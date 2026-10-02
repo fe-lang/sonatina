@@ -6,6 +6,7 @@ use super::{
     super::FunctionVerifier,
     imports::{ImportSources, Source},
     value_state::ValueState,
+    view_index::ViewIndex,
     views::{Index, Place, References, Relation, Root, Step},
 };
 
@@ -22,6 +23,7 @@ pub(super) struct State {
     pub values: BTreeMap<ValueId, ValueState>,
     bound: BTreeSet<ValueId>,
     pub views: BTreeMap<ValueId, ViewFact>,
+    view_index: ViewIndex,
     pub observations: BTreeMap<ValueId, References>,
     pub value_observations: BTreeMap<ValueId, (ValueId, Option<u32>)>,
     pub exposed: BTreeSet<Root>,
@@ -260,7 +262,10 @@ impl State {
                     .collect();
             }
             fact.references = refs.clone();
-            self.views.insert(id, fact);
+            if let Some(old) = self.views.insert(id, fact) {
+                self.view_index.update(id, &old.references, false);
+            }
+            self.view_index.update(id, refs, true);
         }
         self.values.insert(id, value);
     }
@@ -276,7 +281,9 @@ impl State {
                 fact.value.forget_index(ctx, id);
             }
         }
-        self.views.remove(&id);
+        if let Some(old) = self.views.remove(&id) {
+            self.view_index.update(id, &old.references, false);
+        }
         self.observations.remove(&id);
         self.value_observations
             .retain(|&key, (value, _)| key != id && *value != id);
@@ -293,8 +300,10 @@ impl State {
         for value in self.values.values_mut().chain(self.objects.values_mut()) {
             value.visit_references(ctx, f);
         }
-        for fact in self.views.values_mut() {
+        for (&id, fact) in &mut self.views {
             if let Some(references) = f(&fact.references) {
+                self.view_index.update(id, &fact.references, false);
+                self.view_index.update(id, &references, true);
                 fact.references = references;
             }
             fact.value.visit_references(ctx, f);
@@ -373,6 +382,9 @@ impl State {
                     },
                 );
             }
+        }
+        for (&id, fact) in &result.views {
+            result.view_index.update(id, &fact.references, true);
         }
         for (&id, refs) in &self.observations {
             if let Some(other) = other.observations.get(&id)
@@ -498,7 +510,13 @@ impl State {
                 }
             }
         }
-        for fact in self.views.values_mut() {
+        let candidates = if target.unknown {
+            self.views.keys().copied().collect()
+        } else {
+            self.view_index.candidates(target)
+        };
+        for id in candidates {
+            let fact = self.views.get_mut(&id).expect("indexed view");
             if let Some((relation, path)) = target.relation(&fact.references) {
                 match relation {
                     Relation::Equal => fact.value = post.clone(),

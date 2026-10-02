@@ -215,6 +215,14 @@ preserves the relevant equality; copying its pointee creates an immutable value
 snapshot. Rebinding a phi or allocation result on a loop iteration must not make
 an older captured reference equal to the newly bound reference.
 
+Write candidate indexes retain every view fact and select a conservative superset
+of affected facts using physical locations, ancestor guard locations, and
+correlated anchor/cache paths. Constant array indices and fields of the same
+enum variant can be disjoint; symbolic/unknown indices and different variants
+must remain possible overlaps. Unknown targets visit every fact. Maintain the
+indexes when installing or retiring bindings, rewriting references, and joining
+states; an index entry is never an independent proof of initialization or identity.
+
 Before a repeated allocation, simultaneously rename its previous `Recent` into
 `Summary` everywhere: object facts, view alternatives, cell contents, equalities,
 exposure and observations. Merge it with existing summary facts conservatively,

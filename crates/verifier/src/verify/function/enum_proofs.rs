@@ -21,6 +21,7 @@ mod objects;
 mod tests;
 mod transfer;
 mod value_state;
+mod view_index;
 mod views;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
