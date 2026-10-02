@@ -542,7 +542,7 @@ fn jit_predeclares_phi_block_parameters() {
     let phi = function_builder.insert_inst(
         control_flow::Phi::new(
             instructions,
-            vec![(then_value, then_block), (else_value, else_block)],
+            smallvec::smallvec![(then_value, then_block), (else_value, else_block)],
         ),
         Type::I64,
     );

@@ -1,5 +1,5 @@
 use cranelift_entity::SecondaryMap;
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, I256, Immediate, Inst, InstSetExt, Signature, Type, U256, Value, ValueId,
     cfg::ControlFlowGraph,
@@ -169,7 +169,6 @@ fn lower_function(
     ctx.create_phi_stubs()?;
     ctx.lower_non_phi_insts()?;
     ctx.patch_phi_args()?;
-    ctx.machine.rebuild_users();
 
     Ok((ctx.machine, ctx.map))
 }
@@ -219,7 +218,7 @@ impl FuncLowerCtx<'_> {
                 }
                 let machine_inst = cursor.insert_inst_data(
                     &mut self.machine,
-                    control_flow::Phi::new_unchecked(self.is, Vec::new()),
+                    control_flow::Phi::new_unchecked(self.is, SmallVec::new()),
                 );
                 self.copy_frontend_origin_to_machine(source_inst, machine_inst);
                 let result_tys = self.machine_result_tys(source_inst)?;
@@ -255,21 +254,16 @@ impl FuncLowerCtx<'_> {
             else {
                 return Err("pending phi was not a source phi".to_string());
             };
-            let mut args = Vec::with_capacity(phi.args().len());
-            for &(value, pred) in phi.args() {
-                let value = self.lower_value(value)?;
-                let pred = self.machine_pred_block(pred)?;
-                args.push((value, pred));
-            }
-            let machine_phi =
-                <&mut control_flow::Phi as sonatina_ir::InstDowncastMut>::downcast_mut(
-                    self.machine.inst_set(),
-                    self.machine.dfg.inst_mut(machine_inst),
-                )
-                .expect("machine phi downcast failed");
-            for (value, pred) in args {
-                machine_phi.append_phi_arg(value, pred);
-            }
+            let args = phi
+                .args()
+                .iter()
+                .map(|&(value, pred)| {
+                    Ok((self.lower_value(value)?, self.machine_pred_block(pred)?))
+                })
+                .collect::<Result<control_flow::PhiArgs, String>>()?;
+            self.machine
+                .dfg
+                .edit_phi(machine_inst, |phi| *phi.args_mut() = args);
         }
         Ok(())
     }
@@ -811,7 +805,7 @@ impl FuncLowerCtx<'_> {
 
         let phi = self.append_inst_with_results_to(
             join_block,
-            control_flow::Phi::new(self.is, vec![(lhs, lhs_block), (rhs, rhs_block)]),
+            control_flow::Phi::new(self.is, smallvec![(lhs, lhs_block), (rhs, rhs_block)]),
             &[Type::I256],
         );
         self.current_block = Some(join_block);

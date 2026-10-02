@@ -46,7 +46,7 @@ fn build_phi(
     has_inst: &dyn HasInst<Phi>,
 ) -> Result<Phi, Box<Error>> {
     let mut ast_args = args.iter().peekable();
-    let mut args = Vec::new();
+    let mut args = SmallVec::new();
 
     while let Some(&ast_arg) = ast_args.peek() {
         let Ok((value, block)) = ast_arg.try_into() else {

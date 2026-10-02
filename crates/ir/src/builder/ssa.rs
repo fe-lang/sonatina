@@ -1,8 +1,9 @@
 //! SSA construction algorithm here is based on [`Simple and Efficient
 //! Construction of Static Single Assignment Form`](https://link.springer.com/chapter/10.1007/978-3-642-37051-9_6).
 
-use cranelift_entity::{PrimaryMap, SecondaryMap, SparseSet, packed_option::PackedOption};
+use cranelift_entity::{PrimaryMap, SecondaryMap, packed_option::PackedOption};
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use crate::{
     BlockId, Function, InstId, Type, ValueId,
@@ -18,14 +19,15 @@ pub struct VariableData {
     ty: Type,
 }
 
+type PredList = SmallVec<[BlockId; 2]>;
+type IncompletePhiList = SmallVec<[(Variable, InstId); 2]>;
+
 pub struct SsaBuilder {
     blocks: SecondaryMap<BlockId, SsaBlock>,
 
     /// Records all declared variables.
     vars: PrimaryMap<Variable, VariableData>,
 
-    /// Records trivial phis.
-    trivial_phis: SparseSet<InstId>,
     aliases: FxHashMap<ValueId, ValueId>,
 }
 
@@ -34,7 +36,6 @@ impl SsaBuilder {
         SsaBuilder {
             blocks: SecondaryMap::default(),
             vars: PrimaryMap::default(),
-            trivial_phis: SparseSet::new(),
             aliases: FxHashMap::default(),
         }
     }
@@ -120,61 +121,67 @@ impl SsaBuilder {
     fn add_phi_args(&mut self, func: &mut Function, var: Variable, phi: InstId) {
         let block = func.layout.inst_block(phi);
         let preds = std::mem::take(&mut self.blocks[block].preds);
-
-        for pred in &preds {
-            let value = self.use_var(func, var, *pred);
-            func.dfg.append_phi_arg(phi, value, *pred);
-        }
+        // `use_var` returns resolved values, and none of them can become an alias before this
+        // fill completes: every phi they depend on is either complete already, or waits on an
+        // enclosing fill or an unsealed block.
+        let args: control_flow::PhiArgs = preds
+            .iter()
+            .map(|&pred| (self.use_var(func, var, pred), pred))
+            .collect();
         self.blocks[block].preds = preds;
+        assert!(
+            !args.is_empty(),
+            "variable is undefined or used in unreachable block"
+        );
 
-        self.remove_trivial_phi(func, phi);
+        let phi_value = func.dfg.inst_result(phi).unwrap();
+        if let Some(alias) = Self::trivial_phi_alias(phi_value, &args) {
+            self.remove_phi_as_alias(func, phi, phi_value, alias);
+        } else {
+            for (value, pred) in args {
+                func.dfg.append_phi_arg(phi, value, pred);
+            }
+        }
     }
 
     fn remove_trivial_phi(&mut self, func: &mut Function, inst_id: InstId) {
         let phi_value = func.dfg.inst_result(inst_id).unwrap();
-        let phi = func.dfg.cast_phi_mut(inst_id).unwrap();
-
-        let phi_args = phi.args_mut();
-        if phi_args.is_empty() {
-            panic!("variable is undefined or used in unreachable block");
+        let args = func.dfg.cast_phi(inst_id).unwrap().args();
+        if let Some(alias) = Self::trivial_phi_alias(phi_value, args) {
+            self.remove_phi_as_alias(func, inst_id, phi_value, alias);
         }
+    }
 
-        // Trivial phis are those whose arguments are all the same value, ignoring
-        // self-references (common in loops while sealing), e.g.:
-        // - `v = phi [x, x]`
-        // - `v = phi [v, x, v]`
-        //
-        // IMPORTANT: Do not treat `v = phi [v, v, ...]` as trivial; that represents an undefined
-        // value.
-        let mut same_value: Option<ValueId> = None;
-        for (arg_value, _) in phi_args.iter() {
-            if *arg_value == phi_value {
+    fn trivial_phi_alias(phi_value: ValueId, args: &[(ValueId, BlockId)]) -> Option<ValueId> {
+        // Ignore self-references, but keep all-self phis: they represent an undefined value.
+        let mut same_value = None;
+        for &(arg_value, _) in args {
+            if arg_value == phi_value {
                 continue;
             }
             match same_value {
-                None => same_value = Some(*arg_value),
-                Some(existing) if existing == *arg_value => {}
-                Some(_) => return,
+                None => same_value = Some(arg_value),
+                Some(existing) if existing == arg_value => {}
+                Some(_) => return None,
             }
         }
+        same_value
+    }
 
-        let Some(alias) = same_value else {
-            return;
-        };
-
-        if alias == phi_value {
-            return;
-        }
-
-        let modified = self.change_to_alias(func, phi_value, alias);
-        self.trivial_phis.insert(inst_id);
+    fn remove_phi_as_alias(
+        &mut self,
+        func: &mut Function,
+        inst_id: InstId,
+        phi_value: ValueId,
+        alias: ValueId,
+    ) {
+        self.aliases.insert(phi_value, alias);
+        let modified = func.dfg.change_to_alias(phi_value, alias);
         InstInserter::at_location(CursorLocation::At(inst_id)).remove_inst(func);
 
         for user in modified {
-            if !func.dfg.has_inst(user) {
-                continue;
-            }
-            if func.dfg.cast_phi(user).is_some() && !self.trivial_phis.contains_key(user) {
+            // Earlier removals in this loop may have erased `user` already.
+            if func.layout.is_inst_inserted(user) && func.dfg.is_phi(user) {
                 self.remove_trivial_phi(func, user);
             }
         }
@@ -188,56 +195,13 @@ impl SsaBuilder {
     ) -> (InstId, ValueId) {
         let ty = self.var_ty(var);
         let is = func.dfg.inst_set();
-        let phi = control_flow::Phi::new(is.phi(), Vec::new());
+        let phi = control_flow::Phi::new(is.phi(), SmallVec::new());
         let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
 
         let inst = cursor.prepend_inst_data(func, phi);
         let value = cursor.make_result(func, inst, ty);
         cursor.attach_result(func, inst, value);
         (inst, value)
-    }
-
-    fn change_to_alias(
-        &mut self,
-        func: &mut Function,
-        value: ValueId,
-        alias: ValueId,
-    ) -> Vec<InstId> {
-        self.aliases.insert(value, alias);
-
-        // Rewrite all uses of `value` in the current function layout.
-        //
-        // This intentionally avoids `dfg.users[value]`: during SSA construction we may mutate
-        // instructions (e.g. while adding phi arguments) in ways that temporarily leave the users
-        // set stale. A full scan keeps SSA construction correct and ensures we never remove a phi
-        // while leaving dangling operands.
-        let mut modified = Vec::new();
-        let blocks: Vec<_> = func.layout.iter_block().collect();
-        for block in blocks {
-            let insts: Vec<_> = func.layout.iter_inst(block).collect();
-            for inst in insts {
-                let mut used = false;
-                func.dfg.inst(inst).for_each_value(&mut |v| {
-                    if v == value {
-                        used = true;
-                    }
-                });
-                if !used {
-                    continue;
-                }
-
-                func.dfg.untrack_inst(inst);
-                func.dfg.inst_mut(inst).for_each_value_mut(&mut |v| {
-                    if *v == value {
-                        *v = alias;
-                    }
-                });
-                func.dfg.attach_user(inst);
-                modified.push(inst);
-            }
-        }
-
-        modified
     }
 }
 
@@ -250,7 +214,7 @@ impl Default for SsaBuilder {
 #[derive(Default, Clone)]
 struct SsaBlock {
     /// Records all predecessors of a block.
-    preds: Vec<BlockId>,
+    preds: PredList,
 
     /// Records sealed blocks.
     is_sealed: bool,
@@ -259,7 +223,7 @@ struct SsaBlock {
     defs: SecondaryMap<Variable, PackedOption<ValueId>>,
 
     /// Records phis in an unsealed block.
-    incomplete_phis: Vec<(Variable, InstId)>,
+    incomplete_phis: IncompletePhiList,
 }
 
 impl SsaBlock {
@@ -283,7 +247,7 @@ impl SsaBlock {
         self.is_sealed
     }
 
-    fn take_incomplete_phis(&mut self) -> Vec<(Variable, InstId)> {
+    fn take_incomplete_phis(&mut self) -> IncompletePhiList {
         std::mem::take(&mut self.incomplete_phis)
     }
 
@@ -300,6 +264,7 @@ impl SsaBlock {
 mod tests {
     use control_flow::{Br, BrTable, Jump, Phi, Return};
     use macros::inst_set;
+    use smallvec::smallvec;
 
     use super::{super::test_util::*, *};
     use crate::{inst::arith::Add, isa::Isa};
@@ -318,14 +283,14 @@ mod tests {
         builder.switch_to_block(block);
 
         let imm = builder.make_imm_value(7i32);
-        let phi1 = Phi::new(is, vec![(imm, block), (imm, block)]);
+        let phi1 = Phi::new(is, smallvec![(imm, block), (imm, block)]);
         let phi1_res = builder.insert_inst(phi1, Type::I32);
         let phi1_inst = builder.func.dfg.value_inst(phi1_res).unwrap();
 
-        let phi2 = Phi::new(is, vec![(phi1_res, block), (imm, block)]);
+        let phi2 = Phi::new(is, smallvec![(phi1_res, block), (imm, block)]);
         let phi2_res = builder.insert_inst(phi2, Type::I32);
 
-        let phi3 = Phi::new(is, vec![(phi1_res, block), (phi2_res, block)]);
+        let phi3 = Phi::new(is, smallvec![(phi1_res, block), (phi2_res, block)]);
         let phi3_res = builder.insert_inst(phi3, Type::I32);
 
         builder.insert_inst_no_result(Return::new_single(is, phi3_res));
@@ -798,6 +763,70 @@ mod tests {
     block6:
         v3.i32 = add v4 v4;
         return;
+}
+"
+        );
+    }
+
+    #[test]
+    fn use_var_nested_loops_collapse_trivial_phi_chain() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1], Type::I32);
+        let is = evm.inst_set();
+        let cond = builder.args()[0];
+
+        let var = builder.declare_var(Type::I32);
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+        let b3 = builder.append_block();
+        let b4 = builder.append_block();
+
+        builder.switch_to_block(b0);
+        let value = builder.make_imm_value(1i32);
+        builder.def_var(var, value);
+        builder.insert_inst_no_result(Jump::new(is, b1));
+
+        builder.switch_to_block(b1);
+        builder.insert_inst_no_result(Jump::new(is, b2));
+
+        builder.switch_to_block(b2);
+        let val = builder.use_var(var);
+        builder.insert_inst(Add::new(is, val, val), Type::I32);
+        builder.insert_inst_no_result(Br::new(is, cond, b2, b3));
+
+        builder.switch_to_block(b3);
+        builder.insert_inst_no_result(Br::new(is, cond, b1, b4));
+
+        builder.switch_to_block(b4);
+        let val = builder.use_var(var);
+        builder.insert_inst_no_result(Return::new_single(is, val));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+
+        assert_eq!(
+            dump_func(&module, func_ref),
+            "func public %test_func(v0.i1) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i32 = add 1.i32 1.i32;
+        br v0 block2 block3;
+
+    block3:
+        br v0 block1 block4;
+
+    block4:
+        return 1.i32;
 }
 "
         );

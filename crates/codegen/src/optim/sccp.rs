@@ -713,7 +713,6 @@ impl SccpSolver {
         let block = func.layout.inst_block(inst);
         let phi_value = func.dfg.inst_result(inst).expect("phi has no result");
         let phi_ty = func.dfg.value_ty(phi_value);
-        let old_len = func.dfg.cast_phi(inst).unwrap().args().len();
 
         let reachable_preds: BTreeSet<_> = func
             .dfg
@@ -725,11 +724,8 @@ impl SccpSolver {
             .filter(|pred| self.is_reachable(func, *pred, block))
             .collect();
 
-        func.dfg.untrack_inst(inst);
-
-        let mut fold_arg = None;
-        let changed = {
-            let phi = func.dfg.cast_phi_mut(inst).unwrap();
+        let (changed, fold_arg, phi_empty) = func.dfg.edit_phi(inst, |phi| {
+            let old_len = phi.args().len();
             phi.retain(|pred| reachable_preds.contains(&pred));
             let changed = old_len != phi.args().len();
 
@@ -741,13 +737,14 @@ impl SccpSolver {
                 );
             }
 
-            if phi.args().len() == 1 {
-                fold_arg = Some(phi.args()[0].0);
-            }
-            changed
-        };
+            (
+                changed,
+                (phi.args().len() == 1).then(|| phi.args()[0].0),
+                phi.args().is_empty(),
+            )
+        });
 
-        let fold_arg = if fold_arg.is_none() && func.dfg.cast_phi(inst).unwrap().args().is_empty() {
+        let fold_arg = if fold_arg.is_none() && phi_empty {
             Some(func.dfg.make_undef_value(phi_ty))
         } else {
             fold_arg
@@ -769,7 +766,6 @@ impl SccpSolver {
                 changed
             }
         } else {
-            func.dfg.attach_user(inst);
             changed
         }
     }
