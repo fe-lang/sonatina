@@ -1494,10 +1494,7 @@ impl AggregateScalarize {
                 let mut leaf_phis: LeafValues = SmallVec::new();
                 for leaf in shape.leaves {
                     let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
-                    let phi = control_flow::Phi::new_unchecked(
-                        func.inst_set(),
-                        smallvec::SmallVec::new(),
-                    );
+                    let phi = control_flow::Phi::new_unchecked(func.inst_set(), SmallVec::new());
                     let phi_inst = cursor.prepend_inst_data(func, phi);
                     let phi_res = func.dfg.make_value(Value::Inst {
                         inst: phi_inst,

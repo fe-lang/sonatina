@@ -137,7 +137,7 @@ impl OwnedInstKey {
         };
 
         if let Some(phi) = downcast_ref::<Phi>(inst) {
-            key.phi_args = phi.args().iter().copied().collect();
+            key.phi_args = phi.args().clone();
         }
 
         if let Some(call) = downcast_ref::<Call>(inst) {

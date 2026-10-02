@@ -879,6 +879,8 @@ impl Block {
 
 #[cfg(test)]
 mod tests {
+    use smallvec::smallvec;
+
     use super::*;
     use crate::{
         Type,
@@ -1037,7 +1039,7 @@ mod tests {
         let added = dfg.make_imm_value(Immediate::I32(3));
         let phi = dfg.make_inst(Phi::new(
             dfg.inst_set().has_phi().unwrap(),
-            smallvec::smallvec![(kept, block0), (removed, block1)],
+            smallvec![(kept, block0), (removed, block1)],
         ));
 
         let removed_value = dfg.edit_phi(phi, |phi| {

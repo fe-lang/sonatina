@@ -236,6 +236,7 @@ mod tests {
     use data::Gep;
     use logic::*;
     use macros::inst_set;
+    use smallvec::smallvec;
 
     use super::*;
     use crate::{
@@ -377,7 +378,7 @@ mod tests {
             InstClassKind::Unary(UnaryInstKind::Snego)
         );
         assert_eq!(
-            Phi::new(inst_set.phi(), smallvec::smallvec![(v, b0)]).kind(),
+            Phi::new(inst_set.phi(), smallvec![(v, b0)]).kind(),
             InstClassKind::Phi
         );
         assert_eq!(Jump::new(inst_set.jump(), b0).kind(), InstClassKind::Opaque);
