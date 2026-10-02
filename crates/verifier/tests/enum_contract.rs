@@ -899,6 +899,22 @@ block3:
             "obj.store v4 31.i256;\n v6.i256 = obj.load v4;",
         );
         assert_eq!(execute(&initialized, 128).invalid_reads(), 0);
+        for (source, invalid) in [(source, true), (initialized.as_str(), false)] {
+            let parsed = parse_module(source).unwrap();
+            for func in parsed.module.funcs() {
+                parsed
+                    .module
+                    .func_store
+                    .modify(func, |body| body.dfg.clear_users());
+            }
+            // Standard verifies enum semantics without requiring cached user
+            // metadata. Index retirement must still use the actual operands.
+            let report = verify_module(
+                &parsed.module,
+                &VerifierConfig::for_level(VerificationLevel::Standard),
+            );
+            assert_eq!(report.has_errors(), invalid, "{report}");
+        }
     }
 }
 

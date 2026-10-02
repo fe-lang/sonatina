@@ -42,7 +42,7 @@ impl State {
             } else {
                 Self::imported(verifier.ctx, arg, ty, true)
             };
-            state.bind(verifier.ctx, arg, value, None);
+            state.bind(verifier, arg, value, None);
         }
         let mut pending: Vec<_> = state
             .values
@@ -205,29 +205,35 @@ impl State {
 
     pub fn bind(
         &mut self,
-        ctx: &ModuleCtx,
+        verifier: &FunctionVerifier<'_>,
         id: ValueId,
         mut value: ValueState,
         fact: Option<ViewFact>,
     ) {
+        let ctx = verifier.ctx;
         let mut fact = if let Some(CompoundType::ObjRef(elem)) = value.ty.resolve_compound(ctx) {
             Some(fact.unwrap_or_else(|| self.fact(ctx, &value.references, elem)))
         } else {
             None
         };
-        self.prepare_binding(ctx, id);
-        value.visit_references(ctx, &mut |refs| refs.rewrite(|_| {}, Some(id)));
+        self.prepare_binding(verifier, id);
+        // Only reference-typed bindings can name a reference cache, witness or
+        // anchor. An aggregate's nested references cannot name the aggregate
+        // binding itself, and an index-typed scalar contains no references.
+        if value.ty.is_obj_ref(ctx) {
+            value.visit_references(ctx, &mut |refs| refs.without_binding(id));
+        }
         if let Some(fact) = &mut fact {
             fact.value.forget_index(ctx, id);
             fact.value
-                .visit_references(ctx, &mut |refs| refs.rewrite(|_| {}, Some(id)));
+                .visit_references(ctx, &mut |refs| refs.without_binding(id));
         }
         self.install(id, value, fact);
     }
 
-    pub fn prepare_binding(&mut self, ctx: &ModuleCtx, id: ValueId) {
+    pub fn prepare_binding(&mut self, verifier: &FunctionVerifier<'_>, id: ValueId) {
         if !self.bound.insert(id) {
-            self.forget_binding(ctx, id);
+            self.forget_binding(verifier, id);
         }
     }
 
@@ -259,32 +265,44 @@ impl State {
         self.values.insert(id, value);
     }
 
-    fn forget_binding(&mut self, ctx: &ModuleCtx, id: ValueId) {
-        for value in self.objects.values_mut().chain(self.values.values_mut()) {
-            value.forget_index(ctx, id);
-        }
-        for fact in self.views.values_mut() {
-            fact.value.forget_index(ctx, id);
+    fn forget_binding(&mut self, verifier: &FunctionVerifier<'_>, id: ValueId) {
+        let ctx = verifier.ctx;
+        let symbolic = verifier.enum_index_bindings.contains(&id);
+        if symbolic {
+            for value in self.objects.values_mut().chain(self.values.values_mut()) {
+                value.forget_index(ctx, id);
+            }
+            for fact in self.views.values_mut() {
+                fact.value.forget_index(ctx, id);
+            }
         }
         self.views.remove(&id);
         self.observations.remove(&id);
         self.value_observations
             .retain(|&key, (value, _)| key != id && *value != id);
-        self.rewrite_references(ctx, &mut |refs| {
-            refs.rewrite(|_| {}, Some(id));
-        });
+        if symbolic || verifier.func.dfg.value_ty(id).is_obj_ref(ctx) {
+            self.rewrite_references(ctx, &mut |refs| refs.without_binding(id));
+        }
     }
 
-    fn rewrite_references(&mut self, ctx: &ModuleCtx, f: &mut impl FnMut(&mut References)) {
+    fn rewrite_references(
+        &mut self,
+        ctx: &ModuleCtx,
+        f: &mut impl FnMut(&References) -> Option<References>,
+    ) {
         for value in self.values.values_mut().chain(self.objects.values_mut()) {
             value.visit_references(ctx, f);
         }
         for fact in self.views.values_mut() {
-            f(&mut fact.references);
+            if let Some(references) = f(&fact.references) {
+                fact.references = references;
+            }
             fact.value.visit_references(ctx, f);
         }
         for refs in self.observations.values_mut() {
-            f(refs);
+            if let Some(references) = f(refs) {
+                *refs = references;
+            }
         }
     }
 
@@ -298,14 +316,22 @@ impl State {
                 .map_or(old.clone(), |summary| summary.join(ctx, &old));
             self.objects.insert(summary, old);
             self.rewrite_references(ctx, &mut |refs| {
-                refs.rewrite(
+                if !refs.views.iter().any(|view| {
+                    view.place.root == recent
+                        || view.guards.iter().any(|guard| guard.place.root == recent)
+                }) {
+                    return None;
+                }
+                let mut rewritten = refs.clone();
+                rewritten.rewrite(
                     |place| {
                         if place.root == recent {
                             place.root = summary;
                         }
                     },
                     None,
-                )
+                );
+                Some(rewritten)
             });
             if self.exposed.remove(&recent) {
                 self.exposed.insert(summary);

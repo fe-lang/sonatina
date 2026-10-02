@@ -511,20 +511,19 @@ impl ValueState {
         }
     }
 
-    pub fn visit_references(&mut self, ctx: &ModuleCtx, f: &mut impl FnMut(&mut References)) {
+    // None preserves the original shared facts without cloning reference sets.
+    pub fn visit_references(
+        &mut self,
+        ctx: &ModuleCtx,
+        f: &mut impl FnMut(&References) -> Option<References>,
+    ) {
         if !self.has_stored_references(ctx) {
             return;
         }
-        if self.ty.is_obj_ref(ctx) {
-            if let Some(data) = Arc::get_mut(&mut self.0) {
-                f(&mut data.facts_mut().references);
-            } else {
-                let mut references = self.references.clone();
-                f(&mut references);
-                if references != self.references {
-                    self.references = references;
-                }
-            }
+        if self.ty.is_obj_ref(ctx)
+            && let Some(references) = f(&self.references)
+        {
+            self.references = references;
         }
         self.update_children(|_, child| child.visit_references(ctx, f));
     }
@@ -651,7 +650,11 @@ block0:
         let mut reference = ValueState::reference(args[1], References::unknown());
         assert_eq!(reference.join(ctx, &reference), reference);
         assert!(reference.0.self_join_identity.load(Ordering::Relaxed));
-        reference.visit_references(ctx, &mut |refs| refs.unknown = false);
+        reference.visit_references(ctx, &mut |refs| {
+            let mut rewritten = refs.clone();
+            rewritten.unknown = false;
+            Some(rewritten)
+        });
         assert!(!reference.0.self_join_identity.load(Ordering::Relaxed));
         assert!(!reference.references.unknown);
     }
@@ -757,7 +760,9 @@ block0:
         let mut visited = 0;
         value.visit_references(ctx, &mut |refs| {
             visited += 1;
-            refs.cache = Some(id);
+            let mut rewritten = refs.clone();
+            rewritten.cache = Some(id);
+            Some(rewritten)
         });
         assert_eq!(
             visited, 1,
@@ -885,7 +890,7 @@ block0:
         let mut visited = 0;
         unchanged.visit_references(ctx, &mut |refs| {
             visited += 1;
-            refs.rewrite(|_| {}, Some(ValueId::from_u32(12)));
+            refs.without_binding(ValueId::from_u32(12))
         });
         assert_eq!(visited, 2);
         assert!(Arc::ptr_eq(&original.0, &unchanged.0));

@@ -339,6 +339,27 @@ impl References {
         self.anchors.extend(added);
     }
 
+    pub fn without_binding(&self, id: ValueId) -> Option<Self> {
+        let indexed = |path: &[Step]| path.contains(&Step::Index(Index::Symbol(id)));
+        let anchored = |anchor: &Anchor| anchor.value == id || indexed(&anchor.path);
+        let affected = self.cache == Some(id)
+            || self.anchors.iter().any(anchored)
+            || self.views.iter().any(|view| {
+                indexed(&view.place.path)
+                    || view.guards.iter().any(|guard| {
+                        indexed(&guard.place.path)
+                            || guard.witness == Some(id)
+                            || guard.anchor.as_ref().is_some_and(anchored)
+                    })
+            });
+        if !affected {
+            return None;
+        }
+        let mut rewritten = self.clone();
+        rewritten.rewrite(|_| {}, Some(id));
+        Some(rewritten)
+    }
+
     pub fn rewrite(&mut self, mut place: impl FnMut(&mut Place), kill: Option<ValueId>) {
         let mut rewrite = |target: &mut Place| {
             place(target);

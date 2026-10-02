@@ -50,7 +50,7 @@ fn project(
         guards,
     };
     state.bind(
-        verifier.ctx,
+        verifier,
         result,
         ValueState::reference(verifier.func.dfg.value_ty(result), refs),
         Some(fact),
@@ -75,7 +75,7 @@ pub(super) fn instruction(
         let result = result.expect("validated allocation result");
         let refs = state.allocate(ctx, result, *alloc.ty());
         state.bind(
-            ctx,
+            verifier,
             result,
             ValueState::reference(verifier.func.dfg.value_ty(result), refs),
             None,
@@ -126,7 +126,7 @@ pub(super) fn instruction(
             // source subtree facts, including unwritten nested enum payloads.
             value.complete = true;
         }
-        state.bind(ctx, result, value, None);
+        state.bind(verifier, result, value, None);
     } else if let Some(tag) = downcast::<&data::EnumGetTag>(is, inst) {
         let result = result.unwrap();
         let ty = verifier
@@ -135,7 +135,7 @@ pub(super) fn instruction(
         let refs = state.reference(verifier, *tag.object());
         proof = read(state, verifier, &refs, ty, true);
         state.bind(
-            ctx,
+            verifier,
             result,
             ValueState::new(verifier.func.dfg.value_ty(result), true),
             None,
@@ -156,7 +156,7 @@ pub(super) fn instruction(
             value.assert_variant(ctx, assertion.variant().index())
         });
         state.bind(
-            ctx,
+            verifier,
             result.unwrap(),
             ValueState::reference(verifier.func.dfg.value_ty(result.unwrap()), refs),
             None,
@@ -213,7 +213,7 @@ pub(super) fn instruction(
                 state.value(verifier, field),
             );
         }
-        state.bind(ctx, result.unwrap(), value, None);
+        state.bind(verifier, result.unwrap(), value, None);
     } else if let Some(extract) = downcast::<&data::EnumExtract>(is, inst) {
         let value = state.value(verifier, *extract.value());
         let field = value.child(
@@ -234,11 +234,11 @@ pub(super) fn instruction(
         } else {
             Proof::Proven
         };
-        state.bind(ctx, result.unwrap(), field, None);
+        state.bind(verifier, result.unwrap(), field, None);
     } else if let Some(tag) = downcast::<&data::EnumTag>(is, inst) {
         let result = result.unwrap();
         state.bind(
-            ctx,
+            verifier,
             result,
             ValueState::new(verifier.func.dfg.value_ty(result), true),
             None,
@@ -249,7 +249,7 @@ pub(super) fn instruction(
     } else if let Some(test) = downcast::<&data::EnumIsVariant>(is, inst) {
         let result = result.unwrap();
         state.bind(
-            ctx,
+            verifier,
             result,
             ValueState::new(verifier.func.dfg.value_ty(result), true),
             None,
@@ -270,16 +270,16 @@ pub(super) fn instruction(
         value.update(ctx, &[index(verifier, *insert.idx())], true, &|target| {
             *target = field.clone()
         });
-        state.bind(ctx, result.unwrap(), value, None);
+        state.bind(verifier, result.unwrap(), value, None);
     } else if let Some(extract) = downcast::<&data::ExtractValue>(is, inst) {
         let value = state
             .value(verifier, *extract.dest())
             .child(ctx, index(verifier, *extract.idx()));
-        state.bind(ctx, result.unwrap(), value, None);
+        state.bind(verifier, result.unwrap(), value, None);
     } else if let Some(mat) = downcast::<&data::ObjMaterializeStack>(is, inst) {
         state.expose(ctx, &state.reference(verifier, *mat.object()));
         state.bind(
-            ctx,
+            verifier,
             result.unwrap(),
             ValueState::new(verifier.func.dfg.value_ty(result.unwrap()), true),
             None,
@@ -287,7 +287,7 @@ pub(super) fn instruction(
     } else if let Some(mat) = downcast::<&data::ObjMaterializeHeap>(is, inst) {
         state.expose(ctx, &state.reference(verifier, *mat.object()));
         state.bind(
-            ctx,
+            verifier,
             result.unwrap(),
             ValueState::new(verifier.func.dfg.value_ty(result.unwrap()), true),
             None,
@@ -338,7 +338,7 @@ pub(super) fn instruction(
             let value = source.value(ctx, root, verifier.func.dfg.value_ty(result));
             let imported =
                 !matches!(source, Source::Unsupported) && !value.captured(ctx).views.is_empty();
-            state.bind(ctx, result, value, None);
+            state.bind(verifier, result, value, None);
             if imported {
                 // The external alternative is accessible, but computing the
                 // result does not publish any unrelated local allocation.
