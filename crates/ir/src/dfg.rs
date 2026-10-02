@@ -536,7 +536,7 @@ impl DataFlowGraph {
         InstDowncast::downcast(is, inst)
     }
 
-    pub(crate) fn cast_phi_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Phi> {
+    fn cast_phi_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Phi> {
         let is = self.inst_set();
         let inst = self.inst_mut(inst_id);
         InstDowncastMut::downcast_mut(is, inst)
