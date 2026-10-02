@@ -45,11 +45,25 @@ where
 
     pub fn finish(self) {
         if cfg!(debug_assertions) {
+            let dfg = &self.func.dfg;
             for block in self.func.layout.iter_block() {
                 debug_assert!(
                     self.is_sealed(block),
                     "all blocks must be sealed: `{block}` is not sealed"
                 );
+                // Trivial phi removal rewrites uses through `dfg.users`, so an untracked use would
+                // be left pointing at a removed phi.
+                for inst in self.func.layout.iter_inst(block) {
+                    dfg.inst(inst).for_each_value(&mut |value| {
+                        debug_assert!(
+                            dfg.has_value(value)
+                                && dfg
+                                    .users_set(value)
+                                    .is_some_and(|users| users.binary_search(&inst).is_ok()),
+                            "{inst:?} uses {value:?}, which is deleted or does not track it as a user"
+                        );
+                    });
+                }
             }
         }
 
