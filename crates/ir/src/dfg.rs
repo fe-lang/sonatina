@@ -505,39 +505,25 @@ impl DataFlowGraph {
     }
 
     pub fn append_phi_arg(&mut self, inst_id: InstId, value: ValueId, block: BlockId) {
-        self.append_phi_arg_data(inst_id, value, block);
-        self.attach_user(inst_id);
-    }
-
-    pub(crate) fn append_phi_arg_to_tracked_phi(
-        &mut self,
-        inst_id: InstId,
-        value: ValueId,
-        block: BlockId,
-    ) {
-        if self.append_phi_arg_data(inst_id, value, block) {
-            self.users[value].insert(inst_id);
-        }
-    }
-
-    fn append_phi_arg_data(&mut self, inst_id: InstId, value: ValueId, block: BlockId) -> bool {
         let Some(phi) = self.cast_phi_mut(inst_id) else {
-            return false;
+            return;
         };
         phi.append_phi_arg(value, block);
-        true
+        self.users[value].insert(inst_id);
     }
 
     pub fn edit_phi<R>(
         &mut self,
         inst_id: InstId,
         f: impl FnOnce(&mut control_flow::Phi) -> R,
-    ) -> Option<R> {
-        self.cast_phi(inst_id)?;
+    ) -> R {
         self.untrack_inst(inst_id);
-        let result = f(self.cast_phi_mut(inst_id).unwrap());
+        let phi = self
+            .cast_phi_mut(inst_id)
+            .unwrap_or_else(|| panic!("{inst_id:?} is not a phi"));
+        let result = f(phi);
         self.attach_user(inst_id);
-        Some(result)
+        result
     }
 
     pub fn inst_set(&self) -> &'static dyn InstSetBase {
@@ -1056,30 +1042,6 @@ mod tests {
     }
 
     #[test]
-    fn append_phi_arg_retracks_existing_args_after_manual_phi_edit() {
-        let isa = test_isa();
-        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
-        let block0 = dfg.make_block();
-        let block1 = dfg.make_block();
-        let block2 = dfg.make_block();
-        let kept = dfg.make_imm_value(Immediate::I32(1));
-        let removed = dfg.make_imm_value(Immediate::I32(2));
-        let added = dfg.make_imm_value(Immediate::I32(3));
-        let phi = dfg.make_inst(Phi::new(
-            dfg.inst_set().has_phi().unwrap(),
-            smallvec::smallvec![(kept, block0), (removed, block1)],
-        ));
-
-        dfg.untrack_inst(phi);
-        dfg.cast_phi_mut(phi).unwrap().remove_phi_arg(block1);
-        dfg.append_phi_arg(phi, added, block2);
-
-        assert!(dfg.users(kept).any(|&user| user == phi));
-        assert!(dfg.users(added).any(|&user| user == phi));
-        assert!(!dfg.users(removed).any(|&user| user == phi));
-    }
-
-    #[test]
     fn edit_phi_retracks_replaced_args() {
         let isa = test_isa();
         let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
@@ -1094,13 +1056,11 @@ mod tests {
             smallvec::smallvec![(kept, block0), (removed, block1)],
         ));
 
-        let removed_value = dfg
-            .edit_phi(phi, |phi| {
-                let removed_value = phi.remove_phi_arg(block1);
-                phi.append_phi_arg(added, block2);
-                removed_value
-            })
-            .unwrap();
+        let removed_value = dfg.edit_phi(phi, |phi| {
+            let removed_value = phi.remove_phi_arg(block1);
+            phi.append_phi_arg(added, block2);
+            removed_value
+        });
 
         assert_eq!(removed_value, Some(removed));
         assert!(dfg.users(kept).any(|&user| user == phi));

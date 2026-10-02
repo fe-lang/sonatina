@@ -724,28 +724,25 @@ impl SccpSolver {
             .filter(|pred| self.is_reachable(func, *pred, block))
             .collect();
 
-        let (changed, fold_arg, phi_empty) = func
-            .dfg
-            .edit_phi(inst, |phi| {
-                let old_len = phi.args().len();
-                phi.retain(|pred| reachable_preds.contains(&pred));
-                let changed = old_len != phi.args().len();
+        let (changed, fold_arg, phi_empty) = func.dfg.edit_phi(inst, |phi| {
+            let old_len = phi.args().len();
+            phi.retain(|pred| reachable_preds.contains(&pred));
+            let changed = old_len != phi.args().len();
 
-                let mut seen = BTreeSet::new();
-                for &(_, pred) in phi.args() {
-                    assert!(
-                        seen.insert(pred),
-                        "phi {inst:?} has duplicate incoming from {pred:?}"
-                    );
-                }
+            let mut seen = BTreeSet::new();
+            for &(_, pred) in phi.args() {
+                assert!(
+                    seen.insert(pred),
+                    "phi {inst:?} has duplicate incoming from {pred:?}"
+                );
+            }
 
-                (
-                    changed,
-                    (phi.args().len() == 1).then(|| phi.args()[0].0),
-                    phi.args().is_empty(),
-                )
-            })
-            .unwrap();
+            (
+                changed,
+                (phi.args().len() == 1).then(|| phi.args()[0].0),
+                phi.args().is_empty(),
+            )
+        });
 
         let fold_arg = if fold_arg.is_none() && phi_empty {
             Some(func.dfg.make_undef_value(phi_ty))

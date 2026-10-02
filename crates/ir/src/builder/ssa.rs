@@ -147,7 +147,7 @@ impl SsaBuilder {
             self.remove_phi_as_alias(func, phi, phi_value, alias);
         } else {
             for (value, pred) in args {
-                func.dfg.append_phi_arg_to_tracked_phi(phi, value, pred);
+                func.dfg.append_phi_arg(phi, value, pred);
             }
         }
     }

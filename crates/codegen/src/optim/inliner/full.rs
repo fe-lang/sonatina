@@ -263,13 +263,11 @@ pub(super) fn try_inline_callsite_full(
             .expect("verified phi fixup should resolve");
 
         let func = editor.func_mut();
-        func.dfg
-            .edit_phi(fixup.phi_inst, |phi| {
-                if fixup.arg_index < phi.args().len() {
-                    phi.args_mut()[fixup.arg_index].0 = mapped;
-                }
-            })
-            .unwrap();
+        func.dfg.edit_phi(fixup.phi_inst, |phi| {
+            if fixup.arg_index < phi.args().len() {
+                phi.args_mut()[fixup.arg_index].0 = mapped;
+            }
+        });
     }
 
     {

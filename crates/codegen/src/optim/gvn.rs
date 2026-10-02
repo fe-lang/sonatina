@@ -2708,18 +2708,16 @@ impl<'a> RedundantCodeRemover<'a> {
         }
 
         let edges = &self.solver.blocks[block].in_edges;
-        func.dfg
-            .edit_phi(insn, |phi| {
-                let old_len = phi.args().len();
-                phi.retain(|from| {
-                    !matches!(
-                        self.solver.reachable_edge_state(edges, from, block),
-                        ReachableEdgeState::None
-                    )
-                });
-                old_len != phi.args().len()
-            })
-            .unwrap()
+        func.dfg.edit_phi(insn, |phi| {
+            let old_len = phi.args().len();
+            phi.retain(|from| {
+                !matches!(
+                    self.solver.reachable_edge_state(edges, from, block),
+                    ReachableEdgeState::None
+                )
+            });
+            old_len != phi.args().len()
+        })
     }
 }
 
