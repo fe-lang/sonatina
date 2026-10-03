@@ -726,11 +726,11 @@ func public %entry() {
         br v8 block4 block5;
 
     block3:
-        v138.i256 = evm_return_data_size;
-        v139.*i8 = evm_malloc v138;
-        v140.i256 = ptr_to_int v139 i256;
-        evm_return_data_copy v140 0.i256 v138;
-        evm_revert v140 v138;
+        v148.i256 = evm_return_data_size;
+        v149.*i8 = evm_malloc v148;
+        v150.i256 = ptr_to_int v149 i256;
+        evm_return_data_copy v150 0.i256 v148;
+        evm_revert v150 v148;
 
     block4:
         evm_revert 0.i256 0.i256;
@@ -750,11 +750,11 @@ func public %entry() {
         br v16 block8 block9;
 
     block7:
-        v135.i256 = evm_return_data_size;
-        v136.*i8 = evm_malloc v135;
-        v137.i256 = ptr_to_int v136 i256;
-        evm_return_data_copy v137 0.i256 v135;
-        evm_revert v137 v135;
+        v145.i256 = evm_return_data_size;
+        v146.*i8 = evm_malloc v145;
+        v147.i256 = ptr_to_int v146 i256;
+        evm_return_data_copy v147 0.i256 v145;
+        evm_revert v147 v145;
 
     block8:
         evm_revert 0.i256 0.i256;
@@ -822,15 +822,15 @@ func public %entry() {
         evm_revert v50 v48;
 
     block78:
-        v154.i1 = lt v48 32.i256;
-        br v154 block79 block80;
+        v153.i1 = lt v48 32.i256;
+        br v153 block79 block80;
 
     block79:
         evm_revert 0.i256 0.i256;
 
     block80:
-        v155.i256 = mload v50 i256;
-        v53.i1 = eq v155 1000.i256;
+        v154.i256 = mload v50 i256;
+        v53.i1 = eq v154 1000.i256;
         br v53 block28 block27;
 
     block27:
@@ -894,131 +894,131 @@ func public %entry() {
         evm_revert v79 v77;
 
     block42:
-        v86.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v9 100000.i256 0.i256 500.i256;
-        v88.i1 = eq v86 750.i256;
-        br v88 block44 block43;
+        v96.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v9 100000.i256 0.i256 500.i256;
+        v98.i1 = eq v96 750.i256;
+        br v98 block44 block43;
 
     block43:
         evm_revert 0.i256 0.i256;
 
     block44:
-        v89.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 v9 100000.i256 0.i256;
-        v90.i1 = eq v89 500.i256;
-        br v90 block46 block45;
+        v99.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 v9 100000.i256 0.i256;
+        v100.i1 = eq v99 500.i256;
+        br v100 block46 block45;
 
     block45:
         evm_revert 0.i256 0.i256;
 
     block46:
-        v91.objref<@__fe_obj_SolEncoder_5> = call %solencoder_h1b9228b90dad6928_new;
-        v92.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v91 36.i256;
-        mstore v92 485279040008711516304006271566353352125468599605730304659864984485888.i256 i256;
-        (v94.i256, v95.i1) = uaddo v92 4.i256;
-        br v95 block47 block48;
+        v101.objref<@__fe_obj_SolEncoder_5> = call %solencoder_h1b9228b90dad6928_new;
+        v102.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v101 36.i256;
+        mstore v102 485279040008711516304006271566353352125468599605730304659864984485888.i256 i256;
+        (v104.i256, v105.i1) = uaddo v102 4.i256;
+        br v105 block47 block48;
 
     block47:
         evm_revert 0.i256 0.i256;
 
     block48:
-        mstore v94 v9 i256;
-        (v99.i256, v100.i1) = uaddo v94 32.i256;
-        br v100 block50 block51;
+        mstore v104 v9 i256;
+        (v109.i256, v110.i1) = uaddo v104 32.i256;
+        br v110 block50 block51;
 
     block50:
         evm_revert 0.i256 0.i256;
 
     block51:
-        v101.objref<i256> = obj.proj v91 0.i256;
-        v102.i256 = obj.load v101;
-        v103.objref<i256> = obj.proj v91 2.i256;
-        v104.i256 = obj.load v103;
-        (v105.i256, v106.i1) = usubo v104 v102;
-        br v106 block53 block54;
+        v111.objref<i256> = obj.proj v101 0.i256;
+        v112.i256 = obj.load v111;
+        v113.objref<i256> = obj.proj v101 2.i256;
+        v114.i256 = obj.load v113;
+        (v115.i256, v116.i1) = usubo v114 v112;
+        br v116 block53 block54;
 
     block53:
         evm_revert 0.i256 0.i256;
 
     block54:
-        v107.i256 = evm_call 200000.i256 v17 0.i256 v102 v105 0.i256 0.i256;
-        v108.i256 = evm_return_data_size;
-        v109.*i8 = evm_malloc v108;
-        v110.i256 = ptr_to_int v109 i256;
-        evm_return_data_copy v110 0.i256 v108;
-        v111.i1 = is_zero v107;
-        br v111 block55 block82;
+        v117.i256 = evm_call 200000.i256 v17 0.i256 v112 v115 0.i256 0.i256;
+        v118.i256 = evm_return_data_size;
+        v119.*i8 = evm_malloc v118;
+        v120.i256 = ptr_to_int v119 i256;
+        evm_return_data_copy v120 0.i256 v118;
+        v121.i1 = is_zero v117;
+        br v121 block55 block82;
 
     block55:
-        evm_revert v110 v108;
+        evm_revert v120 v118;
 
     block82:
-        v156.i1 = lt v108 32.i256;
-        br v156 block83 block84;
+        v155.i1 = lt v118 32.i256;
+        br v155 block83 block84;
 
     block83:
         evm_revert 0.i256 0.i256;
 
     block84:
-        v157.i256 = mload v110 i256;
-        v113.i1 = eq v157 1000.i256;
-        br v113 block58 block57;
+        v156.i256 = mload v120 i256;
+        v123.i1 = eq v156 1000.i256;
+        br v123 block58 block57;
 
     block57:
         evm_revert 0.i256 0.i256;
 
     block58:
-        v114.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v9 100000.i256 0.i256;
-        v116.i1 = eq v114 2250.i256;
-        br v116 block60 block59;
+        v124.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v9 100000.i256 0.i256;
+        v126.i1 = eq v124 2250.i256;
+        br v126 block60 block59;
 
     block59:
         evm_revert 0.i256 0.i256;
 
     block60:
-        v117.objref<@__fe_obj_ProxyWithdraw_1> = obj.alloc @__fe_obj_ProxyWithdraw_1;
-        v118.objref<i256> = obj.proj v117 0.i256;
-        obj.store v118 v9;
-        v119.objref<i256> = obj.proj v117 1.i256;
-        obj.store v119 9999.i256;
-        v121.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 v17 200000.i256 0.i256 v117;
-        v122.i1 = is_zero v121;
-        br v122 block62 block61;
+        v127.objref<@__fe_obj_ProxyWithdraw_1> = obj.alloc @__fe_obj_ProxyWithdraw_1;
+        v128.objref<i256> = obj.proj v127 0.i256;
+        obj.store v128 v9;
+        v129.objref<i256> = obj.proj v127 1.i256;
+        obj.store v129 9999.i256;
+        v131.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 v17 200000.i256 0.i256 v127;
+        v132.i1 = is_zero v131;
+        br v132 block62 block61;
 
     block61:
         evm_revert 0.i256 0.i256;
 
     block62:
-        v123.objref<@__fe_obj_ProxyWithdraw_1> = obj.alloc @__fe_obj_ProxyWithdraw_1;
-        v124.objref<i256> = obj.proj v123 0.i256;
-        obj.store v124 v9;
-        v125.objref<i256> = obj.proj v123 1.i256;
-        obj.store v125 1000.i256;
-        v126.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 v17 200000.i256 0.i256 v123;
-        v128.i1 = eq v126 1500.i256;
-        br v128 block64 block63;
+        v133.objref<@__fe_obj_ProxyWithdraw_1> = obj.alloc @__fe_obj_ProxyWithdraw_1;
+        v134.objref<i256> = obj.proj v133 0.i256;
+        obj.store v134 v9;
+        v135.objref<i256> = obj.proj v133 1.i256;
+        obj.store v135 1000.i256;
+        v136.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 v17 200000.i256 0.i256 v133;
+        v138.i1 = eq v136 1500.i256;
+        br v138 block64 block63;
 
     block63:
         evm_revert 0.i256 0.i256;
 
     block64:
-        v129.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v9 100000.i256 0.i256 500.i256;
-        v130.i1 = eq v129 750.i256;
-        br v130 block68 block66;
+        v139.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v9 100000.i256 0.i256 500.i256;
+        v140.i1 = eq v139 750.i256;
+        br v140 block68 block66;
 
     block66:
         evm_revert 0.i256 0.i256;
 
     block68:
-        v131.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v9 100000.i256 0.i256;
-        v132.i1 = is_zero v131;
-        br v132 block72 block70;
+        v141.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v9 100000.i256 0.i256;
+        v142.i1 = is_zero v141;
+        br v142 block72 block70;
 
     block70:
         evm_revert 0.i256 0.i256;
 
     block72:
-        v133.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672 v9 100000.i256 0.i256;
-        v134.i1 = is_zero v133;
-        br v134 block1 block74;
+        v143.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672 v9 100000.i256 0.i256;
+        v144.i1 = is_zero v143;
+        br v144 block1 block74;
 
     block74:
         evm_revert 0.i256 0.i256;
