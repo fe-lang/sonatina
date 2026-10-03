@@ -402,6 +402,12 @@ pub(crate) struct StackifySearchCache {
     plans: PlanCache,
 }
 
+impl StackifySearchCache {
+    pub(crate) fn plan_count(&self) -> usize {
+        self.plans.map.len()
+    }
+}
+
 impl NormalizeSearchScratch {
     pub(in crate::stackalloc::stackify) fn with_cache(cache: StackifySearchCache) -> Self {
         Self {

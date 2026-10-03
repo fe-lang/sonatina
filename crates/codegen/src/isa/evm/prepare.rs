@@ -11,7 +11,7 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     machinst::lower::{SectionMembership, SectionWorkModule},
     module_analysis::{CallGraphSchedule, SccRef},
-    stackalloc::{StackifyAlloc, StackifySearchCache},
+    stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
     AccessKind, AccessLoc, Function, GlobalVariableRef, InstDowncast, InstId, InstSetExt,
@@ -49,7 +49,7 @@ use super::{
         lower::lower_section_to_machine,
         pipeline::run_machine_opt_pipeline,
         placement::{MemoryPlacementSection, compute_semantic_memory_placement},
-        prepare::prepare_machine_stackify_analyses,
+        prepare::{SectionStackifySearchCaches, prepare_machine_stackify_analyses},
     },
     malloc_plan,
     memory_plan::{
@@ -796,11 +796,7 @@ fn prepare_machine_section_after_pipeline(
     let mut last_convergence_error = None;
     // Lowering and allocation facts are rebuilt each iteration. Only structural
     // search results survive, within this section's fixed backend profile.
-    let search_caches: FxHashMap<_, _> = funcs
-        .iter()
-        .copied()
-        .map(|func| (func, Mutex::new(StackifySearchCache::default())))
-        .collect();
+    let search_caches = Mutex::new(SectionStackifySearchCaches::default());
 
     for iteration in 0..MAX_FINAL_SPILL_RESERVE_ITERS {
         let placement = compute_semantic_memory_placement(
