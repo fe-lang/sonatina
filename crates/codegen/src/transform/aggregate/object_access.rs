@@ -76,6 +76,11 @@ pub(crate) struct ObjectAccessFacts {
 }
 
 impl ObjectAccessFacts {
+    /// All provenance roots, including arguments, allocations, and fresh calls.
+    pub(crate) fn roots(&self) -> impl Iterator<Item = ValueId> + '_ {
+        self.facts.root_slices().keys().copied()
+    }
+
     pub(crate) fn tracked(
         &self,
         func: &Function,
