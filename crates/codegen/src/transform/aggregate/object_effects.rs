@@ -533,6 +533,17 @@ fn compute_summary_for_func(
 ) -> ObjectEffectSummary {
     module.func_store.view(func, |function| {
         let mut summary = ObjectEffectSummary::new(function.ctx(), func, layout_cache);
+        // Primitive values cannot carry references. Classify each compound type
+        // only once, without consulting the type store for every scalar value.
+        let mut checked_types = FxHashSet::default();
+        if function.dfg.value_ids().all(|value| {
+            let ty = function.dfg.value_ty(value);
+            !matches!(ty, Type::Compound(_))
+                || !checked_types.insert(ty)
+                || !reference_bearing(function, value)
+        }) {
+            return compute_reference_free_summary(function, summaries, layout_cache, summary);
+        }
         let mut root_slices = FxHashMap::default();
         let mut arg_roots = FxHashMap::default();
 
@@ -824,6 +835,55 @@ fn compute_summary_for_func(
         }
         summary
     })
+}
+
+/// Without object references, pointers, or reference-bearing aggregates there
+/// are no roots or captures to analyze. Raw accesses and callees can still
+/// affect object memory, so preserve their non-argument effects.
+fn compute_reference_free_summary(
+    function: &Function,
+    summaries: &ObjectEffectSummaryMap,
+    layout_cache: &mut shape::AggregateLayoutCache,
+    mut summary: ObjectEffectSummary,
+) -> ObjectEffectSummary {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+    let reachable = cfg.reachable_blocks();
+
+    for block in function.layout.iter_block() {
+        if !reachable[block] {
+            continue;
+        }
+        for inst in function.layout.iter_inst(block) {
+            let inst_data = function.dfg.inst(inst);
+            if let Some(ret) = downcast::<&control_flow::Return>(function.inst_set(), inst_data) {
+                // The general return analysis leaves multi-value returns unclassified.
+                if !ret.returns_unit() && !ret.returns_single() {
+                    summary.ret_effect = ObjectReturnEffect::Unknown;
+                }
+                continue;
+            }
+            if let Some(call) = downcast::<&control_flow::Call>(function.inst_set(), inst_data) {
+                let callee = call_effect_summary(function, call, summaries, layout_cache);
+                summary.non_arg.external.union_with(callee.non_arg.external);
+                summary.non_arg.unknown.union_with(callee.non_arg.unknown);
+                continue;
+            }
+            for access in function.dfg.effects(inst).accesses {
+                if access.space == function.ctx().address_spaces().default_space() {
+                    match access.kind {
+                        AccessKind::Read => summary.non_arg.external.reads = true,
+                        AccessKind::Write => summary.non_arg.external.writes = true,
+                    }
+                }
+            }
+        }
+    }
+
+    for effect in &mut summary.arg_effects {
+        effect.local_only = true;
+    }
+    summary
 }
 
 fn compute_capture_states_for_blocks(
