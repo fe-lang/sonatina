@@ -2507,12 +2507,14 @@ impl<'a> RedundantCodeRemover<'a> {
         object_memory: Option<&ObjectMemoryAnalysis>,
         insn: InstId,
     ) -> bool {
-        let [inst_result] = func.dfg.inst_results(insn) else {
+        let [_] = func.dfg.inst_results(insn) else {
             return false;
         };
-        self.solver
-            .object_read_gvn_insn(func, object_memory, insn, *inst_result)
-            .is_some()
+        // The analysis predates code removal, so its carrier may already have
+        // been erased. Only the initialization proof is needed to eliminate a read.
+        object_memory
+            .and_then(|memory| memory.read_state(insn))
+            .is_some_and(|read| !read.may_be_undef())
     }
 
     /// Returns `true` if the `value_phi` can be resolved, i.e. all phi args are dominated by
@@ -2740,6 +2742,7 @@ mod tests {
     use crate::{
         analysis::known_bits::{KnownBitsQuery, count_query_news_for_test},
         domtree::DomTree,
+        optim::aggregate::ObjectMemoryAnalysis,
     };
     use sonatina_ir::{
         BlockId, ControlFlowGraph, Function, Immediate, Type, ValueId,
@@ -2762,6 +2765,48 @@ mod tests {
         module.func_store.view(func_ref, |func| {
             FuncWriter::new(func_ref, func).dump_string()
         })
+    }
+
+    #[test]
+    fn gvn_eliminates_object_reads_after_their_carrier_is_removed() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 0.i256;
+    v2.objref<i256> = obj.alloc i256;
+    obj.store v2 v1;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+"#,
+        )
+        .expect("module parses")
+        .module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            let mut object_memory = ObjectMemoryAnalysis::default();
+            object_memory.compute(func, None, None);
+
+            GvnSolver::new().run_with_object_memory(
+                func,
+                &mut cfg,
+                &mut domtree,
+                Some(&object_memory),
+            );
+        });
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        let dumped = module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        });
+        assert!(!dumped.contains("obj.load"), "{dumped}");
+        assert!(dumped.contains("return v0;"), "{dumped}");
     }
 
     fn simplify_to_value(
