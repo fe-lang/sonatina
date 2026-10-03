@@ -787,7 +787,11 @@ impl CanonicalAddr {
     }
 }
 
-fn absolute_byte_range(base: &BaseObject, offset: i64, bytes: i64) -> Option<(i64, i64)> {
+pub(crate) fn absolute_byte_range(
+    base: &BaseObject,
+    offset: i64,
+    bytes: i64,
+) -> Option<(i64, i64)> {
     let BaseObject::Absolute(base) = base else {
         return None;
     };

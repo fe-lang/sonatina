@@ -16,9 +16,12 @@ use sonatina_ir::{
 
 use super::dead_malloc::eliminate_dead_mallocs;
 
+mod absolute;
+use absolute::{AbsoluteLocations, absolute_interval};
+
 use crate::analysis::memory_access::{
     AliasResult, BaseObject, KeyExpr, KeyedLocKey, LinearLocKey, LinearRangeKey,
-    MemoryAccessAnalysis, RangeCoverage, TrackedLocKey, ValueKey,
+    MemoryAccessAnalysis, RangeCoverage, TrackedLocKey, ValueKey, absolute_byte_range,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -28,8 +31,8 @@ struct AvailState {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct LiveState {
-    exact_live: FxHashSet<TrackedLocKey>,
-    exit_live: FxHashSet<TrackedLocKey>,
+    exact_live: ExactLiveSet,
+    exit_live: ExactLiveSet,
     range_live: FxHashSet<LinearRangeKey>,
     whole_space_live: BitSet<AddressSpaceId>,
 }
@@ -47,6 +50,7 @@ struct LinearBaseKey {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ExactAvailState {
+    absolute: AbsoluteLocations<ValueId>,
     linear_disjoint: FxHashMap<LinearBaseKey, FxHashMap<LinearLocKey, ValueId>>,
     linear_ambiguous: FxHashMap<LinearBaseKey, FxHashMap<LinearLocKey, ValueId>>,
     keyed: FxHashMap<KeyedLocKey, ValueId>,
@@ -54,6 +58,9 @@ struct ExactAvailState {
 
 impl ExactAvailState {
     fn get(&self, key: &TrackedLocKey) -> Option<&ValueId> {
+        if absolute_interval(key).is_some() {
+            return self.absolute.get(key);
+        }
         match key {
             TrackedLocKey::Linear(key) => {
                 let base = LinearBaseKey::new(key.space, key.base.clone());
@@ -66,6 +73,10 @@ impl ExactAvailState {
     }
 
     fn insert(&mut self, key: TrackedLocKey, value: ValueId) {
+        if absolute_interval(&key).is_some() {
+            self.absolute.insert(key, value);
+            return;
+        }
         match key {
             TrackedLocKey::Linear(key) => {
                 let base = LinearBaseKey::new(key.space, key.base.clone());
@@ -84,6 +95,7 @@ impl ExactAvailState {
     where
         F: FnMut(&TrackedLocKey, &mut ValueId) -> bool,
     {
+        self.absolute.retain(&mut keep);
         retain_linear_map(&mut self.linear_disjoint, &mut keep);
         retain_linear_map(&mut self.linear_ambiguous, &mut keep);
         self.keyed.retain(|key, value| {
@@ -96,6 +108,11 @@ impl ExactAvailState {
         match key {
             TrackedLocKey::Linear(key) => {
                 let tracked = TrackedLocKey::Linear(key.clone());
+                self.absolute.retain_candidates(
+                    key.space,
+                    absolute_byte_range(&key.base, key.offset, i64::from(key.bytes)),
+                    |other, _| analysis.alias(other, &tracked) == AliasResult::NoAlias,
+                );
                 self.retain_linear_candidates(key.space, &key.base, |other, _| {
                     analysis.alias(&TrackedLocKey::Linear(other.clone()), &tracked)
                         == AliasResult::NoAlias
@@ -112,6 +129,11 @@ impl ExactAvailState {
     }
 
     fn retain_no_alias_range(&mut self, analysis: &MemoryAccessAnalysis, range: &LinearRangeKey) {
+        self.absolute.retain_candidates(
+            range.space,
+            absolute_byte_range(&range.base, range.offset, range.bytes),
+            |key, _| !analysis.range_may_alias_key(range, key),
+        );
         self.retain_linear_candidates(range.space, &range.base, |key, _| {
             !analysis.range_may_alias_key(range, &TrackedLocKey::Linear(key.clone()))
         });
@@ -139,6 +161,75 @@ impl ExactAvailState {
                 retain_linear_map_in_space(&mut self.linear_disjoint, space, &mut keep);
                 retain_linear_map_in_space(&mut self.linear_ambiguous, space, &mut keep);
             }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ExactLiveSet {
+    absolute: AbsoluteLocations<()>,
+    other: FxHashSet<TrackedLocKey>,
+}
+
+impl ExactLiveSet {
+    fn insert(&mut self, key: TrackedLocKey) {
+        if absolute_interval(&key).is_some() {
+            self.absolute.insert(key, ());
+        } else {
+            self.other.insert(key);
+        }
+    }
+
+    fn contains(&self, key: &TrackedLocKey) -> bool {
+        if absolute_interval(key).is_some() {
+            self.absolute.get(key).is_some()
+        } else {
+            self.other.contains(key)
+        }
+    }
+
+    fn extend(&mut self, keys: impl IntoIterator<Item = TrackedLocKey>) {
+        for key in keys {
+            self.insert(key);
+        }
+    }
+
+    fn into_iter(self) -> impl Iterator<Item = TrackedLocKey> {
+        self.other.into_iter().chain(self.absolute.into_keys())
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(&TrackedLocKey) -> bool) {
+        self.absolute.retain(|key, _| keep(key));
+        self.other.retain(keep);
+    }
+
+    fn candidates(&self, key: &TrackedLocKey) -> impl Iterator<Item = &TrackedLocKey> {
+        let (space, interval) = match key {
+            TrackedLocKey::Linear(key) => (
+                Some(key.space),
+                absolute_byte_range(&key.base, key.offset, i64::from(key.bytes)),
+            ),
+            TrackedLocKey::Keyed(_) => (None, None),
+        };
+        self.other.iter().chain(
+            self.absolute
+                .candidates(space, interval)
+                .map(|(key, _)| key),
+        )
+    }
+
+    fn retain_candidates(
+        &mut self,
+        key: &TrackedLocKey,
+        mut keep: impl FnMut(&TrackedLocKey) -> bool,
+    ) {
+        self.other.retain(|other| keep(other));
+        if let TrackedLocKey::Linear(key) = key {
+            self.absolute.retain_candidates(
+                key.space,
+                absolute_byte_range(&key.base, key.offset, i64::from(key.bytes)),
+                |other, _| keep(other),
+            );
         }
     }
 }
@@ -441,7 +532,7 @@ fn meet_live(states: impl Iterator<Item = (LiveState, bool)>) -> LiveState {
 
     for (state, committing_exit_reachable) in states {
         out.whole_space_live.union_with(&state.whole_space_live);
-        out.exact_live.extend(state.exact_live);
+        out.exact_live.extend(state.exact_live.into_iter());
         out.range_live.extend(state.range_live);
         if committing_exit_reachable {
             exit_states.push(state.exit_live);
@@ -768,20 +859,20 @@ fn value_key_is_live(func: &Function, key: &ValueKey) -> bool {
 }
 
 fn has_may_alias_live(
-    live: &FxHashSet<TrackedLocKey>,
+    live: &ExactLiveSet,
     key: &TrackedLocKey,
     analysis: &MemoryAccessAnalysis,
 ) -> bool {
-    live.iter()
+    live.candidates(key)
         .any(|other| analysis.alias(other, key) != AliasResult::NoAlias)
 }
 
 fn has_must_alias_live(
-    live: &FxHashSet<TrackedLocKey>,
+    live: &ExactLiveSet,
     key: &TrackedLocKey,
     analysis: &MemoryAccessAnalysis,
 ) -> bool {
-    live.iter()
+    live.candidates(key)
         .any(|other| analysis.alias(other, key) == AliasResult::MustAlias)
 }
 
@@ -820,11 +911,13 @@ fn whole_space_liveness_may_observe_key(
 }
 
 fn kill_must_alias_live(
-    live: &mut FxHashSet<TrackedLocKey>,
+    live: &mut ExactLiveSet,
     key: &TrackedLocKey,
     analysis: &MemoryAccessAnalysis,
 ) {
-    live.retain(|other| analysis.alias(other, key) != AliasResult::MustAlias);
+    live.retain_candidates(key, |other| {
+        analysis.alias(other, key) != AliasResult::MustAlias
+    });
 }
 
 fn discharge_live_ranges(
