@@ -58,6 +58,29 @@ impl AvailableMap {
             .chain(self.empty.iter())
     }
 
+    fn load_candidates(
+        &self,
+        slice: ObjectSlice,
+    ) -> impl Iterator<Item = (&ObjectSlice, &ValueId)> {
+        // Nonempty stored slices do not overlap, so only the last start at or
+        // before the load can cover it. Empty views can share a coordinate with
+        // several typed slices; preserve their ordinary coverage scan.
+        let indexed = (slice.leaf_count != 0)
+            .then(|| {
+                self.roots
+                    .get(&slice.root)?
+                    .range(..=slice.first_leaf)
+                    .next_back()
+                    .map(|(_, (slice, value))| (slice, value))
+            })
+            .flatten();
+        let empty = (slice.leaf_count == 0)
+            .then(|| self.iter())
+            .into_iter()
+            .flatten();
+        indexed.into_iter().chain(empty)
+    }
+
     fn extend(&mut self, entries: impl IntoIterator<Item = (ObjectSlice, ValueId)>) {
         for (slice, value) in entries {
             if slice.leaf_count == 0 {
@@ -293,7 +316,7 @@ impl ObjectLoadStore {
         slice: ObjectSlice,
         available: &AvailableMap,
     ) -> Option<ValueId> {
-        for (&available_slice, &value) in available.iter() {
+        for (&available_slice, &value) in available.load_candidates(slice) {
             if !same_base_slice_covers(available_slice, slice) {
                 continue;
             }
