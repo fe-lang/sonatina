@@ -394,6 +394,35 @@ pub(in crate::stackalloc::stackify) struct NormalizeSearchScratch {
     pub(super) operand_prep_plan_cache: OperandPrepPlanCache,
 }
 
+/// Bounded search results for one function under a fixed search profile.
+/// Entries use relative key IDs and cost hashes, not IR values or spill facts.
+/// Transient search graphs and the operand query cache stay with each builder.
+#[derive(Default)]
+pub(crate) struct StackifySearchCache {
+    plans: PlanCache,
+}
+
+impl StackifySearchCache {
+    pub(crate) fn plan_count(&self) -> usize {
+        self.plans.map.len()
+    }
+}
+
+impl NormalizeSearchScratch {
+    pub(in crate::stackalloc::stackify) fn with_cache(cache: StackifySearchCache) -> Self {
+        Self {
+            plan_cache: cache.plans,
+            ..Self::default()
+        }
+    }
+
+    pub(in crate::stackalloc::stackify) fn into_cache(self) -> StackifySearchCache {
+        StackifySearchCache {
+            plans: self.plan_cache,
+        }
+    }
+}
+
 fn clear_hash_map<K: Eq + Hash, V>(map: &mut FxHashMap<K, V>) {
     map.clear();
     map.shrink_to(SEARCH_SCRATCH_REUSE_CAP);

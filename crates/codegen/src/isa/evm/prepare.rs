@@ -1,6 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::sync::Mutex;
 use tracing::{debug, debug_span, info_span, trace_span};
 
 use crate::{
@@ -48,7 +49,7 @@ use super::{
         lower::lower_section_to_machine,
         pipeline::run_machine_opt_pipeline,
         placement::{MemoryPlacementSection, compute_semantic_memory_placement},
-        prepare::prepare_machine_stackify_analyses,
+        prepare::{SectionStackifySearchCaches, prepare_machine_stackify_analyses},
     },
     malloc_plan,
     memory_plan::{
@@ -793,6 +794,9 @@ fn prepare_machine_section_after_pipeline(
     let mut fixed_slot_effects = FxHashSet::default();
     let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
     let mut last_convergence_error = None;
+    // Lowering and allocation facts are rebuilt each iteration. Only structural
+    // search results survive, within this section's fixed backend profile.
+    let search_caches = Mutex::new(SectionStackifySearchCaches::default());
 
     for iteration in 0..MAX_FINAL_SPILL_RESERVE_ITERS {
         let placement = compute_semantic_memory_placement(
@@ -826,6 +830,7 @@ fn prepare_machine_section_after_pipeline(
             backend,
             &machine_isa,
             &placement,
+            &search_caches,
         )?;
         // Recompute fixed-slot effects from the current machine allocation. Final spills selected
         // for fixed slots are added below, after optional spill placement has been chosen.

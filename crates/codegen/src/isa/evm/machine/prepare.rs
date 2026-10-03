@@ -1,6 +1,7 @@
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{Module, cfg::ControlFlowGraph, isa::evm::EvmMachine, module::FuncRef};
+use std::sync::Mutex;
 use tracing::{debug_span, trace_span};
 
 use crate::{
@@ -9,7 +10,7 @@ use crate::{
     module_analysis::CallGraphSchedule,
     stackalloc::{
         HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
-        StackifyBuilder, StackifyEdgeSplitter,
+        StackifyBuilder, StackifyEdgeSplitter, StackifySearchCache,
     },
 };
 
@@ -21,12 +22,52 @@ use super::{
     verify::verify_machine_module,
 };
 
+const SECTION_SEARCH_PLAN_CACHE_CAP: usize = 16_384;
+
+/// Search caches waiting for the next placement iteration. Active allocations
+/// own their caches, so only completed functions count toward this section budget.
+#[derive(Default)]
+pub(crate) struct SectionStackifySearchCaches {
+    caches: FxHashMap<FuncRef, StackifySearchCache>,
+    retained_plans: usize,
+    exhausted: bool,
+}
+
+impl SectionStackifySearchCaches {
+    fn take(&mut self, func: FuncRef) -> StackifySearchCache {
+        let cache = self.caches.remove(&func).unwrap_or_default();
+        self.retained_plans -= cache.plan_count();
+        cache
+    }
+
+    fn retain(&mut self, func: FuncRef, cache: StackifySearchCache) {
+        let plans = cache.plan_count();
+        if self.exhausted || plans == 0 {
+            return;
+        }
+        // Fall back to fresh caches for an oversized section, releasing every
+        // retained map and eviction queue. Keeping only some functions warm can
+        // give identical functions different stack plans and prevent block merging.
+        if self.retained_plans + plans > SECTION_SEARCH_PLAN_CACHE_CAP {
+            *self = Self {
+                exhausted: true,
+                ..Self::default()
+            };
+            return;
+        }
+        self.retained_plans += plans;
+        let previous = self.caches.insert(func, cache);
+        debug_assert!(previous.is_none());
+    }
+}
+
 pub(crate) fn prepare_machine_stackify_analyses(
     module: &Module,
     schedule: &CallGraphSchedule,
     backend: &EvmBackend,
     machine_isa: &EvmMachine,
     placement: &EvmMemoryPlacementPlan,
+    search_caches: &Mutex<SectionStackifySearchCaches>,
 ) -> Result<FxHashMap<FuncRef, MachineStackifyAnalysis>, String> {
     verify_machine_module(module, schedule.funcs())?;
     let _span = debug_span!("sonatina.codegen.evm.machine.prepare_stackify").entered();
@@ -61,6 +102,7 @@ pub(crate) fn prepare_machine_stackify_analyses(
             .par_iter()
             .copied()
             .map(|func| {
+                let mut search_cache = search_caches.lock().unwrap().take(func);
                 let analysis = module.func_store.modify(func, |function| {
                     prepare_machine_stackify_analysis(
                         function,
@@ -68,8 +110,10 @@ pub(crate) fn prepare_machine_stackify_analyses(
                         machine_isa,
                         analysis_fixed_slot_effects,
                         analysis_scratch_arena_effects,
+                        &mut search_cache,
                     )
                 });
+                search_caches.lock().unwrap().retain(func, search_cache);
                 let uses_scratch_spills = analysis.alloc.uses_scratch_spills();
                 // Optional final spills may be assigned to the shared arena after
                 // stackification. Account for them before analyzing callers, even on
@@ -132,6 +176,7 @@ fn prepare_machine_stackify_analysis(
     machine_isa: &EvmMachine,
     fixed_slot_effects: &FxHashSet<FuncRef>,
     scratch_arena_effects: &FxHashSet<FuncRef>,
+    search_cache: &mut StackifySearchCache,
 ) -> MachineStackifyAnalysis {
     let _span = trace_span!("sonatina.codegen.evm.machine.prepare_stackify_func").entered();
     let mut cfg = ControlFlowGraph::new();
@@ -181,10 +226,10 @@ fn prepare_machine_stackify_analysis(
     }
 
     let (alloc, trace) = if backend.capture_stackify_trace {
-        let (alloc, trace) = builder.compute_with_trace_capture();
+        let (alloc, trace) = builder.compute_with_trace_and_search_cache(search_cache);
         (alloc, Some(trace))
     } else {
-        (builder.compute(), None)
+        (builder.compute_with_search_cache(search_cache), None)
     };
 
     MachineStackifyAnalysis {
