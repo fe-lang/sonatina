@@ -315,6 +315,9 @@ impl LoadStoreSolver {
             }
 
             let mut state = in_states[block].clone();
+            // Earlier blocks may have deleted values present in the dataflow facts.
+            // Prune once here, then validate individual forwarding candidates below.
+            prune_dead_avail_state(func, &mut state);
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
             for inst in insts {
                 if !func.layout.is_inst_inserted(inst) {
@@ -579,11 +582,12 @@ fn transfer_forward(
     state: &mut AvailState,
     rewrite: bool,
 ) -> bool {
-    prune_dead_avail_state(func, state);
     let effects = func.dfg.effects(inst);
 
     if let Some(key) = forwardable_read_key(func, inst, analysis, &effects) {
-        if let Some(&known) = state.exact.get(&key) {
+        if let Some(&known) = state.exact.get(&key)
+            && func.dfg.has_value(known)
+        {
             if rewrite {
                 let result = func
                     .dfg
@@ -652,7 +656,8 @@ fn transfer_backward(
     alloca_visibility: &AllocaVisibility,
     rewrite: bool,
 ) -> bool {
-    prune_dead_live_state(func, live);
+    // The fixed point does not mutate IR, and backward rewriting only removes
+    // stores. Neither can delete the values or allocation roots in live keys.
     let effects = func.dfg.effects(inst);
 
     for access in effects.accesses.iter().rev() {
@@ -734,22 +739,11 @@ fn prune_dead_avail_state(func: &Function, state: &mut AvailState) {
         .retain(|key, value| func.dfg.has_value(*value) && tracked_key_is_live(func, key));
 }
 
-fn prune_dead_live_state(func: &Function, live: &mut LiveState) {
-    live.exact_live.retain(|key| tracked_key_is_live(func, key));
-    live.exit_live.retain(|key| tracked_key_is_live(func, key));
-    live.range_live
-        .retain(|range| linear_range_is_live(func, range));
-}
-
 fn tracked_key_is_live(func: &Function, key: &TrackedLocKey) -> bool {
     match key {
         TrackedLocKey::Linear(key) => base_object_is_live(func, &key.base),
         TrackedLocKey::Keyed(key) => value_key_is_live(func, &key.key),
     }
-}
-
-fn linear_range_is_live(func: &Function, range: &LinearRangeKey) -> bool {
-    base_object_is_live(func, &range.base)
 }
 
 fn base_object_is_live(func: &Function, base: &BaseObject) -> bool {
