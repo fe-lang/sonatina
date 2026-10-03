@@ -6,6 +6,7 @@ mod operand_prep;
 mod test_utils;
 
 pub(super) use normalize_search::NormalizeSearchScratch;
+pub(crate) use normalize_search::StackifySearchCache;
 
 use crate::{
     analysis::memory_access::ExactLocalAddr,

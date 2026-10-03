@@ -53,6 +53,7 @@ pub(crate) use builder::{
     HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
 };
 pub use builder::{StackifyBuilder, StackifySearchProfile};
+pub(crate) use planner::StackifySearchCache;
 pub(crate) use trace::StackifyTrace;
 
 use builder::StackifyContext;

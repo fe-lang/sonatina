@@ -1,6 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::sync::Mutex;
 use tracing::{debug, debug_span, info_span, trace_span};
 
 use crate::{
@@ -10,7 +11,7 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     machinst::lower::{SectionMembership, SectionWorkModule},
     module_analysis::{CallGraphSchedule, SccRef},
-    stackalloc::StackifyAlloc,
+    stackalloc::{StackifyAlloc, StackifySearchCache},
 };
 use sonatina_ir::{
     AccessKind, AccessLoc, Function, GlobalVariableRef, InstDowncast, InstId, InstSetExt,
@@ -793,6 +794,13 @@ fn prepare_machine_section_after_pipeline(
     let mut fixed_slot_effects = FxHashSet::default();
     let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
     let mut last_convergence_error = None;
+    // Lowering and allocation facts are rebuilt each iteration. Only structural
+    // search results survive, within this section's fixed backend profile.
+    let search_caches: FxHashMap<_, _> = funcs
+        .iter()
+        .copied()
+        .map(|func| (func, Mutex::new(StackifySearchCache::default())))
+        .collect();
 
     for iteration in 0..MAX_FINAL_SPILL_RESERVE_ITERS {
         let placement = compute_semantic_memory_placement(
@@ -826,6 +834,7 @@ fn prepare_machine_section_after_pipeline(
             backend,
             &machine_isa,
             &placement,
+            &search_caches,
         )?;
         // Recompute fixed-slot effects from the current machine allocation. Final spills selected
         // for fixed slots are added below, after optional spill placement has been chosen.

@@ -17,7 +17,7 @@ use super::{
     block::operand_order_for_stackify,
     driver::FunctionPlanner,
     entry::EntryTable,
-    planner::{MemState, NormalizeSearchScratch, must_use_object_storage},
+    planner::{MemState, NormalizeSearchScratch, StackifySearchCache, must_use_object_storage},
     slots::{FreeSlotPools, SpillSlotInterference, SpillSlotPools},
     spill::SpillSet,
     sym_stack::SymStack,
@@ -292,6 +292,30 @@ impl<'a> StackifyBuilder<'a> {
         self,
         observer: &mut O,
     ) -> StackifyAlloc {
+        self.compute_with_observer_and_cache(observer, &mut StackifySearchCache::default())
+    }
+
+    pub(crate) fn compute_with_search_cache(
+        self,
+        cache: &mut StackifySearchCache,
+    ) -> StackifyAlloc {
+        self.compute_with_observer_and_cache(&mut NullObserver, cache)
+    }
+
+    pub(crate) fn compute_with_trace_and_search_cache(
+        self,
+        cache: &mut StackifySearchCache,
+    ) -> (StackifyAlloc, super::trace::StackifyTrace) {
+        let mut trace = super::trace::StackifyTrace::default();
+        let alloc = self.compute_with_observer_and_cache(&mut trace, cache);
+        (alloc, trace)
+    }
+
+    fn compute_with_observer_and_cache<O: StackifyObserver>(
+        self,
+        observer: &mut O,
+        cache: &mut StackifySearchCache,
+    ) -> StackifyAlloc {
         let entry = match self.cfg.entry() {
             Some(b) => b,
             None => return StackifyAlloc::default(),
@@ -382,7 +406,7 @@ impl<'a> StackifyBuilder<'a> {
         // can rely on loads being correct.
         let mut spill_set: BitSet<ValueId> = BitSet::default();
         let mut forced_object_spills: BitSet<ValueId> = BitSet::default();
-        let mut search_scratch = NormalizeSearchScratch::default();
+        let mut search_scratch = NormalizeSearchScratch::with_cache(std::mem::take(cache));
         loop {
             let checkpoint = observer.checkpoint();
             let mut slots: SpillSlotPools = SpillSlotPools::default();
@@ -409,6 +433,7 @@ impl<'a> StackifyBuilder<'a> {
                     &spill_obj,
                 );
                 alloc.validate_spill_storage();
+                *cache = search_scratch.into_cache();
                 return alloc;
             }
 

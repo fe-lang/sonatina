@@ -1,6 +1,7 @@
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{Module, cfg::ControlFlowGraph, isa::evm::EvmMachine, module::FuncRef};
+use std::sync::Mutex;
 use tracing::{debug_span, trace_span};
 
 use crate::{
@@ -9,7 +10,7 @@ use crate::{
     module_analysis::CallGraphSchedule,
     stackalloc::{
         HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
-        StackifyBuilder, StackifyEdgeSplitter,
+        StackifyBuilder, StackifyEdgeSplitter, StackifySearchCache,
     },
 };
 
@@ -27,6 +28,7 @@ pub(crate) fn prepare_machine_stackify_analyses(
     backend: &EvmBackend,
     machine_isa: &EvmMachine,
     placement: &EvmMemoryPlacementPlan,
+    search_caches: &FxHashMap<FuncRef, Mutex<StackifySearchCache>>,
 ) -> Result<FxHashMap<FuncRef, MachineStackifyAnalysis>, String> {
     verify_machine_module(module, schedule.funcs())?;
     let _span = debug_span!("sonatina.codegen.evm.machine.prepare_stackify").entered();
@@ -61,6 +63,7 @@ pub(crate) fn prepare_machine_stackify_analyses(
             .par_iter()
             .copied()
             .map(|func| {
+                let mut search_cache = search_caches[&func].lock().unwrap();
                 let analysis = module.func_store.modify(func, |function| {
                     prepare_machine_stackify_analysis(
                         function,
@@ -68,6 +71,7 @@ pub(crate) fn prepare_machine_stackify_analyses(
                         machine_isa,
                         analysis_fixed_slot_effects,
                         analysis_scratch_arena_effects,
+                        &mut search_cache,
                     )
                 });
                 let uses_scratch_spills = analysis.alloc.uses_scratch_spills();
@@ -132,6 +136,7 @@ fn prepare_machine_stackify_analysis(
     machine_isa: &EvmMachine,
     fixed_slot_effects: &FxHashSet<FuncRef>,
     scratch_arena_effects: &FxHashSet<FuncRef>,
+    search_cache: &mut StackifySearchCache,
 ) -> MachineStackifyAnalysis {
     let _span = trace_span!("sonatina.codegen.evm.machine.prepare_stackify_func").entered();
     let mut cfg = ControlFlowGraph::new();
@@ -181,10 +186,10 @@ fn prepare_machine_stackify_analysis(
     }
 
     let (alloc, trace) = if backend.capture_stackify_trace {
-        let (alloc, trace) = builder.compute_with_trace_capture();
+        let (alloc, trace) = builder.compute_with_trace_and_search_cache(search_cache);
         (alloc, Some(trace))
     } else {
-        (builder.compute(), None)
+        (builder.compute_with_search_cache(search_cache), None)
     };
 
     MachineStackifyAnalysis {
