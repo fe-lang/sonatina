@@ -413,6 +413,8 @@ impl Pipeline {
         let mut p = Self::new();
         p.inliner_config = inliner_config;
         p.add_step(Step::Inline);
+        // Prune helpers made unreachable by inlining before analyzing their bodies.
+        p.add_step(Step::DeadFuncElim);
         p.add_step(Step::FuncPasses(PRIMARY_FUNC_PASSES.to_vec()));
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
@@ -462,7 +464,8 @@ impl Pipeline {
     /// Default optimization pipeline with a speed-oriented ordering.
     ///
     /// Current sequence:
-    /// 1. `Inline` — module-level inlining (trivial + constrained full inliner)
+    /// 1. `Inline` — module-level inlining (trivial + constrained full inliner),
+    ///    followed by `DeadFuncElim` to prune helpers made unreachable by inlining
     /// 2. Per-function passes (parallel):
     ///    - `CfgCleanup`
     ///    - `AggregateCombine`
