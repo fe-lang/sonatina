@@ -1,5 +1,8 @@
+use std::{collections::BTreeMap, ops::Bound::Excluded};
+
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, InstId, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
@@ -25,7 +28,114 @@ use super::{
     shape,
 };
 
-type AvailableMap = FxHashMap<ObjectSlice, ValueId>;
+/// Nonempty slices within a root never overlap: every insertion follows
+/// invalidation of all may-writes. Index their starts so disjoint field stores
+/// do not scan the entire object. Empty slices retain their full typed identity
+/// separately, because several empty views can share a coordinate.
+#[derive(Clone, Default, PartialEq, Eq)]
+struct AvailableMap {
+    roots: FxHashMap<ValueId, BTreeMap<usize, (ObjectSlice, ValueId)>>,
+    empty: FxHashMap<ObjectSlice, ValueId>,
+}
+
+impl AvailableMap {
+    fn get(&self, slice: &ObjectSlice) -> Option<&ValueId> {
+        if slice.leaf_count == 0 {
+            self.empty.get(slice)
+        } else {
+            self.roots
+                .get(&slice.root)?
+                .get(&slice.first_leaf)
+                .filter(|(stored, _)| stored == slice)
+                .map(|(_, value)| value)
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&ObjectSlice, &ValueId)> {
+        self.roots
+            .values()
+            .flat_map(|root| root.values().map(|(slice, value)| (slice, value)))
+            .chain(self.empty.iter())
+    }
+
+    fn extend(&mut self, entries: impl IntoIterator<Item = (ObjectSlice, ValueId)>) {
+        for (slice, value) in entries {
+            if slice.leaf_count == 0 {
+                self.empty.insert(slice, value);
+            } else {
+                let root = self.roots.entry(slice.root).or_default();
+                debug_assert!(
+                    root.range(..slice.first_leaf)
+                        .next_back()
+                        .is_none_or(|(_, (previous, _))| previous
+                            .first_leaf
+                            .saturating_add(previous.leaf_count)
+                            <= slice.first_leaf)
+                );
+                debug_assert!(
+                    root.range(slice.first_leaf..)
+                        .next()
+                        .is_none_or(
+                            |(&next, _)| slice.first_leaf.saturating_add(slice.leaf_count) <= next
+                        )
+                );
+                root.insert(slice.first_leaf, (slice, value));
+            }
+        }
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(&ObjectSlice, &mut ValueId) -> bool) {
+        self.roots.retain(|_, root| {
+            root.retain(|_, (slice, value)| keep(slice, value));
+            !root.is_empty()
+        });
+        self.empty.retain(keep);
+    }
+
+    fn invalidate(&mut self, writes: &[ObjectAccess], accesses: &ObjectAccessFacts) {
+        if writes.is_empty() {
+            return;
+        }
+        self.empty.retain(|slice, _| {
+            !writes
+                .iter()
+                .any(|&write| accesses.may_overlap(write, *slice))
+        });
+        for &write in writes {
+            self.roots.retain(|&root_id, root| {
+                if let ObjectAccess::Exact(projection) = write
+                    && projection.root_value.value() == root_id
+                {
+                    let first = projection.slice.first_leaf;
+                    let end = first.saturating_add(projection.slice.leaf_count);
+                    let mut remove = SmallVec::<[usize; 4]>::new();
+                    // Only one nonoverlapping slice can start at/before the
+                    // write and extend into it. Later candidates start inside it.
+                    if let Some((&key, &(slice, _))) = root.range(..=first).next_back()
+                        && accesses.may_overlap(write, slice)
+                    {
+                        remove.push(key);
+                    }
+                    if first < end {
+                        remove.extend(
+                            root.range((Excluded(first), Excluded(end)))
+                                .map(|(&key, _)| key),
+                        );
+                    }
+                    for key in remove {
+                        root.remove(&key);
+                    }
+                    !root.is_empty()
+                } else {
+                    // Cross-root aliases, whole-root, external and unknown
+                    // accesses depend on root identity, not field coordinates.
+                    root.first_key_value()
+                        .is_some_and(|(_, &(slice, _))| !accesses.may_overlap(write, slice))
+                }
+            });
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct ObjectLoadStore {
@@ -183,7 +293,7 @@ impl ObjectLoadStore {
         slice: ObjectSlice,
         available: &AvailableMap,
     ) -> Option<ValueId> {
-        for (&available_slice, &value) in available {
+        for (&available_slice, &value) in available.iter() {
             if !same_base_slice_covers(available_slice, slice) {
                 continue;
             }
@@ -295,12 +405,7 @@ impl ObjectLoadStore {
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return true;
         }
-        available.retain(|slice, _| {
-            !effects
-                .writes
-                .iter()
-                .any(|&effect| accesses.may_overlap(effect, *slice))
-        });
+        available.invalidate(&effects.writes, accesses);
         available.extend(written);
         false
     }
@@ -660,10 +765,133 @@ mod tests {
     use std::slice;
 
     use super::*;
-    use crate::transform::aggregate::compute_object_effect_summaries;
-    use sonatina_ir::{ir_writer::FuncWriter, module::FuncRef};
+    use crate::transform::aggregate::{compute_object_effect_summaries, provenance::Projection};
+    use sonatina_ir::{Type, ir_writer::FuncWriter, module::FuncRef};
 
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
+
+    #[test]
+    fn indexed_availability_matches_flat_alias_invalidation() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.objref<[i256; 16]>, v1.objref<[i256; 16]>, v2.[i256; 2]) -> objref<[i256; 16]> {
+block0:
+    v3.objref<[i256; 16]> = obj.alloc [i256; 16];
+    v4.objref<[i256; 16]> = obj.alloc [i256; 16];
+    return v3;
+}
+"#,
+        );
+        module.func_store.view(lookup_func(&module, "f"), |func| {
+            let accesses = ObjectAccessFacts::new(func, None);
+            let mut roots = func.arg_values[..2].to_vec();
+            roots.extend(
+                func.layout
+                    .iter_inst(func.layout.entry_block().unwrap())
+                    .filter_map(|inst| func.dfg.inst_result(inst)),
+            );
+            let pair = func.dfg.value_ty(func.arg_values[2]);
+            let mut seed = AvailableMap::default();
+            for &root in &roots {
+                seed.extend((0..16).step_by(2).flat_map(|first_leaf| {
+                    [
+                        (
+                            ObjectSlice {
+                                root,
+                                first_leaf,
+                                leaf_count: 2,
+                                total_leaves: 16,
+                                ty: pair,
+                            },
+                            func.arg_values[2],
+                        ),
+                        (
+                            ObjectSlice {
+                                root,
+                                first_leaf,
+                                leaf_count: 0,
+                                total_leaves: 16,
+                                ty: Type::Unit,
+                            },
+                            func.arg_values[2],
+                        ),
+                    ]
+                }));
+            }
+            let mut writes = vec![ObjectAccess::Unknown, ObjectAccess::External];
+            for &root in &roots {
+                writes.push(ObjectAccess::Root(RootValue::new(root)));
+                for first_leaf in 0..=16 {
+                    for leaf_count in [0, 1, 2, 4, 16] {
+                        if first_leaf + leaf_count <= 16 {
+                            writes.push(ObjectAccess::Exact(Projection {
+                                root_value: RootValue::new(root),
+                                slice: shape::AggregateSlice {
+                                    ty: pair,
+                                    first_leaf,
+                                    leaf_count,
+                                },
+                            }));
+                        }
+                    }
+                }
+            }
+            let original: FxHashMap<_, _> =
+                seed.iter().map(|(&slice, &value)| (slice, value)).collect();
+            for &write in &writes {
+                let mut indexed = seed.clone();
+                let mut flat = original.clone();
+                indexed.invalidate(&[write], &accesses);
+                flat.retain(|&slice, _| !accesses.may_overlap(write, slice));
+                assert_eq!(
+                    indexed
+                        .iter()
+                        .map(|(&slice, &value)| (slice, value))
+                        .collect::<FxHashMap<_, _>>(),
+                    flat,
+                    "{write:?}"
+                );
+                for slice in original.keys() {
+                    assert_eq!(indexed.get(slice), flat.get(slice), "{write:?} {slice:?}");
+                }
+                // CFG meets preserve the same typed facts independent of order.
+                let met = meet_forward([seed.clone(), indexed].into_iter());
+                assert_eq!(
+                    met.iter()
+                        .map(|(&slice, &value)| (slice, value))
+                        .collect::<FxHashMap<_, _>>(),
+                    flat
+                );
+            }
+            let mut indexed = seed.clone();
+            let mut flat = original;
+            for &write in &writes {
+                indexed.invalidate(&[write], &accesses);
+                flat.retain(|&slice, _| !accesses.may_overlap(write, slice));
+                if let ObjectAccess::Exact(projection) = write {
+                    let slice = accesses.projection_slice(projection);
+                    let value = func.arg_values[2];
+                    indexed.extend([(slice, value)]);
+                    flat.insert(slice, value);
+                }
+                assert_eq!(
+                    indexed
+                        .iter()
+                        .map(|(&slice, &value)| (slice, value))
+                        .collect::<FxHashMap<_, _>>(),
+                    flat,
+                    "sequential write {write:?}"
+                );
+            }
+            let mut indexed = seed.clone();
+            indexed.invalidate(&[], &accesses);
+            assert!(indexed == seed);
+            // Batched effects must behave like their individual transfers.
+            indexed.invalidate(&writes, &accesses);
+            assert_eq!(indexed.iter().count(), 0);
+        });
+    }
 
     fn run_with_effects(module: &sonatina_ir::Module, func_ref: FuncRef) {
         let object_effects = compute_object_effect_summaries(module);
