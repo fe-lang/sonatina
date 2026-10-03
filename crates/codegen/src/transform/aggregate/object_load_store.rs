@@ -558,7 +558,7 @@ impl ObjectLoadStore {
         accesses: &ObjectAccessFacts,
     ) -> FxHashMap<ValueId, usize> {
         let mut live_out_roots = FxHashMap::default();
-        for value in func.dfg.value_ids() {
+        for value in accesses.roots().filter(|&value| func.dfg.has_value(value)) {
             if let Some(root) = whole_root_slice_for_value(tracked, value)
                 && accesses.exposed(RootValue::new(root.root))
             {
@@ -591,7 +591,7 @@ fn mark_access_live(
     access: ObjectAccess,
     live: &mut LiveLeafMap,
 ) {
-    for value in func.dfg.value_ids() {
+    for value in accesses.roots().filter(|&value| func.dfg.has_value(value)) {
         let Some(root) = whole_root_slice_for_value(tracked, value) else {
             continue;
         };
