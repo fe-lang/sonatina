@@ -8,6 +8,7 @@ use crate::{
         lower::{LoweredFunction, SectionWorkModule},
         vcode::{Label, VCode, VCodeFixup},
     },
+    module_analysis::CallGraphSchedule,
     object::{CompileOptions, PcAttribution, SymbolId, UnmappedReason, link::link_section},
     optim::pipeline::Pipeline,
     stackalloc::{
@@ -34,6 +35,9 @@ use self::{
     emit::{
         FinalAlloc, materialize_jumpdests, prune_redundant_opcode_sequences,
         rewrite_evm_local_fallthrough_layout,
+    },
+    machine::placement::{
+        EvmMemoryPlacementPlan, MemoryPlacementSection, compute_semantic_memory_placement,
     },
     memory_plan::{
         ArenaCostModel, BackendSpillReserve, ProgramMemoryPlan,
@@ -1724,6 +1728,42 @@ block0:
     );
 }
 
+fn compute_test_memory_placement(
+    module: &Module,
+    backend: &EvmBackend,
+    entry: FuncRef,
+) -> EvmMemoryPlacementPlan {
+    let funcs = module.funcs();
+    let ptr_escape = compute_ptr_escape_summaries(module, &funcs, &backend.isa);
+    let mut analyses = FxHashMap::default();
+    for &func in &funcs {
+        module.func_store.modify(func, |function| {
+            analyses.insert(
+                func,
+                compute_test_pre_analysis(function, &module.ctx, backend, &ptr_escape),
+            );
+        });
+    }
+    let schedule = CallGraphSchedule::compute(module, &funcs);
+    let fixed_reservations = prepare::scan_fixed_reservations(module, &funcs, backend, &analyses)
+        .expect("fixed reservations");
+    compute_semantic_memory_placement(
+        module,
+        MemoryPlacementSection {
+            schedule: &schedule,
+            fixed_reservations: &fixed_reservations,
+            funcs: &funcs,
+            entry,
+            includes: &[],
+        },
+        &analyses,
+        &ptr_escape,
+        &FxHashSet::default(),
+        backend,
+        &FxHashMap::default(),
+    )
+}
+
 #[test]
 fn caller_free_ptr_floor_reaches_callee_malloc() {
     let parsed = parse_module(
@@ -1732,6 +1772,8 @@ target = "evm-ethereum-osaka"
 
 func public %clobber_then_read(v0.*i256) -> i256 {
 block0:
+    jump block1;
+block1:
     v1.*i8 = evm_malloc 32.i256;
     v2.*i256 = bitcast v1 *i256;
     mstore v2 v2 i256;
@@ -1757,41 +1799,10 @@ block0:
 "#,
     )
     .expect("module parses");
-    let funcs = parsed.module.funcs();
     let backend = osaka_backend();
-    let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
-
-    let mut analyses = FxHashMap::default();
-    for &func in &funcs {
-        parsed.module.func_store.modify(func, |function| {
-            analyses.insert(
-                func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
-            );
-        });
-    }
-
     let clobber = find_func(&parsed.module, "clobber_then_read");
     let entry = find_func(&parsed.module, "entry");
-    let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
-    let fixed_reservations =
-        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses)
-            .expect("fixed reservations");
-    let placement = machine::placement::compute_semantic_memory_placement(
-        &parsed.module,
-        machine::placement::MemoryPlacementSection {
-            schedule: &schedule,
-            fixed_reservations: &fixed_reservations,
-            funcs: &funcs,
-            entry,
-            includes: &[],
-        },
-        &analyses,
-        &ptr_escape,
-        &FxHashSet::default(),
-        &backend,
-        &FxHashMap::default(),
-    );
+    let placement = compute_test_memory_placement(&parsed.module, &backend, entry);
     let malloc = parsed.module.func_store.view(clobber, |function| {
         function
             .layout
@@ -1820,6 +1831,8 @@ func public %alloc() -> i256 {
 block0:
     v0.*i8 = evm_malloc 32.i256;
     v1.i256 = ptr_to_int v0 i256;
+    jump block1;
+block1:
     return v1;
 }
 
@@ -1841,41 +1854,10 @@ block0:
 "#,
     )
     .expect("module parses");
-    let funcs = parsed.module.funcs();
     let backend = osaka_backend();
-    let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
-
-    let mut analyses = FxHashMap::default();
-    for &func in &funcs {
-        parsed.module.func_store.modify(func, |function| {
-            analyses.insert(
-                func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
-            );
-        });
-    }
-
-    let entry = find_func(&parsed.module, "entry");
     let scratch = find_func(&parsed.module, "scratch");
-    let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
-    let fixed_reservations =
-        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses)
-            .expect("fixed reservations");
-    let placement = machine::placement::compute_semantic_memory_placement(
-        &parsed.module,
-        machine::placement::MemoryPlacementSection {
-            schedule: &schedule,
-            fixed_reservations: &fixed_reservations,
-            funcs: &funcs,
-            entry,
-            includes: &[],
-        },
-        &analyses,
-        &ptr_escape,
-        &FxHashSet::default(),
-        &backend,
-        &FxHashMap::default(),
-    );
+    let entry = find_func(&parsed.module, "entry");
+    let placement = compute_test_memory_placement(&parsed.module, &backend, entry);
     let malloc = parsed.module.func_store.view(scratch, |function| {
         function
             .layout
@@ -1896,6 +1878,68 @@ block0:
         placement.funcs[&scratch].free_ptr_floor_before_malloc[&malloc],
         Some(min_base)
     );
+}
+
+#[test]
+fn free_ptr_floor_meets_cfg_edges_and_initial_entry_state() {
+    for (body, expected) in [
+        (
+            "block0:\n    evm_mstore 64.i256 512.i256;\n    jump block1;\nblock1:",
+            Some(512),
+        ),
+        (
+            "block0:\n    br v0 block1 block2;\nblock1:\n    evm_mstore 64.i256 512.i256;\n    jump block3;\nblock2:\n    evm_mstore 64.i256 768.i256;\n    jump block3;\nblock3:",
+            Some(512),
+        ),
+        (
+            "block0:\n    br v0 block1 block2;\nblock1:\n    evm_mstore 64.i256 512.i256;\n    jump block3;\nblock2:\n    evm_mstore 64.i256 v1;\n    jump block3;\nblock3:",
+            None,
+        ),
+        (
+            "block0:\n    evm_mstore 64.i256 512.i256;\n    jump block1;\nblock1:\n    call %clobber v1;",
+            None,
+        ),
+        ("block0:", None),
+    ] {
+        let exit = if body == "block0:" {
+            "br v0 block0 block1;\nblock1:\n    return v3;"
+        } else {
+            "return v3;"
+        };
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %probe(v0.i1, v1.i256) -> i256 {{
+{body}
+    v2.*i8 = evm_malloc 32.i256;
+    v3.i256 = ptr_to_int v2 i256;
+    {exit}
+}}
+func private %clobber(v0.i256) {{
+block0:
+    evm_mstore 64.i256 v0;
+    return;
+}}
+func public %entry() {{
+block0:
+    v0.i256 = call %probe 0.i1 0.i256;
+    evm_mstore 0.i256 v0;
+    evm_return 0.i256 32.i256;
+}}
+"#
+        );
+        let module = parse_module(&source).expect("module parses").module;
+        let backend = osaka_backend();
+        let entry = find_func(&module, "entry");
+        let probe = find_func(&module, "probe");
+        let placement = compute_test_memory_placement(&module, &backend, entry);
+        let floors: Vec<_> = placement.funcs[&probe]
+            .free_ptr_floor_before_malloc
+            .values()
+            .copied()
+            .collect();
+        assert_eq!(floors, [expected], "{body}");
+    }
 }
 
 #[test]

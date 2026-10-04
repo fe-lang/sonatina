@@ -1788,7 +1788,15 @@ object @Contract { section runtime { entry %entry; } }
                     "    return v2;\nblock2:\n    jump block0;",
                 );
             }
-            for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            for (level, initial_free_ptr) in
+                [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os]
+                    .into_iter()
+                    .flat_map(|level| [0, 64, 512].map(|initial| (level, initial)))
+            {
+                let source = source.replace(
+                    "evm_mstore 64.i256 0.i256;",
+                    &format!("evm_mstore 64.i256 {initial_free_ptr}.i256;"),
+                );
                 let module = parse_sona(&source).module;
                 verify_module_or_panic(&module, &config);
                 let mut compiler =
