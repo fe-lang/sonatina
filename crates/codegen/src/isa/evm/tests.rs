@@ -53,6 +53,14 @@ struct PlanTestCtx {
     plan: ProgramMemoryPlan,
 }
 
+#[test]
+fn unknown_contents_keep_branch_exclusive_allocations_disjoint() {
+    let source = include_str!("../../../test_files/evm/branch_exclusive_unknown_storage.sntn");
+    let ctx = plan_test_ctx_from_src(source);
+    let plan = &ctx.plan.funcs[&ctx.names["entry"]];
+    assert_eq!(plan.scratch_words + plan.stable_words, 6);
+}
+
 fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
     let parsed = parse_module(src).expect("module parses");
     let funcs = parsed.module.funcs();

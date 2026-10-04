@@ -118,18 +118,6 @@ fn closure_allocas(
     Ok(out)
 }
 
-fn conservative_closure_allocas(
-    roots: impl IntoIterator<Item = InstId>,
-    edges: &FxHashMap<InstId, FxHashSet<InstId>>,
-    unknown: &FxHashSet<InstId>,
-    all_allocas: &FxHashSet<InstId>,
-) -> (FxHashSet<InstId>, bool) {
-    match closure_allocas(roots, edges, unknown) {
-        Ok(allocas) => (allocas, false),
-        Err(UnknownLocalPtr) => (all_allocas.clone(), true),
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct ExpandedAllocaRoots {
     pub(crate) allocas: FxHashSet<InstId>,
@@ -139,19 +127,61 @@ pub(crate) struct ExpandedAllocaRoots {
 pub(crate) struct AllocaClosureCtx<'a> {
     pub(crate) edges: &'a FxHashMap<InstId, FxHashSet<InstId>>,
     pub(crate) unknown: &'a FxHashSet<InstId>,
-    pub(crate) all_allocas: &'a FxHashSet<InstId>,
 }
 
 impl AllocaClosureCtx<'_> {
     pub(crate) fn expand_roots(
         &self,
         roots: impl IntoIterator<Item = InstId>,
+        available: &BitSet<InstId>,
     ) -> ExpandedAllocaRoots {
-        let (allocas, hit_unknown) =
-            conservative_closure_allocas(roots, self.edges, self.unknown, self.all_allocas);
+        let (allocas, hit_unknown) = match closure_allocas(roots, self.edges, self.unknown) {
+            Ok(allocas) => (allocas, false),
+            // Unknown contents can retain any allocation that may already have
+            // executed, including those reaching this access around a backedge.
+            // Objects from mutually exclusive paths cannot exist at this access.
+            Err(UnknownLocalPtr) => (available.iter().collect(), true),
+        };
         ExpandedAllocaRoots {
             allocas,
             hit_unknown,
+        }
+    }
+}
+
+#[derive(Default)]
+struct AllocaAvailability {
+    incoming: SecondaryMap<BlockId, BitSet<InstId>>,
+    outgoing: SecondaryMap<BlockId, BitSet<InstId>>,
+}
+
+impl AllocaAvailability {
+    fn compute(
+        function: &Function,
+        cfg: &ControlFlowGraph,
+        block_order: &[BlockId],
+        allocas: &FxHashMap<InstId, StackObjId>,
+    ) -> Self {
+        let mut result = Self::default();
+        for &inst in allocas.keys() {
+            result.outgoing[function.layout.inst_block(inst)].insert(inst);
+        }
+        loop {
+            let mut changed = false;
+            for &block in block_order {
+                let mut incoming = BitSet::default();
+                for &pred in cfg.preds_of(block) {
+                    incoming.union_with(&result.outgoing[pred]);
+                }
+                let outgoing = &mut result.outgoing[block];
+                let old_len = outgoing.len();
+                outgoing.union_with(&incoming);
+                changed |= outgoing.len() != old_len;
+                result.incoming[block] = incoming;
+            }
+            if !changed {
+                return result;
+            }
         }
     }
 }
@@ -250,25 +280,25 @@ fn seed_object_event_metadata(function: &Function, block_order: &[BlockId]) -> O
     events
 }
 
-fn add_value_alloca_uses(
-    uses: &mut BitSet<LocalObjIdx>,
-    value: ValueId,
-    prov: &SecondaryMap<ValueId, Provenance>,
-    closure: &AllocaClosureCtx<'_>,
-    alloca_local_by_inst: &FxHashMap<InstId, LocalObjIdx>,
-    unknown_barrier_objs: &mut FxHashSet<StackObjId>,
-    obj_id_by_local: &[StackObjId],
-) {
-    let roots: Vec<_> = prov[value].alloca_insts().collect();
-    if roots.is_empty() {
-        return;
-    }
-    let expanded = closure.expand_roots(roots);
-    for alloca in expanded.allocas {
-        if let Some(&local_idx) = alloca_local_by_inst.get(&alloca) {
-            uses.insert(local_idx);
-            if expanded.hit_unknown {
-                unknown_barrier_objs.insert(obj_id_by_local[local_idx.as_u32() as usize]);
+impl ComputeCtx<'_, '_> {
+    fn add_value_alloca_uses(
+        &mut self,
+        uses: &mut BitSet<LocalObjIdx>,
+        value: ValueId,
+        available: &BitSet<InstId>,
+    ) {
+        let roots: Vec<_> = self.prov[value].alloca_insts().collect();
+        if roots.is_empty() {
+            return;
+        }
+        let expanded = self.closure.expand_roots(roots, available);
+        for alloca in expanded.allocas {
+            if let Some(&local_idx) = self.alloca_local_by_inst.get(&alloca) {
+                uses.insert(local_idx);
+                if expanded.hit_unknown {
+                    self.unknown_barrier_objs
+                        .insert(self.obj_id_by_local[local_idx.as_u32() as usize]);
+                }
             }
         }
     }
@@ -277,12 +307,17 @@ fn add_value_alloca_uses(
 fn build_object_event_index(
     function: &Function,
     block_order: &[BlockId],
+    availability: &AllocaAvailability,
     ctx: &mut ComputeCtx<'_, '_>,
 ) -> ObjectEventIndex {
     let mut events = seed_object_event_metadata(function, block_order);
 
     for &block in block_order {
+        let mut available = availability.incoming[block].clone();
         for inst in function.layout.iter_inst(block) {
+            if ctx.alloca_ids.contains_key(&inst) {
+                available.insert(inst);
+            }
             let resolved = ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst));
             if let EvmInstKind::Phi(phi) = resolved {
                 for &result in function.dfg.inst_results(inst) {
@@ -304,15 +339,7 @@ fn build_object_event_index(
                     }
 
                     let edge_uses = events.edge_phi_uses.entry((*pred, block)).or_default();
-                    add_value_alloca_uses(
-                        edge_uses,
-                        raw_value,
-                        ctx.prov,
-                        ctx.closure,
-                        ctx.alloca_local_by_inst,
-                        ctx.unknown_barrier_objs,
-                        ctx.obj_id_by_local,
-                    );
+                    ctx.add_value_alloca_uses(edge_uses, raw_value, &availability.outgoing[*pred]);
                 }
                 continue;
             }
@@ -335,15 +362,7 @@ fn build_object_event_index(
                 if let Some(local_idx) = ctx.spill_local_by_value[value] {
                     events.local_uses[inst].insert(local_idx);
                 }
-                add_value_alloca_uses(
-                    &mut events.local_uses[inst],
-                    value,
-                    ctx.prov,
-                    ctx.closure,
-                    ctx.alloca_local_by_inst,
-                    ctx.unknown_barrier_objs,
-                    ctx.obj_id_by_local,
-                );
+                ctx.add_value_alloca_uses(&mut events.local_uses[inst], value, &available);
             });
         }
     }
@@ -578,7 +597,12 @@ pub(super) fn compute_regions_and_calls(
     block_order: &[BlockId],
     ctx: &mut ComputeCtx<'_, '_>,
 ) -> (Vec<LiveRegion>, Vec<CallSiteObjects>) {
-    let events = build_object_event_index(function, block_order, ctx);
+    let availability = if ctx.closure.unknown.is_empty() {
+        AllocaAvailability::default()
+    } else {
+        AllocaAvailability::compute(function, cfg, block_order, ctx.alloca_ids)
+    };
+    let events = build_object_event_index(function, block_order, &availability, ctx);
     let block_live = solve_object_block_liveness(function, cfg, block_order, &events);
     let regions = emit_regions(
         function,
@@ -591,7 +615,11 @@ pub(super) fn compute_regions_and_calls(
     let mut call_sites = Vec::new();
     for &block in block_order {
         let boundary_live = build_block_boundary_live_sets(function, block, &block_live, &events);
+        let mut available = availability.incoming[block].clone();
         for inst in function.layout.iter_inst(block) {
+            if ctx.alloca_ids.contains_key(&inst) {
+                available.insert(inst);
+            }
             let Some(call) = function.dfg.cast_call(inst) else {
                 continue;
             };
@@ -612,7 +640,7 @@ pub(super) fn compute_regions_and_calls(
                     roots.insert(base);
                 }
             }
-            let expanded = ctx.closure.expand_roots(roots.iter().copied());
+            let expanded = ctx.closure.expand_roots(roots.iter().copied(), &available);
             for alloca in expanded.allocas {
                 if let Some(&id) = ctx.alloca_ids.get(&alloca) {
                     visible_objs.insert(id);
