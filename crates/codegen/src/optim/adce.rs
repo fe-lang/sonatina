@@ -371,6 +371,39 @@ mod tests {
     }
 
     #[test]
+    fn removes_empty_mcopy_and_dead_addresses_but_keeps_operand_effects() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.i256) -> i256 {
+block0:
+    evm_sstore 7.i256 v0;
+    v1.i256 = add v0 32.i256;
+    v2.i256 = evm_mload v1;
+    evm_mcopy v1 v2 0.i256;
+    v3.i256 = call %f v0;
+    evm_mcopy v3 v3 0.i256;
+    evm_mcopy v0 v0 1.i256;
+    evm_mcopy v0 v0 v0;
+    evm_return_data_copy v0 1.i256 0.i256;
+    return v0;
+}
+"#;
+        let (changed, dumped) = run_default_adce(source);
+        assert!(changed);
+        assert!(
+            !dumped.contains("add ") && !dumped.contains("evm_mload"),
+            "{dumped}"
+        );
+        assert_eq!(dumped.matches("evm_mcopy").count(), 2, "{dumped}");
+        assert!(dumped.contains("evm_sstore 7.i256 v0;"), "{dumped}");
+        assert!(dumped.contains("call %f v0;"), "{dumped}");
+        assert!(
+            dumped.contains("evm_return_data_copy v0 1.i256 0.i256;"),
+            "{dumped}"
+        );
+    }
+
+    #[test]
     fn keeps_phi_entry_pred_edge_live() {
         let source = r#"
 target = "evm-ethereum-osaka"

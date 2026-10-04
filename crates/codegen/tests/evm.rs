@@ -685,6 +685,59 @@ object @Contract { section runtime { entry %entry; } }
 }
 
 #[test]
+fn empty_mcopy_preserves_operand_effects_without_touching_memory() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+func private %address(v0.i256) -> i256 {
+block0:
+    evm_sstore 7.i256 99.i256;
+    return v0;
+}
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    v2.i256 = call %address v0;
+    evm_mcopy v2 v1 0.i256;
+    v3.i256 = evm_sload 7.i256;
+    evm_mstore 0.i256 v3;
+    evm_return 0.i256 32.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(source).module;
+        verify_module_or_panic(&module, &config);
+        let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        verify_module_or_panic(compiler.optimize(), &config);
+        let artifacts = compiler.compile().expect("empty copies should compile");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        for dest in [IrU256::zero(), IrU256::one() << 255, IrU256::MAX] {
+            for addr in [IrU256::zero(), IrU256::one() << 255, IrU256::MAX] {
+                // Each call starts with fresh storage, so a prior case cannot
+                // hide removal of the operand-producing call's storage write.
+                let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+                let calldata = [dest.to_big_endian(), addr.to_big_endian()].concat();
+                let result = harness.call(&calldata);
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("{level:?}, dest={dest}, addr={addr}: {result:?}");
+                };
+                assert_eq!(actual.as_ref(), IrU256::from(99).to_big_endian());
+            }
+        }
+    }
+}
+
+#[test]
 fn terminal_word_buffers_preserve_return_and_revert_payloads() {
     let source = r#"
 target = "evm-ethereum-osaka"
