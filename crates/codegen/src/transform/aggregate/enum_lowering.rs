@@ -5,6 +5,7 @@ use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     global_variable::GvInitializer,
     inst::{cmp, data, downcast},
+    isa::TypeLayoutError,
     module::ModuleCtx,
     types::{CompoundType, CompoundTypeRef, EnumData, EnumVariantRef, TypeStore},
     visitor::VisitorMut,
@@ -48,7 +49,17 @@ struct EnumTypeLowerer {
 impl EnumTypeLowerer {
     fn rewrite_type(&mut self, ctx: &ModuleCtx, ty: Type) -> Type {
         match ty {
-            Type::EnumTag(enum_ty) => self.layout(ctx, enum_ty).tag_ty,
+            // Tags depend only on the variant count; building the product layout
+            // here would recurse forever when a payload holds its own enum's tag.
+            Type::EnumTag(enum_ty) => ctx.with_ty_store(|store| {
+                choose_tag_ty(
+                    store
+                        .enum_data(enum_ty)
+                        .expect("enum tag must reference an enum")
+                        .variants
+                        .len(),
+                )
+            }),
             Type::Compound(compound) => Type::Compound(self.rewrite_compound(ctx, compound)),
             _ => ty,
         }
@@ -192,6 +203,64 @@ impl EnumTypeLowerer {
     }
 }
 
+/// Concrete target layout after enum legalization, without rewriting the source
+/// module. The private context also preserves named structs, which enum lowering
+/// normally rewrites in place. Create a new query after changing source types.
+pub struct EnumLoweredLayout {
+    ctx: ModuleCtx,
+    ty: Type,
+    enumeration: Option<EnumLayoutInfo>,
+}
+
+impl EnumLoweredLayout {
+    pub fn new(ctx: &ModuleCtx, ty: Type) -> Self {
+        let ctx = ctx.fork();
+        let mut lowerer = EnumTypeLowerer::default();
+        let lowered = lowerer.rewrite_type(&ctx, ty);
+        let enumeration = match ty {
+            Type::Compound(compound) => lowerer.layouts.remove(&compound),
+            _ => None,
+        };
+        Self {
+            ctx,
+            ty: lowered,
+            enumeration,
+        }
+    }
+
+    pub fn tag_type(&self) -> Option<Type> {
+        self.enumeration
+            .as_ref()
+            .map(|enumeration| enumeration.tag_ty)
+    }
+
+    pub fn size(&self) -> Result<usize, TypeLayoutError> {
+        self.ctx.size_of(self.ty)
+    }
+
+    pub fn field_offset(&self, field: usize) -> Option<usize> {
+        // Enum payload coordinates are variant-relative, never struct indices.
+        if self.enumeration.is_some() {
+            return None;
+        }
+        self.ctx
+            .aggregate_elem_offset(self.ty, field)
+            .map(|(offset, _)| offset)
+    }
+
+    pub fn variant_field_offset(&self, variant: usize, field: usize) -> Option<usize> {
+        let enumeration = self.enumeration.as_ref()?;
+        enumeration
+            .lowered_variant_field_tys
+            .get(variant)?
+            .get(field)?;
+        let start = usize::try_from(*enumeration.variant_field_starts.get(variant)?).ok()?;
+        self.ctx
+            .aggregate_elem_offset(self.ty, start.checked_add(field)?)
+            .map(|(offset, _)| offset)
+    }
+}
+
 #[derive(Default)]
 pub struct EnumLowerToProduct;
 
@@ -216,12 +285,15 @@ impl EnumLowerToProduct {
 }
 
 fn rewrite_declared_signatures(module: &Module, lowerer: &mut EnumTypeLowerer) -> bool {
-    let funcs: Vec<_> = module
+    // Declaration maps iterate in hash order; rewriting in that order would
+    // create the lowered structs in a different order on each run.
+    let mut funcs: Vec<_> = module
         .ctx
         .declared_funcs
         .iter()
         .map(|entry| *entry.key())
         .collect();
+    funcs.sort_unstable();
     let mut changed = false;
 
     for func in funcs {

@@ -1,0 +1,33 @@
+target = "evm-ethereum-osaka"
+
+type @Loop = enum {
+    #Tagged(enumtag(@Loop)),
+    #Plain,
+};
+
+type @Ping = enum {
+    #Pong(enumtag(@Pong)),
+    #Done,
+};
+
+type @Pong = enum {
+    #Ping(enumtag(@Ping)),
+    #Left,
+    #Right,
+};
+
+func private %retag(v0.@Loop) -> enumtag(@Loop) {
+block0:
+    v1.enumtag(@Loop) = enum.tag v0;
+    v2.@Loop = enum.make @Loop #Tagged (v1);
+    v3.enumtag(@Loop) = enum.extract v2 #Tagged 0.i8;
+    return v3;
+}
+
+func private %bounce(v0.@Ping) -> enumtag(@Ping) {
+block0:
+    v1.enumtag(@Ping) = enum.tag v0;
+    v2.@Pong = enum.make @Pong #Ping (v1);
+    v3.enumtag(@Ping) = enum.extract v2 #Ping 0.i8;
+    return v3;
+}
