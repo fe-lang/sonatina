@@ -53,7 +53,7 @@ fn classify_stack_peephole_input(input: StackPeepholeInput) -> Option<StackPeeph
             is_push_opcode(op).then_some(StackPeepholeOp::Push)
         }
         StackPeepholeInput::Action(action) => match action {
-            Action::Push(_) => Some(StackPeepholeOp::Push),
+            Action::Push(_) | Action::LoadCalldata(_) => Some(StackPeepholeOp::Push),
             Action::StackDup(depth) => (depth < 16).then_some(StackPeepholeOp::Dup(depth + 1)),
             Action::StackSwap(depth) => {
                 ((1..=16).contains(&depth)).then_some(StackPeepholeOp::Swap(depth))
@@ -458,6 +458,10 @@ pub(crate) fn perform_action(
         }
         Action::Push(imm) => {
             emit_immediate_materialization(ctx, immediate_materialization_plan(imm));
+        }
+        Action::LoadCalldata(offset) => {
+            emit_immediate_materialization(ctx, immediate_materialization_plan(offset));
+            ctx.push(OpCode::CALLDATALOAD);
         }
         Action::Pop => {
             ctx.push(OpCode::POP);

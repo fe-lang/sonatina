@@ -6,12 +6,12 @@ input_file: test_files/evm/final_spill_share_entry_loop.sntn
 evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false mem_plan_detail=true
 
 object: Contract
-  section runtime: 238 bytes
-  total: 238 bytes
+  section runtime: 235 bytes
+  total: 235 bytes
 
 functions:
   mem: global_dyn_base=0x180 arena_base=0xa0 scratch_peak_words=2 stable_chain_peak_words=5
-  entry: ir_blocks=1 ir_insts=9 vcode_ops=37 fixups=2 imm_bytes=7
+  entry: ir_blocks=1 ir_insts=9 vcode_ops=34 fixups=2 imm_bytes=7
     mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xe0) entry_abs_words=2 abs_words_end=3
   spin: ir_blocks=3 ir_insts=39 vcode_ops=136 fixups=6 imm_bytes=25
     mem: scratch_words=0 stable_words=4 stable_mode=StableAbs(base=0x100) entry_abs_words=3 abs_words_end=7
@@ -21,7 +21,6 @@ functions:
 mem plan detail:
 evm mem plan: global_dyn_base=0x180 arena_base=0xa0 scratch_peak_words=2 stable_chain_peak_words=5
 evm mem plan: entry scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xe0) entry_abs_words=2 abs_words_end=3
-  scratch_spill v1 slot=0 addr=0x0
 evm mem plan: spin scratch_words=0 stable_words=4 stable_mode=StableAbs(base=0x100) entry_abs_words=3 abs_words_end=7
   scratch_spill v18 slot=0 addr=0x0
   scratch_spill v20 slot=1 addr=0x20
@@ -36,7 +35,7 @@ evm mem plan: one scratch_words=2 stable_words=0 stable_mode=None entry_abs_word
 
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=22264 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1124
+  case ok: calldata_len=32 success reason=Return gas_used=22256 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1116
 
 
 --------------- DEBUG ---------------
@@ -46,9 +45,6 @@ entry:
   block0:
     PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    DUP1
-    PUSH0
-    MSTORE
     PUSH0  // evm_mstore v2 v0;
     PUSH1 0xe0 (224)
     MSTORE
@@ -68,7 +64,7 @@ entry:
     PUSH1 0xe0 (224)
     SWAP4
     PUSH0
-    MLOAD
+    CALLDATALOAD
     PUSH1 `pc + (4)`
     SWAP6
     PUSH1 FuncRef(2)

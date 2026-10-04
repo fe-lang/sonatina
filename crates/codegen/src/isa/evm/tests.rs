@@ -1477,10 +1477,15 @@ object @Contract {
 
 #[test]
 fn dynamic_terminal_payload_rejects_clobbered_spilled_length() {
-    // `v0` is used below 20 later values, so it is spilled, and the terminal
+    // The computed `v0` cannot rematerialize and is used below 20 later values,
+    // so it is spilled, and the terminal
     // would reload it after the copy overwrote its slot.
     let loads: String = (0..=20)
-        .map(|i| format!("    v{i}.i256 = evm_calldata_load {}.i32;\n", i * 32))
+        .map(|i| {
+            let raw = 100 + i;
+            let offset = i * 32;
+            format!("    v{raw}.i256 = evm_calldata_load {offset}.i32;\n    v{i}.i256 = add v{raw} 1.i256;\n")
+        })
         .collect();
     let sums: String = (1..20)
         .rev()

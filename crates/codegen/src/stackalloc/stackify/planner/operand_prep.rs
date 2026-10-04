@@ -1079,7 +1079,7 @@ block0:
                 forced_object_spills: &forced_object_spills,
                 slots: &mut slots,
             };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
 
             let old_args = [old_imm, imm2, imm3];
             let current_args = [current_imm, imm2, imm3];
@@ -1188,7 +1188,7 @@ block0:
                 forced_object_spills: &forced_object_spills,
                 slots: &mut slots,
             };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
 
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(arg);
@@ -1262,7 +1262,7 @@ block0:
                 forced_object_spills: &forced_object_spills,
                 slots: &mut slots,
             };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
 
             let args: Vec<_> = func.arg_values.iter().copied().collect();
             let mut stack = SymStack::entry_stack(func, false);
@@ -1344,8 +1344,7 @@ block0:
                     forced_object_spills: &forced_object_spills,
                     slots: &mut slots,
                 };
-                let mem =
-                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+                let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
                 let mut stack = SymStack::entry_stack(func, false);
                 for &value in values.iter().rev() {
                     stack.push_value(value);
@@ -1421,8 +1420,7 @@ block0:
                     forced_object_spills: &forced_object_spills,
                     slots: &mut slots,
                 };
-                let mem =
-                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+                let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
                 let mut stack = SymStack::entry_stack(func, false);
                 stack.push_value(source);
                 stack.push_value(top);
@@ -1501,7 +1499,7 @@ block0:
                 forced_object_spills: &forced_object_spills,
                 slots: &mut slots,
             };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(stack_source);
             stack.push_value(ignored);
@@ -1578,8 +1576,7 @@ block0:
                     forced_object_spills: &forced_object_spills,
                     slots: &mut slots,
                 };
-                let mem =
-                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+                let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
                 let mut stack = SymStack::entry_stack(func, false);
                 for &value in values.iter().rev() {
                     stack.push_value(value);
@@ -1658,8 +1655,7 @@ block0:
                     forced_object_spills: &forced_object_spills,
                     slots: &mut slots,
                 };
-                let mem =
-                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+                let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
                 let mut stack = SymStack::entry_stack(func, false);
                 stack.push_value(ignored);
                 stack.push_value(source);
@@ -1734,8 +1730,7 @@ block0:
                     forced_object_spills: &forced_object_spills,
                     slots: &mut slots,
                 };
-                let mem =
-                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+                let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
 
                 let mut actions = crate::stackalloc::Actions::new();
                 let mut search_scratch = NormalizeSearchScratch::default();
@@ -1834,8 +1829,7 @@ block0:
                     forced_object_spills: &forced_object_spills,
                     slots: &mut slots,
                 };
-                let mem =
-                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+                let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
                 let mut stack = stack_from_top(stack_values);
                 let mut args: SmallVec<[ValueId; 8]> = args_values.iter().copied().collect();
                 let mut last_use = BitSet::default();
@@ -1939,7 +1933,7 @@ block0:
                 forced_object_spills: &forced_object_spills,
                 slots: &mut slots,
             };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
 
             let args = [func.arg_values[1], func.arg_values[0]];
             let mut stack = SymStack::entry_stack(func, false);
@@ -2017,7 +2011,7 @@ block0:
                 forced_object_spills: &forced_object_spills,
                 slots: &mut slots,
             };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
 
             let args = [func.arg_values[2]];
             let mut stack = SymStack::entry_stack(func, false);
@@ -2054,7 +2048,7 @@ block0:
                 forced_object_spills: &forced_object_spills,
                 slots: &mut slots,
             };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
             {
                 let mut search_scratch = NormalizeSearchScratch::default();
                 let mut planner =

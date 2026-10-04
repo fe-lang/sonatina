@@ -1,0 +1,91 @@
+#! evm.config: { stack_reach: 4, mem_plan_detail: true, stackify_trace: true }
+#! evm.case: empty
+#!   calldata: 0x
+#!   expect: return u256(0)
+#! evm.case: one
+#!   calldata: u256(1) u256(11) u256(13) u256(17) u256(19) u256(23)
+#!   expect: return u256(92)
+#! evm.case: two
+#!   calldata: u256(2) u256(11) u256(13) u256(17) u256(19) u256(23)
+#!   expect: return u256(191)
+#! evm.case: three
+#!   calldata: u256(3) u256(11) u256(13) u256(17) u256(19) u256(23)
+#!   expect: return u256(289)
+#! evm.case: overflow
+#!   calldata: u256(2) u256(11) u256(13) u256(17) u256(19) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#!   expect: return u256(143)
+#! evm.case: short
+#!   calldata: u256(1)
+#!   expect: return u256(9)
+
+#! evm.case: partial_word
+#!   calldata: u256(1) 0xff
+#!   expect: return u256(0xff00000000000000000000000000000000000000000000000000000000000009)
+
+# The constant reads survive both branches, loop backedges and a call that
+# overwrites scratch. Narrow stack reach forces rematerialization. Wide and
+# negative offsets must preserve EVM zero-padding, never truncate to 32 or 64 bits.
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    v2.i256 = evm_calldata_load 64.i256;
+    v3.i256 = evm_calldata_load 96.i256;
+    v4.i256 = evm_calldata_load 128.i256;
+    v5.i256 = evm_calldata_load 160.i256;
+    v6.i256 = evm_calldata_load 65535.i256;
+    v7.i256 = evm_calldata_load 18446744073709551648.i256;
+    v8.i256 = evm_calldata_load -1.i256;
+    v9.i1 = eq v0 0.i256;
+    br v9 block6 block1;
+block1:
+    v10.i256 = phi (0.i256 block0) (v27 block5);
+    v11.i256 = phi (0.i256 block0) (v26 block5);
+    v12.i256 = call %clobber v10;
+    v13.i256 = and v10 1.i256;
+    v14.i1 = eq v13 0.i256;
+    br v14 block2 block3;
+block2:
+    v15.i256 = add v12 7.i256;
+    jump block4;
+block3:
+    v16.i256 = add v12 11.i256;
+    jump block4;
+block4:
+    v17.i256 = phi (v15 block2) (v16 block3);
+    v18.i256 = add v0 v1;
+    v19.i256 = add v18 v2;
+    v20.i256 = add v19 v3;
+    v21.i256 = add v20 v4;
+    v22.i256 = add v21 v5;
+    v23.i256 = add v22 v6;
+    v24.i256 = add v23 v7;
+    v25.i256 = add v24 v8;
+    jump block5;
+block5:
+    v29.i256 = add v25 v17;
+    v26.i256 = add v11 v29;
+    v27.i256 = add v10 1.i256;
+    v28.i1 = lt v27 v0;
+    br v28 block1 block6;
+block6:
+    v30.i256 = phi (0.i256 block0) (v26 block5);
+    mstore 0.i256 v30 i256;
+    evm_return 0.i256 32.i256;
+}
+
+func inline(never) private %clobber(v0.i256) -> i256 {
+block0:
+    mstore 0.i256 123.i256 i256;
+    mstore 32.i256 456.i256 i256;
+    v1.i256 = add v0 1.i256;
+    return v1;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

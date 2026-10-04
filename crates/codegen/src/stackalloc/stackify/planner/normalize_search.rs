@@ -5578,7 +5578,7 @@ func public %f() {
                 forced_object_spills: &forced_object_spills,
                 slots: &mut slots,
             };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
 
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
@@ -5629,7 +5629,7 @@ func public %f() {
                 forced_object_spills: &forced_object_spills,
                 slots: &mut slots,
             };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
 
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();

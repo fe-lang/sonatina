@@ -268,7 +268,7 @@ block1:
                 forced_object_spills: &forced_object_spills,
                 slots: &mut slots,
             };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
             let mut stack = SymStack::opaque_prefix_empty(false);
             let mut actions = Actions::new();
             let mut search_scratch = NormalizeSearchScratch::default();
@@ -385,7 +385,7 @@ block1:
                 forced_object_spills: &forced_object_spills,
                 slots: &mut slots,
             };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
             let mut stack = SymStack::opaque_prefix_empty(false);
             let mut actions = Actions::new();
             let mut search_scratch = NormalizeSearchScratch::default();

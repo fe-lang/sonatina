@@ -174,7 +174,7 @@ impl StackifyTrace {
                         .or_default()
                         .push(v);
                 }
-                Some(SpillStorage::ExactLocal(_)) | None => {}
+                Some(SpillStorage::Rematerialized) | None => {}
             }
         }
         if !spill_set_by_slot.is_empty() {
@@ -511,6 +511,9 @@ fn fmt_actions(actions: &[Action]) -> String {
             }
             Action::Push(imm) => {
                 let _ = write!(&mut s, "PUSH({})", fmt_immediate(imm));
+            }
+            Action::LoadCalldata(offset) => {
+                let _ = write!(&mut s, "CALLDATALOAD({})", fmt_immediate(offset));
             }
             Action::PushContinuationOffset => s.push_str("PUSH_CONT"),
             Action::Pop => s.push_str("POP"),
