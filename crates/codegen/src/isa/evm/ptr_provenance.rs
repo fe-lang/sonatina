@@ -95,16 +95,6 @@ impl Provenance {
         changed
     }
 
-    fn poison_to_unknown_non_arg_preserving_arg_attribution(&mut self) -> bool {
-        let mut changed = self.mark_unknown_non_arg();
-        // Memory clobbering intentionally loses exact bases. Plain union does not.
-        if !self.bases.is_empty() {
-            self.bases.clear();
-            changed = true;
-        }
-        changed
-    }
-
     pub(crate) fn union_with(&mut self, other: &Self) -> bool {
         let mut changed = false;
         let mut bases_changed = false;
@@ -223,7 +213,10 @@ fn poison_local_mem(mem: &mut FxHashMap<InstId, Provenance>, addr_prov: &Provena
         changed |= mem
             .entry(base)
             .or_default()
-            .poison_to_unknown_non_arg_preserving_arg_attribution();
+            // Memory facts join writes from the entire function. Keep possible
+            // exact bases: clearing them here can alternate forever with a
+            // modeled store that adds the same bases on every iteration.
+            .mark_unknown_non_arg();
     }
     changed
 }
@@ -242,7 +235,7 @@ fn poison_arg_mem(mem: &mut [Provenance], addr_prov: &Provenance) -> bool {
     let mut changed = false;
     for arg_idx in addr_prov.arg_indices() {
         if let Some(slot) = mem.get_mut(arg_idx as usize) {
-            changed |= slot.poison_to_unknown_non_arg_preserving_arg_attribution();
+            changed |= slot.mark_unknown_non_arg();
         }
     }
     changed
@@ -656,6 +649,29 @@ block0:
 
         assert!(ret_prov.is_unknown_ptr());
         assert_eq!(ret_prov.arg_indices().collect::<Vec<_>>(), vec![0]);
+    }
+
+    #[test]
+    fn local_mem_poison_preserves_possible_local_bases_and_converges() {
+        let ret_prov = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> *i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.**i256 = alloca *i256;
+    mstore v1 v0 *i256;
+    evm_mstore8 v1 1.i8;
+    v2.*i256 = mload v1 *i256;
+    return v2;
+}
+"#,
+            "f",
+        );
+
+        assert!(ret_prov.is_unknown_ptr());
+        assert_eq!(ret_prov.alloca_insts().count(), 1);
     }
 
     #[test]
