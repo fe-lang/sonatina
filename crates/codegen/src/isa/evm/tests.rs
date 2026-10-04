@@ -1096,6 +1096,156 @@ block0:
 }
 
 #[test]
+fn unknown_scalar_words_do_not_retain_private_loop_hash_buffers() {
+    for (read, stored, expected_transient) in [
+        ("v8.i256 = add v6 0.i256;", "v8", true),
+        (
+            "v14.i256 = shl 5.i256 v2;\n    v7.i256 = add v1 v14;\n    v8.i256 = mload v7 i256;",
+            "v8",
+            true,
+        ),
+        (
+            "v7.*i256 = int_to_ptr v6 *i256;\n    v8.i256 = mload v7 i256;",
+            "v8",
+            false,
+        ),
+        (
+            "v7.*[i256; 1] = int_to_ptr v1 *[i256; 1];\n    v14.*i256 = gep v7 0.i256 v6;\n    v8.i256 = mload v14 i256;",
+            "v8",
+            false,
+        ),
+        ("v8.i256 = evm_keccak256 v1 v6;", "v8", false),
+        (
+            "v7.i256 = add v2 96.i256;\n    v8.i256 = evm_mload v7;",
+            "v8",
+            false,
+        ),
+        (
+            "v7.i256 = xor v6 1.i256;\n    v8.i256 = evm_mload v7;",
+            "v8",
+            false,
+        ),
+        ("v8.i256 = add v6 0.i256;", "v10", false),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func public %entry() {{
+block0:
+    v18.i256 = evm_calldata_size;
+    v17.i256 = evm_udiv v18 32.i256;
+    v19.i256 = mul v17 32.i256;
+    v0.*i8 = evm_malloc v19;
+    v1.i256 = ptr_to_int v0 i256;
+    evm_calldata_copy v1 0.i256 v19;
+    jump block1;
+block1:
+    v2.i256 = phi (0.i256 block0) (v13 block2);
+    v3.i256 = phi (0.i256 block0) (v12 block2);
+    v4.i1 = lt v2 v17;
+    br v4 block2 block3;
+block2:
+    v6.i256 = mload v1 i256;
+    {read}
+    v9.*i8 = evm_malloc 64.i256;
+    v10.i256 = ptr_to_int v9 i256;
+    mstore v10 {stored} i256;
+    v11.i256 = add v10 32.i256;
+    mstore v11 v3 i256;
+    v12.i256 = evm_keccak256 v10 64.i256;
+    v13.i256 = add v2 1.i256;
+    jump block1;
+block3:
+    mstore 0.i256 v3 i256;
+    evm_return 0.i256 32.i256;
+}}
+"#
+        );
+        let parsed = parse_module(&source).expect("loop parses");
+        let entry = find_func(&parsed.module, "entry");
+        let backend = osaka_backend();
+        let hash_malloc = parsed.module.func_store.view(entry, |function| {
+            function
+                .layout
+                .iter_all_insts()
+                .find(|&inst| {
+                    matches!(backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                        EvmInstKind::EvmMalloc(malloc)
+                        if prepare::value_imm_u32(function, *malloc.size()) == Some(64))
+                })
+                .unwrap()
+        });
+        let placement = compute_test_memory_placement(&parsed.module, &backend, entry);
+        assert_eq!(
+            placement.funcs[&entry]
+                .mem_plan
+                .transient_mallocs
+                .contains(&hash_malloc),
+            expected_transient,
+            "read={read}, stored={stored}"
+        );
+    }
+}
+
+#[test]
+fn private_memzero_uses_fixed_buffer_only_with_bounded_accesses() {
+    for (offset, len, fixed) in [(0, 64, true), (32, 32, true), (32, 64, false)] {
+        let dumped = prepared_func_dump(
+            &format!(
+                r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i256 {{
+block0:
+    v0.*i8 = evm_malloc 64.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = add v1 {offset}.i256;
+    memzero v2 {len}.i256;
+    v3.i256 = evm_keccak256 v1 64.i256;
+    return v3;
+}}
+"#
+            ),
+            "entry",
+        );
+        assert_eq!(
+            !dumped.contains("evm_mload 64.i256"),
+            fixed,
+            "offset={offset}, len={len}:\n{dumped}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_private_buffers_require_matching_allocation_extents() {
+    for (offset, len, fixed) in [(0, "v0", true), (1, "v0", false), (0, "v1", false)] {
+        let dumped = prepared_func_dump(
+            &format!(
+                r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256, v1.i256) -> i256 {{
+block0:
+    v2.*i8 = evm_malloc v0;
+    v3.i256 = ptr_to_int v2 i256;
+    v4.i256 = add v3 {offset}.i256;
+    evm_calldata_copy v4 0.i256 {len};
+    v5.i256 = evm_keccak256 v4 {len};
+    return v5;
+}}
+"#
+            ),
+            "entry",
+        );
+        assert_eq!(
+            !dumped.contains("evm_mload 64.i256"),
+            fixed,
+            "offset={offset}, len={len}:\n{dumped}"
+        );
+    }
+}
+
+#[test]
 fn dynamic_private_transient_access_len_keeps_heap_base() {
     let dumped = prepared_func_dump(
         r#"

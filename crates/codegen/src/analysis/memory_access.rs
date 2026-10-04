@@ -110,9 +110,9 @@ pub enum AliasResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CanonicalAddr {
-    base: BaseObject,
-    offset: i64,
+pub(crate) struct CanonicalAddr {
+    pub(crate) base: BaseObject,
+    pub(crate) offset: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -470,7 +470,11 @@ impl MemoryAccessAnalysis {
         }
     }
 
-    fn canonical_linear_addr(&mut self, func: &Function, addr: ValueId) -> CanonicalAddr {
+    pub(crate) fn canonical_linear_addr(
+        &mut self,
+        func: &Function,
+        addr: ValueId,
+    ) -> CanonicalAddr {
         self.canonical_linear_addr_rec(func, addr, &mut FxHashSet::default())
     }
 

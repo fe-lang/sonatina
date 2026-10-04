@@ -17,6 +17,7 @@ pub mod opcode;
 mod pipeline;
 mod placement_search;
 mod prepare;
+mod private_malloc;
 mod ptr_escape;
 mod ptr_provenance;
 pub(crate) mod static_arena_alloc;
