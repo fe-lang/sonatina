@@ -1,0 +1,30 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 1262
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/branch_exclusive_unknown_storage.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false mem_plan_detail=true
+
+object: Contract
+  section runtime: 56 bytes
+  total: 56 bytes
+
+functions:
+  mem: global_dyn_base=0x160 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=6
+  read: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=0 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
+  entry: ir_blocks=3 ir_insts=11 vcode_ops=37 fixups=5 imm_bytes=10
+    mem: scratch_words=0 stable_words=6 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=6
+
+mem plan detail:
+evm mem plan: global_dyn_base=0x160 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=6
+evm mem plan: read scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
+evm mem plan: entry scratch_words=0 stable_words=6 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=6
+
+
+evm:
+  case left: calldata_len=224 success reason=Return gas_used=22083 gas_refunded=0 logs=0 output=call len=32 tx_gas=21968 runtime_gas=115
+  case right: calldata_len=224 success reason=Return gas_used=22108 gas_refunded=0 logs=0 output=call len=32 tx_gas=21980 runtime_gas=128
+  case empty: calldata_len=0 success reason=Return gas_used=21115 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=115
+  case short: calldata_len=64 success reason=Return gas_used=21408 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=128

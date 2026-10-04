@@ -389,8 +389,6 @@ fn compute_func_stack_objects_from_input(
             store_count: 0,
         });
     }
-    let all_allocas: FxHashSet<InstId> = alloca_ids.keys().copied().collect();
-
     let mut obj_index: FxHashMap<StackObjId, usize> = FxHashMap::default();
     for (idx, obj) in objects.iter().enumerate() {
         obj_index.insert(obj.id, idx);
@@ -482,7 +480,6 @@ fn compute_func_stack_objects_from_input(
     let closure = AllocaClosureCtx {
         edges: &local_edges,
         unknown: &local_unknown,
-        all_allocas: &all_allocas,
     };
     let mut liveness_ctx = ObjectLivenessCtx {
         analysis,
@@ -884,10 +881,9 @@ mod tests {
         let closure = AllocaClosureCtx {
             edges: &edges,
             unknown: &unknown,
-            all_allocas: &all_allocas,
         };
 
-        let expanded = closure.expand_roots([root]);
+        let expanded = closure.expand_roots([root], &BitSet::from([root, child, unrelated]));
         assert!(expanded.hit_unknown);
         assert_eq!(expanded.allocas, all_allocas);
     }
@@ -1017,6 +1013,61 @@ func private %loop_alloca_phi() -> i256 {
                 .any(|segment| segment.block == BlockId::from_u32(2)),
             "loop-carried alloca should remain live through its defining block: {region:?}"
         );
+    }
+
+    #[test]
+    fn unknown_contents_keep_backedge_allocations_but_exclude_future_ones() {
+        let (parsed, func_ref, _, stack) = analyze_function(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %touch(v0.*i256) {
+block0:
+    v1.i256 = mload v0 i256;
+    return;
+}
+
+func private %entry(v0.i1) {
+block0:
+    v1.*i256 = alloca i256;
+    evm_calldata_copy v1 0.i256 32.i256;
+    call %touch v1;
+    jump block1;
+block1:
+    call %touch v1;
+    br v0 block2 block3;
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 42.i256 i256;
+    mstore v1 v2 *i256;
+    jump block1;
+block3:
+    return;
+}
+"#,
+            "entry",
+            16,
+        );
+        parsed.module.func_store.view(func_ref, |function| {
+            let child = parsed.debug.value(func_ref, "v2").unwrap();
+            let child_inst = function.dfg.value_inst(child).unwrap();
+            let child_obj = stack.alloca_ids[&child_inst];
+            for call in &stack.call_sites {
+                let block = function.layout.inst_block(call.inst);
+                assert_eq!(
+                    call.callee_visible_objs.contains(&child_obj),
+                    block == BlockId::from_u32(1),
+                    "the child exists at the loop header through the backedge, but not at entry"
+                );
+            }
+            assert!(
+                stack.obj_facts[&child_obj]
+                    .region
+                    .segments
+                    .iter()
+                    .any(|segment| segment.block == BlockId::from_u32(1))
+            );
+        });
     }
 
     #[test]

@@ -2095,26 +2095,33 @@ object @Contract { section runtime { entry %entry; } }
 }
 
 #[test]
-fn calldata_rematerialization_at_all_optimization_levels() {
-    let source = include_str!("../test_files/evm/calldata_rematerialization.sntn");
-    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
-        let parsed = parse_sona(source);
-        let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments).unwrap();
-        let compiler = Compile::new(parsed.module, EvmCompiler::default()).with_opt_level(level);
-        let artifacts = compiler.compile().expect("calldata spill fixture compiles");
-        let runtime = artifacts[0]
-            .sections
-            .iter()
-            .find(|(name, _)| name.0 == "runtime")
-            .unwrap();
-        for case in cases {
-            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
-            let result = harness.call(&case.calldata);
-            assert_case(
-                &case,
-                &result,
-                &format!("calldata rematerialization {level:?}"),
-            );
+fn calldata_memory_planning_at_all_optimization_levels() {
+    for (name, source) in [
+        (
+            "rematerialization",
+            include_str!("../test_files/evm/calldata_rematerialization.sntn"),
+        ),
+        (
+            "branch storage",
+            include_str!("../test_files/evm/branch_exclusive_unknown_storage.sntn"),
+        ),
+    ] {
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            let parsed = parse_sona(source);
+            let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments).unwrap();
+            let compiler =
+                Compile::new(parsed.module, EvmCompiler::default()).with_opt_level(level);
+            let artifacts = compiler.compile().expect("calldata fixture compiles");
+            let runtime = artifacts[0]
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            for case in cases {
+                let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+                let result = harness.call(&case.calldata);
+                assert_case(&case, &result, &format!("{name} {level:?}"));
+            }
         }
     }
 }

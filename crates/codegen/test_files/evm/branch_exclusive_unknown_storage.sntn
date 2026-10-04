@@ -1,0 +1,48 @@
+#! evm.config: { mem_plan_detail: true }
+#! evm.case: left
+#!   calldata: u256(0) u256(11) u256(22) u256(33) u256(44) u256(55) u256(66)
+#!   expect: return u256(44)
+#! evm.case: right
+#!   calldata: u256(1) u256(11) u256(22) u256(33) u256(44) u256(55) u256(66)
+#!   expect: return u256(66)
+#! evm.case: empty
+#!   calldata: 0x
+#!   expect: return u256(0)
+#! evm.case: short
+#!   calldata: u256(1) u256(11)
+#!   expect: return u256(0)
+
+target = "evm-ethereum-osaka"
+
+func inline(never) private %read(v0.*i256) -> i256 {
+block0:
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+block1:
+    v2.*[i256; 4] = alloca [i256; 4];
+    evm_calldata_copy v2 32.i256 128.i256;
+    v3.*i256 = gep v2 0.i256 3.i256;
+    v4.i256 = call %read v3;
+    mstore 0.i256 v4 i256;
+    evm_return 0.i256 32.i256;
+block2:
+    v5.*[i256; 6] = alloca [i256; 6];
+    evm_calldata_copy v5 32.i256 192.i256;
+    v6.*i256 = gep v5 0.i256 5.i256;
+    v7.i256 = call %read v6;
+    mstore 0.i256 v7 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
