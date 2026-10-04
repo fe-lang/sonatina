@@ -80,7 +80,8 @@ impl PtrArgEscape {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PtrReturnEscape {
     pub(crate) returned_args: SmallVec<[u32; 4]>,
-    pub(crate) non_arg_pointer: bool,
+    pub(crate) heap_pointer: bool,
+    pub(crate) unknown_pointer: bool,
 }
 
 impl PtrReturnEscape {
@@ -139,7 +140,7 @@ impl PtrEscapeSummary {
         module.func_sig(func, |sig| {
             for (ret_idx, &ret_ty) in sig.ret_tys().iter().enumerate() {
                 if ret_ty.is_pointer(module) {
-                    out.returns[ret_idx].non_arg_pointer = true;
+                    out.returns[ret_idx].unknown_pointer = true;
                     for arg_idx in 0..arg_count {
                         let _ = out.returns[ret_idx].record_arg(arg_idx as u32);
                     }
@@ -198,12 +199,6 @@ impl PtrEscapeSummary {
         }
     }
 
-    fn record_returned_non_arg_pointer(&mut self, ret_idx: usize) {
-        if let Some(ret) = self.returns.get_mut(ret_idx) {
-            ret.non_arg_pointer = true;
-        }
-    }
-
     pub(crate) fn arg_may_escape(&self, src_idx: usize) -> bool {
         self.args
             .get(src_idx)
@@ -223,10 +218,11 @@ impl PtrEscapeSummary {
             .map_or(&[], |ret| ret.returned_args.as_slice())
     }
 
+    #[cfg(test)]
     pub(crate) fn return_may_be_non_arg_pointer(&self, ret_idx: usize) -> bool {
         self.returns
             .get(ret_idx)
-            .is_some_and(|ret| ret.non_arg_pointer)
+            .is_some_and(|ret| ret.heap_pointer || ret.unknown_pointer)
     }
 
     pub(crate) fn arg_store_targets(&self, src_idx: usize) -> &[u32] {
@@ -718,16 +714,15 @@ impl<'a> SummaryComputer<'a> {
 
     fn record_return(&mut self, ret_idx: usize, value: ValueId) {
         let ret_prov = &self.scan_ctx.prov[value];
-        if ret_prov.is_unknown_ptr()
-            || ret_prov.malloc_insts().next().is_some()
-            || (self
-                .function
-                .dfg
-                .value_ty(value)
-                .is_pointer(self.scan_ctx.module)
-                && ret_prov.has_no_known_bases())
-        {
-            self.summary.record_returned_non_arg_pointer(ret_idx);
+        if let Some(ret) = self.summary.returns.get_mut(ret_idx) {
+            ret.heap_pointer |= ret_prov.may_reference_heap();
+            ret.unknown_pointer |= ret_prov.may_reference_unknown_local()
+                || (self
+                    .function
+                    .dfg
+                    .value_ty(value)
+                    .is_pointer(self.scan_ctx.module)
+                    && ret_prov.is_empty());
         }
 
         for arg_idx in self.arg_sources(value) {

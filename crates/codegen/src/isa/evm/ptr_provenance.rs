@@ -40,11 +40,15 @@ pub(crate) struct Provenance {
     unknown_arg_indices: SmallVec<[u32; 4]>,
     /// The value may also be a non-arg pointer whose exact base is unknown.
     unknown_non_arg: bool,
+    /// A heap pointer returned by a callee, without a caller-local malloc identity.
+    /// Heap escape and reclamation remain conservative, but this fact alone does
+    /// not make the value point at an arbitrary local alloca.
+    unknown_heap: bool,
 }
 
 impl Provenance {
     pub(crate) fn is_empty(&self) -> bool {
-        self.bases.is_empty() && self.unknown_arg_indices.is_empty() && !self.unknown_non_arg
+        self.bases.is_empty() && !self.is_unknown_ptr()
     }
 
     pub(crate) fn has_no_known_bases(&self) -> bool {
@@ -52,7 +56,15 @@ impl Provenance {
     }
 
     pub(crate) fn is_unknown_ptr(&self) -> bool {
+        self.unknown_heap || self.may_reference_unknown_local()
+    }
+
+    pub(crate) fn may_reference_unknown_local(&self) -> bool {
         self.unknown_non_arg || !self.unknown_arg_indices.is_empty()
+    }
+
+    pub(crate) fn may_reference_heap(&self) -> bool {
+        self.unknown_heap || self.malloc_insts().next().is_some()
     }
 
     fn insert_arg_index(indices: &mut SmallVec<[u32; 4]>, idx: u32) -> bool {
@@ -125,6 +137,8 @@ impl Provenance {
         if other.unknown_non_arg {
             changed |= self.mark_unknown_non_arg();
         }
+        changed |= other.unknown_heap && !self.unknown_heap;
+        self.unknown_heap |= other.unknown_heap;
         changed
     }
 
@@ -151,12 +165,14 @@ impl Provenance {
 
     pub(crate) fn may_be_nonlocal_nonarg(&self) -> bool {
         self.unknown_non_arg
-            || self.bases.iter().any(|b| matches!(b, PtrBase::Malloc(_)))
+            || self.may_reference_heap()
             || (self.has_no_known_bases() && self.unknown_arg_indices.is_empty())
     }
 
     pub(crate) fn may_be_nonlocal_nonarg_without_malloc(&self) -> bool {
-        self.unknown_non_arg || (self.has_no_known_bases() && self.unknown_arg_indices.is_empty())
+        self.unknown_non_arg
+            || self.unknown_heap
+            || (self.has_no_known_bases() && self.unknown_arg_indices.is_empty())
     }
 
     pub(crate) fn alloca_insts(&self) -> impl Iterator<Item = InstId> + '_ {
@@ -273,11 +289,15 @@ fn call_result_provenance(
         }
     }
     let def_ty = function.dfg.value_ty(def);
-    if summary.return_may_be_non_arg_pointer(ret_idx)
-        && type_can_carry_pointer_provenance(module, def_ty)
+    if type_can_carry_pointer_provenance(module, def_ty)
+        && let Some(ret) = summary.returns.get(ret_idx)
     {
-        let _ = next.mark_unknown_non_arg();
-    } else if def_ty.is_pointer(module) && next.has_no_known_bases() && !next.is_unknown_ptr() {
+        next.unknown_heap |= ret.heap_pointer;
+        if ret.unknown_pointer {
+            let _ = next.mark_unknown_non_arg();
+        }
+    }
+    if def_ty.is_pointer(module) && next.is_empty() {
         // Pointer-typed calls with incomplete summaries still produce pointer values.
         let _ = next.mark_unknown_non_arg();
     }
@@ -569,11 +589,13 @@ mod tests {
             bases: SmallVec::from_vec(vec![PtrBase::Alloca(alloca), PtrBase::Arg(0)]),
             unknown_arg_indices: SmallVec::new(),
             unknown_non_arg: false,
+            unknown_heap: false,
         };
         let rhs = Provenance {
             bases: SmallVec::from_vec(vec![PtrBase::Malloc(malloc), PtrBase::Arg(1)]),
             unknown_arg_indices: SmallVec::from_vec(vec![2]),
             unknown_non_arg: true,
+            unknown_heap: false,
         };
 
         assert!(lhs.mark_unknown_non_arg());
@@ -871,5 +893,86 @@ block0:
             ret_prov.arg_indices().collect::<Vec<_>>(),
             Vec::<u32>::new()
         );
+    }
+
+    #[test]
+    fn callee_heap_origins_survive_forwarding_and_mixed_returns() {
+        for (alternative, has_arg, has_unknown) in [
+            ("v5.i256 = ptr_to_int v0 i256;", true, false),
+            (
+                "v4.*i256 = int_to_ptr 4096.i256 *i256;\nv5.i256 = ptr_to_int v4 i256;",
+                false,
+                true,
+            ),
+            (
+                "v4.*i256 = evm_malloc 64.i256;\nv5.i256 = ptr_to_int v4 i256;",
+                false,
+                false,
+            ),
+        ] {
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+func private %make(v0.*i256, v1.i1) -> i256 {{
+block0:
+    br v1 block1 block2;
+block1:
+    v2.*i256 = evm_malloc 32.i256;
+    v3.i256 = ptr_to_int v2 i256;
+    return v3;
+block2:
+    {alternative}
+    return v5;
+}}
+func private %forward(v0.*i256, v1.i1) -> i256 {{
+block0:
+    v2.i256 = call %make v0 v1;
+    return v2;
+}}
+func public %caller(v0.*i256, v1.i1) -> i256 {{
+block0:
+    v2.i256 = call %forward v0 v1;
+    return v2;
+}}
+"#
+            );
+            let provenance = ret_provenance(&source, "caller");
+            assert!(provenance.may_reference_heap(), "{provenance:?}");
+            assert!(provenance.is_unknown_ptr(), "heap identity remains unknown");
+            assert_eq!(
+                provenance.may_reference_unknown_local(),
+                has_unknown,
+                "{provenance:?}"
+            );
+            assert_eq!(
+                provenance.arg_indices().collect::<Vec<_>>(),
+                if has_arg { vec![0] } else { vec![] }
+            );
+            assert_eq!(
+                provenance.malloc_insts().count(),
+                0,
+                "callee allocations have no local instruction identity"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_clobber_keeps_heap_and_local_possibilities() {
+        let mut provenance = Provenance {
+            unknown_heap: true,
+            ..Provenance::default()
+        };
+        assert!(!provenance.may_reference_unknown_local());
+        assert!(provenance.mark_unknown_non_arg());
+        assert!(provenance.may_reference_unknown_local());
+        assert!(provenance.may_reference_heap());
+        let alloca = InstId(3);
+        assert!(provenance.union_with(&Provenance {
+            bases: SmallVec::from_vec(vec![PtrBase::Alloca(alloca)]),
+            ..Provenance::default()
+        }));
+        assert_eq!(provenance.alloca_insts().collect::<Vec<_>>(), vec![alloca]);
+        assert!(provenance.may_reference_unknown_local());
+        assert!(provenance.may_reference_heap());
     }
 }

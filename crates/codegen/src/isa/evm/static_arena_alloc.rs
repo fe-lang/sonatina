@@ -301,7 +301,7 @@ fn compute_func_stack_objects_from_input(
     let mut local_edges: FxHashMap<InstId, FxHashSet<InstId>> = FxHashMap::default();
     let mut local_unknown: FxHashSet<InstId> = FxHashSet::default();
     for (&base, stored) in &prov_info.local_mem {
-        if stored.is_unknown_ptr() {
+        if stored.may_reference_unknown_local() {
             local_unknown.insert(base);
             continue;
         }
@@ -1338,5 +1338,57 @@ block0:
         assert_eq!(packed.offsets[&StackObjId::new(2)], 3);
         assert_eq!(packed.offsets[&StackObjId::new(3)], 5);
         assert_eq!(packed.max_used, 6);
+    }
+
+    #[test]
+    fn callee_heap_return_does_not_extend_dead_local_objects() {
+        let (parsed, func_ref, _, stack) = analyze_function(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %allocate() -> i256 {
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+
+func private %read(v0.*i256) -> i256 {
+block0:
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+func private %caller() -> i256 {
+block0:
+    v0.*[i256; 4] = alloca [i256; 4];
+    v1.*i256 = bitcast v0 *i256;
+    mstore v1 7.i256 i256;
+    v2.i256 = call %read v1;
+    v3.*i256 = alloca i256;
+    v4.i256 = call %allocate;
+    mstore v3 v4 i256;
+    v5.i256 = call %read v3;
+    v6.i256 = add v2 v5;
+    return v6;
+}
+"#,
+            "caller",
+            16,
+        );
+        let regions: Vec<_> = ["v0", "v3"]
+            .into_iter()
+            .map(|name| {
+                let value = parsed.debug.value(func_ref, name).expect("alloca exists");
+                let inst = parsed.module.func_store.view(func_ref, |function| {
+                    function
+                        .dfg
+                        .value_inst(value)
+                        .expect("alloca has a definition")
+                });
+                &stack.obj_facts[&stack.alloca_ids[&inst]].region
+            })
+            .collect();
+        assert!(!regions[0].overlaps(regions[1]), "{regions:?}");
     }
 }
