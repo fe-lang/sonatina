@@ -1,10 +1,10 @@
+#[cfg(test)]
 use cranelift_entity::SecondaryMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, InstId, InstSetExt, Module, ValueId,
-    inst::evm::inst_set::EvmInstKind,
-    isa::{Isa, evm::Evm},
+    Function, Module, ValueId,
+    isa::evm::Evm,
     module::{FuncRef, ModuleCtx},
 };
 
@@ -16,7 +16,7 @@ use super::{
         escape_source_may_be_heap_derived, for_each_escape_event_at_inst,
         for_each_ptr_transfer_at_inst,
     },
-    ptr_provenance::{Provenance, compute_provenance, type_can_carry_pointer_provenance},
+    ptr_provenance::{ArgumentOrigin, Provenance, compute_provenance},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -63,35 +63,28 @@ impl ArgStoreLattice {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PtrArgEscape {
     pub(crate) stores: ArgStoreLattice,
-    pub(crate) arg_store_targets: SmallVec<[u32; 4]>,
+    pub(crate) arg_store_targets: SmallVec<[ArgumentOrigin; 4]>,
+    pub(crate) source_imprecise: bool,
+    pub(crate) stored_heap_pointer: bool,
+    pub(crate) stored_unknown_pointer: bool,
 }
 
 impl PtrArgEscape {
-    fn record_store_to_arg(&mut self, dst_idx: u32) -> bool {
-        if self.arg_store_targets.contains(&dst_idx) {
-            return false;
-        }
-        self.arg_store_targets.push(dst_idx);
-        self.arg_store_targets.sort_unstable();
-        self.stores.record_arg()
+    fn record_store_to_arg(&mut self, origin: ArgumentOrigin) -> bool {
+        self.stores.record_arg() | ArgumentOrigin::join_into(&mut self.arg_store_targets, origin)
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PtrReturnEscape {
-    pub(crate) returned_args: SmallVec<[u32; 4]>,
+    pub(crate) origins: SmallVec<[ArgumentOrigin; 4]>,
     pub(crate) heap_pointer: bool,
     pub(crate) unknown_pointer: bool,
 }
 
 impl PtrReturnEscape {
-    fn record_arg(&mut self, arg_idx: u32) -> bool {
-        if self.returned_args.contains(&arg_idx) {
-            return false;
-        }
-        self.returned_args.push(arg_idx);
-        self.returned_args.sort_unstable();
-        true
+    fn record_arg(&mut self, origin: ArgumentOrigin) -> bool {
+        ArgumentOrigin::join_into(&mut self.origins, origin)
     }
 }
 
@@ -110,6 +103,7 @@ impl PtrReturnEscape {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PtrEscapeSummary {
     pub(crate) args: Vec<PtrArgEscape>,
+    pub(crate) arg_memory: Vec<(ArgumentOrigin, PtrArgEscape)>,
     pub(crate) returns: Vec<PtrReturnEscape>,
     /// May publish newly allocated or unknown heap storage through memory,
     /// including allocations made by callees. Returned pointers are tracked
@@ -122,6 +116,7 @@ impl PtrEscapeSummary {
     fn new(arg_count: usize, ret_count: usize) -> Self {
         Self {
             args: vec![PtrArgEscape::default(); arg_count],
+            arg_memory: Vec::new(),
             returns: vec![PtrReturnEscape::default(); ret_count],
             may_publish_heap: false,
         }
@@ -142,7 +137,8 @@ impl PtrEscapeSummary {
                 if ret_ty.is_pointer(module) {
                     out.returns[ret_idx].unknown_pointer = true;
                     for arg_idx in 0..arg_count {
-                        let _ = out.returns[ret_idx].record_arg(arg_idx as u32);
+                        let _ =
+                            out.returns[ret_idx].record_arg(ArgumentOrigin::value(arg_idx as u32));
                     }
                 }
             }
@@ -152,10 +148,12 @@ impl PtrEscapeSummary {
                     continue;
                 }
 
+                out.args[src_idx].stored_unknown_pointer = true;
                 let _ = out.args[src_idx].stores.record_nonlocal();
                 for (dst_idx, &dst_ty) in sig.args().iter().enumerate() {
                     if dst_ty.is_pointer(module) {
-                        let _ = out.args[src_idx].record_store_to_arg(dst_idx as u32);
+                        let _ = out.args[src_idx]
+                            .record_store_to_arg(ArgumentOrigin::value(dst_idx as u32));
                     }
                 }
             }
@@ -174,31 +172,50 @@ impl PtrEscapeSummary {
             .unwrap_or_else(|| Self::conservative_unknown_ctx(module, func))
     }
 
-    fn record_store_to_arg(&mut self, src_idx: usize, dst_idx: u32) {
-        let Some(arg) = self.args.get_mut(src_idx) else {
-            return;
+    fn arg_effect_mut(&mut self, origin: ArgumentOrigin) -> &mut PtrArgEscape {
+        if origin.depth == 0 {
+            let effect = &mut self.args[origin.index as usize];
+            effect.source_imprecise |= !origin.exact;
+            return effect;
+        }
+        let index = if let Some(index) = self
+            .arg_memory
+            .iter()
+            .position(|(old, _)| old.index == origin.index)
+        {
+            let old = &mut self.arg_memory[index].0;
+            old.transitive |= origin.transitive || old.depth != origin.depth;
+            old.exact &= origin.exact;
+            old.depth = old.depth.min(origin.depth);
+            index
+        } else {
+            self.arg_memory.push((origin, PtrArgEscape::default()));
+            self.arg_memory.sort_unstable_by_key(|(origin, _)| *origin);
+            self.arg_memory
+                .iter()
+                .position(|(old, _)| *old == origin)
+                .unwrap()
         };
-        let _ = arg.record_store_to_arg(dst_idx);
+        &mut self.arg_memory[index].1
     }
 
-    fn record_store_local(&mut self, src_idx: usize) {
-        if let Some(arg) = self.args.get_mut(src_idx) {
-            let _ = arg.stores.record_local();
-        }
+    pub(crate) fn argument_effects(&self) -> impl Iterator<Item = (ArgumentOrigin, &PtrArgEscape)> {
+        self.args
+            .iter()
+            .enumerate()
+            .map(|(index, effect)| {
+                let mut origin = ArgumentOrigin::value(index as u32);
+                origin.exact = !effect.source_imprecise;
+                (origin, effect)
+            })
+            .chain(
+                self.arg_memory
+                    .iter()
+                    .map(|(origin, effect)| (*origin, effect)),
+            )
     }
 
-    fn record_store_nonlocal(&mut self, src_idx: usize) {
-        if let Some(arg) = self.args.get_mut(src_idx) {
-            let _ = arg.stores.record_nonlocal();
-        }
-    }
-
-    fn record_returned_arg(&mut self, ret_idx: usize, src_idx: usize) {
-        if let Some(ret) = self.returns.get_mut(ret_idx) {
-            let _ = ret.record_arg(src_idx as u32);
-        }
-    }
-
+    #[cfg(test)]
     pub(crate) fn arg_may_escape(&self, src_idx: usize) -> bool {
         self.args
             .get(src_idx)
@@ -207,15 +224,21 @@ impl PtrEscapeSummary {
 
     #[cfg(test)]
     pub(crate) fn arg_may_be_returned(&self, src_idx: usize) -> bool {
-        self.returns
-            .iter()
-            .any(|ret| ret.returned_args.contains(&(src_idx as u32)))
+        self.returns.iter().any(|ret| {
+            ret.origins
+                .iter()
+                .any(|origin| origin.index == src_idx as u32 && origin.depth == 0)
+        })
     }
 
-    pub(crate) fn returned_arg_indices(&self, ret_idx: usize) -> &[u32] {
+    #[cfg(test)]
+    pub(crate) fn returned_arg_indices(&self, ret_idx: usize) -> Vec<u32> {
         self.returns
             .get(ret_idx)
-            .map_or(&[], |ret| ret.returned_args.as_slice())
+            .into_iter()
+            .flat_map(|ret| &ret.origins)
+            .filter_map(|origin| (origin.depth == 0).then_some(origin.index))
+            .collect()
     }
 
     #[cfg(test)]
@@ -225,10 +248,14 @@ impl PtrEscapeSummary {
             .is_some_and(|ret| ret.heap_pointer || ret.unknown_pointer)
     }
 
-    pub(crate) fn arg_store_targets(&self, src_idx: usize) -> &[u32] {
+    #[cfg(test)]
+    pub(crate) fn arg_store_targets(&self, src_idx: usize) -> Vec<u32> {
         self.args
             .get(src_idx)
-            .map_or(&[], |arg| arg.arg_store_targets.as_slice())
+            .into_iter()
+            .flat_map(|arg| &arg.arg_store_targets)
+            .filter_map(|origin| (origin.depth == 0).then_some(origin.index))
+            .collect()
     }
 
     #[cfg(test)]
@@ -255,33 +282,27 @@ impl PtrEscapeSummary {
                 .call_arg_store_dest_args(src_idx, call_args)
                 .any(|dst_arg| {
                     let dst_prov = &prov[dst_arg];
-                    dst_prov.has_any_arg() || dst_prov.may_be_nonlocal_nonarg()
+                    dst_prov.has_any_arg()
+                        || dst_prov.may_reference_heap()
+                        || dst_prov.may_be_nonlocal_nonarg_without_malloc()
                 })
     }
 
+    #[cfg(test)]
     pub(crate) fn call_arg_store_dest_args<'a>(
         &'a self,
         src_idx: usize,
         call_args: &'a [ValueId],
     ) -> impl Iterator<Item = ValueId> + 'a {
         self.arg_store_targets(src_idx)
-            .iter()
-            .filter_map(move |&dst_idx| call_args.get(dst_idx as usize).copied())
+            .into_iter()
+            .filter_map(move |dst_idx| call_args.get(dst_idx as usize).copied())
     }
 
-    /// Apply this summary's store effects at a call site, substituting actual
-    /// args for formals. Calls `f(src_formal_idx, dst_actual)` for each direct
-    /// src-to-dst-arg edge in the summary.
-    pub(crate) fn for_each_store_effect(
-        &self,
-        call_args: &[ValueId],
-        mut f: impl FnMut(usize, ValueId),
-    ) {
-        for (src_idx, arg) in self.args.iter().enumerate() {
-            for &dst_idx in &arg.arg_store_targets {
-                if let Some(&dst_actual) = call_args.get(dst_idx as usize) {
-                    f(src_idx, dst_actual);
-                }
+    pub(crate) fn for_each_store_effect(&self, mut f: impl FnMut(ArgumentOrigin, ArgumentOrigin)) {
+        for (source, effect) in self.argument_effects() {
+            for &dest in &effect.arg_store_targets {
+                f(source, dest);
             }
         }
     }
@@ -325,286 +346,6 @@ pub(crate) fn compute_ptr_escape_summaries(
     summaries
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct ArgOrigins(SmallVec<[u32; 4]>);
-
-impl ArgOrigins {
-    fn new() -> Self {
-        Self(SmallVec::new())
-    }
-
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    fn insert(&mut self, idx: u32) -> bool {
-        if self.0.contains(&idx) {
-            return false;
-        }
-        self.0.push(idx);
-        self.0.sort_unstable();
-        true
-    }
-
-    fn union_with(&mut self, other: &Self) -> bool {
-        let mut changed = false;
-        for idx in other.iter() {
-            changed |= self.insert(idx);
-        }
-        changed
-    }
-
-    fn iter(&self) -> impl Iterator<Item = u32> + '_ {
-        self.0.iter().copied()
-    }
-
-    fn source_indices_with(&self, src_prov: &Provenance) -> SmallVec<[usize; 4]> {
-        let mut out = SmallVec::new();
-        out.extend(src_prov.arg_indices().map(|idx| idx as usize));
-        out.extend(self.iter().map(|idx| idx as usize));
-        out
-    }
-
-    fn from_addr(addr_prov: &Provenance, addr_origins: &Self) -> Self {
-        let mut out = Self::new();
-        for idx in addr_prov.arg_indices() {
-            let _ = out.insert(idx);
-        }
-        let _ = out.union_with(addr_origins);
-        out
-    }
-
-    fn is_only_forwarded_addr_for(&self, addr_prov: &Provenance) -> bool {
-        !self.is_empty() && addr_prov.has_no_known_bases() && !addr_prov.is_unknown_ptr()
-    }
-}
-
-struct ArgForwardingState<'a> {
-    function: &'a Function,
-    module: &'a ModuleCtx,
-    isa: &'a Evm,
-    summaries: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
-    prov: &'a SecondaryMap<ValueId, Provenance>,
-    origins: SecondaryMap<ValueId, ArgOrigins>,
-    local_mem: FxHashMap<InstId, ArgOrigins>,
-    arg_mem: Vec<ArgOrigins>,
-}
-
-impl<'a> ArgForwardingState<'a> {
-    fn new(
-        function: &'a Function,
-        module: &'a ModuleCtx,
-        isa: &'a Evm,
-        summaries: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
-        prov: &'a SecondaryMap<ValueId, Provenance>,
-    ) -> Self {
-        let mut origins: SecondaryMap<ValueId, ArgOrigins> = SecondaryMap::new();
-        for value in function.dfg.value_ids() {
-            let _ = &mut origins[value];
-        }
-        for (idx, &arg) in function.arg_values.iter().enumerate() {
-            if type_can_carry_pointer_provenance(module, function.dfg.value_ty(arg)) {
-                let _ = origins[arg].insert(idx as u32);
-            }
-        }
-
-        Self {
-            function,
-            module,
-            isa,
-            summaries,
-            prov,
-            origins,
-            local_mem: FxHashMap::default(),
-            arg_mem: vec![ArgOrigins::new(); function.arg_values.len()],
-        }
-    }
-
-    fn compute(mut self) -> SecondaryMap<ValueId, ArgOrigins> {
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for block in self.function.layout.iter_block() {
-                for inst in self.function.layout.iter_inst(block) {
-                    changed |= self.visit_inst(inst);
-                }
-            }
-        }
-        self.origins
-    }
-
-    fn visit_inst(&mut self, inst: InstId) -> bool {
-        let data = self
-            .isa
-            .inst_set()
-            .resolve_inst(self.function.dfg.inst(inst));
-
-        if let EvmInstKind::Mstore(mstore) = &data {
-            return self.store_value_to_addr(*mstore.addr(), *mstore.value());
-        }
-
-        if let EvmInstKind::Call(call) = &data {
-            let mut changed = false;
-            let summary =
-                PtrEscapeSummary::get_or_conservative(self.summaries, self.module, *call.callee());
-            let args = call.args();
-            summary.for_each_store_effect(args, |src_idx, dst_actual| {
-                if let Some(&src_actual) = args.get(src_idx) {
-                    changed |= self.store_value_to_addr(dst_actual, src_actual);
-                }
-            });
-
-            for (ret_idx, &def) in self.function.dfg.inst_results(inst).iter().enumerate() {
-                if type_can_carry_pointer_provenance(self.module, self.function.dfg.value_ty(def)) {
-                    let mut next = ArgOrigins::new();
-                    for &idx in summary.returned_arg_indices(ret_idx) {
-                        if let Some(&arg) = args.get(idx as usize) {
-                            let _ = next.union_with(&self.origins[arg]);
-                        }
-                    }
-                    changed |= self.set_origins(def, next);
-                }
-            }
-            return changed;
-        }
-
-        let [def] = self.function.dfg.inst_results(inst) else {
-            return false;
-        };
-        if !type_can_carry_pointer_provenance(self.module, self.function.dfg.value_ty(*def)) {
-            return false;
-        }
-
-        self.set_origins(*def, self.compute_inst_origins(inst, data))
-    }
-
-    fn compute_inst_origins(&self, inst: InstId, data: EvmInstKind<'_>) -> ArgOrigins {
-        let mut next = ArgOrigins::new();
-        match data {
-            EvmInstKind::Mload(mload) => {
-                let _ = next.union_with(&self.load_from_addr(*mload.addr()));
-            }
-            EvmInstKind::Phi(phi) => {
-                for (value, _) in phi.args().iter() {
-                    let _ = next.union_with(&self.origins[*value]);
-                }
-            }
-            EvmInstKind::Gep(gep) => {
-                if let Some(&base) = gep.values().first() {
-                    let _ = next.union_with(&self.origins[base]);
-                }
-            }
-            EvmInstKind::Bitcast(bc) => {
-                let _ = next.union_with(&self.origins[*bc.from()]);
-            }
-            EvmInstKind::IntToPtr(i2p) => {
-                let _ = next.union_with(&self.origins[*i2p.from()]);
-            }
-            EvmInstKind::PtrToInt(p2i) => {
-                let _ = next.union_with(&self.origins[*p2i.from()]);
-            }
-            EvmInstKind::InsertValue(iv) => {
-                let _ = next.union_with(&self.origins[*iv.dest()]);
-                let _ = next.union_with(&self.origins[*iv.value()]);
-            }
-            EvmInstKind::ExtractValue(ev) => {
-                let _ = next.union_with(&self.origins[*ev.dest()]);
-            }
-            EvmInstKind::Add(_)
-            | EvmInstKind::Sub(_)
-            | EvmInstKind::Mul(_)
-            | EvmInstKind::And(_)
-            | EvmInstKind::Or(_)
-            | EvmInstKind::Xor(_)
-            | EvmInstKind::Shl(_)
-            | EvmInstKind::Shr(_)
-            | EvmInstKind::Sar(_)
-            | EvmInstKind::Not(_)
-            | EvmInstKind::Sext(_)
-            | EvmInstKind::Zext(_)
-            | EvmInstKind::Trunc(_)
-            | EvmInstKind::EvmSdiv(_)
-            | EvmInstKind::EvmUdiv(_)
-            | EvmInstKind::EvmUmod(_)
-            | EvmInstKind::EvmSmod(_)
-            | EvmInstKind::EvmAddMod(_)
-            | EvmInstKind::EvmMulMod(_)
-            | EvmInstKind::EvmExp(_)
-            | EvmInstKind::EvmSignExtend(_)
-            | EvmInstKind::EvmByte(_)
-            | EvmInstKind::EvmClz(_) => {
-                self.function.dfg.inst(inst).for_each_value(&mut |value| {
-                    let _ = next.union_with(&self.origins[value]);
-                });
-            }
-            _ => {}
-        }
-        next
-    }
-
-    fn store_value_to_addr(&mut self, addr: ValueId, value: ValueId) -> bool {
-        self.store_origins_to_addr(addr, self.origins[value].clone())
-    }
-
-    fn store_origins_to_addr(&mut self, addr: ValueId, val_origins: ArgOrigins) -> bool {
-        let mut changed = false;
-        let addr_prov = &self.prov[addr];
-        if addr_prov.is_local_addr() {
-            for base in addr_prov.alloca_insts() {
-                changed |= self
-                    .local_mem
-                    .entry(base)
-                    .or_default()
-                    .union_with(&val_origins);
-            }
-        }
-
-        for idx in ArgOrigins::from_addr(addr_prov, &self.origins[addr]).iter() {
-            if let Some(slot) = self.arg_mem.get_mut(idx as usize) {
-                changed |= slot.union_with(&val_origins);
-            }
-        }
-        changed
-    }
-
-    fn load_from_addr(&self, addr: ValueId) -> ArgOrigins {
-        let mut out = ArgOrigins::new();
-        let addr_prov = &self.prov[addr];
-        if addr_prov.is_local_addr() {
-            for base in addr_prov.alloca_insts() {
-                if let Some(stored) = self.local_mem.get(&base) {
-                    let _ = out.union_with(stored);
-                }
-            }
-        }
-
-        for idx in ArgOrigins::from_addr(addr_prov, &self.origins[addr]).iter() {
-            if let Some(stored) = self.arg_mem.get(idx as usize) {
-                let _ = out.union_with(stored);
-            }
-        }
-        out
-    }
-
-    fn set_origins(&mut self, value: ValueId, next: ArgOrigins) -> bool {
-        if self.origins[value] == next {
-            return false;
-        }
-        self.origins[value] = next;
-        true
-    }
-}
-
-fn compute_arg_forwarding(
-    function: &Function,
-    module: &ModuleCtx,
-    isa: &Evm,
-    summaries: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    prov: &SecondaryMap<ValueId, Provenance>,
-) -> SecondaryMap<ValueId, ArgOrigins> {
-    ArgForwardingState::new(function, module, isa, summaries, prov).compute()
-}
-
 fn compute_summary_for_func(
     module: &Module,
     func: FuncRef,
@@ -614,30 +355,20 @@ fn compute_summary_for_func(
     module.func_store.view(func, |function| {
         let sig_arg_count = module.ctx.func_sig(func, |sig| sig.args().len());
         debug_assert_eq!(function.arg_values.len(), sig_arg_count);
-        let summary = PtrEscapeSummary::empty_for_func(&module.ctx, func);
+        let mut summary = PtrEscapeSummary::empty_for_func(&module.ctx, func);
 
         let prov_info = compute_provenance(function, &module.ctx, isa, |callee| {
             PtrEscapeSummary::get_or_conservative(summaries, &module.ctx, callee)
         });
-        let prov = &prov_info.value;
-        let local_mem = &prov_info.local_mem;
-        let arg_mem = &prov_info.arg_mem;
-        let arg_origins = compute_arg_forwarding(function, &module.ctx, isa, summaries, prov);
-        let scan_ctx = EscapeScanCtx {
-            module: &module.ctx,
-            isa,
-            ptr_escape: summaries,
-            prov,
-            local_mem,
-            arg_mem,
-        };
-
-        let malloc_escape = compute_local_malloc_escape(scan_ctx, function, &arg_origins);
+        for &(origin, ref stored) in &prov_info.arg_mem {
+            let effect = summary.arg_effect_mut(origin);
+            effect.stored_heap_pointer |= stored.may_reference_heap();
+            effect.stored_unknown_pointer |= stored.may_reference_unknown_local();
+        }
+        let scan_ctx = EscapeScanCtx::new(function, &module.ctx, isa, summaries, &prov_info);
         SummaryComputer {
             function,
-            scan_ctx,
-            arg_origins: &arg_origins,
-            malloc_escape: &malloc_escape,
+            scan_ctx: &scan_ctx,
             summary,
         }
         .compute()
@@ -646,9 +377,7 @@ fn compute_summary_for_func(
 
 struct SummaryComputer<'a> {
     function: &'a Function,
-    scan_ctx: EscapeScanCtx<'a>,
-    arg_origins: &'a SecondaryMap<ValueId, ArgOrigins>,
-    malloc_escape: &'a LocalMallocEscape,
+    scan_ctx: &'a EscapeScanCtx<'a>,
     summary: PtrEscapeSummary,
 }
 
@@ -665,7 +394,7 @@ impl<'a> SummaryComputer<'a> {
                             && escape_source_may_be_heap_derived(
                                 self.function,
                                 self.scan_ctx,
-                                event.source,
+                                &event.source,
                             );
                     });
                     if let Some(call) = self.function.dfg.call_info(inst) {
@@ -682,38 +411,34 @@ impl<'a> SummaryComputer<'a> {
         self.summary
     }
 
-    fn record_event(&mut self, event: PtrTransferEvent<'a>) {
+    fn record_event(&mut self, event: PtrTransferEvent<'_>) {
         match event {
             PtrTransferEvent::Return { ret_idx, value } => self.record_return(ret_idx, value),
             PtrTransferEvent::Write {
-                dest,
-                dest_prov,
-                source,
-                ..
+                dest_prov, source, ..
             } => match source {
-                PtrTransferSource::Value(value) => self.record_value_write(value, dest_prov, dest),
-                PtrTransferSource::LocalMem { stored, .. }
-                | PtrTransferSource::ArgMem { stored } => {
-                    self.record_provenance_write(stored, dest_prov, dest);
+                PtrTransferSource::Value(value) => {
+                    self.record_provenance_write(&self.scan_ctx.prov_info.value[value], dest_prov);
                 }
-                PtrTransferSource::UnknownCopy => {}
+                PtrTransferSource::Memory { stored, .. } => {
+                    self.record_provenance_write(&stored, dest_prov);
+                }
             },
-            PtrTransferEvent::CallArgEscape { value, .. } => {
-                for arg_idx in self.arg_sources(value) {
-                    self.summary.record_store_nonlocal(arg_idx);
+            PtrTransferEvent::CallArgEscape { stored, .. } => {
+                for origin in stored.argument_origins() {
+                    self.summary.arg_effect_mut(origin).stores.record_nonlocal();
                 }
             }
             PtrTransferEvent::CallArgStore {
-                value,
-                dest,
-                dest_prov,
-                ..
-            } => self.record_value_write(value, dest_prov, dest),
+                stored, dest_prov, ..
+            } => {
+                self.record_provenance_write(&stored, &dest_prov);
+            }
         }
     }
 
     fn record_return(&mut self, ret_idx: usize, value: ValueId) {
-        let ret_prov = &self.scan_ctx.prov[value];
+        let ret_prov = &self.scan_ctx.prov_info.value[value];
         if let Some(ret) = self.summary.returns.get_mut(ret_idx) {
             ret.heap_pointer |= ret_prov.may_reference_heap();
             ret.unknown_pointer |= ret_prov.may_reference_unknown_local()
@@ -723,157 +448,30 @@ impl<'a> SummaryComputer<'a> {
                     .value_ty(value)
                     .is_pointer(self.scan_ctx.module)
                     && ret_prov.is_empty());
-        }
-
-        for arg_idx in self.arg_sources(value) {
-            self.summary.record_returned_arg(ret_idx, arg_idx);
-        }
-    }
-
-    fn record_value_write(&mut self, value: ValueId, dst_prov: &Provenance, dst: ValueId) {
-        let dst_origins = self.arg_origins[dst].clone();
-        for arg_idx in self.arg_sources(value) {
-            self.record_arg_write(arg_idx, dst_prov, &dst_origins);
-        }
-    }
-
-    fn record_provenance_write(
-        &mut self,
-        src_prov: &Provenance,
-        dst_prov: &Provenance,
-        dst: ValueId,
-    ) {
-        let dst_origins = self.arg_origins[dst].clone();
-        for arg_idx in src_prov.arg_indices() {
-            self.record_arg_write(arg_idx as usize, dst_prov, &dst_origins);
-        }
-    }
-
-    fn record_arg_write(
-        &mut self,
-        src_idx: usize,
-        dst_prov: &Provenance,
-        dst_origins: &ArgOrigins,
-    ) {
-        if dst_prov.is_local_addr() || dst_prov.malloc_insts().next().is_some() {
-            self.summary.record_store_local(src_idx);
-        }
-        for dst_idx in dst_prov.arg_indices() {
-            self.summary.record_store_to_arg(src_idx, dst_idx);
-        }
-        for dst_idx in dst_origins.iter() {
-            self.summary.record_store_to_arg(src_idx, dst_idx);
-        }
-        if (dst_prov.may_be_nonlocal_nonarg_without_malloc()
-            && !dst_origins.is_only_forwarded_addr_for(dst_prov))
-            || dst_prov
-                .malloc_insts()
-                .any(|malloc| self.malloc_escape.escaping.contains(&malloc))
-        {
-            self.summary.record_store_nonlocal(src_idx);
-        }
-    }
-
-    fn arg_sources(&self, value: ValueId) -> SmallVec<[usize; 4]> {
-        self.arg_origins[value].source_indices_with(&self.scan_ctx.prov[value])
-    }
-}
-
-#[derive(Default)]
-struct LocalMallocEscape {
-    contents: FxHashMap<InstId, Provenance>,
-    escaping: FxHashSet<InstId>,
-}
-
-impl LocalMallocEscape {
-    fn record_write(
-        &mut self,
-        src_prov: &Provenance,
-        dst_prov: &Provenance,
-        dst_origins: &ArgOrigins,
-    ) {
-        for malloc in dst_prov.malloc_insts() {
-            let _ = self
-                .contents
-                .entry(malloc)
-                .or_default()
-                .union_with(src_prov);
-        }
-
-        if dst_prov.has_any_arg() {
-            self.record_escape(src_prov);
-            return;
-        }
-
-        if dst_prov.may_be_nonlocal_nonarg_without_malloc()
-            && !dst_origins.is_only_forwarded_addr_for(dst_prov)
-        {
-            self.record_escape(src_prov);
-        }
-    }
-
-    fn record_escape(&mut self, prov: &Provenance) {
-        for malloc in prov.malloc_insts() {
-            self.escaping.insert(malloc);
-        }
-    }
-
-    fn close(&mut self) {
-        let mut worklist: SmallVec<[InstId; 8]> = self.escaping.iter().copied().collect();
-        while let Some(malloc) = worklist.pop() {
-            if let Some(stored) = self.contents.get(&malloc) {
-                for child in stored.malloc_insts() {
-                    if self.escaping.insert(child) {
-                        worklist.push(child);
-                    }
-                }
+            for origin in ret_prov.argument_origins() {
+                ret.record_arg(origin);
             }
         }
     }
-}
 
-fn compute_local_malloc_escape(
-    scan_ctx: EscapeScanCtx<'_>,
-    function: &Function,
-    arg_origins: &SecondaryMap<ValueId, ArgOrigins>,
-) -> LocalMallocEscape {
-    let mut out = LocalMallocEscape::default();
-    let prov = scan_ctx.prov;
-
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            for_each_ptr_transfer_at_inst(function, inst, scan_ctx, |event| match event {
-                PtrTransferEvent::Return { value, .. }
-                | PtrTransferEvent::CallArgEscape { value, .. } => out.record_escape(&prov[value]),
-                PtrTransferEvent::Write {
-                    dest,
-                    dest_prov,
-                    source,
-                    ..
-                } => match source {
-                    PtrTransferSource::Value(value) => {
-                        out.record_write(&prov[value], dest_prov, &arg_origins[dest]);
-                    }
-                    PtrTransferSource::LocalMem { stored, .. }
-                    | PtrTransferSource::ArgMem { stored } => {
-                        out.record_write(stored, dest_prov, &arg_origins[dest]);
-                    }
-                    PtrTransferSource::UnknownCopy => {}
-                },
-                PtrTransferEvent::CallArgStore {
-                    value,
-                    dest,
-                    dest_prov,
-                    ..
-                } => {
-                    out.record_write(&prov[value], dest_prov, &arg_origins[dest]);
-                }
-            });
+    fn record_provenance_write(&mut self, src: &Provenance, dest: &Provenance) {
+        for origin in src.argument_origins() {
+            let effect = self.summary.arg_effect_mut(origin);
+            if dest.is_local_addr() || dest.malloc_insts().next().is_some() {
+                effect.stores.record_local();
+            }
+            for target in dest.argument_origins() {
+                effect.record_store_to_arg(target);
+            }
+            if dest.may_be_nonlocal_nonarg_without_malloc()
+                || dest
+                    .malloc_insts()
+                    .any(|malloc| self.scan_ctx.escaping_mallocs.contains(&malloc))
+            {
+                effect.stores.record_nonlocal();
+            }
         }
     }
-
-    out.close();
-    out
 }
 
 #[cfg(test)]

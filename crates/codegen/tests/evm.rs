@@ -9,7 +9,7 @@ use revm::{
     interpreter::Interpreter,
     primitives::{
         AccountInfo, Address, Bytecode, Bytes, Env, ExecutionResult, HaltReason, OsakaSpec, Output,
-        TransactTo, U256,
+        TransactTo, U256, keccak256,
     },
 };
 
@@ -294,6 +294,245 @@ object @Contract {
             expected[..tail.len()].copy_from_slice(tail);
             expected[63] = 99;
             assert_eq!(actual.as_ref(), expected, "{level:?}, offset={offset}");
+        }
+    }
+}
+
+#[test]
+fn dynamic_private_buffer_extents_preserve_bytes_at_all_optimization_levels() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_size;
+    v1.*i8 = evm_malloc v0;
+    v2.i256 = ptr_to_int v1 i256;
+    evm_calldata_copy v2 0.i256 v0;
+    v3.i256 = evm_keccak256 v2 v0;
+    memzero v2 v0;
+    v4.i256 = evm_keccak256 v2 v0;
+    mstore 0.i256 v3 i256;
+    mstore 32.i256 v4 i256;
+    evm_return 0.i256 64.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for (source, echo) in [
+        (source, false),
+        (
+            include_str!("../test_files/evm/dynamic_terminal_payload_return_data.sntn"),
+            true,
+        ),
+    ] {
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            let module = parse_sona(source).module;
+            verify_module_or_panic(&module, &config);
+            let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+            verify_module_or_panic(compiler.optimize(), &config);
+            let artifacts = compiler.compile().expect("dynamic buffer should compile");
+            let runtime = artifacts[0]
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for len in [0, 1, 31, 32, 33, 63, 64, 65, 96, 257] {
+                let calldata: Vec<_> = (0..len).map(|index| (index % 251) as u8).collect();
+                let expected = if echo {
+                    calldata.clone()
+                } else {
+                    [keccak256(&calldata), keccak256(vec![0; len])]
+                        .into_iter()
+                        .flat_map(|hash| hash.0)
+                        .collect()
+                };
+                let result = harness.call(&calldata);
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("{level:?}, len={len}, echo={echo}: {result:?}");
+                };
+                assert_eq!(
+                    actual.as_ref(),
+                    expected,
+                    "{level:?}, len={len}, echo={echo}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn private_scalar_loop_hash_preserves_data_at_all_optimization_levels() {
+    let source = include_str!("fixtures/private_scalar_loop_hash.sntn");
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(source).module;
+        verify_module_or_panic(&module, &config);
+        let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        verify_module_or_panic(compiler.optimize(), &config);
+        let artifacts = compiler.compile().expect("scalar loop should compile");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for len in [0_usize, 1, 2, 8, 16, 32, 64] {
+            for pointer_shaped in [false, true] {
+                let calldata: Vec<_> = (0..len)
+                    .flat_map(|index| {
+                        if pointer_shaped {
+                            IrU256::from(96 + 32 * index).to_big_endian()
+                        } else {
+                            keccak256(index.to_be_bytes()).0
+                        }
+                    })
+                    .collect();
+                let expected = calldata
+                    .as_chunks::<32>()
+                    .0
+                    .iter()
+                    .fold([0; 32], |hash, word| {
+                        keccak256([word.as_slice(), &hash].concat()).0
+                    });
+                let result = harness.call(&calldata);
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("{level:?}, len={len}, pointer_shaped={pointer_shaped}: {result:?}");
+                };
+                assert_eq!(
+                    actual.as_ref(),
+                    expected,
+                    "{level:?}, len={len}, pointer_shaped={pointer_shaped}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn loaded_argument_return_preserves_local_lifetime() {
+    let cases = [
+        (
+            "direct",
+            include_str!("fixtures/loaded_argument_return.sntn"),
+        ),
+        (
+            "typed",
+            include_str!("fixtures/loaded_argument_return_typed.sntn"),
+        ),
+        (
+            "encoded_arg",
+            include_str!("fixtures/loaded_argument_return_encoded_arg.sntn"),
+        ),
+        (
+            "wrapper",
+            include_str!("fixtures/loaded_argument_return_wrapper.sntn"),
+        ),
+        (
+            "nested",
+            include_str!("fixtures/loaded_argument_return_nested.sntn"),
+        ),
+        (
+            "copy",
+            include_str!("fixtures/loaded_argument_return_copy.sntn"),
+        ),
+        (
+            "outparam",
+            include_str!("fixtures/loaded_argument_return_outparam.sntn"),
+        ),
+        (
+            "nested_outparam",
+            include_str!("fixtures/loaded_argument_return_nested_outparam.sntn"),
+        ),
+        (
+            "recursive",
+            include_str!("fixtures/loaded_argument_return_recursive.sntn"),
+        ),
+        (
+            "cycle",
+            include_str!("fixtures/loaded_argument_return_cycle.sntn"),
+        ),
+        (
+            "offset",
+            include_str!("fixtures/loaded_argument_return_offset.sntn"),
+        ),
+        (
+            "offset_outparam",
+            include_str!("fixtures/loaded_argument_return_offset_outparam.sntn"),
+        ),
+        (
+            "offset_wrapper",
+            include_str!("fixtures/loaded_argument_return_offset_wrapper.sntn"),
+        ),
+        (
+            "raw_load",
+            include_str!("fixtures/loaded_argument_return_raw_load.sntn"),
+        ),
+        (
+            "raw_store",
+            include_str!("fixtures/loaded_argument_return_raw_store.sntn"),
+        ),
+        (
+            "raw_both",
+            include_str!("fixtures/loaded_argument_return_raw_both.sntn"),
+        ),
+        (
+            "heap_roundtrip",
+            include_str!("fixtures/loaded_argument_return_heap_roundtrip.sntn"),
+        ),
+        (
+            "external_roundtrip",
+            include_str!("fixtures/loaded_argument_return_external_roundtrip.sntn"),
+        ),
+        (
+            "external_heap",
+            include_str!("fixtures/loaded_argument_return_external_heap.sntn"),
+        ),
+        (
+            "heap_children",
+            include_str!("fixtures/loaded_argument_return_heap_children.sntn"),
+        ),
+        (
+            "local_children",
+            include_str!("fixtures/loaded_argument_return_local_children.sntn"),
+        ),
+    ];
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for (case, source) in cases {
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            eprintln!("loaded return: {case}, {level:?}");
+            let module = parse_sona(source).module;
+            verify_module_or_panic(&module, &config);
+            let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+            verify_module_or_panic(compiler.optimize(), &config);
+            let artifacts = compiler.compile().expect("loaded return program compiles");
+            let runtime = artifacts[0]
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            let result = harness.call(&[]);
+            let ExecutionResult::Success {
+                output: Output::Call(actual),
+                ..
+            } = result
+            else {
+                panic!("{case}, {level:?}: {result:?}");
+            };
+            let expected = [IrU256::from(42), IrU256::from(99)]
+                .into_iter()
+                .flat_map(|word| word.to_big_endian())
+                .collect::<Vec<_>>();
+            assert_eq!(actual.as_ref(), expected, "{case}, {level:?}");
         }
     }
 }

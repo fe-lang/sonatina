@@ -24,7 +24,7 @@ use super::{
     escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
     memory_plan::{FuncPreAnalysis, WORD_BYTES},
     ptr_escape::PtrEscapeSummary,
-    ptr_provenance::{Provenance, ProvenanceInfo, compute_provenance},
+    ptr_provenance::{Provenance, ProvenanceInfo, compute_provenance, memory_load, memory_store},
 };
 use crate::stackalloc::StackifyAlloc;
 
@@ -300,25 +300,21 @@ fn compute_func_stack_objects_from_input(
 
     let mut local_edges: FxHashMap<InstId, FxHashSet<InstId>> = FxHashMap::default();
     let mut local_unknown: FxHashSet<InstId> = FxHashSet::default();
-    for (&base, stored) in &prov_info.local_mem {
+    // Heap containers can retain local objects, including through mixed
+    // local/heap cycles. Heap nodes participate in the closure but do not
+    // become stack objects themselves.
+    for (&base, stored) in prov_info.local_mem.iter().chain(&prov_info.malloc_mem) {
         if stored.may_reference_unknown_local() {
             local_unknown.insert(base);
             continue;
         }
-        for child in stored.alloca_insts() {
+        for child in stored.alloca_insts().chain(stored.malloc_insts()) {
             local_edges.entry(base).or_default().insert(child);
         }
     }
 
-    let escaping_sites = compute_escaping_allocas(
-        function,
-        ctx.module,
-        ctx.isa,
-        ctx.ptr_escape,
-        prov,
-        &prov_info.local_mem,
-        &prov_info.arg_mem,
-    );
+    let escaping_sites =
+        compute_escaping_allocas(function, ctx.module, ctx.isa, ctx.ptr_escape, prov_info);
     if !escaping_sites.is_empty() {
         panic!(
             "{}",
@@ -411,28 +407,23 @@ fn compute_func_stack_objects_from_input(
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let data = ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            match data {
-                EvmInstKind::Mload(mload) => {
-                    for base in prov[*mload.addr()].alloca_insts() {
-                        if let Some(&id) = alloca_ids.get(&base)
-                            && let Some(obj) =
-                                obj_index.get(&id).and_then(|idx| objects.get_mut(*idx))
-                        {
-                            obj.load_count = obj.load_count.saturating_add(1);
-                        }
+            if let Some((addr, _)) = memory_load(&data, ctx.module) {
+                for base in prov[addr].alloca_insts() {
+                    if let Some(&id) = alloca_ids.get(&base)
+                        && let Some(obj) = obj_index.get(&id).and_then(|idx| objects.get_mut(*idx))
+                    {
+                        obj.load_count = obj.load_count.saturating_add(1);
                     }
                 }
-                EvmInstKind::Mstore(mstore) => {
-                    for base in prov[*mstore.addr()].alloca_insts() {
-                        if let Some(&id) = alloca_ids.get(&base)
-                            && let Some(obj) =
-                                obj_index.get(&id).and_then(|idx| objects.get_mut(*idx))
-                        {
-                            obj.store_count = obj.store_count.saturating_add(1);
-                        }
+            }
+            if let Some((addr, _, _)) = memory_store(&data, ctx.module) {
+                for base in prov[addr].alloca_insts() {
+                    if let Some(&id) = alloca_ids.get(&base)
+                        && let Some(obj) = obj_index.get(&id).and_then(|idx| objects.get_mut(*idx))
+                    {
+                        obj.store_count = obj.store_count.saturating_add(1);
                     }
                 }
-                _ => {}
             }
 
             function.dfg.inst(inst).for_each_value(&mut |v| {
@@ -576,23 +567,14 @@ fn compute_escaping_allocas(
     module: &ModuleCtx,
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    prov: &SecondaryMap<ValueId, Provenance>,
-    local_mem: &FxHashMap<InstId, Provenance>,
-    arg_mem: &[Provenance],
+    prov_info: &ProvenanceInfo,
 ) -> FxHashMap<InstId, Vec<AllocaEscapeSite>> {
     let mut escaping: FxHashMap<InstId, Vec<AllocaEscapeSite>> = FxHashMap::default();
-    let scan_ctx = EscapeScanCtx {
-        module,
-        isa,
-        ptr_escape,
-        prov,
-        local_mem,
-        arg_mem,
-    };
+    let scan_ctx = EscapeScanCtx::new(function, module, isa, ptr_escape, prov_info);
 
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
-            for_each_escape_event_at_inst(function, inst, scan_ctx, |event| match event.source {
+            for_each_escape_event_at_inst(function, inst, &scan_ctx, |event| match event.source {
                 EscapeSource::Value(value) => {
                     let site = match event.sink {
                         EscapeSink::Return => AllocaEscapeSite::Return { inst, value },
@@ -600,6 +582,7 @@ fn compute_escaping_allocas(
                             inst,
                             addr: match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
                                 EvmInstKind::Mstore(mstore) => *mstore.addr(),
+                                EvmInstKind::EvmMstore(mstore) => *mstore.addr(),
                                 EvmInstKind::EvmMstore8(mstore8) => *mstore8.addr(),
                                 _ => unreachable!("only stores emit direct-value store escapes"),
                             },
@@ -616,11 +599,11 @@ fn compute_escaping_allocas(
                         }
                     };
 
-                    for base in prov[value].alloca_insts() {
+                    for base in prov_info.value[value].alloca_insts() {
                         escaping.entry(base).or_default().push(site.clone());
                     }
                 }
-                EscapeSource::LocalMem { addr, stored } => {
+                EscapeSource::Memory { addr, stored } => {
                     for base in stored.alloca_insts() {
                         escaping
                             .entry(base)
@@ -628,7 +611,22 @@ fn compute_escaping_allocas(
                             .push(AllocaEscapeSite::NonLocalCopy { inst, addr });
                     }
                 }
-                EscapeSource::UnknownCopy => {}
+                EscapeSource::CallArgument { value, stored } => {
+                    let EscapeSink::CallArg { callee, arg_index } = event.sink else {
+                        unreachable!("resolved argument escape must come from a call");
+                    };
+                    for base in stored.alloca_insts() {
+                        escaping
+                            .entry(base)
+                            .or_default()
+                            .push(AllocaEscapeSite::CallArg {
+                                inst,
+                                callee,
+                                arg_index,
+                                value,
+                            });
+                    }
+                }
             });
         }
     }
@@ -832,6 +830,48 @@ mod tests {
             alloc_ctx.compute_func_stack_objects(func_ref, function, &analysis)
         });
         (parsed, func_ref, analysis, stack)
+    }
+
+    #[test]
+    fn codecopy_source_casts_do_not_extend_previous_local_lifetimes() {
+        let (parsed, func_ref, _, stack) = analyze_function(
+            r#"
+target = "evm-ethereum-osaka"
+global private const [i256; 1] $data = [7];
+func private %entry() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = sym_addr $data;
+    v2.*[i256; 1] = int_to_ptr v1 *[i256; 1];
+    v3.*i256 = gep v2 0.i256 0.i256;
+    v4.i256 = ptr_to_int v3 i256;
+    evm_code_copy v0 v4 32.i256;
+    v5.i256 = mload v0 i256;
+    v6.*i256 = alloca i256;
+    v7.i256 = sym_addr $data;
+    v8.*[i256; 1] = int_to_ptr v7 *[i256; 1];
+    v9.*i256 = gep v8 0.i256 0.i256;
+    v10.i256 = ptr_to_int v9 i256;
+    evm_code_copy v6 v10 32.i256;
+    v11.i256 = mload v6 i256;
+    v12.i256 = add v5 v11;
+    return v12;
+}
+"#,
+            "entry",
+            16,
+        );
+        parsed.module.func_store.view(func_ref, |function| {
+            let regions = ["v0", "v6"].map(|name| {
+                let value = parsed.debug.value(func_ref, name).unwrap();
+                let inst = function.dfg.value_inst(value).unwrap();
+                &stack.obj_facts[&stack.alloca_ids[&inst]].region
+            });
+            assert!(
+                !regions[0].overlaps(regions[1]),
+                "code offsets must not retain unrelated local memory: {regions:?}"
+            );
+        });
     }
 
     #[test]

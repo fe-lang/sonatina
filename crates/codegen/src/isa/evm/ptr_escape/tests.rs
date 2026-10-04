@@ -1086,3 +1086,274 @@ return;
     assert!(!f.arg_store_lattice(0).may_store_nonlocal());
     assert_eq!(arg_may_escape(f), vec![false, false, false]);
 }
+
+#[test]
+fn loaded_return_depths_and_recursive_widening() {
+    let (summaries, _) = compute(
+        r#"
+target = "evm-ethereum-osaka"
+func private %load(v0.*i256) -> i256 {
+block0:
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+func private %nested(v0.*i256) -> i256 {
+block0:
+    v1.i256 = call %load v0;
+    v2.i256 = mload v1 i256;
+    return v2;
+}
+func private %offset(v0.*i256) -> i256 {
+block0:
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = add v1 32.i256;
+    v3.i256 = mload v2 i256;
+    return v3;
+}
+func private %wrapped_offset(v0.*i256) -> i256 {
+block0:
+    v1.i256 = call %offset v0;
+    return v1;
+}
+
+func private %recursive(v0.i256, v1.i1) -> i256 {
+block0:
+    v2.i256 = mload v0 i256;
+    br v1 block1 block2;
+block1:
+    return v2;
+block2:
+    v3.i256 = call %recursive v2 v1;
+    return v3;
+}
+"#,
+    );
+    for name in ["offset", "wrapped_offset"] {
+        let origin = summaries[name].returns[0].origins[0];
+        assert_eq!(
+            (origin.index, origin.depth, origin.exact),
+            (0, 1, false),
+            "{name}: {origin:?}"
+        );
+    }
+    for (name, depth, transitive) in [
+        ("load", 1, false),
+        ("nested", 2, false),
+        ("recursive", 1, true),
+    ] {
+        let summary = &summaries[name];
+        let ret = &summary.returns[0];
+        assert_eq!(ret.origins.len(), 1, "{name}: {ret:?}");
+        let origin = ret.origins[0];
+        assert_eq!(
+            (origin.index, origin.depth, origin.transitive),
+            (0, depth, transitive),
+            "{name}: {ret:?}"
+        );
+        assert!(!ret.heap_pointer && !ret.unknown_pointer, "{name}: {ret:?}");
+    }
+}
+
+#[test]
+fn loaded_argument_stores_and_publication_keep_their_source() {
+    let (summaries, _) = compute(
+        r#"
+target = "evm-ethereum-osaka"
+func private %copy(v0.*i256, v1.*i256) {
+block0:
+    v2.i256 = mload v0 i256;
+    mstore v1 v2 i256;
+    return;
+}
+func private %nested_copy(v0.*i256, v1.*i256) {
+block0:
+    v2.i256 = mload v0 i256;
+    v3.i256 = mload v1 i256;
+    mstore v3 v2 i256;
+    return;
+}
+func private %publish(v0.*i256) {
+block0:
+    v1.i256 = mload v0 i256;
+    mstore 4096.i256 v1 i256;
+    return;
+}
+func private %relay(v0.*i256) {
+block0:
+    call %publish v0;
+    return;
+}
+"#,
+    );
+    for (name, target_depth) in [("copy", 0), ("nested_copy", 1)] {
+        let summary = &summaries[name];
+        assert!(!summary.arg_may_escape(0));
+        let (source, effect) = summary
+            .argument_effects()
+            .find(|(origin, _)| origin.depth == 1 && origin.index == 0)
+            .unwrap();
+        assert!(source.exact);
+        assert_eq!(effect.arg_store_targets.len(), 1, "{name}: {effect:?}");
+        let target = effect.arg_store_targets[0];
+        assert_eq!((target.index, target.depth), (1, target_depth));
+        assert!(!effect.stores.may_store_nonlocal());
+    }
+    for name in ["publish", "relay"] {
+        let summary = &summaries[name];
+        assert!(
+            !summary.arg_may_escape(0),
+            "the descriptor address itself is not published"
+        );
+        assert!(
+            summary
+                .argument_effects()
+                .any(|(origin, effect)| origin.index == 0
+                    && origin.depth == 1
+                    && effect.stores.may_store_nonlocal()),
+            "{name}: {summary:?}"
+        );
+    }
+}
+
+#[test]
+fn callee_output_writes_preserve_heap_and_clobber_origins() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+func private %heap_out(v0.*i256) {
+block0:
+    v1.*i256 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v0 v2 i256;
+    return;
+}
+func private %heap_relay(v0.*i256) {
+block0:
+    call %heap_out v0;
+    return;
+}
+func private %clobber(v0.*i256) {
+block0:
+    evm_calldata_copy v0 0.i256 32.i256;
+    return;
+}
+func private %clobber_relay(v0.*i256) {
+block0:
+    call %clobber v0;
+    return;
+}
+func public %heap_caller() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    call %heap_relay v0;
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+func public %clobber_caller() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    call %clobber_relay v0;
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+"#;
+    let (summaries, _) = compute(src);
+    for name in ["heap_out", "heap_relay"] {
+        assert!(summaries[name].args[0].stored_heap_pointer, "{name}");
+        assert!(!summaries[name].args[0].stored_unknown_pointer, "{name}");
+    }
+    for name in ["clobber", "clobber_relay"] {
+        assert!(summaries[name].args[0].stored_unknown_pointer, "{name}");
+    }
+    let heap = ret_provenance_from_src(src, "heap_caller");
+    assert!(heap.may_reference_heap());
+    assert!(!heap.may_reference_unknown_local());
+    let clobber = ret_provenance_from_src(src, "clobber_caller");
+    assert!(clobber.may_reference_unknown_local());
+}
+
+#[test]
+fn private_hash_buffers_do_not_publish_unknown_heap_contents() {
+    let (summaries, _) = compute(
+        r#"
+target = "evm-ethereum-osaka"
+func private %hash() -> i256 {
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    evm_calldata_copy v0 0.i256 32.i256;
+    v1.i256 = mload v0 i256;
+    v2.*i256 = evm_malloc 32.i256;
+    mstore v2 v1 i256;
+    v3.i256 = evm_keccak256 v2 32.i256;
+    return v3;
+}
+func public %relay() -> i256 {
+block0:
+    v0.i256 = call %hash;
+    return v0;
+}
+"#,
+    );
+    for name in ["hash", "relay"] {
+        assert!(!summaries[name].may_publish_heap, "{name}");
+    }
+}
+
+#[test]
+fn unknown_escaped_container_keeps_stored_arguments_nonlocal() {
+    let (summaries, _) = compute(
+        r#"
+target = "evm-ethereum-osaka"
+func public %box(v0.i256) -> i256 {
+block0:
+    v1.*i256 = evm_malloc 32.i256;
+    mstore v1 v0 i256;
+    v2.*i256 = evm_malloc 32.i256;
+    evm_calldata_copy v2 0.i256 32.i256;
+    v3.i256 = mload v2 i256;
+    return v3;
+}
+"#,
+    );
+    assert!(summaries["box"].args[0].stores.may_store_nonlocal());
+}
+
+#[test]
+fn nested_exact_loads_exclude_unrelated_cycle_fields() {
+    for (inner_address, shifted) in [("v3", false), ("v4", true)] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %read(v0.*i256) -> i256 {{
+block0:
+    v1.i256 = mload v0 i256;
+    v2.i256 = mload v1 i256;
+    return v2;
+}}
+func public %f() -> i256 {{
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.*[i256; 2] = alloca [i256; 2];
+    v3.*i256 = bitcast v2 *i256;
+    mstore v3 v1 i256;
+    v4.*i256 = gep v2 0.i256 1.i256;
+    v5.i256 = ptr_to_int v3 i256;
+    mstore v4 v5 i256;
+    v6.*i256 = alloca i256;
+    v7.i256 = ptr_to_int {inner_address} i256;
+    mstore v6 v7 i256;
+    v8.i256 = call %read v6;
+    return v8;
+}}
+"#
+        );
+        let provenance = ret_provenance_from_src(&source, "f");
+        assert_eq!(provenance.malloc_insts().count(), 1, "{provenance:?}");
+        assert_eq!(
+            provenance.alloca_insts().count(),
+            usize::from(shifted),
+            "{provenance:?}"
+        );
+        assert!(!provenance.is_unknown_ptr(), "{provenance:?}");
+    }
+}
