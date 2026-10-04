@@ -1,0 +1,40 @@
+---
+source: crates/codegen/tests/enum_lowering.rs
+input_file: test_files/enum_lowering/recursive_tags.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @__enum_lowered_Loop_0 = {i1, i1};
+type @__enum_lowered_Ping_1 = {i1, i8};
+type @__enum_lowered_Pong_2 = {i8, i1};
+type @Loop = enum {
+    #Tagged(enumtag(@Loop)),
+    #Plain,
+};
+type @Ping = enum {
+    #Pong(enumtag(@Pong)),
+    #Done,
+};
+type @Pong = enum {
+    #Ping(enumtag(@Ping)),
+    #Left,
+    #Right,
+};
+
+func private %retag(v0.@__enum_lowered_Loop_0) -> i1 {
+    block0:
+        v6.i1 = extract_value v0 0.i64;
+        v9.@__enum_lowered_Loop_0 = insert_value undef.@__enum_lowered_Loop_0 0.i64 0.i1;
+        v11.@__enum_lowered_Loop_0 = insert_value v9 1.i64 v6;
+        v12.i1 = extract_value v11 1.i64;
+        return v12;
+}
+
+func private %bounce(v0.@__enum_lowered_Ping_1) -> i1 {
+    block0:
+        v6.i1 = extract_value v0 0.i64;
+        v8.@__enum_lowered_Pong_2 = insert_value undef.@__enum_lowered_Pong_2 0.i64 0.i8;
+        v10.@__enum_lowered_Pong_2 = insert_value v8 1.i64 v6;
+        v11.i1 = extract_value v10 1.i64;
+        return v11;
+}

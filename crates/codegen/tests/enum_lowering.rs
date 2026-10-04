@@ -806,3 +806,22 @@ fn concrete_layout_queries_preserve_types_and_match_enum_legalization() {
         );
     }
 }
+
+#[test]
+fn concrete_layout_queries_lower_recursive_enum_tags() {
+    let parsed = common::parse_module(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test_files/enum_lowering/recursive_tags.sntn"
+    ));
+    for (name, tag) in [("Loop", Type::I1), ("Ping", Type::I1), ("Pong", Type::I8)] {
+        let enum_ty = parsed
+            .module
+            .ctx
+            .with_ty_store(|store| store.lookup_enum(name))
+            .unwrap();
+        let layout = EnumLoweredLayout::new(&parsed.module.ctx, Type::Compound(enum_ty));
+        assert_eq!(layout.tag_type(), Some(tag));
+        assert_eq!(layout.size().unwrap(), 64);
+        assert_eq!(layout.variant_field_offset(0, 0), Some(32));
+    }
+}

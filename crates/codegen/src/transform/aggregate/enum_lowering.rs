@@ -49,7 +49,17 @@ struct EnumTypeLowerer {
 impl EnumTypeLowerer {
     fn rewrite_type(&mut self, ctx: &ModuleCtx, ty: Type) -> Type {
         match ty {
-            Type::EnumTag(enum_ty) => self.layout(ctx, enum_ty).tag_ty,
+            // Tags depend only on the variant count; building the product layout
+            // here would recurse forever when a payload holds its own enum's tag.
+            Type::EnumTag(enum_ty) => ctx.with_ty_store(|store| {
+                choose_tag_ty(
+                    store
+                        .enum_data(enum_ty)
+                        .expect("enum tag must reference an enum")
+                        .variants
+                        .len(),
+                )
+            }),
             Type::Compound(compound) => Type::Compound(self.rewrite_compound(ctx, compound)),
             _ => ty,
         }
