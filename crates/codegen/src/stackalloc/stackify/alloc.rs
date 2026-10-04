@@ -3,7 +3,6 @@ use rustc_hash::FxHashMap;
 use sonatina_ir::{Function, InstId, ValueId};
 
 use crate::{
-    analysis::memory_access::ExactLocalAddr,
     isa::evm::static_arena_alloc::StackObjId,
     stackalloc::{Action, Actions, Allocator},
 };
@@ -12,17 +11,17 @@ use crate::{
 pub(crate) enum SpillStorage {
     Scratch(u32),
     Object(StackObjId),
-    ExactLocal(ExactLocalAddr),
+    Rematerialized,
 }
 
 impl SpillStorage {
     /// The action that stores a value from the stack top into this storage.
-    /// `None` for storage materialized without a store (exact local addresses).
+    /// `None` for storage materialized without a store.
     pub(super) fn store_action(self) -> Option<Action> {
         match self {
             SpillStorage::Scratch(slot) => Some(Action::MemStoreAbs(slot * 32)),
             SpillStorage::Object(obj) => Some(Action::MemStoreObj(obj)),
-            SpillStorage::ExactLocal(_) => None,
+            SpillStorage::Rematerialized => None,
         }
     }
 }
@@ -38,7 +37,7 @@ pub struct StackifyAlloc {
     /// Finalized storage for every spilled value. Single source of truth; the
     /// object/scratch projections below are derived from it on demand.
     pub(crate) spill_storage: SecondaryMap<ValueId, Option<SpillStorage>>,
-    pub(crate) exact_local_addr: SecondaryMap<ValueId, Option<ExactLocalAddr>>,
+    pub(crate) remat_actions: SecondaryMap<ValueId, Option<Action>>,
 }
 
 impl StackifyAlloc {

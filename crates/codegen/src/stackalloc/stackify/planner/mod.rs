@@ -9,7 +9,6 @@ pub(super) use normalize_search::NormalizeSearchScratch;
 pub(crate) use normalize_search::StackifySearchCache;
 
 use crate::{
-    analysis::memory_access::ExactLocalAddr,
     bitset::BitSet,
     stackalloc::{Action, Actions},
 };
@@ -66,7 +65,7 @@ pub(super) struct MemPlan<'a> {
     scratch_live_values: &'a BitSet<ValueId>,
     scratch_spill_slots: u32,
     spill_obj: &'a SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
-    exact_local_addr: &'a SecondaryMap<ValueId, Option<ExactLocalAddr>>,
+    remat_actions: &'a SecondaryMap<ValueId, Option<Action>>,
     object_spill_requests: &'a mut BitSet<ValueId>,
     forced_object_spills: &'a BitSet<ValueId>,
     free_slots: &'a mut FreeSlotPools,
@@ -79,14 +78,14 @@ impl<'a> MemPlan<'a> {
     pub(super) fn new(
         mem: &'a mut MemState<'_>,
         ctx: &'a StackifyContext<'_>,
-        exact_local_addr: &'a SecondaryMap<ValueId, Option<ExactLocalAddr>>,
+        remat_actions: &'a SecondaryMap<ValueId, Option<Action>>,
         free_slots: &'a mut FreeSlotPools,
     ) -> Self {
         Self {
             scratch_live_values: &ctx.scratch_live_values,
             scratch_spill_slots: ctx.scratch_spill_slots,
             spill_obj: mem.spill_obj,
-            exact_local_addr,
+            remat_actions,
             object_spill_requests: &mut *mem.object_spill_requests,
             forced_object_spills: mem.forced_object_spills,
             free_slots,
@@ -133,10 +132,10 @@ impl<'a> MemPlan<'a> {
         let Some(spilled) = self.spill.spilled(v) else {
             return;
         };
-        if self.exact_local_addr[v].is_some() {
+        if self.remat_actions[v].is_some() {
             debug_assert_eq!(
                 self.spill_obj[v], None,
-                "exact local addresses must not have spill objects"
+                "rematerialized values must not have spill objects"
             );
             actions.push(Action::Pop);
             return;
@@ -175,15 +174,12 @@ impl<'a> MemPlan<'a> {
             return Action::MemLoadObj(crate::isa::evm::static_arena_alloc::StackObjId::new(0));
         };
 
-        if let Some(exact) = self.exact_local_addr[v] {
+        if let Some(action) = self.remat_actions[v] {
             debug_assert_eq!(
                 self.spill_obj[v], None,
-                "exact local addresses must not have spill objects"
+                "rematerialized values must not have spill objects"
             );
-            return Action::MaterializeLocalAddr {
-                alloca: exact.root_alloca,
-                offset_bytes: exact.offset_bytes,
-            };
+            return action;
         }
 
         if !self.must_use_object_storage(v) {

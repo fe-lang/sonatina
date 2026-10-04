@@ -6,29 +6,29 @@ input_file: test_files/evm/zk.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 2168 bytes
-  section runtime: 2157 bytes
-  total: 4325 bytes
+  section init: 2143 bytes
+  section runtime: 2132 bytes
+  total: 4275 bytes
 
 functions:
-  mem: global_dyn_base=0x4a0 arena_base=0x440 scratch_peak_words=3 stable_chain_peak_words=0
+  mem: global_dyn_base=0x480 arena_base=0x440 scratch_peak_words=2 stable_chain_peak_words=0
   smt_store_zero_table: ir_blocks=1 ir_insts=33 vcode_ops=99 fixups=0 imm_bytes=63
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   leanimt_root_from_calldata: ir_blocks=9 ir_insts=28 vcode_ops=73 fixups=5 imm_bytes=10
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   smt_root_from_calldata: ir_blocks=18 ir_insts=65 vcode_ops=165 fixups=13 imm_bytes=26
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   init__StorPtr_Evm___207f35a85ac4062e: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
-  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=51 ir_insts=185 vcode_ops=509 fixups=40 imm_bytes=100
-    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
+  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=51 ir_insts=185 vcode_ops=494 fixups=40 imm_bytes=97
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   hash2_at: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   hash2: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=0 imm_bytes=4
-    mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=2
+    mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=2
 
 evm:
-  deploy: success reason=Return gas_used=519588 gas_refunded=0 logs=0 output=create len=2157 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=514179 gas_refunded=0 logs=0 output=create len=2132 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case bench_lean_typical_root: calldata_len=1124 success reason=Return gas_used=30014 gas_refunded=0 logs=0 output=call len=32 tx_gas=28616 runtime_gas=1398
   case bench_lean_typical_verify: calldata_len=1156 success reason=Return gas_used=30581 gas_refunded=0 logs=0 output=call len=32 tx_gas=29128 runtime_gas=1453
   case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31494 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=1854
@@ -37,10 +37,10 @@ evm:
   case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=46899 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=7659
   case bench_smt_typical_root: calldata_len=1124 success reason=Return gas_used=36308 gas_refunded=0 logs=0 output=call len=32 tx_gas=27932 runtime_gas=8376
   case bench_smt_typical_verify: calldata_len=1156 success reason=Return gas_used=36875 gas_refunded=0 logs=0 output=call len=32 tx_gas=28444 runtime_gas=8431
-  case bench_smt_typical_update: calldata_len=1188 success reason=Return gas_used=39353 gas_refunded=0 logs=0 output=call len=32 tx_gas=28956 runtime_gas=10397
+  case bench_smt_typical_update: calldata_len=1188 success reason=Return gas_used=39301 gas_refunded=0 logs=0 output=call len=32 tx_gas=28956 runtime_gas=10345
   case bench_smt_all_enabled_root: calldata_len=1124 success reason=Return gas_used=44112 gas_refunded=0 logs=0 output=call len=32 tx_gas=38300 runtime_gas=5812
   case bench_smt_all_enabled_verify: calldata_len=1156 success reason=Return gas_used=44679 gas_refunded=0 logs=0 output=call len=32 tx_gas=38812 runtime_gas=5867
-  case bench_smt_all_enabled_update: calldata_len=1188 success reason=Return gas_used=47219 gas_refunded=0 logs=0 output=call len=32 tx_gas=39324 runtime_gas=7895
+  case bench_smt_all_enabled_update: calldata_len=1188 success reason=Return gas_used=47068 gas_refunded=0 logs=0 output=call len=32 tx_gas=39324 runtime_gas=7744
 
 
 --------------- DEBUG ---------------
@@ -528,7 +528,6 @@ evm:
       evm_return [0, v0]
 
 // func private %runtime__StorPtr_Evm___207f35a85ac4062e()
-spill_set: s0=v92, s1=v96, o0=v95, o1=v97, o2=v98
   block0 P=[] T=[]
     // v28.i256 = evm_calldata_load 0.i256;
     - stack=[]
@@ -908,7 +907,7 @@ spill_set: s0=v92, s1=v96, o0=v95, o1=v97, o2=v98
     - stack=[]
       pre: [PUSH(132)]
       evm_calldata_load [132] -> v92
-      post: [DUP1, MSTORE_ABS(0)]
+      post: [DUP1, POP]
     // v94.i256 = eq 4294967295.i256 v92;
     - stack=[v92]
       pre: [DUP1, PUSH(4294967295)]
@@ -917,22 +916,22 @@ spill_set: s0=v92, s1=v96, o0=v95, o1=v97, o2=v98
     - stack=[v94, v92]
       pre: [PUSH(4)]
       evm_calldata_load [4] -> v95
-      post: [DUP1, MSTORE_OBJ(0)]
+      post: [DUP1, POP]
     // v96.i256 = evm_calldata_load 36.i256;
     - stack=[v95, v94, v92]
       pre: [PUSH(36)]
       evm_calldata_load [36] -> v96
-      post: [DUP1, MSTORE_ABS(32)]
+      post: [DUP1, POP]
     // v97.i256 = evm_calldata_load 68.i256;
     - stack=[v96, v95, v94, v92]
       pre: [PUSH(68)]
       evm_calldata_load [68] -> v97
-      post: [DUP1, MSTORE_OBJ(1)]
+      post: [DUP1, POP]
     // v98.i256 = evm_calldata_load 100.i256;
     - stack=[v97, v96, v95, v94, v92]
       pre: [PUSH(100)]
       evm_calldata_load [100] -> v98
-      post: [DUP1, MSTORE_OBJ(2)]
+      post: [DUP1, POP]
     // br v94 block54 block23;
     - stack=[v98, v97, v96, v95, v94, v92]
       pre: [SWAP4]
@@ -945,7 +944,7 @@ spill_set: s0=v92, s1=v96, o0=v95, o1=v97, o2=v98
       call []
     // jump block32;
     - stack=[v97, v96, v95, v98, v92]
-      exit(block32): [POP, POP, POP, POP, POP, PUSH(0), MLOAD_ABS(0), PUSH(64), MLOAD_ABS(32), PUSH(164), MLOAD_OBJ(2), MLOAD_OBJ(1)]
+      exit(block32): [POP, POP, POP, POP, POP, PUSH(0), CALLDATALOAD(132), PUSH(64), CALLDATALOAD(36), PUSH(164), CALLDATALOAD(100), CALLDATALOAD(68)]
       jump -> block32
   block32 P=[v15, v16, v17, v18, v19, v20, v21] T=[]
     // v99.i256 = lt v21 32.i256;
@@ -1082,7 +1081,7 @@ spill_set: s0=v92, s1=v96, o0=v95, o1=v97, o2=v98
     // v115.i256 = eq v95 v18;
     - stack=[v15, v16x, v17x, v18, v19x, v20x, v21x], last_use=[v18, v95]
       cleanup: [SWAP2, POP, POP]
-      pre: [SWAP1, MLOAD_OBJ(0)]
+      pre: [SWAP1, CALLDATALOAD(4)]
       eq [v95, v18] -> v115
     // br v115 block57 block41;
     - stack=[v115, v15, v19x, v20x, v21x]
@@ -1200,7 +1199,7 @@ spill_set: s0=v92, s1=v96, o0=v95, o1=v97, o2=v98
     inherited from block25: [v8, v9, v10x, v11x, v12x]
     // v127.i256 = eq v95 v9;
     - stack=[v8, v9, v10x, v11x, v12x], last_use=[v9, v95]
-      pre: [SWAP1, MLOAD_OBJ(0)]
+      pre: [SWAP1, CALLDATALOAD(4)]
       eq [v95, v9] -> v127
     // br v127 block55 block31;
     - stack=[v127, v8, v10x, v11x, v12x]
@@ -1932,32 +1931,17 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
   block22:
     PUSH1 0x84 (132)  // v92.i256 = evm_calldata_load 132.i256;
     CALLDATALOAD
-    DUP1
-    PUSH0
-    MSTORE
     DUP1  // v94.i256 = eq 4294967295.i256 v92;
     PUSH4 0xffffffff (4294967295)
     EQ
     PUSH1 0x4 (4)  // v95.i256 = evm_calldata_load v40;
     CALLDATALOAD
-    DUP1
-    PUSH2 0x440 (1088)
-    MSTORE
     PUSH1 0x24 (36)  // v96.i256 = evm_calldata_load v42;
     CALLDATALOAD
-    DUP1
-    PUSH1 0x20 (32)
-    MSTORE
     PUSH1 0x44 (68)  // v97.i256 = evm_calldata_load v61;
     CALLDATALOAD
-    DUP1
-    PUSH2 0x460 (1120)
-    MSTORE
     PUSH1 0x64 (100)  // v98.i256 = evm_calldata_load v62;
     CALLDATALOAD
-    DUP1
-    PUSH2 0x480 (1152)
-    MSTORE
     SWAP4  // br v94 block54 block23;
     PUSH1 block54
     JUMPI
@@ -1972,16 +1956,16 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     POP
     POP
     PUSH0
-    PUSH0
-    MLOAD
+    PUSH1 0x84 (132)
+    CALLDATALOAD
     PUSH1 0x40 (64)
-    PUSH1 0x20 (32)
-    MLOAD
+    PUSH1 0x24 (36)
+    CALLDATALOAD
     PUSH1 0xa4 (164)
-    PUSH2 0x480 (1152)
-    MLOAD
-    PUSH2 0x460 (1120)
-    MLOAD
+    PUSH1 0x64 (100)
+    CALLDATALOAD
+    PUSH1 0x44 (68)
+    CALLDATALOAD
   block32:
     JUMPDEST
     PUSH1 0x20 (32)  // v99.i256 = lt v28 v63;
@@ -1994,8 +1978,8 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     POP
     POP
     SWAP1
-    PUSH2 0x440 (1088)
-    MLOAD
+    PUSH1 0x4 (4)
+    CALLDATALOAD
     EQ
     PUSH1 block57  // br v115 block57 block41;
     JUMPI
@@ -2126,8 +2110,8 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     JUMPI
   block27:
     SWAP1  // v127.i256 = eq v95 v14;
-    PUSH2 0x440 (1088)
-    MLOAD
+    PUSH1 0x4 (4)
+    CALLDATALOAD
     EQ
     PUSH1 block55  // br v127 block55 block31;
     JUMPI

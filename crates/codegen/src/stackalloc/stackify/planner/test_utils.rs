@@ -1,12 +1,13 @@
 use crate::{
-    analysis::memory_access::MemoryAccessAnalysis,
     cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
     liveness::Liveness,
     stackalloc::{
         normalize_value_alias_map,
         stackify::{
-            builder::{StackifyContext, StackifyReachability, StackifySearchProfile},
+            builder::{
+                StackifyContext, StackifyReachability, StackifySearchProfile, compute_remat_actions,
+            },
             templates::{
                 compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
                 function_has_internal_return,
@@ -44,12 +45,7 @@ pub(super) fn build_stackify_test_context<'a>(
             &phi_results,
             &value_aliases,
         );
-    let mut analysis = MemoryAccessAnalysis::new();
-    let mut exact_local_addr: SecondaryMap<ValueId, Option<_>> = SecondaryMap::new();
-    for value in func.dfg.values.keys() {
-        exact_local_addr[value] =
-            analysis.exact_local_addr(func, value_aliases[value].unwrap_or(value));
-    }
+    let remat_actions = compute_remat_actions(func, &value_aliases);
 
     StackifyContext {
         func,
@@ -69,7 +65,7 @@ pub(super) fn build_stackify_test_context<'a>(
         reach,
         search_profile: StackifySearchProfile::Exact,
         value_aliases,
-        exact_local_addr,
+        remat_actions,
         stack_cached_immediates: Default::default(),
     }
 }

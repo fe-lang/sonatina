@@ -1,20 +1,29 @@
 #! evm.config: { stack_reach: 4, mem_plan_detail: true }
 #! evm.case: nonzero
 #!   calldata: u256(42) u256(43) u256(44) u256(45) u256(46) u256(47) u256(48) u256(49)
-#!   expect: return u256(434)
+#!   expect: return u256(442)
 
+# Computed values must still spill; immutable calldata reads can rematerialize.
 target = "evm-ethereum-osaka"
 
 func public %entry() {
 block0:
-    v0.i256 = evm_calldata_load 0.i256;
-    v1.i256 = evm_calldata_load 32.i256;
-    v2.i256 = evm_calldata_load 64.i256;
-    v3.i256 = evm_calldata_load 96.i256;
-    v4.i256 = evm_calldata_load 128.i256;
-    v5.i256 = evm_calldata_load 160.i256;
-    v6.i256 = evm_calldata_load 192.i256;
-    v7.i256 = evm_calldata_load 224.i256;
+    v20.i256 = evm_calldata_load 0.i256;
+    v0.i256 = add v20 1.i256;
+    v21.i256 = evm_calldata_load 32.i256;
+    v1.i256 = add v21 1.i256;
+    v22.i256 = evm_calldata_load 64.i256;
+    v2.i256 = add v22 1.i256;
+    v23.i256 = evm_calldata_load 96.i256;
+    v3.i256 = add v23 1.i256;
+    v24.i256 = evm_calldata_load 128.i256;
+    v4.i256 = add v24 1.i256;
+    v25.i256 = evm_calldata_load 160.i256;
+    v5.i256 = add v25 1.i256;
+    v26.i256 = evm_calldata_load 192.i256;
+    v6.i256 = add v26 1.i256;
+    v27.i256 = evm_calldata_load 224.i256;
+    v7.i256 = add v27 1.i256;
     mstore 0.i256 60.i256 i256;
     mstore 32.i256 10.i256 i256;
     v8.i256 = call %clobber;

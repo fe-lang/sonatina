@@ -62,7 +62,7 @@ impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
         let mem = planner::MemPlan::new(
             &mut self.mem,
             self.ctx,
-            &self.alloc.exact_local_addr,
+            &self.alloc.remat_actions,
             free_slots,
         );
         let mut planner = Planner::new(self.ctx, stack, actions, mem, &mut *self.search_scratch);
@@ -235,7 +235,7 @@ impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
         f: impl FnOnce(&mut Planner<'_, '_>) -> R,
     ) -> R {
         // Resolve the action buffer first: `Pre`/`Post` index into `alloc` (a field disjoint from
-        // `alloc.exact_local_addr`, which `MemPlan` borrows), while `BrTableCase` accumulates into
+        // `alloc.remat_actions`, which `MemPlan` borrows), while `BrTableCase` accumulates into
         // a local buffer pushed onto `brtable_actions` after planning. Then construct the
         // `MemPlan`/`Planner` once for all three.
         let mut brtable_buf = Actions::new();
@@ -247,7 +247,7 @@ impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
         let mem = planner::MemPlan::new(
             &mut self.mem,
             self.ctx,
-            &self.alloc.exact_local_addr,
+            &self.alloc.remat_actions,
             free_slots,
         );
         let result = {

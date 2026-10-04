@@ -92,6 +92,8 @@ pub enum Action {
     StackDup(u8),
     StackSwap(u8),
     Push(Immediate),
+    /// Re-read immutable calldata at a constant offset instead of a spill word.
+    LoadCalldata(Immediate),
     /// For CALL: Push code offset that callee should jump to upon return
     PushContinuationOffset,
     Pop,

@@ -1,16 +1,19 @@
 use crate::{
-    analysis::memory_access::{ExactLocalAddr, MemoryAccessAnalysis},
+    analysis::memory_access::MemoryAccessAnalysis,
     bitset::BitSet,
     cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
-    isa::evm::immediate_materialization_code_len,
+    isa::evm::{immediate_materialization_code_len, immediate_materialization_plan},
     liveness::Liveness,
-    stackalloc::normalize_value_alias_map,
+    stackalloc::{Action, normalize_value_alias_map},
 };
 use cranelift_entity::{EntityRef, SecondaryMap};
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, I256, ValueId, cfg::ControlFlowGraph};
+use sonatina_ir::{
+    BlockId, Function, I256, InstDowncast, ValueId, cfg::ControlFlowGraph,
+    inst::evm::EvmCalldataLoad,
+};
 
 use super::{
     alloc::{SpillStorage, StackifyAlloc},
@@ -175,7 +178,7 @@ pub(super) struct StackifyContext<'a> {
     pub(super) reach: StackifyReachability,
     pub(super) search_profile: StackifySearchProfile,
     pub(super) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
-    pub(super) exact_local_addr: SecondaryMap<ValueId, Option<ExactLocalAddr>>,
+    pub(super) remat_actions: SecondaryMap<ValueId, Option<Action>>,
     pub(super) stack_cached_immediates: FxHashSet<I256>,
 }
 
@@ -362,7 +365,7 @@ impl<'a> StackifyBuilder<'a> {
             ));
         }
 
-        let exact_local_addr = compute_exact_local_addrs(self.func, &value_aliases);
+        let remat_actions = compute_remat_actions(self.func, &value_aliases);
         let phi_results = compute_phi_results(self.func, &value_aliases);
         let phi_out_sources = compute_phi_out_sources(self.func, self.cfg, &value_aliases);
         let spill_slot_interference = SpillSlotInterference::compute(
@@ -392,7 +395,7 @@ impl<'a> StackifyBuilder<'a> {
             reach: self.reach,
             search_profile: self.search_profile,
             value_aliases,
-            exact_local_addr,
+            remat_actions,
             stack_cached_immediates,
         };
 
@@ -461,7 +464,7 @@ impl<'a> StackifyBuilder<'a> {
         for &arg in ctx.func.arg_values.iter() {
             let arg = ctx.canonicalize_value(arg);
             if let Some(spilled) = spill.spilled(arg)
-                && ctx.exact_local_addr[arg].is_none()
+                && ctx.remat_actions[arg].is_none()
                 && !must_use_object_storage(
                     ctx.scratch_spill_slots,
                     &ctx.scratch_live_values,
@@ -482,7 +485,7 @@ impl<'a> StackifyBuilder<'a> {
             }
         }
 
-        let spill_obj = assign_spill_obj_ids(ctx.func, spill, &ctx.exact_local_addr);
+        let spill_obj = assign_spill_obj_ids(ctx.func, spill, &ctx.remat_actions);
         let interfaces = compute_block_interfaces(ctx, spill);
 
         let mut alloc = StackifyAlloc {
@@ -490,7 +493,7 @@ impl<'a> StackifyBuilder<'a> {
             post_actions: SecondaryMap::new(),
             brtable_actions: SecondaryMap::new(),
             spill_storage: SecondaryMap::new(),
-            exact_local_addr: ctx.exact_local_addr.clone(),
+            remat_actions: ctx.remat_actions.clone(),
         };
 
         let mut spill_requests: BitSet<ValueId> = BitSet::default();
@@ -541,8 +544,8 @@ impl<'a> StackifyBuilder<'a> {
         }
 
         for value in spill.bitset().iter() {
-            if let Some(exact) = ctx.exact_local_addr[value] {
-                spill_storage[value] = Some(SpillStorage::ExactLocal(exact));
+            if ctx.remat_actions[value].is_some() {
+                spill_storage[value] = Some(SpillStorage::Rematerialized);
             } else if ctx.scratch_spill_slots == 0
                 || ctx.scratch_live_values.contains(value)
                 || forced_object_spills.contains(value)
@@ -653,7 +656,7 @@ fn canonicalize_immediate_aliases(
 fn assign_spill_obj_ids(
     func: &Function,
     spill: SpillSet<'_>,
-    exact_local_addr: &SecondaryMap<ValueId, Option<ExactLocalAddr>>,
+    remat_actions: &SecondaryMap<ValueId, Option<Action>>,
 ) -> SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>> {
     let mut map: SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>> =
         SecondaryMap::new();
@@ -666,7 +669,7 @@ fn assign_spill_obj_ids(
 
     let mut next_idx = 0usize;
     for v in spilled {
-        if exact_local_addr[v].is_some() {
+        if remat_actions[v].is_some() {
             continue;
         }
         map[v] = Some(crate::isa::evm::static_arena_alloc::StackObjId::new(
@@ -677,15 +680,31 @@ fn assign_spill_obj_ids(
     map
 }
 
-fn compute_exact_local_addrs(
+pub(super) fn compute_remat_actions(
     func: &Function,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
-) -> SecondaryMap<ValueId, Option<ExactLocalAddr>> {
+) -> SecondaryMap<ValueId, Option<Action>> {
     let mut analysis = MemoryAccessAnalysis::new();
-    let mut map: SecondaryMap<ValueId, Option<ExactLocalAddr>> = SecondaryMap::new();
+    let mut map: SecondaryMap<ValueId, Option<Action>> = SecondaryMap::new();
     for value in func.dfg.value_ids() {
         let canonical = value_aliases[value].unwrap_or(value);
-        map[value] = analysis.exact_local_addr(func, canonical);
+        map[value] = analysis
+            .exact_local_addr(func, canonical)
+            .map(|exact| Action::MaterializeLocalAddr {
+                alloca: exact.root_alloca,
+                offset_bytes: exact.offset_bytes,
+            })
+            .or_else(|| {
+                let inst = func.dfg.value_inst(canonical)?;
+                let load = <&EvmCalldataLoad>::downcast(func.inst_set(), func.dfg.inst(inst))?;
+                let offset = func.dfg.value_imm(*load.data_offset())?;
+                let cost = immediate_materialization_plan(offset).cost();
+                // An absolute arena reload commonly costs PUSH2 + MLOAD (4 bytes / 6 gas).
+                // Match that reload budget, avoiding the spill store and reservation. Keep
+                // the original Immediate: large or negative offsets must never truncate.
+                // Calldata is immutable across calls, and out-of-range loads zero-pad.
+                (cost.bytes <= 3 && cost.gas <= 3).then_some(Action::LoadCalldata(offset))
+            });
     }
     map
 }
@@ -700,6 +719,45 @@ mod tests {
     use cranelift_entity::SecondaryMap;
     use sonatina_ir::cfg::ControlFlowGraph;
     use sonatina_parser::parse_module;
+
+    #[test]
+    fn rematerialization_preserves_offset_width_and_excludes_mutable_reads() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func public %reads(v0.i256) -> i256 {
+block0:
+    v1.i256 = evm_calldata_load 65535.i256;
+    v2.i256 = evm_calldata_load 65536.i256;
+    v3.i256 = evm_calldata_load 18446744073709551648.i256;
+    v4.i256 = evm_calldata_load -1.i256;
+    v5.i256 = evm_calldata_load v0;
+    v6.i256 = evm_gas;
+    v7.i256 = mload 32.i256 i256;
+    v8.i256 = evm_sload 32.i256;
+    return v1;
+}
+"#,
+        )
+        .unwrap();
+        let fref = parsed.module.funcs()[0];
+        parsed.module.func_store.view(fref, |func| {
+            let mut aliases = SecondaryMap::new();
+            for value in func.dfg.value_ids() {
+                aliases[value] = Some(value);
+            }
+            let actions = super::compute_remat_actions(func, &aliases);
+            let value = parsed.debug.value(fref, "v1").unwrap();
+            let Some(Action::LoadCalldata(offset)) = actions[value] else {
+                panic!("short constant calldata read should rematerialize");
+            };
+            assert_eq!(offset.as_i256(), 65535.into());
+            for name in ["v0", "v2", "v3", "v4", "v5", "v6", "v7", "v8"] {
+                let value = parsed.debug.value(fref, name).unwrap();
+                assert_eq!(actions[value], None, "{name} must not rematerialize");
+            }
+        });
+    }
 
     #[test]
     fn normalize_value_aliases_keeps_cycle_paths_self_canonical() {
