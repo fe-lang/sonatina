@@ -8,8 +8,8 @@ use revm::{
     Context, EvmContext, Handler, inspector_handle_register,
     interpreter::Interpreter,
     primitives::{
-        AccountInfo, Address, Bytecode, Bytes, Env, ExecutionResult, OsakaSpec, Output, TransactTo,
-        U256,
+        AccountInfo, Address, Bytecode, Bytes, Env, ExecutionResult, HaltReason, OsakaSpec, Output,
+        TransactTo, U256,
     },
 };
 
@@ -1743,6 +1743,99 @@ object @Contract { section runtime { entry %entry; } }
                 .flat_map(|word| word.to_big_endian())
                 .collect::<Vec<_>>();
             assert_eq!(output.as_ref(), expected, "{level:?}");
+        }
+    }
+}
+
+#[test]
+fn entry_backedges_preserve_first_invocation_branch() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+func inline(never) private %allocate(v0.i1) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    br v0 block0 block1;
+block1:
+    return v2;
+}
+func public %entry() {
+block0:
+    evm_mstore 64.i256 0.i256;
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i1 = trunc v0 i1;
+    v2.i256 = call %allocate v1;
+    v3.i1 = lt v2 96.i256;
+    v4.i256 = zext v3 i256;
+    evm_mstore 0.i256 v4;
+    evm_return 0.i256 32.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for indirect in [false, true] {
+        for loop_on_true in [false, true] {
+            let latch = if indirect { "block2" } else { "block0" };
+            let branch = if loop_on_true {
+                format!("br v0 {latch} block1;")
+            } else {
+                format!("br v0 block1 {latch};")
+            };
+            let mut source = source.replace("br v0 block0 block1;", &branch);
+            if indirect {
+                source = source.replace(
+                    "    return v2;",
+                    "    return v2;\nblock2:\n    jump block0;",
+                );
+            }
+            for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+                let module = parse_sona(&source).module;
+                verify_module_or_panic(&module, &config);
+                let mut compiler =
+                    Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+                verify_module_or_panic(compiler.optimize(), &config);
+                let artifacts = compiler.compile().expect("entry loop should compile");
+                let runtime = artifacts[0]
+                    .sections
+                    .iter()
+                    .find(|(name, _)| name.0 == "runtime")
+                    .unwrap();
+                for condition in [false, true] {
+                    let harness = EvmHarness::from_runtime(&runtime.1.bytes);
+                    let mut env = Env::default();
+                    env.tx.clear();
+                    env.tx.transact_to = TransactTo::Call(harness.contract);
+                    env.tx.gas_limit = 100_000;
+                    env.tx.data = IrU256::from(u8::from(condition))
+                        .to_big_endian()
+                        .to_vec()
+                        .into();
+                    let (result, _) = EvmHarness::run_tx(harness.db, env);
+                    if condition == loop_on_true {
+                        assert!(
+                            matches!(
+                                result,
+                                ExecutionResult::Halt {
+                                    reason: HaltReason::OutOfGas(_),
+                                    ..
+                                }
+                            ),
+                            "{level:?}, indirect={indirect}, loop_on_true={loop_on_true}: {result:?}"
+                        );
+                    } else {
+                        let ExecutionResult::Success {
+                            output: Output::Call(output),
+                            ..
+                        } = result
+                        else {
+                            panic!(
+                                "{level:?}, indirect={indirect}, loop_on_true={loop_on_true}: {result:?}"
+                            );
+                        };
+                        assert_eq!(output.as_ref(), [0; 32]);
+                    }
+                }
+            }
         }
     }
 }

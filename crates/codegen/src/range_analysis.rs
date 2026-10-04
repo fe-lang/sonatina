@@ -406,6 +406,13 @@ fn compute_block_entry(
     exit_envs: &SecondaryMap<BlockId, RangeEnv>,
     reachable: &SecondaryMap<BlockId, bool>,
 ) -> Option<RangeEnv> {
+    // Every invocation reaches entry without traversing a CFG predecessor.
+    // Joining that unconstrained edge with any backedges leaves no entry facts.
+    // Entry phis are forbidden, so there are no initial phi facts to recover.
+    if block == entry {
+        return Some(RangeEnv::default());
+    }
+
     let mut edge_envs = Vec::new();
     for &pred in cfg.preds_of(block) {
         if !reachable[pred] {
@@ -422,7 +429,7 @@ fn compute_block_entry(
         .map(|(index, (pred, _))| (*pred, index))
         .collect();
 
-    if block != entry && edge_envs.is_empty() {
+    if edge_envs.is_empty() {
         return None;
     }
 
@@ -2104,6 +2111,58 @@ mod tests {
             assert!(join_envs(func, &left, &right).is_empty());
             assert!(widen_env(func, &left, &right).is_empty());
         });
+    }
+
+    #[test]
+    fn entry_backedges_do_not_constrain_initial_arguments() {
+        for indirect in [false, true] {
+            for loop_on_true in [false, true] {
+                let mb = test_module_builder();
+                let (evm, mut builder) = test_func_builder(&mb, &[Type::I8], Type::I8);
+                let is = evm.inst_set();
+                let entry = builder.append_block();
+                let latch = if indirect {
+                    builder.append_block()
+                } else {
+                    entry
+                };
+                let exit = builder.append_block();
+
+                builder.switch_to_block(entry);
+                let arg = builder.args()[0];
+                let ten = builder.make_imm_value(10i8);
+                let cond = builder.insert_inst_with(|| Lt::new(is, arg, ten), Type::I1);
+                let (then_block, else_block) = if loop_on_true {
+                    (latch, exit)
+                } else {
+                    (exit, latch)
+                };
+                builder.insert_inst_no_result_with(|| Br::new(is, cond, then_block, else_block));
+                if indirect {
+                    builder.switch_to_block(latch);
+                    builder.insert_inst_no_result_with(|| Jump::new(is, entry));
+                }
+                builder.switch_to_block(exit);
+                builder.insert_inst_no_result_with(|| Return::new_single(is, arg));
+                builder.seal_all();
+                builder.finish();
+
+                let module = mb.build();
+                module.func_store.view(module.funcs()[0], |func| {
+                    let analysis = compute_analysis(func);
+                    assert_eq!(
+                        fact_for_value(func, analysis.entry_env(entry), arg),
+                        RangeFact::full_for(Type::I8),
+                        "indirect={indirect}, loop_on_true={loop_on_true}"
+                    );
+                    assert!(analysis.is_reachable(exit));
+                    let fact = fact_for_value(func, analysis.entry_env(exit), arg);
+                    let expected = if loop_on_true { (10u8, 255u8) } else { (0, 9) };
+                    assert_eq!(fact.unsigned.lo, U256::from(expected.0));
+                    assert_eq!(fact.unsigned.hi, U256::from(expected.1));
+                });
+            }
+        }
     }
 
     #[test]
