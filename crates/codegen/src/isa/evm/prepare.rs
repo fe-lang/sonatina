@@ -11,7 +11,7 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     machinst::lower::{SectionMembership, SectionWorkModule},
     module_analysis::{CallGraphSchedule, SccRef},
-    stackalloc::StackifyAlloc,
+    stackalloc::{Action, Allocator, StackifyAlloc},
 };
 use sonatina_ir::{
     AccessKind, AccessLoc, Function, GlobalVariableRef, InstDowncast, InstId, InstSetExt,
@@ -613,15 +613,78 @@ fn reserve_function_memory_layout(
 fn machine_fixed_memory_write_ranges(
     function: &Function,
     isa: &EvmMachine,
+    alloc: &StackifyAlloc,
 ) -> Vec<FixedMemoryWriteRange> {
+    let memory_action = |action: &Action| {
+        matches!(
+            action,
+            Action::MemLoadAbs(_)
+                | Action::MemStoreAbs(_)
+                | Action::MemLoadObj(_)
+                | Action::MemStoreObj(_)
+                | Action::MemLoadFrameSlot(_)
+                | Action::MemStoreFrameSlot(_)
+        )
+    };
+    let mut accesses = SecondaryMap::new();
     let mut ranges = Vec::new();
     for block in function.layout.iter_block() {
+        accesses[block] = function.layout.entry_block() == Some(block)
+            && alloc.enter_function(function).iter().any(memory_action);
         for inst in function.layout.iter_inst(block) {
+            accesses[block] |= alloc
+                .pre_inst(inst)
+                .iter()
+                .chain(alloc.post_inst(inst))
+                .any(memory_action);
+            match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
+                // Call-preserve actions are injected after this analysis.
+                EvmMachineInstKind::Call(_) => accesses[block] = true,
+                EvmMachineInstKind::BrTable(branch) => {
+                    accesses[block] |= branch.table().iter().enumerate().any(|(index, _)| {
+                        alloc.br_table_case(inst, index).iter().any(memory_action)
+                    });
+                }
+                _ => {}
+            }
             if let Some(range) = machine_fixed_memory_write_range(function, isa, inst) {
                 ranges.push(range);
             }
         }
     }
+    // A write cannot conflict with a final spill if every remaining path halts
+    // without another allocator memory access. Include the whole block so we
+    // retain same-block conflicts, and keep internal returns and cycles unless
+    // termination has been proved through every successor.
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+    let blocks: Vec<_> = cfg.post_order().collect();
+    let mut terminal: SecondaryMap<_, bool> = SecondaryMap::new();
+    loop {
+        let mut changed = false;
+        for &block in &blocks {
+            if terminal[block] || accesses[block] {
+                continue;
+            }
+            let halts = function.layout.last_inst_of(block).is_some_and(|inst| {
+                matches!(
+                    isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmMachineInstKind::EvmReturn(_) | EvmMachineInstKind::EvmRevert(_)
+                )
+            });
+            if halts
+                || (cfg.succs_of(block).next().is_some()
+                    && cfg.succs_of(block).all(|next| terminal[*next]))
+            {
+                terminal[block] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    ranges.retain(|range| !terminal[function.layout.inst_block(range.inst)]);
     ranges.sort_unstable_by_key(|range| (range.start_byte, range.end_byte, range.inst.as_u32()));
     ranges
 }
@@ -865,7 +928,11 @@ fn prepare_machine_section_after_pipeline(
                         .func_store
                         .view(func, |machine_function| {
                             spills.share_disjoint_objects(machine_function, &analysis.alloc);
-                            machine_fixed_memory_write_ranges(machine_function, &machine_isa)
+                            machine_fixed_memory_write_ranges(
+                                machine_function,
+                                &machine_isa,
+                                &analysis.alloc,
+                            )
                         });
                 MachineFinalSpillInput {
                     func,
@@ -1549,15 +1616,18 @@ fn compute_high_evm_pre_analyses(
 
 #[cfg(test)]
 mod tests {
-    use crate::isa::evm::test_util::osaka_triple;
+    use crate::{
+        isa::evm::test_util::osaka_triple,
+        stackalloc::{Action, StackifyAlloc},
+    };
     use sonatina_ir::{
         I256, Immediate, Linkage, Signature, Type,
         builder::{FunctionBuilder, ModuleBuilder},
         func_cursor::InstInserter,
         inst::{
-            control_flow::Return,
+            control_flow::{Br, Call, Jump, Return},
             evm::{
-                EvmCalldataCopy, EvmMstore, EvmMstore8, EvmStaticCall,
+                EvmCalldataCopy, EvmMstore, EvmMstore8, EvmReturn, EvmRevert, EvmStaticCall,
                 machine_inst_set::EvmMachineInstSet,
             },
         },
@@ -1596,7 +1666,7 @@ mod tests {
 
         let module = mb.build();
         module.func_store.view(func_ref, |function| {
-            machine_fixed_memory_write_ranges(function, &machine)
+            machine_fixed_memory_write_ranges(function, &machine, &StackifyAlloc::default())
         })
     }
 
@@ -1605,6 +1675,87 @@ mod tests {
             .iter()
             .map(|range| (range.start_byte, range.end_byte))
             .collect()
+    }
+
+    #[test]
+    fn terminal_write_exemption_requires_halting_paths_without_allocator_accesses() {
+        for case in [
+            "return",
+            "revert",
+            "loop",
+            "internal return",
+            "call",
+            "reload",
+            "store",
+        ] {
+            let mb = machine_builder();
+            let entry = mb
+                .declare_function(Signature::new_unit("entry", Linkage::Public, &[Type::I256]))
+                .unwrap();
+            let callee = mb
+                .declare_function(Signature::new_unit("callee", Linkage::Private, &[]))
+                .unwrap();
+            let isa = EvmMachine::new(mb.triple());
+            let is = isa.inst_set();
+            let mut builder = mb.func_builder::<InstInserter>(entry);
+            let start = builder.append_block();
+            let branch = builder.append_block();
+            let other = builder.append_block();
+            let exit = builder.append_block();
+            builder.switch_to_block(start);
+            let address = word(&mut builder, 0x140);
+            let value = word(&mut builder, 7);
+            let len = word(&mut builder, 32);
+            builder.insert_inst_no_result(EvmMstore::new(is, address, value));
+            builder.insert_inst_no_result(Jump::new(is, branch));
+            builder.switch_to_block(branch);
+            if case == "call" {
+                builder.insert_inst_no_result(Call::new(is, callee, Default::default()));
+            }
+            let condition = builder.func.arg_values[0];
+            builder.insert_inst_no_result(Br::new(is, condition, other, exit));
+            builder.switch_to_block(other);
+            builder.insert_inst_no_result(Jump::new(is, if case == "loop" { start } else { exit }));
+            builder.switch_to_block(exit);
+            if case == "internal return" {
+                builder.insert_inst_no_result(Return::new_unit(is))
+            } else if case == "revert" {
+                builder.insert_inst_no_result(EvmRevert::new(is, address, len))
+            } else {
+                builder.insert_inst_no_result(EvmReturn::new(is, address, len))
+            };
+            builder.seal_all();
+            builder.finish();
+            let module = mb.build();
+            let mut alloc = StackifyAlloc::default();
+            if case == "reload" || case == "store" {
+                let terminal = module.func_store.view(entry, |function| {
+                    function.layout.last_inst_of(exit).unwrap()
+                });
+                alloc.touch_inst_actions(terminal);
+                alloc.rewrite_action_lists(
+                    |_, mut actions| {
+                        actions.push(if case == "reload" {
+                            Action::MemLoadAbs(0x140)
+                        } else {
+                            Action::MemStoreAbs(0x140)
+                        });
+                        actions
+                    },
+                    |_, actions| actions,
+                    |actions| actions,
+                );
+            }
+            module.func_store.view(entry, |function| {
+                let ranges = machine_fixed_memory_write_ranges(function, &isa, &alloc);
+                let expected = if case == "return" || case == "revert" {
+                    vec![]
+                } else {
+                    vec![(0x140, 0x160)]
+                };
+                assert_eq!(range_bytes(&ranges), expected, "{case}");
+            });
+        }
     }
 
     #[test]

@@ -4054,6 +4054,12 @@ fn branch_exclusive_final_spills_do_not_raise_getter_heap_floor() {
         .expect("prepare succeeds");
     let plan = &prepared.function_plan(entry).unwrap().mem_plan;
     assert!(plan.spill_obj.values().any(Option::is_some));
+    let spill_words: FxHashSet<_> = plan.spill_obj.values().flatten().collect();
+    assert_eq!(
+        usize::try_from(plan.stable_words).unwrap(),
+        spill_words.len(),
+        "terminal writes in the getter must not add padding to unrelated spills"
+    );
     let getter_floor = plan.abs_addr_for_word(plan.entry_abs_words);
     prepared.module().func_store.view(entry, |function| {
         let return_buffers: Vec<_> = function
