@@ -54,6 +54,55 @@ fn test_enum_lowering(fixture: Fixture<&str>) {
 }
 
 #[test]
+fn enum_lowering_output_is_deterministic() {
+    // Each parse gets a freshly hashed declaration map, so unordered signature
+    // rewrites would create the lowered structs in a different order.
+    let dumps: Vec<_> = (0..8)
+        .map(|_| {
+            let parsed = sonatina_parser::parse_module(
+                r#"
+target = "evm-ethereum-osaka"
+
+type @A = enum {
+    #Some(i8),
+    #None,
+};
+
+type @B = enum {
+    #Some(i16),
+    #None,
+};
+
+type @C = enum {
+    #Some(i32),
+    #None,
+};
+
+func private %a(v0.@A) {
+block0:
+    return;
+}
+
+func private %b(v0.@B) {
+block0:
+    return;
+}
+
+func private %c(v0.@C) {
+block0:
+    return;
+}
+"#,
+            )
+            .expect("module should parse");
+            EnumLowerToProduct.run(&parsed.module);
+            ModuleWriter::new(&parsed.module).dump_string()
+        })
+        .collect();
+    assert!(dumps.iter().all(|dump| *dump == dumps[0]), "{dumps:#?}");
+}
+
+#[test]
 fn enum_tag_global_initializers_follow_lowered_types() {
     let triple = TargetTriple::new(
         Architecture::Evm,

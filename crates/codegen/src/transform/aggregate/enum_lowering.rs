@@ -275,12 +275,15 @@ impl EnumLowerToProduct {
 }
 
 fn rewrite_declared_signatures(module: &Module, lowerer: &mut EnumTypeLowerer) -> bool {
-    let funcs: Vec<_> = module
+    // Declaration maps iterate in hash order; rewriting in that order would
+    // create the lowered structs in a different order on each run.
+    let mut funcs: Vec<_> = module
         .ctx
         .declared_funcs
         .iter()
         .map(|entry| *entry.key())
         .collect();
+    funcs.sort_unstable();
     let mut changed = false;
 
     for func in funcs {
