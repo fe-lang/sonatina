@@ -129,7 +129,7 @@ pub(crate) fn is_plain_inst(
         && vcode.inst_imm_bytes.get(inst).is_none()
 }
 
-fn push_immediate_u256(vcode: &VCode<OpCode>, inst: VCodeInst) -> Option<U256> {
+pub(crate) fn push_immediate_u256(vcode: &VCode<OpCode>, inst: VCodeInst) -> Option<U256> {
     let op = vcode.insts[inst];
     if (op as u8) == (OpCode::PUSH0 as u8) {
         return Some(U256::zero());
@@ -749,7 +749,7 @@ pub(crate) fn leave_frame(ctx: &mut Lower<OpCode>, frame_layout: DynamicFrameLay
     ctx.push(OpCode::MSTORE);
 }
 
-fn dup_op(n: u8) -> OpCode {
+pub(crate) fn dup_op(n: u8) -> OpCode {
     match n + 1 {
         1 => OpCode::DUP1,
         2 => OpCode::DUP2,
