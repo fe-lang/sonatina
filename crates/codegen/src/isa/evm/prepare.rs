@@ -43,7 +43,8 @@ use super::{
         final_spills::{
             FinalSpillAllocationInput, FinalSpillChoiceCtx, FinalSpillObjects,
             FixedMemoryWriteRange, MachineFinalSpillInput, OptionalFinalSpillPlacement,
-            allocate_final_spills, validate_dynamic_terminal_payload_spills,
+            allocate_final_spills, compute_malloc_spill_bounds,
+            validate_dynamic_terminal_payload_spills,
         },
         lazy_frame::{FrameSummary, compute_frame_summary, compute_machine_frame_roots},
         lower::lower_section_to_machine,
@@ -53,9 +54,9 @@ use super::{
     },
     malloc_plan,
     memory_plan::{
-        self, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan, ProgramMemoryPlan,
-        STATIC_BASE, SemanticFuncPlan, WORD_BYTES, compute_abs_clobber_words_with_extra,
-        expect_func_entry,
+        self, BackendSpillPlan, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan,
+        ProgramMemoryPlan, STATIC_BASE, SemanticFuncPlan, WORD_BYTES,
+        compute_abs_clobber_words_with_extra, expect_func_entry,
     },
     pipeline::EvmPipeline,
     ptr_escape::PtrEscapeSummary,
@@ -792,7 +793,7 @@ fn prepare_machine_section_after_pipeline(
     let fixed_reservations =
         scan_fixed_reservations(source_module, &funcs, backend, &pre_analyses)?;
     let mut fixed_slot_effects = FxHashSet::default();
-    let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
+    let mut backend_spills = BackendSpillPlan::default();
     let mut last_convergence_error = None;
     // Lowering and allocation facts are rebuilt each iteration. Only structural
     // search results survive, within this section's fixed backend profile.
@@ -812,7 +813,7 @@ fn prepare_machine_section_after_pipeline(
             &ptr_escape,
             &fixed_slot_effects,
             backend,
-            &backend_spill_reserves,
+            &backend_spills,
         );
 
         let machine = lower_section_to_machine(&work, &funcs, &placement, backend)?;
@@ -848,7 +849,8 @@ fn prepare_machine_section_after_pipeline(
                 let func_map =
                     expect_func_entry(&machine.source_to_machine.funcs, func, "source map");
                 let mem_plan = MachineFuncPlan::from_semantic(&func_placement.mem_plan, func_map);
-                let reserve = backend_spill_reserves
+                let reserve = backend_spills
+                    .reserves
                     .get(&func)
                     .copied()
                     .unwrap_or_default();
@@ -958,16 +960,31 @@ fn prepare_machine_section_after_pipeline(
                             )
                         })
                     });
-                let frame_summary = machine.work.module().func_store.view(func, |function| {
-                    let final_alloc =
-                        FinalAlloc::new(final_spills.alloc.clone(), final_spills.mem_plan.clone());
-                    compute_frame_summary(
-                        function,
-                        &final_alloc,
-                        &final_spills.mem_plan,
-                        &frame_roots,
-                    )
-                });
+                let (frame_summary, malloc_spill_bounds) =
+                    machine.work.module().func_store.view(func, |function| {
+                        let final_alloc = FinalAlloc::new(
+                            final_spills.alloc.clone(),
+                            final_spills.mem_plan.clone(),
+                        );
+                        let bounds = source_module.func_store.view(func, |source| {
+                            compute_malloc_spill_bounds(
+                                source,
+                                function,
+                                func_map,
+                                &final_alloc,
+                                &backend.isa,
+                            )
+                        });
+                        (
+                            compute_frame_summary(
+                                function,
+                                &final_alloc,
+                                &final_spills.mem_plan,
+                                &frame_roots,
+                            ),
+                            bounds,
+                        )
+                    });
                 let alias_plan = machine.work.module().func_store.view(func, |function| {
                     compute_late_block_alias_plan(
                         function,
@@ -1004,6 +1021,7 @@ fn prepare_machine_section_after_pipeline(
                     func,
                     final_spills.required_reserve,
                     final_spills.used_fallback,
+                    malloc_spill_bounds,
                     EvmFunctionPlan {
                         alloc: final_spills.alloc,
                         emitted_block_order,
@@ -1020,7 +1038,9 @@ fn prepare_machine_section_after_pipeline(
         let mut results = results.into_iter().collect::<Result<Vec<_>, _>>()?;
         results.sort_unstable_by_key(|(func, ..)| func.as_u32());
         let mut final_spill_fallback_funcs = Vec::new();
-        for (func, required_reserve, used_fallback, plan) in results {
+        let mut actual_malloc_spill_bounds = FxHashMap::default();
+        for (func, required_reserve, used_fallback, bounds, plan) in results {
+            actual_malloc_spill_bounds.insert(func, bounds);
             if required_reserve.scratch_words != 0 {
                 actual_fixed_slot_effects.insert(func);
             }
@@ -1053,7 +1073,8 @@ fn prepare_machine_section_after_pipeline(
                 .dyn_sp_plan = dyn_sp_plan;
         }
 
-        let reserve_peak = backend_spill_reserves
+        let reserve_peak = backend_spills
+            .reserves
             .values()
             .map(|reserve| reserve.max_words())
             .max()
@@ -1072,16 +1093,26 @@ fn prepare_machine_section_after_pipeline(
             .iter()
             .all(|func| fixed_slot_effects.contains(func));
         let spill_reserve_satisfied = actual_spill_reserves.iter().all(|(func, actual)| {
-            backend_spill_reserves
+            backend_spills
+                .reserves
                 .get(func)
                 .copied()
                 .unwrap_or_default()
                 .satisfies(*actual)
         });
+        let spill_bounds_satisfied = actual_malloc_spill_bounds.iter().all(|(func, bounds)| {
+            bounds.iter().all(|(inst, bound)| {
+                placement.funcs[func]
+                    .mem_plan
+                    .malloc_future_abs_words
+                    .get(inst)
+                    .is_some_and(|reserved| reserved >= bound)
+            })
+        });
         let fallback_satisfied = final_spill_fallback_funcs.is_empty();
         last_convergence_error = Some(final_spill_convergence_error(
             iteration,
-            &backend_spill_reserves,
+            &backend_spills.reserves,
             &actual_spill_reserves,
             &fixed_slot_effects,
             &actual_fixed_slot_effects,
@@ -1089,7 +1120,18 @@ fn prepare_machine_section_after_pipeline(
             &section_plan,
         ));
 
-        if spill_reserve_satisfied && fixed_slot_effects_satisfied && fallback_satisfied {
+        if !spill_bounds_satisfied {
+            last_convergence_error
+                .as_mut()
+                .expect("convergence diagnostic was recorded")
+                .push_str("; per-allocation spill bounds are not satisfied");
+        }
+
+        if spill_reserve_satisfied
+            && fixed_slot_effects_satisfied
+            && spill_bounds_satisfied
+            && fallback_satisfied
+        {
             if std::env::var_os("SONATINA_MEM_LOOP_STATS").is_some() {
                 eprintln!(
                     "MEM_LOOP_STATS funcs={} iterations={} final_spill_funcs={} optional_spill_funcs={}",
@@ -1125,15 +1167,28 @@ fn prepare_machine_section_after_pipeline(
                 function_plans,
             });
         }
-        if spill_reserve_satisfied && fixed_slot_effects_satisfied && !fallback_satisfied {
+        if spill_reserve_satisfied
+            && fixed_slot_effects_satisfied
+            && spill_bounds_satisfied
+            && !fallback_satisfied
+        {
             return Err(final_spill_fallback_with_satisfied_reserves_error(
                 &final_spill_fallback_funcs,
                 &section_plan,
             ));
         }
 
-        backend_spill_reserves =
-            pointwise_max_reserve_maps(&backend_spill_reserves, &actual_spill_reserves);
+        backend_spills.reserves =
+            pointwise_max_reserve_maps(&backend_spills.reserves, &actual_spill_reserves);
+        for (func, bounds) in actual_malloc_spill_bounds {
+            let known = backend_spills.malloc_bounds.entry(func).or_default();
+            for (inst, bound) in bounds {
+                known
+                    .entry(inst)
+                    .and_modify(|known| *known = (*known).max(bound))
+                    .or_insert(bound);
+            }
+        }
         fixed_slot_effects.extend(actual_fixed_slot_effects);
         debug!(
             iteration,

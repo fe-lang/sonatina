@@ -22,8 +22,8 @@ use super::{
     super::{
         EvmBackend, heap_plan, malloc_plan,
         memory_plan::{
-            self, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis, StableMode,
-            WORD_BYTES, expect_func_entry,
+            self, BackendSpillPlan, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis,
+            StableMode, WORD_BYTES, expect_func_entry,
         },
         prepare::{
             ArenaBaseFacts, SectionMemoryLayout, choose_arena_base,
@@ -145,8 +145,9 @@ pub(crate) fn compute_semantic_memory_placement(
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     fixed_slot_effects: &FxHashSet<FuncRef>,
     backend: &EvmBackend,
-    backend_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
+    backend_spills: &BackendSpillPlan,
 ) -> EvmMemoryPlacementPlan {
+    let backend_spill_reserves = &backend_spills.reserves;
     let schedule = section.schedule;
     let funcs = section.funcs;
     let mut semantic_plan = memory_plan::compute_semantic_program_memory_plan(
@@ -327,8 +328,14 @@ pub(crate) fn compute_semantic_memory_placement(
             && let Some(func_plan) = semantic_plan.funcs.get(&func)
         {
             let reserve_abs_words = backend_spill_reserve_abs_words(func_plan, reserve);
-            for bound in bounds.values_mut() {
-                *bound = (*bound).max(reserve_abs_words);
+            for (&inst, bound) in bounds.iter_mut() {
+                let spill_bound = backend_spills
+                    .malloc_bounds
+                    .get(&func)
+                    .and_then(|bounds| bounds.get(&inst))
+                    .copied()
+                    .unwrap_or(reserve_abs_words);
+                *bound = (*bound).max(spill_bound);
             }
         }
     }

@@ -36,11 +36,15 @@ use self::{
         FinalAlloc, materialize_jumpdests, prune_redundant_opcode_sequences,
         rewrite_evm_local_fallthrough_layout,
     },
-    machine::placement::{
-        EvmMemoryPlacementPlan, MemoryPlacementSection, compute_semantic_memory_placement,
+    machine::{
+        final_spills::compute_malloc_spill_bounds,
+        module::FuncMachineMap,
+        placement::{
+            EvmMemoryPlacementPlan, MemoryPlacementSection, compute_semantic_memory_placement,
+        },
     },
     memory_plan::{
-        ArenaCostModel, BackendSpillReserve, ProgramMemoryPlan,
+        ArenaCostModel, BackendSpillPlan, BackendSpillReserve, ProgramMemoryPlan,
         compute_abs_clobber_words_with_extra, compute_semantic_program_memory_plan,
     },
     prepare::compute_return_escape_caller_clamp_words,
@@ -1703,7 +1707,10 @@ block0:
         &ptr_escape,
         &FxHashSet::default(),
         &backend,
-        &reserve_words,
+        &BackendSpillPlan {
+            reserves: reserve_words,
+            malloc_bounds: FxHashMap::default(),
+        },
     );
 
     let mk = names["mk"];
@@ -1773,7 +1780,7 @@ fn compute_test_memory_placement(
         &ptr_escape,
         &FxHashSet::default(),
         backend,
-        &FxHashMap::default(),
+        &BackendSpillPlan::default(),
     )
 }
 
@@ -4028,4 +4035,92 @@ fn caller_spills_survive_transitive_scratch_arena_clobbers() {
             ));
         }
     }
+}
+
+#[test]
+fn branch_exclusive_final_spills_do_not_raise_getter_heap_floor() {
+    let parsed = parse_module(include_str!(
+        "../../../test_files/evm/branch_exclusive_final_spills.sntn"
+    ))
+    .expect("module parses");
+    let entry = find_func(&parsed.module, "entry");
+    let backend = osaka_backend().with_stackify_reach_depth(4);
+    let prepared = backend
+        .prepare_section(work_module_with_entry(
+            &parsed.module,
+            &parsed.module.funcs(),
+            entry,
+        ))
+        .expect("prepare succeeds");
+    let plan = &prepared.function_plan(entry).unwrap().mem_plan;
+    assert!(plan.spill_obj.values().any(Option::is_some));
+    let getter_floor = plan.abs_addr_for_word(plan.entry_abs_words);
+    prepared.module().func_store.view(entry, |function| {
+        let return_buffers: Vec<_> = function
+            .layout
+            .iter_all_insts()
+            .filter(|&inst| {
+                matches!(
+                    backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::EvmReturn(_)
+                )
+            })
+            .filter_map(|inst| {
+                let pointer = function.dfg.inst(inst).collect_values()[0];
+                prepare::value_imm_u32(function, pointer)
+            })
+            .filter(|&address| address != 0)
+            .collect();
+        assert_eq!(
+            return_buffers,
+            [getter_floor],
+            "the getter cannot reach the other branch's spill accesses"
+        );
+    });
+}
+
+#[test]
+fn removed_malloc_boundary_keeps_spills_separate_from_dead_objects() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+func public %entry() {
+block0:
+    v0.*[i256; 8] = alloca [i256; 8];
+    memzero v0 256.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = evm_keccak256 v1 256.i256;
+    v3.*i8 = evm_malloc 32.i256;
+    mstore v3 v2 i256;
+    evm_return v3 32.i256;
+}
+"#,
+    )
+    .expect("module parses");
+    let entry = find_func(&parsed.module, "entry");
+    let backend = osaka_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(
+            &parsed.module,
+            &parsed.module.funcs(),
+            entry,
+        ))
+        .expect("prepare succeeds");
+    let plan = prepared.function_plan(entry).unwrap();
+    assert!(plan.mem_plan.abs_words_end() > 0);
+    assert!(plan.mem_plan.spill_obj.values().all(Option::is_none));
+    assert!(!plan.alloc.uses_scratch_spills());
+    parsed.module.func_store.view(entry, |source| {
+        prepared.module().func_store.view(entry, |machine| {
+            let bounds = compute_malloc_spill_bounds(
+                source,
+                machine,
+                &FuncMachineMap::new(),
+                &FinalAlloc::new(plan.alloc.clone(), plan.mem_plan.clone()),
+                &backend.isa,
+            );
+            assert_eq!(bounds.len(), 1);
+            assert_eq!(bounds.values().next(), Some(&0));
+        });
+    });
 }
