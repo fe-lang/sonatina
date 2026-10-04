@@ -2,7 +2,6 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, Module, ValueId,
-    cfg::ControlFlowGraph,
     inst::evm::inst_set::{EvmInstKind, EvmInstSet},
     module::{FuncRef, ModuleCtx},
 };
@@ -244,7 +243,17 @@ impl FuncFreePtrFloorCtx<'_> {
         let states = run_forward_heap_dataflow(
             function,
             entry_floor,
-            |block, block_out| block_entry_floor(cfg, block, block_out, entry_floor),
+            |block, block_out| {
+                // Entry also has the initial invocation as an incoming edge.
+                // A backedge cannot establish a floor for the first iteration.
+                let boundary =
+                    (Some(block) == function.layout.entry_block()).then_some(entry_floor);
+                boundary
+                    .into_iter()
+                    .chain(cfg.preds_of(block).map(|pred| block_out[*pred]))
+                    .reduce(FreePtrFloor::join)
+                    .unwrap_or(entry_floor)
+            },
             transfer,
         );
 
@@ -289,26 +298,6 @@ fn function_exit_floor(
         }
     }
     out.unwrap_or(FreePtrFloor::Unknown)
-}
-
-// PARITY: the accumulator starts at Unknown and `join(Unknown, _) = Unknown`,
-// so any block with predecessors currently loses its floor entirely. This is
-// conservative (never unsound) but likely unintended; fixing it to fold from
-// the first predecessor is a snapshot-visible precision change to make
-// separately.
-fn block_entry_floor(
-    cfg: &ControlFlowGraph,
-    block: BlockId,
-    block_out: &SecondaryMap<BlockId, FreePtrFloor>,
-    entry_floor: FreePtrFloor,
-) -> FreePtrFloor {
-    let mut floor = FreePtrFloor::Unknown;
-    let mut has_pred = false;
-    for pred in cfg.preds_of(block) {
-        has_pred = true;
-        floor = floor.join(block_out[*pred]);
-    }
-    if has_pred { floor } else { entry_floor }
 }
 
 struct TransferCtx<'a> {
