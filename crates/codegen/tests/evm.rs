@@ -16,7 +16,10 @@ use revm::{
 use sonatina_codegen::{
     Compile,
     compile::{EvmCompiler, OptLevel},
-    isa::evm::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy},
+    isa::evm::{
+        EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy,
+        opcode::OpCode,
+    },
     machinst::{
         lower::{LoweredFunction, SectionCodeUnit, SectionWorkModule},
         vcode::{Label, VCodeFixup, section_code_unit_label_name},
@@ -291,6 +294,163 @@ object @Contract {
             expected[..tail.len()].copy_from_slice(tail);
             expected[63] = 99;
             assert_eq!(actual.as_ref(), expected, "{level:?}, offset={offset}");
+        }
+    }
+}
+
+#[test]
+fn terminal_payload_bases_preserve_overlaps_values_and_halts() {
+    let bases = [
+        IrU256::from(64),
+        IrU256::from(257),
+        IrU256::from(1024),
+        IrU256::from(8192),
+        IrU256::zero(),
+        IrU256::MAX - IrU256::from(16),
+    ];
+    let offsets = [-4i64, 0, 4, 36, 32, 64, 96, 128];
+    let patterns = [0x31u8, 0x42, 0x53, 0x64, 0x75, 0x86, 0x97, 0xa8];
+    for terminal in ["evm_return", "evm_revert"] {
+        let mut functions = String::new();
+        let mut expected = Vec::new();
+        for (idx, base) in bases.iter().enumerate() {
+            let mut body = String::new();
+            let mut output = vec![0u8; 160];
+            for (store, (&offset, &pattern)) in offsets.iter().zip(&patterns).enumerate() {
+                let address = if offset < 0 {
+                    base.overflowing_sub(IrU256::from(offset.unsigned_abs())).0
+                } else {
+                    base.overflowing_add(IrU256::from(offset as u64)).0
+                };
+                // Three independently varying words plus the address exercise
+                // the complete four-parameter budget, interspersed with literals.
+                let byte = if [1, 3, 5].contains(&store) {
+                    pattern.wrapping_add(idx as u8)
+                } else {
+                    pattern
+                };
+                let word = IrU256::from_big_endian(&[byte; 32]);
+                body.push_str(&format!("evm_mstore {address}.i256 {word}.i256;\n"));
+                for (at, value) in output.iter_mut().enumerate() {
+                    if (offset..offset + 32).contains(&(at as i64)) {
+                        *value = byte;
+                    }
+                }
+            }
+            body.push_str(&format!("{terminal} {base}.i256 160.i256;"));
+            for function in [idx, idx + bases.len()] {
+                functions.push_str(&format!(
+                    "func inline(never) private %payload{function}() {{\nblock0:\n{body}\n}}\n"
+                ));
+            }
+            expected.push(output);
+        }
+        // Duplicate each payload in separate functions so exact outlining first
+        // creates helpers, and the base-sharing path must rewrite those helpers.
+        expected.extend_from_within(..);
+        let arms = expected.iter().enumerate().map(|(idx, _)| {
+            let next = idx + 1;
+            format!("block{idx}:\nv{next}.i1 = eq v0 {idx}.i256;\nbr v{next} block{} block{next};\n", idx + expected.len() + 1)
+        }).collect::<String>();
+        let dispatch = expected
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| {
+                let block = idx + expected.len() + 1;
+                format!("block{block}:\ncall %payload{idx};\nevm_revert 0.i256 0.i256;\n")
+            })
+            .collect::<String>();
+        let source = format!(
+            r#"target = "evm-ethereum-osaka"
+{functions}
+func public %entry() {{
+block100:
+v0.i256 = evm_calldata_load 0.i256;
+jump block0;
+{arms}
+block{}:
+evm_revert 0.i256 0.i256;
+{dispatch}
+}}
+object @Contract {{ section runtime {{ entry %entry; }} }}
+"#,
+            expected.len()
+        );
+        for profile in [
+            LateCleanupProfile::Off,
+            LateCleanupProfile::Speed,
+            LateCleanupProfile::Size,
+        ] {
+            let parsed = parse_sona(&source);
+            let backend = EvmBackend::new(Evm::new(parsed.module.ctx.triple))
+                .with_late_cleanup_profile(profile);
+            let entry = *parsed.debug.func_order.last().unwrap();
+            let prepared = backend
+                .prepare_section(SectionWorkModule::from_roots(
+                    &parsed.module,
+                    entry,
+                    &[],
+                    &[],
+                ))
+                .unwrap();
+            let mut lowered = prepared
+                .funcs()
+                .iter()
+                .map(|&func| (func, backend.lower_function(&prepared, func).unwrap()))
+                .collect();
+            let units = backend.post_lower_section(&prepared, &mut lowered).unwrap();
+            let shared_payload = units.iter().any(|unit| {
+                unit.block_order.iter().any(|&block| {
+                    let ops = unit
+                        .vcode
+                        .block_insns(block)
+                        .map(|inst| unit.vcode.insts[inst] as u8)
+                        .collect::<Vec<_>>();
+                    ops.len() >= 2
+                        && ops[ops.len() - 2] == OpCode::SWAP1 as u8
+                        && ops.contains(&(OpCode::MSTORE as u8))
+                })
+            });
+            assert_eq!(
+                shared_payload,
+                profile == LateCleanupProfile::Size
+                    || profile == LateCleanupProfile::Speed && terminal == "evm_revert",
+                "sharing must actually fire under the intended {profile:?} {terminal} policy"
+            );
+            let artifact = compile_object(
+                &parsed.module,
+                &backend,
+                "Contract",
+                &CompileOptions::default(),
+            )
+            .unwrap();
+            let runtime = artifact
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for (idx, output) in expected.iter().enumerate() {
+                let result = harness.call(&IrU256::from(idx).to_big_endian());
+                if idx % bases.len() >= 4 {
+                    assert!(
+                        matches!(result, ExecutionResult::Halt { .. }),
+                        "{profile:?} {terminal} case {idx}: {result:?}"
+                    );
+                    continue;
+                }
+                let actual = match result {
+                    ExecutionResult::Success {
+                        output: Output::Call(actual),
+                        ..
+                    } if terminal == "evm_return" => actual,
+                    ExecutionResult::Revert { output: actual, .. } if terminal == "evm_revert" => {
+                        actual
+                    }
+                    _ => panic!("{profile:?} {terminal} case {idx}: {result:?}"),
+                };
+                assert_eq!(actual.as_ref(), output, "{profile:?} {terminal} case {idx}");
+            }
         }
     }
 }

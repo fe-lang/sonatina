@@ -9,8 +9,8 @@ pub(crate) use layout::{
     materialize_jumpdests, referenced_insn_label_targets, rewrite_evm_local_fallthrough_layout,
 };
 pub(crate) use stack::{
-    fold_stack_actions, immediate_u32, is_plain_inst, is_push_opcode, perform_action,
-    perform_actions, prune_redundant_opcode_sequences, push_op,
+    dup_op, fold_stack_actions, immediate_u32, is_plain_inst, is_push_opcode, perform_action,
+    perform_actions, prune_redundant_opcode_sequences, push_immediate_u256, push_op,
 };
 
 use tracing::trace_span;
