@@ -2095,7 +2095,7 @@ object @Contract { section runtime { entry %entry; } }
 }
 
 #[test]
-fn calldata_memory_planning_at_all_optimization_levels() {
+fn memory_planning_at_all_optimization_levels() {
     for (name, source) in [
         (
             "rematerialization",
@@ -2105,13 +2105,21 @@ fn calldata_memory_planning_at_all_optimization_levels() {
             "branch storage",
             include_str!("../test_files/evm/branch_exclusive_unknown_storage.sntn"),
         ),
+        (
+            "branch spills",
+            include_str!("../test_files/evm/branch_exclusive_final_spills.sntn"),
+        ),
+        (
+            "heap across spill loop",
+            include_str!("../test_files/evm/heap_live_across_final_spill_loop.sntn"),
+        ),
     ] {
         for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
             let parsed = parse_sona(source);
             let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments).unwrap();
             let compiler =
                 Compile::new(parsed.module, EvmCompiler::default()).with_opt_level(level);
-            let artifacts = compiler.compile().expect("calldata fixture compiles");
+            let artifacts = compiler.compile().expect("memory fixture compiles");
             let runtime = artifacts[0]
                 .sections
                 .iter()

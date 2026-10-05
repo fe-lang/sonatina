@@ -5,8 +5,11 @@ use sonatina_ir::Module;
 use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, ValueId,
     cfg::ControlFlowGraph,
-    inst::evm::machine_inst_set::EvmMachineInstKind,
-    isa::{Isa, evm::EvmMachine},
+    inst::evm::{inst_set::EvmInstKind, machine_inst_set::EvmMachineInstKind},
+    isa::{
+        Isa,
+        evm::{Evm, EvmMachine},
+    },
     module::FuncRef,
 };
 
@@ -20,12 +23,17 @@ use crate::isa::evm::memory_plan::align_up_to_word;
 
 #[cfg(debug_assertions)]
 use super::{
-    super::{EvmBackend, memory_plan::FuncPreAnalysis, ptr_escape::PtrEscapeSummary},
+    super::{
+        EvmBackend,
+        memory_plan::{BackendSpillPlan, FuncPreAnalysis},
+        ptr_escape::PtrEscapeSummary,
+    },
     placement::{MemoryPlacementSection, compute_semantic_memory_placement},
 };
 use super::{
     super::{
         MachineFuncPlan, ObjLoc,
+        emit::FinalAlloc,
         memory_plan::{
             self, BackendSpillReserve, FinalScratchReserveRange, MachineStackifyAnalysis,
             StableMode, WORD_BYTES,
@@ -35,8 +43,108 @@ use super::{
         },
         static_arena_alloc::StackObjId,
     },
+    module::FuncMachineMap,
     placement::EvmMemoryPlacementPlan,
 };
+
+/// Bound absolute spill accesses on every path beginning at each allocation's
+/// source block. Including the whole block is conservative for accesses before
+/// the allocation, and the backward fixed point also covers later loop trips.
+/// Callee clobbers and semantic objects are handled by the existing heap plan.
+pub(crate) fn compute_malloc_spill_bounds(
+    source: &Function,
+    machine: &Function,
+    map: &FuncMachineMap,
+    alloc: &FinalAlloc,
+    isa: &Evm,
+) -> FxHashMap<InstId, u32> {
+    if alloc.mem_plan.uses_dynamic_frame() {
+        return FxHashMap::default();
+    }
+    let mallocs: Vec<_> = source
+        .layout
+        .iter_block()
+        .flat_map(|block| {
+            source.layout.iter_inst(block).filter_map(move |inst| {
+                matches!(
+                    isa.inst_set().resolve_inst(source.dfg.inst(inst)),
+                    EvmInstKind::EvmMalloc(_)
+                )
+                .then_some((inst, block))
+            })
+        })
+        .collect();
+    if mallocs.is_empty() {
+        return FxHashMap::default();
+    }
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(machine);
+    let machine_isa = EvmMachine::new(machine.dfg.ctx.triple);
+    let mut bounds: SecondaryMap<BlockId, u32> = SecondaryMap::new();
+    let action_bound = |action: &Action| match *action {
+        Action::MemLoadAbs(addr) | Action::MemStoreAbs(addr) => addr
+            .checked_add(WORD_BYTES)
+            .expect("spill access end overflow")
+            .saturating_sub(alloc.mem_plan.arena_base)
+            .div_ceil(WORD_BYTES),
+        _ => 0,
+    };
+    for block in machine.layout.iter_block() {
+        let bound = &mut bounds[block];
+        if machine.layout.entry_block() == Some(block) {
+            *bound = alloc
+                .enter_function(machine)
+                .iter()
+                .map(action_bound)
+                .max()
+                .unwrap_or(0);
+        }
+        for inst in machine.layout.iter_inst(block) {
+            for action in alloc.pre_inst(inst).iter().chain(alloc.post_inst(inst)) {
+                *bound = (*bound).max(action_bound(action));
+            }
+            if let EvmMachineInstKind::BrTable(branch) =
+                machine_isa.inst_set().resolve_inst(machine.dfg.inst(inst))
+            {
+                for (index, _) in branch.table().iter().enumerate() {
+                    for action in alloc.br_table_case(inst, index) {
+                        *bound = (*bound).max(action_bound(action));
+                    }
+                }
+            }
+        }
+    }
+    let full_bound = bounds.values().copied().max().unwrap_or(0);
+    let blocks: Vec<_> = cfg.post_order().collect();
+    loop {
+        let mut changed = false;
+        for &block in &blocks {
+            let next = cfg
+                .succs_of(block)
+                .map(|next| bounds[*next])
+                .max()
+                .unwrap_or(0);
+            if next > bounds[block] {
+                bounds[block] = next;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    mallocs
+        .into_iter()
+        .map(|(inst, block)| {
+            // CFG cleanup can remove a mapped block. Without a surviving boundary
+            // retain all function spill accesses, without adding dead semantic objects.
+            let bound = map.blocks[block]
+                .filter(|&block| machine.layout.is_block_inserted(block))
+                .map_or(full_bound, |block| bounds[block]);
+            (inst, bound)
+        })
+        .collect()
+}
 
 pub(crate) struct FinalSpillAllocation {
     pub(crate) alloc: StackifyAlloc,
@@ -465,7 +573,10 @@ impl FinalSpillChoiceCtx<'_> {
             replan.ptr_escape,
             &fixed_slot_effects,
             replan.backend,
-            reserves,
+            &BackendSpillPlan {
+                reserves: reserves.clone(),
+                malloc_bounds: FxHashMap::default(),
+            },
         );
 
         (

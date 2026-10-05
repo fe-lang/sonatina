@@ -69,6 +69,15 @@ pub struct ProgramMemoryPlan {
     pub funcs: FxHashMap<FuncRef, SemanticFuncPlan>,
 }
 
+/// Final-spill requirements learned while iterating machine preparation.
+/// Per-malloc bounds cover only accesses reachable from its source block;
+/// missing entries retain the full function reservation.
+#[derive(Default)]
+pub(crate) struct BackendSpillPlan {
+    pub(crate) reserves: FxHashMap<FuncRef, BackendSpillReserve>,
+    pub(crate) malloc_bounds: FxHashMap<FuncRef, FxHashMap<InstId, u32>>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BackendSpillReserve {
     pub(crate) scratch_words: u32,

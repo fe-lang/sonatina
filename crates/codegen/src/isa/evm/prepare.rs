@@ -11,7 +11,7 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     machinst::lower::{SectionMembership, SectionWorkModule},
     module_analysis::{CallGraphSchedule, SccRef},
-    stackalloc::StackifyAlloc,
+    stackalloc::{Action, Allocator, StackifyAlloc},
 };
 use sonatina_ir::{
     AccessKind, AccessLoc, Function, GlobalVariableRef, InstDowncast, InstId, InstSetExt,
@@ -43,7 +43,8 @@ use super::{
         final_spills::{
             FinalSpillAllocationInput, FinalSpillChoiceCtx, FinalSpillObjects,
             FixedMemoryWriteRange, MachineFinalSpillInput, OptionalFinalSpillPlacement,
-            allocate_final_spills, validate_dynamic_terminal_payload_spills,
+            allocate_final_spills, compute_malloc_spill_bounds,
+            validate_dynamic_terminal_payload_spills,
         },
         lazy_frame::{FrameSummary, compute_frame_summary, compute_machine_frame_roots},
         lower::lower_section_to_machine,
@@ -53,9 +54,9 @@ use super::{
     },
     malloc_plan,
     memory_plan::{
-        self, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan, ProgramMemoryPlan,
-        STATIC_BASE, SemanticFuncPlan, WORD_BYTES, compute_abs_clobber_words_with_extra,
-        expect_func_entry,
+        self, BackendSpillPlan, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan,
+        ProgramMemoryPlan, STATIC_BASE, SemanticFuncPlan, WORD_BYTES,
+        compute_abs_clobber_words_with_extra, expect_func_entry,
     },
     pipeline::EvmPipeline,
     ptr_escape::PtrEscapeSummary,
@@ -612,15 +613,78 @@ fn reserve_function_memory_layout(
 fn machine_fixed_memory_write_ranges(
     function: &Function,
     isa: &EvmMachine,
+    alloc: &StackifyAlloc,
 ) -> Vec<FixedMemoryWriteRange> {
+    let memory_action = |action: &Action| {
+        matches!(
+            action,
+            Action::MemLoadAbs(_)
+                | Action::MemStoreAbs(_)
+                | Action::MemLoadObj(_)
+                | Action::MemStoreObj(_)
+                | Action::MemLoadFrameSlot(_)
+                | Action::MemStoreFrameSlot(_)
+        )
+    };
+    let mut accesses = SecondaryMap::new();
     let mut ranges = Vec::new();
     for block in function.layout.iter_block() {
+        accesses[block] = function.layout.entry_block() == Some(block)
+            && alloc.enter_function(function).iter().any(memory_action);
         for inst in function.layout.iter_inst(block) {
+            accesses[block] |= alloc
+                .pre_inst(inst)
+                .iter()
+                .chain(alloc.post_inst(inst))
+                .any(memory_action);
+            match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
+                // Call-preserve actions are injected after this analysis.
+                EvmMachineInstKind::Call(_) => accesses[block] = true,
+                EvmMachineInstKind::BrTable(branch) => {
+                    accesses[block] |= branch.table().iter().enumerate().any(|(index, _)| {
+                        alloc.br_table_case(inst, index).iter().any(memory_action)
+                    });
+                }
+                _ => {}
+            }
             if let Some(range) = machine_fixed_memory_write_range(function, isa, inst) {
                 ranges.push(range);
             }
         }
     }
+    // A write cannot conflict with a final spill if every remaining path halts
+    // without another allocator memory access. Include the whole block so we
+    // retain same-block conflicts, and keep internal returns and cycles unless
+    // termination has been proved through every successor.
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+    let blocks: Vec<_> = cfg.post_order().collect();
+    let mut terminal: SecondaryMap<_, bool> = SecondaryMap::new();
+    loop {
+        let mut changed = false;
+        for &block in &blocks {
+            if terminal[block] || accesses[block] {
+                continue;
+            }
+            let halts = function.layout.last_inst_of(block).is_some_and(|inst| {
+                matches!(
+                    isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmMachineInstKind::EvmReturn(_) | EvmMachineInstKind::EvmRevert(_)
+                )
+            });
+            if halts
+                || (cfg.succs_of(block).next().is_some()
+                    && cfg.succs_of(block).all(|next| terminal[*next]))
+            {
+                terminal[block] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    ranges.retain(|range| !terminal[function.layout.inst_block(range.inst)]);
     ranges.sort_unstable_by_key(|range| (range.start_byte, range.end_byte, range.inst.as_u32()));
     ranges
 }
@@ -792,7 +856,7 @@ fn prepare_machine_section_after_pipeline(
     let fixed_reservations =
         scan_fixed_reservations(source_module, &funcs, backend, &pre_analyses)?;
     let mut fixed_slot_effects = FxHashSet::default();
-    let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
+    let mut backend_spills = BackendSpillPlan::default();
     let mut last_convergence_error = None;
     // Lowering and allocation facts are rebuilt each iteration. Only structural
     // search results survive, within this section's fixed backend profile.
@@ -812,7 +876,7 @@ fn prepare_machine_section_after_pipeline(
             &ptr_escape,
             &fixed_slot_effects,
             backend,
-            &backend_spill_reserves,
+            &backend_spills,
         );
 
         let machine = lower_section_to_machine(&work, &funcs, &placement, backend)?;
@@ -848,7 +912,8 @@ fn prepare_machine_section_after_pipeline(
                 let func_map =
                     expect_func_entry(&machine.source_to_machine.funcs, func, "source map");
                 let mem_plan = MachineFuncPlan::from_semantic(&func_placement.mem_plan, func_map);
-                let reserve = backend_spill_reserves
+                let reserve = backend_spills
+                    .reserves
                     .get(&func)
                     .copied()
                     .unwrap_or_default();
@@ -863,7 +928,11 @@ fn prepare_machine_section_after_pipeline(
                         .func_store
                         .view(func, |machine_function| {
                             spills.share_disjoint_objects(machine_function, &analysis.alloc);
-                            machine_fixed_memory_write_ranges(machine_function, &machine_isa)
+                            machine_fixed_memory_write_ranges(
+                                machine_function,
+                                &machine_isa,
+                                &analysis.alloc,
+                            )
                         });
                 MachineFinalSpillInput {
                     func,
@@ -958,16 +1027,31 @@ fn prepare_machine_section_after_pipeline(
                             )
                         })
                     });
-                let frame_summary = machine.work.module().func_store.view(func, |function| {
-                    let final_alloc =
-                        FinalAlloc::new(final_spills.alloc.clone(), final_spills.mem_plan.clone());
-                    compute_frame_summary(
-                        function,
-                        &final_alloc,
-                        &final_spills.mem_plan,
-                        &frame_roots,
-                    )
-                });
+                let (frame_summary, malloc_spill_bounds) =
+                    machine.work.module().func_store.view(func, |function| {
+                        let final_alloc = FinalAlloc::new(
+                            final_spills.alloc.clone(),
+                            final_spills.mem_plan.clone(),
+                        );
+                        let bounds = source_module.func_store.view(func, |source| {
+                            compute_malloc_spill_bounds(
+                                source,
+                                function,
+                                func_map,
+                                &final_alloc,
+                                &backend.isa,
+                            )
+                        });
+                        (
+                            compute_frame_summary(
+                                function,
+                                &final_alloc,
+                                &final_spills.mem_plan,
+                                &frame_roots,
+                            ),
+                            bounds,
+                        )
+                    });
                 let alias_plan = machine.work.module().func_store.view(func, |function| {
                     compute_late_block_alias_plan(
                         function,
@@ -1004,6 +1088,7 @@ fn prepare_machine_section_after_pipeline(
                     func,
                     final_spills.required_reserve,
                     final_spills.used_fallback,
+                    malloc_spill_bounds,
                     EvmFunctionPlan {
                         alloc: final_spills.alloc,
                         emitted_block_order,
@@ -1020,7 +1105,9 @@ fn prepare_machine_section_after_pipeline(
         let mut results = results.into_iter().collect::<Result<Vec<_>, _>>()?;
         results.sort_unstable_by_key(|(func, ..)| func.as_u32());
         let mut final_spill_fallback_funcs = Vec::new();
-        for (func, required_reserve, used_fallback, plan) in results {
+        let mut actual_malloc_spill_bounds = FxHashMap::default();
+        for (func, required_reserve, used_fallback, bounds, plan) in results {
+            actual_malloc_spill_bounds.insert(func, bounds);
             if required_reserve.scratch_words != 0 {
                 actual_fixed_slot_effects.insert(func);
             }
@@ -1053,7 +1140,8 @@ fn prepare_machine_section_after_pipeline(
                 .dyn_sp_plan = dyn_sp_plan;
         }
 
-        let reserve_peak = backend_spill_reserves
+        let reserve_peak = backend_spills
+            .reserves
             .values()
             .map(|reserve| reserve.max_words())
             .max()
@@ -1072,16 +1160,26 @@ fn prepare_machine_section_after_pipeline(
             .iter()
             .all(|func| fixed_slot_effects.contains(func));
         let spill_reserve_satisfied = actual_spill_reserves.iter().all(|(func, actual)| {
-            backend_spill_reserves
+            backend_spills
+                .reserves
                 .get(func)
                 .copied()
                 .unwrap_or_default()
                 .satisfies(*actual)
         });
+        let spill_bounds_satisfied = actual_malloc_spill_bounds.iter().all(|(func, bounds)| {
+            bounds.iter().all(|(inst, bound)| {
+                placement.funcs[func]
+                    .mem_plan
+                    .malloc_future_abs_words
+                    .get(inst)
+                    .is_some_and(|reserved| reserved >= bound)
+            })
+        });
         let fallback_satisfied = final_spill_fallback_funcs.is_empty();
         last_convergence_error = Some(final_spill_convergence_error(
             iteration,
-            &backend_spill_reserves,
+            &backend_spills.reserves,
             &actual_spill_reserves,
             &fixed_slot_effects,
             &actual_fixed_slot_effects,
@@ -1089,7 +1187,18 @@ fn prepare_machine_section_after_pipeline(
             &section_plan,
         ));
 
-        if spill_reserve_satisfied && fixed_slot_effects_satisfied && fallback_satisfied {
+        if !spill_bounds_satisfied {
+            last_convergence_error
+                .as_mut()
+                .expect("convergence diagnostic was recorded")
+                .push_str("; per-allocation spill bounds are not satisfied");
+        }
+
+        if spill_reserve_satisfied
+            && fixed_slot_effects_satisfied
+            && spill_bounds_satisfied
+            && fallback_satisfied
+        {
             if std::env::var_os("SONATINA_MEM_LOOP_STATS").is_some() {
                 eprintln!(
                     "MEM_LOOP_STATS funcs={} iterations={} final_spill_funcs={} optional_spill_funcs={}",
@@ -1125,15 +1234,28 @@ fn prepare_machine_section_after_pipeline(
                 function_plans,
             });
         }
-        if spill_reserve_satisfied && fixed_slot_effects_satisfied && !fallback_satisfied {
+        if spill_reserve_satisfied
+            && fixed_slot_effects_satisfied
+            && spill_bounds_satisfied
+            && !fallback_satisfied
+        {
             return Err(final_spill_fallback_with_satisfied_reserves_error(
                 &final_spill_fallback_funcs,
                 &section_plan,
             ));
         }
 
-        backend_spill_reserves =
-            pointwise_max_reserve_maps(&backend_spill_reserves, &actual_spill_reserves);
+        backend_spills.reserves =
+            pointwise_max_reserve_maps(&backend_spills.reserves, &actual_spill_reserves);
+        for (func, bounds) in actual_malloc_spill_bounds {
+            let known = backend_spills.malloc_bounds.entry(func).or_default();
+            for (inst, bound) in bounds {
+                known
+                    .entry(inst)
+                    .and_modify(|known| *known = (*known).max(bound))
+                    .or_insert(bound);
+            }
+        }
         fixed_slot_effects.extend(actual_fixed_slot_effects);
         debug!(
             iteration,
@@ -1494,15 +1616,18 @@ fn compute_high_evm_pre_analyses(
 
 #[cfg(test)]
 mod tests {
-    use crate::isa::evm::test_util::osaka_triple;
+    use crate::{
+        isa::evm::test_util::osaka_triple,
+        stackalloc::{Action, StackifyAlloc},
+    };
     use sonatina_ir::{
         I256, Immediate, Linkage, Signature, Type,
         builder::{FunctionBuilder, ModuleBuilder},
         func_cursor::InstInserter,
         inst::{
-            control_flow::Return,
+            control_flow::{Br, Call, Jump, Return},
             evm::{
-                EvmCalldataCopy, EvmMstore, EvmMstore8, EvmStaticCall,
+                EvmCalldataCopy, EvmMstore, EvmMstore8, EvmReturn, EvmRevert, EvmStaticCall,
                 machine_inst_set::EvmMachineInstSet,
             },
         },
@@ -1541,7 +1666,7 @@ mod tests {
 
         let module = mb.build();
         module.func_store.view(func_ref, |function| {
-            machine_fixed_memory_write_ranges(function, &machine)
+            machine_fixed_memory_write_ranges(function, &machine, &StackifyAlloc::default())
         })
     }
 
@@ -1550,6 +1675,87 @@ mod tests {
             .iter()
             .map(|range| (range.start_byte, range.end_byte))
             .collect()
+    }
+
+    #[test]
+    fn terminal_write_exemption_requires_halting_paths_without_allocator_accesses() {
+        for case in [
+            "return",
+            "revert",
+            "loop",
+            "internal return",
+            "call",
+            "reload",
+            "store",
+        ] {
+            let mb = machine_builder();
+            let entry = mb
+                .declare_function(Signature::new_unit("entry", Linkage::Public, &[Type::I256]))
+                .unwrap();
+            let callee = mb
+                .declare_function(Signature::new_unit("callee", Linkage::Private, &[]))
+                .unwrap();
+            let isa = EvmMachine::new(mb.triple());
+            let is = isa.inst_set();
+            let mut builder = mb.func_builder::<InstInserter>(entry);
+            let start = builder.append_block();
+            let branch = builder.append_block();
+            let other = builder.append_block();
+            let exit = builder.append_block();
+            builder.switch_to_block(start);
+            let address = word(&mut builder, 0x140);
+            let value = word(&mut builder, 7);
+            let len = word(&mut builder, 32);
+            builder.insert_inst_no_result(EvmMstore::new(is, address, value));
+            builder.insert_inst_no_result(Jump::new(is, branch));
+            builder.switch_to_block(branch);
+            if case == "call" {
+                builder.insert_inst_no_result(Call::new(is, callee, Default::default()));
+            }
+            let condition = builder.func.arg_values[0];
+            builder.insert_inst_no_result(Br::new(is, condition, other, exit));
+            builder.switch_to_block(other);
+            builder.insert_inst_no_result(Jump::new(is, if case == "loop" { start } else { exit }));
+            builder.switch_to_block(exit);
+            if case == "internal return" {
+                builder.insert_inst_no_result(Return::new_unit(is))
+            } else if case == "revert" {
+                builder.insert_inst_no_result(EvmRevert::new(is, address, len))
+            } else {
+                builder.insert_inst_no_result(EvmReturn::new(is, address, len))
+            };
+            builder.seal_all();
+            builder.finish();
+            let module = mb.build();
+            let mut alloc = StackifyAlloc::default();
+            if case == "reload" || case == "store" {
+                let terminal = module.func_store.view(entry, |function| {
+                    function.layout.last_inst_of(exit).unwrap()
+                });
+                alloc.touch_inst_actions(terminal);
+                alloc.rewrite_action_lists(
+                    |_, mut actions| {
+                        actions.push(if case == "reload" {
+                            Action::MemLoadAbs(0x140)
+                        } else {
+                            Action::MemStoreAbs(0x140)
+                        });
+                        actions
+                    },
+                    |_, actions| actions,
+                    |actions| actions,
+                );
+            }
+            module.func_store.view(entry, |function| {
+                let ranges = machine_fixed_memory_write_ranges(function, &isa, &alloc);
+                let expected = if case == "return" || case == "revert" {
+                    vec![]
+                } else {
+                    vec![(0x140, 0x160)]
+                };
+                assert_eq!(range_bytes(&ranges), expected, "{case}");
+            });
+        }
     }
 
     #[test]
