@@ -721,8 +721,12 @@ fn classify_declared_effects_with<S: EffectSink>(
     }
 
     if let Some(mcopy) = <&EvmMcopy as InstDowncast>::downcast(is, inst) {
-        sink.read_range(MEMORY, *mcopy.addr(), *mcopy.len());
-        sink.write_range(MEMORY, *mcopy.dest(), *mcopy.len());
+        // EIP-5656: a zero-length copy does not access or expand memory,
+        // regardless of either address. Positive-length self-copies still can.
+        if !dfg.value_imm(*mcopy.len()).is_some_and(Immediate::is_zero) {
+            sink.read_range(MEMORY, *mcopy.addr(), *mcopy.len());
+            sink.write_range(MEMORY, *mcopy.dest(), *mcopy.len());
+        }
         return sink.finish();
     }
 
@@ -1184,6 +1188,38 @@ mod tests {
             OperatingSystem::Evm(EvmVersion::Osaka),
         ))
         .address_spaces()
+    }
+
+    #[test]
+    fn evm_mcopy_effects_require_a_potentially_nonzero_length() {
+        for length in [Some(0), Some(1), Some(-1), None] {
+            let mb = test_module_builder();
+            let (evm, mut builder) = test_func_builder(&mb, &[Type::I256], Type::I256);
+            let is = evm.inst_set();
+            let block = builder.append_block();
+            builder.switch_to_block(block);
+            let addr = builder.make_imm_value(Immediate::from_i256(I256::from(-1), Type::I256));
+            let len = length.map_or(builder.func.arg_values[0], |length| {
+                builder.make_imm_value(Immediate::from_i256(I256::from(length), Type::I256))
+            });
+            // Even a self-copy may expand memory when its length is nonzero.
+            builder.insert_inst_no_result_with(|| EvmMcopy::new(is, addr, addr, len));
+            builder.insert_inst_no_result_with(|| Return::new_single(is, len));
+            builder.seal_all();
+
+            let effects = effects_for_inst::<EvmMcopy>(&builder.func);
+            let summary = summary_for_inst::<EvmMcopy>(&builder.func);
+            assert_eq!(effects.summary(), summary, "length={length:?}");
+            if length == Some(0) {
+                assert_eq!(effects, InstEffects::default());
+                assert!(!summary.has_effect());
+            } else {
+                assert_eq!(effects.accesses.len(), 2);
+                assert!(has_access(&effects, MEMORY, AccessKind::Read));
+                assert!(has_access(&effects, MEMORY, AccessKind::Write));
+                assert!(summary.may_mutate_state());
+            }
+        }
     }
 
     #[test]
