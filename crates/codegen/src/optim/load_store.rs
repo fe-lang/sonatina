@@ -850,9 +850,14 @@ fn value_key_is_live(func: &Function, key: &ValueKey) -> bool {
         ValueKey::Imm(_) => true,
         ValueKey::Arg(value) => func.dfg.has_value(*value),
         ValueKey::Expr(expr) => match expr.as_ref() {
-            KeyExpr::Unary { arg, .. } | KeyExpr::Cast { arg, .. } => value_key_is_live(func, arg),
+            KeyExpr::Unary { arg, .. }
+            | KeyExpr::Cast { arg, .. }
+            | KeyExpr::ImmutableRead { addr: arg, .. } => value_key_is_live(func, arg),
             KeyExpr::Binary { lhs, rhs, .. } => {
                 value_key_is_live(func, lhs) && value_key_is_live(func, rhs)
+            }
+            KeyExpr::Keccak256Words { words } => {
+                words.iter().all(|word| value_key_is_live(func, word))
             }
         },
     }

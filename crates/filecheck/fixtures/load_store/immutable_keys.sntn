@@ -1,0 +1,126 @@
+#! Storage keys may be built from reads of calldata and code, which nothing
+#! writes within a frame, and from word hashes of such keys.
+
+target = "evm-ethereum-osaka"
+
+#! A load right after a store to a calldata-derived slot takes the stored value.
+# sameln: func public %forwards_sload_at_calldata_slot() -> i256 {
+# not:         evm_sload v2
+# check:       return v3;
+func public %forwards_sload_at_calldata_slot() -> i256 {
+    block0:
+        v0.i256 = evm_calldata_load 4.i256;
+        v1.i256 = shr 5.i256 v0;
+        v2.i256 = add 100.i256 v1;
+        v3.i256 = evm_calldata_load 36.i256;
+        evm_sstore v2 v3;
+        v4.i256 = evm_sload v2;
+        return v4;
+}
+
+#! A slot recomputed from a second read of the same calldata word is the same slot.
+# sameln: func public %forwards_sload_at_recomputed_calldata_slot(v0.i256) -> i256 {
+# not:         evm_sload
+# check:       return v0;
+func public %forwards_sload_at_recomputed_calldata_slot(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_calldata_load 4.i256;
+        v2.i256 = add 100.i256 v1;
+        evm_sstore v2 v0;
+        v3.i256 = evm_calldata_load 4.i256;
+        v4.i256 = add 100.i256 v3;
+        v5.i256 = evm_sload v4;
+        return v5;
+}
+
+#! Slots from different calldata words may coincide: a store to either may write the other.
+# sameln: func public %distinct_calldata_slots_may_alias() -> i256 {
+# check:       v4.i256 = evm_sload v0;
+# check:       return v4;
+func public %distinct_calldata_slots_may_alias() -> i256 {
+    block0:
+        v0.i256 = evm_calldata_load 4.i256;
+        v1.i256 = evm_calldata_load 36.i256;
+        evm_sstore v0 1.i256;
+        evm_sstore v1 2.i256;
+        v4.i256 = evm_sload v0;
+        return v4;
+}
+
+#! An overwritten store to a calldata-derived slot is dead.
+# sameln: func public %removes_overwritten_sstore_at_calldata_slot() {
+# not:         evm_sstore v1 1.i256;
+# check:       evm_sstore v1 2.i256;
+func public %removes_overwritten_sstore_at_calldata_slot() {
+    block0:
+        v0.i256 = evm_calldata_load 4.i256;
+        v1.i256 = add 7.i256 v0;
+        evm_sstore v1 1.i256;
+        evm_sstore v1 2.i256;
+        return;
+}
+
+#! A read at an offset that changes each iteration names a different slot each
+#! time: the next iteration's store does not overwrite this one.
+# sameln: func public %keeps_sstore_at_loop_variant_calldata_slot(v0.i1) {
+# check:       evm_sstore v2 1.i256;
+# check:       evm_sstore v2 2.i256;
+func public %keeps_sstore_at_loop_variant_calldata_slot(v0.i1) {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v3 block2);
+        v2.i256 = evm_calldata_load v1;
+        br v0 block2 block3;
+
+    block2:
+        evm_sstore v2 1.i256;
+        v3.i256 = add v1 32.i256;
+        jump block1;
+
+    block3:
+        evm_sstore v2 2.i256;
+        return;
+}
+
+#! A slot hashed from calldata words is the same slot when hashed again.
+# sameln: func public %forwards_sload_at_hashed_calldata_slot(v0.i256) -> i256 {
+# not:         evm_sload
+# check:       return v0;
+func public %forwards_sload_at_hashed_calldata_slot(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_calldata_load 4.i256;
+        v2.i256 = evm_keccak256_words v1 3.i256;
+        evm_sstore v2 v0;
+        v3.i256 = evm_keccak256_words v1 3.i256;
+        v4.i256 = evm_sload v3;
+        return v4;
+}
+
+#! Hashes of different words may still coincide as far as forwarding knows.
+# sameln: func public %differently_hashed_slots_may_alias(v0.i256) -> i256 {
+# check:       v5.i256 = evm_sload v2;
+# check:       return v5;
+func public %differently_hashed_slots_may_alias(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_calldata_load 4.i256;
+        v2.i256 = evm_keccak256_words v1 3.i256;
+        v3.i256 = evm_keccak256_words v1 4.i256;
+        evm_sstore v2 v0;
+        evm_sstore v3 9.i256;
+        v5.i256 = evm_sload v2;
+        return v5;
+}
+
+#! Code is immutable too.
+# sameln: func public %forwards_tload_at_code_slot(v0.i256) -> i256 {
+# not:         evm_tload
+# check:       return v0;
+func public %forwards_tload_at_code_slot(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_code_load 0.i256;
+        evm_tstore v1 v0;
+        v2.i256 = evm_tload v1;
+        return v2;
+}

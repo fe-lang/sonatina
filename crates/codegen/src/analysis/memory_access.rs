@@ -6,15 +6,15 @@ use std::{
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    AccessLoc, AddressSpaceId, Function, GlobalVariableRef, I256, Immediate, InstDowncast, InstId,
-    Type, Value, ValueId,
+    AccessKind, AccessLoc, AddressSpaceId, Function, GlobalVariableRef, I256, Immediate,
+    InstDowncast, InstId, Type, Value, ValueId,
     inst::{
         arith::{Add, Sub},
         cast::{Bitcast, IntToPtr, PtrToInt},
         control_flow::Phi,
         data::{Alloca, Gep},
-        equiv::{InstClassKind, InstKeyExt},
-        evm::EvmMalloc,
+        equiv::{InstClassKind, InstKeyExt, OwnedInstKey},
+        evm::{EvmKeccak256Words, EvmMalloc},
     },
     types::CompoundType,
 };
@@ -25,8 +25,9 @@ use crate::{isa::evm::STATIC_BASE, transform::aggregate::shape};
 pub enum ValueKey {
     Imm(Immediate),
     // Exact keyed forwarding is only sound for runtime-invariant leaves. Raw SSA identities are
-    // not stable enough across loop backedges or merged control flow, so the only symbolic leaf
-    // we preserve directly is a formal argument.
+    // not stable enough across loop backedges or merged control flow: a later store to the same
+    // name in the next iteration is a store to another slot. The symbolic leaves are formal
+    // arguments and reads of immutable spaces (`KeyExpr::ImmutableRead`).
     Arg(ValueId),
     Expr(Box<KeyExpr>),
 }
@@ -53,6 +54,16 @@ pub enum KeyExpr {
         ty: Type,
         arg: ValueKey,
     },
+    /// A read of a space nothing writes, such as calldata or code, at an invariant location: it
+    /// yields the same value everywhere in a function.
+    ImmutableRead {
+        space: AddressSpaceId,
+        addr: ValueKey,
+        bytes: u32,
+        ty: Type,
+    },
+    /// `evm_keccak256_words`, a value of its words alone.
+    Keccak256Words { words: Vec<ValueKey> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -754,8 +765,59 @@ impl MemoryAccessAnalysis {
                     None
                 }
             }
-            InstClassKind::Opaque => None,
+            InstClassKind::Opaque => self.opaque_value_key(func, inst, &key, visiting),
         }
+    }
+
+    /// The key of a single-result opaque instruction whose operands determine its result within
+    /// a function: a word hash, or a must-happen exact read of an immutable space.
+    fn opaque_value_key(
+        &mut self,
+        func: &Function,
+        inst: InstId,
+        key: &OwnedInstKey,
+        visiting: &mut FxHashSet<ValueId>,
+    ) -> Option<ValueKey> {
+        if key.result_tys().len() != 1 {
+            return None;
+        }
+        if <&EvmKeccak256Words as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
+            .is_some()
+        {
+            let words = key
+                .values()
+                .iter()
+                .map(|&word| self.trackable_value_key_rec(func, word, visiting))
+                .collect::<Option<_>>()?;
+            return Some(ValueKey::Expr(Box::new(KeyExpr::Keccak256Words { words })));
+        }
+
+        let effects = func.dfg.effects(inst);
+        let [access] = effects.accesses.as_slice() else {
+            return None;
+        };
+        if !effects.other.is_empty()
+            || access.kind != AccessKind::Read
+            || !access.must_happen
+            || !func.ctx().address_spaces().desc(access.space).immutable
+        {
+            return None;
+        }
+        let (addr, bytes, ty) = match access.loc {
+            AccessLoc::LinearExact { addr, bytes, ty } => (
+                self.trackable_value_key_rec(func, addr, visiting)?,
+                bytes,
+                ty,
+            ),
+            AccessLoc::LinearExactImm { addr, bytes, ty } => (ValueKey::Imm(addr), bytes, ty),
+            _ => return None,
+        };
+        Some(ValueKey::Expr(Box::new(KeyExpr::ImmutableRead {
+            space: access.space,
+            addr,
+            bytes,
+            ty,
+        })))
     }
 
     fn const_gep_offset(&self, func: &Function, base: ValueId, indices: &[ValueId]) -> Option<i64> {
