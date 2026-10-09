@@ -7,6 +7,7 @@ pub mod checked_arith_elim;
 pub mod code_sink;
 pub mod gvn;
 pub mod insn_simplify;
+pub mod jump_thread;
 pub mod known_bits_simplify;
 pub mod licm;
 pub mod load_store;

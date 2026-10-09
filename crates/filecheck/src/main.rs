@@ -3,8 +3,9 @@ use sonatina_filecheck::{
     aggregate_scalarize::AggregateScalarizeTransform,
     branch_canonicalize::BranchCanonicalizeTransform, cfg_cleanup::CfgCleanupTransform,
     checked_arith_elim::CheckedArithElimTransform, code_sink::CodeSinkTransform, gvn::GvnTransform,
-    known_bits_simplify::KnownBitsSimplifyTransform, licm::LicmTransformer,
-    load_store::LoadStoreTransform, loop_strength_reduce::LoopStrengthReduceTransform,
+    jump_thread::JumpThreadTransform, known_bits_simplify::KnownBitsSimplifyTransform,
+    licm::LicmTransformer, load_store::LoadStoreTransform,
+    loop_strength_reduce::LoopStrengthReduceTransform,
     range_branch_simplify::RangeBranchSimplifyTransform, sccp::SccpTransform,
 };
 
@@ -31,6 +32,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(KnownBitsSimplifyTransform);
+    runner.run();
+
+    runner.attach_transformer(JumpThreadTransform);
     runner.run();
 
     runner.attach_transformer(RangeBranchSimplifyTransform::default());

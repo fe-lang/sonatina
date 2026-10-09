@@ -43,6 +43,7 @@ use super::{
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     gvn::GvnSolver,
     inliner::{Inliner, InlinerConfig},
+    jump_thread::JumpThread,
     known_bits_simplify::KnownBitsSimplify,
     licm::LicmSolver,
     load_store::LoadStoreSolver,
@@ -79,6 +80,8 @@ pub enum Pass {
     KnownBitsSimplify,
     /// Eliminate checked arithmetic and div/mod overflow flags proven unreachable by range analysis.
     CheckedArithElim,
+    /// Thread predecessors past a branch on a phi of constants.
+    JumpThread,
     /// Remove conditional branches whose truth is proven by range analysis.
     RangeBranchSimplify,
     /// Sparse conditional constant propagation (composite: CfgCleanup + SCCP + CfgCleanup + ADCE).
@@ -157,6 +160,11 @@ impl Pass {
             },
             Pass::CheckedArithElim => PassInfo {
                 name: "checked_arith_elim",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::JumpThread => PassInfo {
+                name: "jump_thread",
                 needs_func_behavior: false,
                 invalidates_func_behavior: true,
             },
@@ -288,6 +296,7 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::AggregateScalarize,
     Pass::LoadStore,
     Pass::CheckedArithElim,
+    Pass::JumpThread,
     Pass::RangeBranchSimplify,
     Pass::Sccp,
     Pass::ScalarCanonicalize,
@@ -311,6 +320,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::AggregateScalarize,
     Pass::LoadStore,
     Pass::CheckedArithElim,
+    Pass::JumpThread,
     Pass::RangeBranchSimplify,
     Pass::Sccp,
     Pass::ScalarCanonicalize,
@@ -474,6 +484,7 @@ impl Pipeline {
     ///    - `AggregateScalarize`
     ///    - `LoadStore`
     ///    - `CheckedArithElim`
+    ///    - `JumpThread`
     ///    - `RangeBranchSimplify`
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
     ///    - `ScalarCanonicalize` — local canonical forms for scalar SSA instructions
@@ -495,6 +506,7 @@ impl Pipeline {
     ///    - `AggregateScalarize`
     ///    - `LoadStore`
     ///    - `CheckedArithElim`
+    ///    - `JumpThread`
     ///    - `RangeBranchSimplify`
     ///    - `Sccp`
     ///    - `ScalarCanonicalize`
@@ -824,6 +836,10 @@ fn run_pass(
                     CheckedArithElim::new().run(func, &ctx.cfg, &ctx.domtree, &ctx.lpt)
                 }
             }
+        }
+        Pass::JumpThread => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.jump_thread").entered();
+            JumpThread::new().run(func)
         }
         Pass::RangeBranchSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.range_branch_simplify").entered();
