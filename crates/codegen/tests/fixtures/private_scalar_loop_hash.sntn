@@ -1,0 +1,33 @@
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_size;
+    v1.*i8 = evm_malloc v0;
+    v2.i256 = ptr_to_int v1 i256;
+    evm_calldata_copy v2 0.i256 v0;
+    v3.i256 = evm_udiv v0 32.i256;
+    jump block1;
+block1:
+    v4.i256 = phi (0.i256 block0) (v16 block2);
+    v5.i256 = phi (0.i256 block0) (v15 block2);
+    v6.i1 = lt v4 v3;
+    br v6 block2 block3;
+block2:
+    v7.i256 = shl 5.i256 v4;
+    v8.i256 = add v2 v7;
+    v9.i256 = mload v8 i256;
+    v10.*i8 = evm_malloc 64.i256;
+    v11.i256 = ptr_to_int v10 i256;
+    mstore v11 v9 i256;
+    v12.i256 = add v11 32.i256;
+    mstore v12 v5 i256;
+    v15.i256 = evm_keccak256 v11 64.i256;
+    v16.i256 = add v4 1.i256;
+    jump block1;
+block3:
+    mstore 0.i256 v5 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract { section runtime { entry %entry; } }

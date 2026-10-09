@@ -281,17 +281,32 @@ fn seed_object_event_metadata(function: &Function, block_order: &[BlockId]) -> O
 }
 
 impl ComputeCtx<'_, '_> {
+    fn expand_values(
+        &self,
+        values: impl IntoIterator<Item = ValueId>,
+        available: &BitSet<InstId>,
+    ) -> ExpandedAllocaRoots {
+        let mut roots = FxHashSet::default();
+        for value in values {
+            let provenance = &self.prov[value];
+            if provenance.may_reference_unknown_local() {
+                return ExpandedAllocaRoots {
+                    allocas: available.iter().collect(),
+                    hit_unknown: true,
+                };
+            }
+            roots.extend(provenance.alloca_insts().chain(provenance.malloc_insts()));
+        }
+        self.closure.expand_roots(roots, available)
+    }
+
     fn add_value_alloca_uses(
         &mut self,
         uses: &mut BitSet<LocalObjIdx>,
         value: ValueId,
         available: &BitSet<InstId>,
     ) {
-        let roots: Vec<_> = self.prov[value].alloca_insts().collect();
-        if roots.is_empty() {
-            return;
-        }
-        let expanded = self.closure.expand_roots(roots, available);
+        let expanded = self.expand_values([value], available);
         for alloca in expanded.allocas {
             if let Some(&local_idx) = self.alloca_local_by_inst.get(&alloca) {
                 uses.insert(local_idx);
@@ -597,7 +612,12 @@ pub(super) fn compute_regions_and_calls(
     block_order: &[BlockId],
     ctx: &mut ComputeCtx<'_, '_>,
 ) -> (Vec<LiveRegion>, Vec<CallSiteObjects>) {
-    let availability = if ctx.closure.unknown.is_empty() {
+    let availability = if ctx.closure.unknown.is_empty()
+        && !function
+            .dfg
+            .value_ids()
+            .any(|value| ctx.prov[value].may_reference_unknown_local())
+    {
         AllocaAvailability::default()
     } else {
         AllocaAvailability::compute(function, cfg, block_order, ctx.alloca_ids)
@@ -634,13 +654,7 @@ pub(super) fn compute_regions_and_calls(
             live_across_objs.sort_unstable_by_key(|id| id.as_u32());
 
             let mut visible_objs: FxHashSet<StackObjId> = FxHashSet::default();
-            let mut roots: FxHashSet<InstId> = FxHashSet::default();
-            for &arg in call.args() {
-                for base in ctx.prov[arg].alloca_insts() {
-                    roots.insert(base);
-                }
-            }
-            let expanded = ctx.closure.expand_roots(roots.iter().copied(), &available);
+            let expanded = ctx.expand_values(call.args().iter().copied(), &available);
             for alloca in expanded.allocas {
                 if let Some(&id) = ctx.alloca_ids.get(&alloca) {
                     visible_objs.insert(id);

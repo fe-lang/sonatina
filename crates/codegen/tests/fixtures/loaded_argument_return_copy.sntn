@@ -1,0 +1,32 @@
+target = "evm-ethereum-osaka"
+func inline(never) private %recover(v0.*i256) -> i256 {
+block0:
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+func inline(never) private %touch(v0.*i256) -> i256 {
+block0:
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+func public %entry() {
+block0:
+    v0.*[i256; 4] = alloca [i256; 4];
+    v1.*i256 = bitcast v0 *i256;
+    mstore v1 42.i256 i256;
+    v2.*i256 = alloca i256;
+    v3.i256 = ptr_to_int v1 i256;
+    mstore v2 v3 i256;
+    v9.*i256 = alloca i256;
+    evm_mcopy v9 v2 32.i256;
+    v4.i256 = call %recover v9;
+    v5.*[i256; 4] = alloca [i256; 4];
+    v6.*i256 = bitcast v5 *i256;
+    mstore v6 99.i256 i256;
+    v7.i256 = call %touch v6;
+    v8.i256 = mload v4 i256;
+    mstore 0.i256 v8 i256;
+    mstore 32.i256 v7 i256;
+    evm_return 0.i256 64.i256;
+}
+object @Contract { section runtime { entry %entry; } }

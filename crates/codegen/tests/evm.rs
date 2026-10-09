@@ -9,7 +9,7 @@ use revm::{
     interpreter::Interpreter,
     primitives::{
         AccountInfo, Address, Bytecode, Bytes, Env, ExecutionResult, HaltReason, OsakaSpec, Output,
-        TransactTo, U256,
+        TransactTo, U256, keccak256,
     },
 };
 
@@ -294,6 +294,383 @@ object @Contract {
             expected[..tail.len()].copy_from_slice(tail);
             expected[63] = 99;
             assert_eq!(actual.as_ref(), expected, "{level:?}, offset={offset}");
+        }
+    }
+}
+
+#[test]
+fn dynamic_private_buffer_extents_preserve_bytes_at_all_optimization_levels() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_size;
+    v1.*i8 = evm_malloc v0;
+    v2.i256 = ptr_to_int v1 i256;
+    evm_calldata_copy v2 0.i256 v0;
+    v3.i256 = evm_keccak256 v2 v0;
+    memzero v2 v0;
+    v4.i256 = evm_keccak256 v2 v0;
+    mstore 0.i256 v3 i256;
+    mstore 32.i256 v4 i256;
+    evm_return 0.i256 64.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for (source, echo) in [
+        (source, false),
+        (
+            include_str!("../test_files/evm/dynamic_terminal_payload_return_data.sntn"),
+            true,
+        ),
+    ] {
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            let module = parse_sona(source).module;
+            verify_module_or_panic(&module, &config);
+            let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+            verify_module_or_panic(compiler.optimize(), &config);
+            let artifacts = compiler.compile().expect("dynamic buffer should compile");
+            let runtime = artifacts[0]
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for len in [0, 1, 31, 32, 33, 63, 64, 65, 96, 257] {
+                let calldata: Vec<_> = (0..len).map(|index| (index % 251) as u8).collect();
+                let expected = if echo {
+                    calldata.clone()
+                } else {
+                    [keccak256(&calldata), keccak256(vec![0; len])]
+                        .into_iter()
+                        .flat_map(|hash| hash.0)
+                        .collect()
+                };
+                let result = harness.call(&calldata);
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("{level:?}, len={len}, echo={echo}: {result:?}");
+                };
+                assert_eq!(
+                    actual.as_ref(),
+                    expected,
+                    "{level:?}, len={len}, echo={echo}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn private_scalar_loop_hash_preserves_data_at_all_optimization_levels() {
+    let source = include_str!("fixtures/private_scalar_loop_hash.sntn");
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(source).module;
+        verify_module_or_panic(&module, &config);
+        let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        verify_module_or_panic(compiler.optimize(), &config);
+        let artifacts = compiler.compile().expect("scalar loop should compile");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for len in [0_usize, 1, 2, 8, 16, 32, 64] {
+            for pointer_shaped in [false, true] {
+                let calldata: Vec<_> = (0..len)
+                    .flat_map(|index| {
+                        if pointer_shaped {
+                            IrU256::from(96 + 32 * index).to_big_endian()
+                        } else {
+                            keccak256(index.to_be_bytes()).0
+                        }
+                    })
+                    .collect();
+                let expected = calldata
+                    .as_chunks::<32>()
+                    .0
+                    .iter()
+                    .fold([0; 32], |hash, word| {
+                        keccak256([word.as_slice(), &hash].concat()).0
+                    });
+                let result = harness.call(&calldata);
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("{level:?}, len={len}, pointer_shaped={pointer_shaped}: {result:?}");
+                };
+                assert_eq!(
+                    actual.as_ref(),
+                    expected,
+                    "{level:?}, len={len}, pointer_shaped={pointer_shaped}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn loaded_argument_return_preserves_local_lifetime() {
+    let cases = [
+        (
+            "direct",
+            include_str!("fixtures/loaded_argument_return.sntn"),
+        ),
+        (
+            "typed",
+            include_str!("fixtures/loaded_argument_return_typed.sntn"),
+        ),
+        (
+            "encoded_arg",
+            include_str!("fixtures/loaded_argument_return_encoded_arg.sntn"),
+        ),
+        (
+            "wrapper",
+            include_str!("fixtures/loaded_argument_return_wrapper.sntn"),
+        ),
+        (
+            "nested",
+            include_str!("fixtures/loaded_argument_return_nested.sntn"),
+        ),
+        (
+            "copy",
+            include_str!("fixtures/loaded_argument_return_copy.sntn"),
+        ),
+        (
+            "outparam",
+            include_str!("fixtures/loaded_argument_return_outparam.sntn"),
+        ),
+        (
+            "nested_outparam",
+            include_str!("fixtures/loaded_argument_return_nested_outparam.sntn"),
+        ),
+        (
+            "recursive",
+            include_str!("fixtures/loaded_argument_return_recursive.sntn"),
+        ),
+        (
+            "cycle",
+            include_str!("fixtures/loaded_argument_return_cycle.sntn"),
+        ),
+        (
+            "offset",
+            include_str!("fixtures/loaded_argument_return_offset.sntn"),
+        ),
+        (
+            "offset_outparam",
+            include_str!("fixtures/loaded_argument_return_offset_outparam.sntn"),
+        ),
+        (
+            "offset_wrapper",
+            include_str!("fixtures/loaded_argument_return_offset_wrapper.sntn"),
+        ),
+        (
+            "raw_load",
+            include_str!("fixtures/loaded_argument_return_raw_load.sntn"),
+        ),
+        (
+            "raw_store",
+            include_str!("fixtures/loaded_argument_return_raw_store.sntn"),
+        ),
+        (
+            "raw_both",
+            include_str!("fixtures/loaded_argument_return_raw_both.sntn"),
+        ),
+        (
+            "heap_roundtrip",
+            include_str!("fixtures/loaded_argument_return_heap_roundtrip.sntn"),
+        ),
+        (
+            "external_roundtrip",
+            include_str!("fixtures/loaded_argument_return_external_roundtrip.sntn"),
+        ),
+        (
+            "external_heap",
+            include_str!("fixtures/loaded_argument_return_external_heap.sntn"),
+        ),
+        (
+            "heap_children",
+            include_str!("fixtures/loaded_argument_return_heap_children.sntn"),
+        ),
+        (
+            "local_children",
+            include_str!("fixtures/loaded_argument_return_local_children.sntn"),
+        ),
+        (
+            "mixed_heap",
+            include_str!("fixtures/loaded_argument_return_mixed_heap.sntn"),
+        ),
+        (
+            "mixed_heap_phi",
+            include_str!("fixtures/loaded_argument_return_mixed_heap_phi.sntn"),
+        ),
+        (
+            "wide",
+            include_str!("fixtures/loaded_argument_return_wide.sntn"),
+        ),
+        (
+            "wide_copy",
+            include_str!("fixtures/loaded_argument_return_wide_copy.sntn"),
+        ),
+    ];
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for (case, source) in cases {
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            eprintln!("loaded return: {case}, {level:?}");
+            let module = parse_sona(source).module;
+            verify_module_or_panic(&module, &config);
+            let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+            verify_module_or_panic(compiler.optimize(), &config);
+            let artifacts = compiler.compile().expect("loaded return program compiles");
+            let runtime = artifacts[0]
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            let result = harness.call(&[]);
+            let ExecutionResult::Success {
+                output: Output::Call(actual),
+                ..
+            } = result
+            else {
+                panic!("{case}, {level:?}: {result:?}");
+            };
+            let expected = [IrU256::from(42), IrU256::from(99)]
+                .into_iter()
+                .flat_map(|word| word.to_big_endian())
+                .collect::<Vec<_>>();
+            assert_eq!(actual.as_ref(), expected, "{case}, {level:?}");
+        }
+    }
+}
+
+#[test]
+fn callee_heap_returns_preserve_heap_and_borrowed_values_across_calls() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+func inline(never) private %allocate(v0.i256) -> i256 {
+block0:
+    v1.*i256 = evm_malloc 32.i256;
+    mstore v1 v0 i256;
+    v2.i256 = ptr_to_int v1 i256;
+    return v2;
+}
+func inline(never) private %forward(v0.i256) -> i256 {
+block0:
+    v1.i256 = call %allocate v0;
+    return v1;
+}
+func inline(never) private %choose(v0.*i256, v1.i256, v2.i1) -> i256 {
+block0:
+    br v2 block1 block2;
+block1:
+    v3.i256 = call %forward v1;
+    return v3;
+block2:
+    v4.i256 = ptr_to_int v0 i256;
+    return v4;
+}
+func inline(never) private %touch(v0.*i256) -> i256 {
+block0:
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+func inline(never) private %clobber(v0.i256) -> i256 {
+block0:
+    v1.*[i256; 8] = alloca [i256; 8];
+    v2.*i256 = bitcast v1 *i256;
+    mstore v2 v0 i256;
+    v3.i256 = call %touch v2;
+    v4.i256 = call %allocate v3;
+    v5.i256 = mload v4 i256;
+    return v5;
+}
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    v2.i1 = eq v1 1.i256;
+    v3.*[i256; 4] = alloca [i256; 4];
+    v4.*i256 = bitcast v3 *i256;
+    mstore v4 17.i256 i256;
+    v5.i256 = call %touch v4;
+    v6.*i256 = alloca i256;
+    v7.i256 = xor v0 255.i256;
+    mstore v6 v7 i256;
+    v8.i256 = call %choose v6 v0 v2;
+    v9.*i256 = alloca i256;
+    mstore v9 v8 i256;
+    v10.i256 = call %clobber 99.i256;
+    v11.i256 = call %touch v9;
+    v12.i256 = mload v11 i256;
+    v13.i256 = call %forward 101.i256;
+    v14.i256 = mload v13 i256;
+    v15.i256 = mload v11 i256;
+    mstore 0.i256 v5 i256;
+    mstore 32.i256 v10 i256;
+    mstore 64.i256 v12 i256;
+    mstore 96.i256 v14 i256;
+    mstore 128.i256 v15 i256;
+    evm_return 0.i256 160.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(source).module;
+        verify_module_or_panic(&module, &config);
+        let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        verify_module_or_panic(compiler.optimize(), &config);
+        let artifacts = compiler.compile().expect("heap-return program compiles");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for seed in [
+            IrU256::zero(),
+            IrU256::from(19),
+            IrU256::one() << 255,
+            IrU256::MAX,
+        ] {
+            for flag in [0u64, 1] {
+                let mut input = seed.to_big_endian().to_vec();
+                input.extend_from_slice(&IrU256::from(flag).to_big_endian());
+                let result = harness.call(&input);
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("{level:?}, {seed}, {flag}: {result:?}");
+                };
+                let value = if flag == 1 {
+                    seed
+                } else {
+                    seed ^ IrU256::from(255)
+                };
+                let expected = [
+                    IrU256::from(17),
+                    IrU256::from(99),
+                    value,
+                    IrU256::from(101),
+                    value,
+                ]
+                .into_iter()
+                .flat_map(|value| value.to_big_endian())
+                .collect::<Vec<_>>();
+                assert_eq!(actual.as_ref(), expected, "{level:?}, {seed}, {flag}");
+            }
         }
     }
 }

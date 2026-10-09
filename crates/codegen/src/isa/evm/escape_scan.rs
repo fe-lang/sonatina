@@ -1,6 +1,4 @@
-use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     Function, InstId, InstSetExt, ValueId,
     inst::evm::inst_set::EvmInstKind,
@@ -8,7 +6,10 @@ use sonatina_ir::{
     module::{FuncRef, ModuleCtx},
 };
 
-use super::{ptr_escape::PtrEscapeSummary, ptr_provenance::Provenance};
+use super::{
+    ptr_escape::PtrEscapeSummary,
+    ptr_provenance::{Provenance, ProvenanceInfo, memory_store},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PtrWriteKind {
@@ -16,20 +17,13 @@ pub(crate) enum PtrWriteKind {
     Copy,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum PtrTransferSource<'a> {
+#[derive(Clone, Debug)]
+pub(crate) enum PtrTransferSource {
     Value(ValueId),
-    LocalMem {
-        addr: ValueId,
-        stored: &'a Provenance,
-    },
-    ArgMem {
-        stored: &'a Provenance,
-    },
-    UnknownCopy,
+    Memory { addr: ValueId, stored: Provenance },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum PtrTransferEvent<'a> {
     Return {
         ret_idx: usize,
@@ -37,21 +31,21 @@ pub(crate) enum PtrTransferEvent<'a> {
     },
     Write {
         kind: PtrWriteKind,
-        dest: ValueId,
         dest_prov: &'a Provenance,
-        source: PtrTransferSource<'a>,
+        source: PtrTransferSource,
     },
     CallArgEscape {
         callee: FuncRef,
         arg_index: usize,
         value: ValueId,
+        stored: Provenance,
     },
     CallArgStore {
         callee: FuncRef,
         arg_index: usize,
         value: ValueId,
-        dest: ValueId,
-        dest_prov: &'a Provenance,
+        stored: Provenance,
+        dest_prov: Provenance,
     },
 }
 
@@ -63,58 +57,126 @@ pub(crate) enum EscapeSink {
     CallArg { callee: FuncRef, arg_index: usize },
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum EscapeSource<'a> {
+#[derive(Clone, Debug)]
+pub(crate) enum EscapeSource {
     Value(ValueId),
-    LocalMem {
-        addr: ValueId,
-        stored: &'a Provenance,
-    },
-    UnknownCopy,
+    Memory { addr: ValueId, stored: Provenance },
+    CallArgument { value: ValueId, stored: Provenance },
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct EscapeEvent<'a> {
+#[derive(Clone, Debug)]
+pub(crate) struct EscapeEvent {
     pub(crate) sink: EscapeSink,
-    pub(crate) source: EscapeSource<'a>,
+    pub(crate) source: EscapeSource,
 }
 
-#[derive(Clone, Copy)]
 pub(crate) struct EscapeScanCtx<'a> {
     pub(crate) module: &'a ModuleCtx,
     pub(crate) isa: &'a Evm,
     pub(crate) ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
-    pub(crate) prov: &'a SecondaryMap<ValueId, Provenance>,
-    pub(crate) local_mem: &'a FxHashMap<InstId, Provenance>,
-    pub(crate) arg_mem: &'a [Provenance],
+    pub(crate) prov_info: &'a ProvenanceInfo,
+    pub(crate) escaping_mallocs: FxHashSet<InstId>,
+}
+
+impl<'a> EscapeScanCtx<'a> {
+    pub(crate) fn new(
+        function: &Function,
+        module: &'a ModuleCtx,
+        isa: &'a Evm,
+        ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+        prov_info: &'a ProvenanceInfo,
+    ) -> Self {
+        let mut ctx = Self {
+            module,
+            isa,
+            ptr_escape,
+            prov_info,
+            escaping_mallocs: FxHashSet::default(),
+        };
+        let mut roots = Provenance::default();
+        for inst in function.layout.iter_all_insts() {
+            for_each_ptr_transfer_at_inst(function, inst, &ctx, |event| {
+                let (stored, dest) = match &event {
+                    PtrTransferEvent::Return { value, .. } => (&prov_info.value[*value], None),
+                    PtrTransferEvent::CallArgEscape { stored, .. } => (stored, None),
+                    PtrTransferEvent::Write {
+                        dest_prov, source, ..
+                    } => {
+                        let stored = match source {
+                            PtrTransferSource::Value(value) => &prov_info.value[*value],
+                            PtrTransferSource::Memory { stored, .. } => stored,
+                        };
+                        (stored, Some(*dest_prov))
+                    }
+                    PtrTransferEvent::CallArgStore {
+                        stored, dest_prov, ..
+                    } => (stored, Some(dest_prov)),
+                };
+                if dest.is_none_or(|dest| {
+                    dest.has_any_arg() || dest.may_be_nonlocal_nonarg_without_malloc()
+                }) {
+                    roots.union_with(stored);
+                }
+            });
+        }
+        let reachable = prov_info.reachable_memory(&roots);
+        ctx.escaping_mallocs.extend(reachable.malloc_insts());
+        if reachable.is_unknown_ptr() {
+            // An unknown escaped address can name any allocation in this
+            // function, including a container holding an argument pointer.
+            ctx.escaping_mallocs
+                .extend(function.layout.iter_all_insts().filter(|&inst| {
+                    matches!(
+                        isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                        EvmInstKind::EvmMalloc(_)
+                    )
+                }));
+        }
+        ctx
+    }
+
+    fn is_local_destination(&self, dest: &Provenance) -> bool {
+        !dest.has_any_arg()
+            && !dest.may_be_nonlocal_nonarg_without_malloc()
+            && !dest
+                .malloc_insts()
+                .any(|malloc| self.escaping_mallocs.contains(&malloc))
+    }
 }
 
 pub(crate) fn escape_source_may_be_heap_derived(
     function: &Function,
-    ctx: EscapeScanCtx<'_>,
-    source: EscapeSource<'_>,
+    ctx: &EscapeScanCtx<'_>,
+    source: &EscapeSource,
 ) -> bool {
     match source {
         EscapeSource::Value(value) => {
-            ctx.prov[value].malloc_insts().next().is_some()
-                || ctx.prov[value].is_unknown_ptr()
-                || (function.dfg.value_ty(value).is_pointer(ctx.module)
-                    && ctx.prov[value].has_no_known_bases())
+            ctx.prov_info.value[*value].malloc_insts().next().is_some()
+                || ctx.prov_info.value[*value].is_unknown_ptr()
+                || (function.dfg.value_ty(*value).is_pointer(ctx.module)
+                    && ctx.prov_info.value[*value].has_no_known_bases())
         }
-        EscapeSource::LocalMem { stored, .. } => {
+        EscapeSource::Memory { stored, .. } | EscapeSource::CallArgument { stored, .. } => {
             stored.is_unknown_ptr() || stored.malloc_insts().next().is_some()
         }
-        EscapeSource::UnknownCopy => true,
     }
 }
 
 pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
     function: &'a Function,
     inst: InstId,
-    ctx: EscapeScanCtx<'a>,
+    ctx: &EscapeScanCtx<'a>,
     mut visit: impl FnMut(PtrTransferEvent<'a>),
 ) {
     let data = ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst));
+    if let Some((dest, value, _)) = memory_store(&data, ctx.module) {
+        visit(PtrTransferEvent::Write {
+            kind: PtrWriteKind::Store,
+            dest_prov: &ctx.prov_info.value[dest],
+            source: PtrTransferSource::Value(value),
+        });
+        return;
+    }
     match data {
         EvmInstKind::Return(_) => {
             let Some(ret_args) = function.dfg.return_args(inst) else {
@@ -124,77 +186,47 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
                 visit(PtrTransferEvent::Return { ret_idx, value });
             }
         }
-        EvmInstKind::Mstore(mstore) => {
-            let dest = *mstore.addr();
-            visit(PtrTransferEvent::Write {
-                kind: PtrWriteKind::Store,
-                dest,
-                dest_prov: &ctx.prov[dest],
-                source: PtrTransferSource::Value(*mstore.value()),
-            });
-        }
-        EvmInstKind::EvmMstore8(mstore8) => {
-            let dest = *mstore8.addr();
-            visit(PtrTransferEvent::Write {
-                kind: PtrWriteKind::Store,
-                dest,
-                dest_prov: &ctx.prov[dest],
-                source: PtrTransferSource::Value(*mstore8.val()),
-            });
-        }
         EvmInstKind::EvmMcopy(mcopy) => {
             let dest = *mcopy.dest();
             let addr = *mcopy.addr();
-            let src_prov = &ctx.prov[addr];
-            for base in src_prov.alloca_insts() {
-                if let Some(stored) = ctx.local_mem.get(&base) {
-                    visit(PtrTransferEvent::Write {
-                        kind: PtrWriteKind::Copy,
-                        dest,
-                        dest_prov: &ctx.prov[dest],
-                        source: PtrTransferSource::LocalMem { addr, stored },
-                    });
-                }
+            let src_prov = &ctx.prov_info.value[addr];
+            let mut stored = ctx.prov_info.load_memory(src_prov);
+            if src_prov.has_no_known_bases() && src_prov.argument_origins().next().is_none() {
+                stored.mark_unknown_non_arg();
             }
-            for arg_index in src_prov.arg_indices() {
-                if let Some(stored) = ctx.arg_mem.get(arg_index as usize) {
-                    visit(PtrTransferEvent::Write {
-                        kind: PtrWriteKind::Copy,
-                        dest,
-                        dest_prov: &ctx.prov[dest],
-                        source: PtrTransferSource::ArgMem { stored },
-                    });
-                }
-            }
-            if !src_prov.is_local_addr() {
-                visit(PtrTransferEvent::Write {
-                    kind: PtrWriteKind::Copy,
-                    dest,
-                    dest_prov: &ctx.prov[dest],
-                    source: PtrTransferSource::UnknownCopy,
-                });
-            }
+            visit(PtrTransferEvent::Write {
+                kind: PtrWriteKind::Copy,
+                dest_prov: &ctx.prov_info.value[dest],
+                source: PtrTransferSource::Memory { addr, stored },
+            });
         }
         EvmInstKind::Call(call) => {
             let callee = *call.callee();
             let callee_sum =
                 PtrEscapeSummary::get_or_conservative(ctx.ptr_escape, ctx.module, callee);
 
-            for (arg_index, &value) in call.args().iter().enumerate() {
-                if callee_sum.arg_may_escape(arg_index) {
+            for (origin, effect) in callee_sum.argument_effects() {
+                let arg_index = origin.index as usize;
+                let Some(&value) = call.args().get(arg_index) else {
+                    continue;
+                };
+                let stored = ctx.prov_info.resolve_argument(call.args(), origin);
+                if effect.stores.may_store_nonlocal() {
                     visit(PtrTransferEvent::CallArgEscape {
                         callee,
                         arg_index,
                         value,
+                        stored: stored.clone(),
                     });
                 }
-                for dest in callee_sum.call_arg_store_dest_args(arg_index, call.args()) {
+                for &dest in &effect.arg_store_targets {
+                    let dest_prov = ctx.prov_info.resolve_argument(call.args(), dest);
                     visit(PtrTransferEvent::CallArgStore {
                         callee,
                         arg_index,
                         value,
-                        dest,
-                        dest_prov: &ctx.prov[dest],
+                        stored: stored.clone(),
+                        dest_prov,
                     });
                 }
             }
@@ -206,10 +238,9 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
 pub(crate) fn for_each_escape_event_at_inst<'a>(
     function: &'a Function,
     inst: InstId,
-    ctx: EscapeScanCtx<'a>,
-    mut visit: impl FnMut(EscapeEvent<'a>),
+    ctx: &EscapeScanCtx<'a>,
+    mut visit: impl FnMut(EscapeEvent),
 ) {
-    let mut call_arg_escapes: SmallVec<[(FuncRef, usize, ValueId); 4]> = SmallVec::new();
     for_each_ptr_transfer_at_inst(function, inst, ctx, |event| match event {
         PtrTransferEvent::Return { value, .. } => visit(EscapeEvent {
             sink: EscapeSink::Return,
@@ -221,7 +252,7 @@ pub(crate) fn for_each_escape_event_at_inst<'a>(
             source,
             ..
         } => {
-            if dest_prov.is_local_addr() {
+            if ctx.is_local_destination(dest_prov) {
                 return;
             }
 
@@ -230,19 +261,12 @@ pub(crate) fn for_each_escape_event_at_inst<'a>(
                     sink: EscapeSink::NonLocalStore,
                     source: EscapeSource::Value(value),
                 }),
-                (PtrWriteKind::Copy, PtrTransferSource::LocalMem { addr, stored }) => {
+                (PtrWriteKind::Copy, PtrTransferSource::Memory { addr, stored }) => {
                     visit(EscapeEvent {
                         sink: EscapeSink::NonLocalCopy,
-                        source: EscapeSource::LocalMem { addr, stored },
+                        source: EscapeSource::Memory { addr, stored },
                     })
                 }
-                (
-                    PtrWriteKind::Copy,
-                    PtrTransferSource::ArgMem { .. } | PtrTransferSource::UnknownCopy,
-                ) => visit(EscapeEvent {
-                    sink: EscapeSink::NonLocalCopy,
-                    source: EscapeSource::UnknownCopy,
-                }),
                 (PtrWriteKind::Copy, PtrTransferSource::Value(_)) => {
                     unreachable!("copies do not emit direct-value sources")
                 }
@@ -253,29 +277,26 @@ pub(crate) fn for_each_escape_event_at_inst<'a>(
             callee,
             arg_index,
             value,
+            stored,
         } => {
-            if !call_arg_escapes.contains(&(callee, arg_index, value)) {
-                call_arg_escapes.push((callee, arg_index, value));
-            }
+            visit(EscapeEvent {
+                sink: EscapeSink::CallArg { callee, arg_index },
+                source: EscapeSource::CallArgument { value, stored },
+            });
         }
         PtrTransferEvent::CallArgStore {
             callee,
             arg_index,
             value,
+            stored,
             dest_prov,
-            ..
         } => {
-            if (dest_prov.has_any_arg() || dest_prov.may_be_nonlocal_nonarg())
-                && !call_arg_escapes.contains(&(callee, arg_index, value))
-            {
-                call_arg_escapes.push((callee, arg_index, value));
+            if !ctx.is_local_destination(&dest_prov) {
+                visit(EscapeEvent {
+                    sink: EscapeSink::CallArg { callee, arg_index },
+                    source: EscapeSource::CallArgument { value, stored },
+                });
             }
         }
     });
-    for (callee, arg_index, value) in call_arg_escapes {
-        visit(EscapeEvent {
-            sink: EscapeSink::CallArg { callee, arg_index },
-            source: EscapeSource::Value(value),
-        });
-    }
 }
