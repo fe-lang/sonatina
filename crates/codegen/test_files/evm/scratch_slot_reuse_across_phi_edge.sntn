@@ -1,0 +1,58 @@
+#! evm.config: { stack_reach: 2 }
+#! evm.case: zero
+#!   calldata: u256(0)
+#!   expect: return u256(154658)
+#! evm.case: one
+#!   calldata: u256(1)
+#!   expect: return u256(807058)
+#! evm.case: three
+#!   calldata: u256(3)
+#!   expect: return u256(5814462)
+
+# With a reach of 2, the loop values spill. `v11 = add v1 26` is the last use of
+# phi `v1` in block2, so `v1`'s scratch slot is released just as `v11` spills.
+# `v11` must not take it: the backedge stores the next `v1` into that slot
+# before it reads `v11` for phi `v4`.
+
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (1.i256 block0) (v8 block2);
+    v4.i256 = phi (4.i256 block0) (v11 block2);
+    v3.i256 = phi (3.i256 block0) (v10 block2);
+    v2.i256 = phi (2.i256 block0) (v9 block2);
+    v5.i256 = phi (0.i256 block0) (v6 block2);
+    v7.i1 = lt v5 v0;
+    br v7 block2 block3;
+
+block2:
+    v9.i256 = add v3 19.i256;
+    v10.i256 = add v2 14.i256;
+    v8.i256 = add v3 2.i256;
+    v11.i256 = add v1 26.i256;
+    v6.i256 = add v5 1.i256;
+    jump block1;
+
+block3:
+    v12.i256 = mul v1 53.i256;
+    v13.i256 = add v12 v2;
+    v14.i256 = mul v13 53.i256;
+    v15.i256 = add v14 v3;
+    v16.i256 = mul v15 53.i256;
+    v17.i256 = add v16 v4;
+    return v17;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = call %f v0;
+    mstore 0.i256 v1 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract { section runtime { entry %entry; } }
