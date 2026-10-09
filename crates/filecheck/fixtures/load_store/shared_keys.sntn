@@ -1,0 +1,153 @@
+#! Keys share the expressions the IR shares: a chain of hashes or arithmetic
+#! whose every step uses its predecessor twice stays linear in size, so these
+#! slots are keyed, and their loads forwarded, without blowing up.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %forwards_sload_at_deeply_shared_hash_slot(v0.i256) -> i256 {
+# not:         evm_sload
+# check:       return 42.i256;
+func public %forwards_sload_at_deeply_shared_hash_slot(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_keccak256_words v0 v0;
+        v2.i256 = evm_keccak256_words v1 v1;
+        v3.i256 = evm_keccak256_words v2 v2;
+        v4.i256 = evm_keccak256_words v3 v3;
+        v5.i256 = evm_keccak256_words v4 v4;
+        v6.i256 = evm_keccak256_words v5 v5;
+        v7.i256 = evm_keccak256_words v6 v6;
+        v8.i256 = evm_keccak256_words v7 v7;
+        v9.i256 = evm_keccak256_words v8 v8;
+        v10.i256 = evm_keccak256_words v9 v9;
+        v11.i256 = evm_keccak256_words v10 v10;
+        v12.i256 = evm_keccak256_words v11 v11;
+        v13.i256 = evm_keccak256_words v12 v12;
+        v14.i256 = evm_keccak256_words v13 v13;
+        v15.i256 = evm_keccak256_words v14 v14;
+        v16.i256 = evm_keccak256_words v15 v15;
+        v17.i256 = evm_keccak256_words v16 v16;
+        v18.i256 = evm_keccak256_words v17 v17;
+        v19.i256 = evm_keccak256_words v18 v18;
+        v20.i256 = evm_keccak256_words v19 v19;
+        v21.i256 = evm_keccak256_words v20 v20;
+        v22.i256 = evm_keccak256_words v21 v21;
+        v23.i256 = evm_keccak256_words v22 v22;
+        v24.i256 = evm_keccak256_words v23 v23;
+        v25.i256 = evm_keccak256_words v24 v24;
+        v26.i256 = evm_keccak256_words v25 v25;
+        v27.i256 = evm_keccak256_words v26 v26;
+        v28.i256 = evm_keccak256_words v27 v27;
+        v29.i256 = evm_keccak256_words v28 v28;
+        v30.i256 = evm_keccak256_words v29 v29;
+        v31.i256 = evm_keccak256_words v30 v30;
+        v32.i256 = evm_keccak256_words v31 v31;
+        v33.i256 = evm_keccak256_words v32 v32;
+        v34.i256 = evm_keccak256_words v33 v33;
+        v35.i256 = evm_keccak256_words v34 v34;
+        v36.i256 = evm_keccak256_words v35 v35;
+        v37.i256 = evm_keccak256_words v36 v36;
+        v38.i256 = evm_keccak256_words v37 v37;
+        v39.i256 = evm_keccak256_words v38 v38;
+        v40.i256 = evm_keccak256_words v39 v39;
+        v41.i256 = evm_keccak256_words v40 v40;
+        v42.i256 = evm_keccak256_words v41 v41;
+        v43.i256 = evm_keccak256_words v42 v42;
+        v44.i256 = evm_keccak256_words v43 v43;
+        v45.i256 = evm_keccak256_words v44 v44;
+        v46.i256 = evm_keccak256_words v45 v45;
+        v47.i256 = evm_keccak256_words v46 v46;
+        v48.i256 = evm_keccak256_words v47 v47;
+        v49.i256 = evm_keccak256_words v48 v48;
+        v50.i256 = evm_keccak256_words v49 v49;
+        v51.i256 = evm_keccak256_words v50 v50;
+        v52.i256 = evm_keccak256_words v51 v51;
+        v53.i256 = evm_keccak256_words v52 v52;
+        v54.i256 = evm_keccak256_words v53 v53;
+        v55.i256 = evm_keccak256_words v54 v54;
+        v56.i256 = evm_keccak256_words v55 v55;
+        v57.i256 = evm_keccak256_words v56 v56;
+        v58.i256 = evm_keccak256_words v57 v57;
+        v59.i256 = evm_keccak256_words v58 v58;
+        v60.i256 = evm_keccak256_words v59 v59;
+        v61.i256 = evm_keccak256_words v60 v60;
+        v62.i256 = evm_keccak256_words v61 v61;
+        v63.i256 = evm_keccak256_words v62 v62;
+        v64.i256 = evm_keccak256_words v63 v63;
+        evm_sstore v64 42.i256;
+        v65.i256 = evm_sload v64;
+        return v65;
+}
+
+# sameln: func public %forwards_sload_at_deeply_shared_arith_slot(v0.i256, v1.i256) -> i256 {
+# not:         evm_sload
+# check:       return 42.i256;
+func public %forwards_sload_at_deeply_shared_arith_slot(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = xor v1 v0;
+        v3.i256 = add v2 v1;
+        v4.i256 = xor v3 v2;
+        v5.i256 = add v4 v3;
+        v6.i256 = xor v5 v4;
+        v7.i256 = add v6 v5;
+        v8.i256 = xor v7 v6;
+        v9.i256 = add v8 v7;
+        v10.i256 = xor v9 v8;
+        v11.i256 = add v10 v9;
+        v12.i256 = xor v11 v10;
+        v13.i256 = add v12 v11;
+        v14.i256 = xor v13 v12;
+        v15.i256 = add v14 v13;
+        v16.i256 = xor v15 v14;
+        v17.i256 = add v16 v15;
+        v18.i256 = xor v17 v16;
+        v19.i256 = add v18 v17;
+        v20.i256 = xor v19 v18;
+        v21.i256 = add v20 v19;
+        v22.i256 = xor v21 v20;
+        v23.i256 = add v22 v21;
+        v24.i256 = xor v23 v22;
+        v25.i256 = add v24 v23;
+        v26.i256 = xor v25 v24;
+        v27.i256 = add v26 v25;
+        v28.i256 = xor v27 v26;
+        v29.i256 = add v28 v27;
+        v30.i256 = xor v29 v28;
+        v31.i256 = add v30 v29;
+        v32.i256 = xor v31 v30;
+        v33.i256 = add v32 v31;
+        v34.i256 = xor v33 v32;
+        v35.i256 = add v34 v33;
+        v36.i256 = xor v35 v34;
+        v37.i256 = add v36 v35;
+        v38.i256 = xor v37 v36;
+        v39.i256 = add v38 v37;
+        v40.i256 = xor v39 v38;
+        v41.i256 = add v40 v39;
+        v42.i256 = xor v41 v40;
+        v43.i256 = add v42 v41;
+        v44.i256 = xor v43 v42;
+        v45.i256 = add v44 v43;
+        v46.i256 = xor v45 v44;
+        v47.i256 = add v46 v45;
+        v48.i256 = xor v47 v46;
+        v49.i256 = add v48 v47;
+        v50.i256 = xor v49 v48;
+        v51.i256 = add v50 v49;
+        v52.i256 = xor v51 v50;
+        v53.i256 = add v52 v51;
+        v54.i256 = xor v53 v52;
+        v55.i256 = add v54 v53;
+        v56.i256 = xor v55 v54;
+        v57.i256 = add v56 v55;
+        v58.i256 = xor v57 v56;
+        v59.i256 = add v58 v57;
+        v60.i256 = xor v59 v58;
+        v61.i256 = add v60 v59;
+        v62.i256 = xor v61 v60;
+        v63.i256 = add v62 v61;
+        v64.i256 = xor v63 v62;
+        v65.i256 = add v64 v63;
+        evm_sstore v65 42.i256;
+        v66.i256 = evm_sload v65;
+        return v66;
+}

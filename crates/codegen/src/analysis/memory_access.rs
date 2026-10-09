@@ -1,9 +1,6 @@
-use std::{
-    hash::{Hash, Hasher},
-    ops::ControlFlow,
-};
+use std::ops::ControlFlow;
 
-use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
     AccessKind, AccessLoc, AddressSpaceId, Function, GlobalVariableRef, I256, Immediate,
@@ -21,19 +18,20 @@ use sonatina_ir::{
 
 use crate::{isa::evm::STATIC_BASE, transform::aggregate::shape};
 
+/// A key: a handle to a node interned by `MemoryAccessAnalysis`. Structurally equal keys are
+/// one handle, so a key is copied, hashed and compared in constant time, and an expression the
+/// IR shares is stored once however often it is used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ValueKey(u32);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ValueKey {
+pub enum KeyNode {
     Imm(Immediate),
     // Exact keyed forwarding is only sound for runtime-invariant leaves. Raw SSA identities are
     // not stable enough across loop backedges or merged control flow: a later store to the same
     // name in the next iteration is a store to another slot. The symbolic leaves are formal
-    // arguments and reads of immutable spaces (`KeyExpr::ImmutableRead`).
+    // arguments and reads of immutable spaces (`KeyNode::ImmutableRead`).
     Arg(ValueId),
-    Expr(Box<KeyExpr>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum KeyExpr {
     Unary {
         opcode: &'static str,
         result_idx: u16,
@@ -63,7 +61,9 @@ pub enum KeyExpr {
         ty: Type,
     },
     /// `evm_keccak256_words`, a value of its words alone.
-    Keccak256Words { words: Vec<ValueKey> },
+    Keccak256Words {
+        words: SmallVec<[ValueKey; 2]>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -151,6 +151,8 @@ enum AddrFrame {
 pub struct MemoryAccessAnalysis {
     canonical_addrs: FxHashMap<ValueId, CanonicalAddr>,
     value_keys: FxHashMap<ValueId, Option<ValueKey>>,
+    key_nodes: Vec<KeyNode>,
+    key_ids: FxHashMap<KeyNode, ValueKey>,
 }
 
 impl MemoryAccessAnalysis {
@@ -158,12 +160,55 @@ impl MemoryAccessAnalysis {
         Self {
             canonical_addrs: FxHashMap::default(),
             value_keys: FxHashMap::default(),
+            key_nodes: Vec::new(),
+            key_ids: FxHashMap::default(),
         }
     }
 
+    /// Forgets what values map to, which an IR rewrite can change. Interned keys stay: the
+    /// dataflow states of a pass hold them across rewrites.
     pub fn clear(&mut self) {
         self.canonical_addrs.clear();
         self.value_keys.clear();
+    }
+
+    pub fn key_node(&self, key: ValueKey) -> &KeyNode {
+        &self.key_nodes[key.0 as usize]
+    }
+
+    /// Whether every argument `key` is built from still exists.
+    pub fn key_is_live(&self, func: &Function, key: ValueKey) -> bool {
+        let mut stack = vec![key];
+        let mut seen = FxHashSet::default();
+        while let Some(key) = stack.pop() {
+            if !seen.insert(key) {
+                continue;
+            }
+            match self.key_node(key) {
+                KeyNode::Imm(_) => {}
+                KeyNode::Arg(value) => {
+                    if !func.dfg.has_value(*value) {
+                        return false;
+                    }
+                }
+                KeyNode::Unary { arg, .. }
+                | KeyNode::Cast { arg, .. }
+                | KeyNode::ImmutableRead { addr: arg, .. } => stack.push(*arg),
+                KeyNode::Binary { lhs, rhs, .. } => stack.extend([*lhs, *rhs]),
+                KeyNode::Keccak256Words { words } => stack.extend(words.iter().copied()),
+            }
+        }
+        true
+    }
+
+    fn intern(&mut self, node: KeyNode) -> ValueKey {
+        if let Some(&key) = self.key_ids.get(&node) {
+            return key;
+        }
+        let key = ValueKey(u32::try_from(self.key_nodes.len()).expect("too many keys"));
+        self.key_nodes.push(node.clone());
+        self.key_ids.insert(node, key);
+        key
     }
 
     pub fn trackable_exact_loc(
@@ -360,8 +405,8 @@ impl MemoryAccessAnalysis {
             return AliasResult::MustAlias;
         }
 
-        match (&lhs.key, &rhs.key) {
-            (ValueKey::Imm(lhs), ValueKey::Imm(rhs)) if lhs != rhs => AliasResult::NoAlias,
+        match (self.key_node(lhs.key), self.key_node(rhs.key)) {
+            (KeyNode::Imm(lhs), KeyNode::Imm(rhs)) if lhs != rhs => AliasResult::NoAlias,
             _ => AliasResult::MayAlias,
         }
     }
@@ -665,8 +710,8 @@ impl MemoryAccessAnalysis {
         value: ValueId,
         visiting: &mut FxHashSet<ValueId>,
     ) -> Option<ValueKey> {
-        if let Some(key) = self.value_keys.get(&value) {
-            return key.clone();
+        if let Some(&key) = self.value_keys.get(&value) {
+            return key;
         }
 
         if !visiting.insert(value) {
@@ -677,8 +722,8 @@ impl MemoryAccessAnalysis {
         // out of exact keyed forwarding. Structural expression equality is not enough once phi
         // nodes or loop-carried values can vary across executions.
         let key = match func.dfg.get_value(value) {
-            Some(Value::Immediate { imm, .. }) => Some(ValueKey::Imm(*imm)),
-            Some(Value::Arg { .. }) => Some(ValueKey::Arg(value)),
+            Some(Value::Immediate { imm, .. }) => Some(self.intern(KeyNode::Imm(*imm))),
+            Some(Value::Arg { .. }) => Some(self.intern(KeyNode::Arg(value))),
             Some(Value::Inst {
                 inst,
                 result_idx,
@@ -688,7 +733,7 @@ impl MemoryAccessAnalysis {
         };
 
         visiting.remove(&value);
-        self.value_keys.insert(value, key.clone());
+        self.value_keys.insert(value, key);
         key
     }
 
@@ -718,40 +763,38 @@ impl MemoryAccessAnalysis {
                 let arg = key
                     .unary_arg()
                     .and_then(|arg| self.trackable_value_key_rec(func, arg, visiting))?;
-                Some(ValueKey::Expr(Box::new(KeyExpr::Unary {
+                Some(self.intern(KeyNode::Unary {
                     opcode: key.opcode_text(),
                     result_idx,
                     ty,
                     arg,
-                })))
+                }))
             }
             InstClassKind::Binary(_) => {
                 let (lhs, rhs) = key.binary_args()?;
                 let mut lhs = self.trackable_value_key_rec(func, lhs, visiting)?;
                 let mut rhs = self.trackable_value_key_rec(func, rhs, visiting)?;
-                if key.is_commutative_binary()
-                    && value_key_fingerprint(&rhs) < value_key_fingerprint(&lhs)
-                {
+                if key.is_commutative_binary() && rhs < lhs {
                     std::mem::swap(&mut lhs, &mut rhs);
                 }
-                Some(ValueKey::Expr(Box::new(KeyExpr::Binary {
+                Some(self.intern(KeyNode::Binary {
                     opcode: key.opcode_text(),
                     result_idx,
                     ty,
                     extra_ty: key.extra_ty(),
                     lhs,
                     rhs,
-                })))
+                }))
             }
             InstClassKind::Cast(_) => {
                 let (arg, _) = key.cast_arg_ty()?;
                 let arg = self.trackable_value_key_rec(func, arg, visiting)?;
-                Some(ValueKey::Expr(Box::new(KeyExpr::Cast {
+                Some(self.intern(KeyNode::Cast {
                     opcode: key.opcode_text(),
                     result_idx,
                     ty,
                     arg,
-                })))
+                }))
             }
             InstClassKind::Phi => {
                 let phi_args = key.phi_args()?;
@@ -759,7 +802,7 @@ impl MemoryAccessAnalysis {
                     .iter()
                     .map(|(arg, _)| self.trackable_value_key_rec(func, *arg, visiting));
                 let first = args.next().flatten()?;
-                if args.all(|arg| arg.as_ref() == Some(&first)) {
+                if args.all(|arg| arg == Some(first)) {
                     Some(first)
                 } else {
                     None
@@ -789,7 +832,7 @@ impl MemoryAccessAnalysis {
                 .iter()
                 .map(|&word| self.trackable_value_key_rec(func, word, visiting))
                 .collect::<Option<_>>()?;
-            return Some(ValueKey::Expr(Box::new(KeyExpr::Keccak256Words { words })));
+            return Some(self.intern(KeyNode::Keccak256Words { words }));
         }
 
         let effects = func.dfg.effects(inst);
@@ -809,15 +852,17 @@ impl MemoryAccessAnalysis {
                 bytes,
                 ty,
             ),
-            AccessLoc::LinearExactImm { addr, bytes, ty } => (ValueKey::Imm(addr), bytes, ty),
+            AccessLoc::LinearExactImm { addr, bytes, ty } => {
+                (self.intern(KeyNode::Imm(addr)), bytes, ty)
+            }
             _ => return None,
         };
-        Some(ValueKey::Expr(Box::new(KeyExpr::ImmutableRead {
+        Some(self.intern(KeyNode::ImmutableRead {
             space: access.space,
             addr,
             bytes,
             ty,
-        })))
+        }))
     }
 
     fn const_gep_offset(&self, func: &Function, base: ValueId, indices: &[ValueId]) -> Option<i64> {
@@ -949,12 +994,6 @@ fn byte_ranges_overlap(lhs_start: i64, lhs_end: i64, rhs_start: i64, rhs_end: i6
     lhs_start < rhs_end && rhs_start < lhs_end
 }
 
-fn value_key_fingerprint(key: &ValueKey) -> u64 {
-    let mut hasher = FxHasher::default();
-    key.hash(&mut hasher);
-    hasher.finish()
-}
-
 fn immediate_i64(imm: Immediate) -> Option<i64> {
     let value = imm.as_i256();
     if value < I256::from(i64::MIN) || value > I256::from(i64::MAX) {
@@ -982,17 +1021,20 @@ mod tests {
         isa::Isa,
     };
 
-    fn single_key(func: &Function, inst: InstId) -> TrackedLocKey {
-        let mut analysis = MemoryAccessAnalysis::new();
-        let effects = func.dfg.effects(inst);
-        let access = effects.accesses.first().expect("expected one access");
-        analysis
-            .trackable_exact_loc(func, access)
-            .expect("access should be trackable")
+    /// Keys are interned: compare them only through the analysis that made them.
+    fn single_key(
+        analysis: &mut MemoryAccessAnalysis,
+        func: &Function,
+        inst: InstId,
+    ) -> TrackedLocKey {
+        maybe_single_key(analysis, func, inst).expect("access should be trackable")
     }
 
-    fn maybe_single_key(func: &Function, inst: InstId) -> Option<TrackedLocKey> {
-        let mut analysis = MemoryAccessAnalysis::new();
+    fn maybe_single_key(
+        analysis: &mut MemoryAccessAnalysis,
+        func: &Function,
+        inst: InstId,
+    ) -> Option<TrackedLocKey> {
         let effects = func.dfg.effects(inst);
         let access = effects.accesses.first().expect("expected one access");
         analysis.trackable_exact_loc(func, access)
@@ -1138,13 +1180,11 @@ mod tests {
         builder.seal_all();
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
-        let key0 = single_key(&builder.func, insts[2]);
-        let key1 = single_key(&builder.func, insts[3]);
+        let mut analysis = MemoryAccessAnalysis::new();
+        let key0 = single_key(&mut analysis, &builder.func, insts[2]);
+        let key1 = single_key(&mut analysis, &builder.func, insts[3]);
 
-        assert_eq!(
-            MemoryAccessAnalysis::new().alias(&key0, &key1),
-            AliasResult::NoAlias
-        );
+        assert_eq!(analysis.alias(&key0, &key1), AliasResult::NoAlias);
     }
 
     #[test]
@@ -1166,10 +1206,10 @@ mod tests {
         builder.seal_all();
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
-        let key0 = single_key(&builder.func, insts[0]);
-        let key1 = single_key(&builder.func, insts[1]);
-        let key2 = single_key(&builder.func, insts[2]);
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
+        let key0 = single_key(&mut analysis, &builder.func, insts[0]);
+        let key1 = single_key(&mut analysis, &builder.func, insts[1]);
+        let key2 = single_key(&mut analysis, &builder.func, insts[2]);
 
         assert_eq!(analysis.alias(&key0, &key1), AliasResult::MustAlias);
         assert_eq!(analysis.alias(&key0, &key2), AliasResult::NoAlias);
@@ -1327,13 +1367,11 @@ mod tests {
         builder.seal_all();
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
-        let key0 = single_key(&builder.func, insts[0]);
-        let key1 = single_key(&builder.func, insts[1]);
+        let mut analysis = MemoryAccessAnalysis::new();
+        let key0 = single_key(&mut analysis, &builder.func, insts[0]);
+        let key1 = single_key(&mut analysis, &builder.func, insts[1]);
 
-        assert_eq!(
-            MemoryAccessAnalysis::new().alias(&key0, &key1),
-            AliasResult::MayAlias
-        );
+        assert_eq!(analysis.alias(&key0, &key1), AliasResult::MayAlias);
     }
 
     #[test]
@@ -1355,11 +1393,12 @@ mod tests {
         builder.seal_all();
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
-        let memory_key = single_key(&builder.func, insts[1]);
-        let storage_key = single_key(&builder.func, insts[2]);
+        let mut analysis = MemoryAccessAnalysis::new();
+        let memory_key = single_key(&mut analysis, &builder.func, insts[1]);
+        let storage_key = single_key(&mut analysis, &builder.func, insts[2]);
 
         assert_eq!(
-            MemoryAccessAnalysis::new().alias(&memory_key, &storage_key),
+            analysis.alias(&memory_key, &storage_key),
             AliasResult::NoAlias
         );
     }
@@ -1382,7 +1421,8 @@ mod tests {
         builder.seal_all();
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
-        assert!(maybe_single_key(&builder.func, insts[1]).is_none());
+        let mut analysis = MemoryAccessAnalysis::new();
+        assert!(maybe_single_key(&mut analysis, &builder.func, insts[1]).is_none());
     }
 
     #[test]
@@ -1404,9 +1444,9 @@ mod tests {
         builder.seal_all();
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
-        let key0 = single_key(&builder.func, insts[1]);
-        let key1 = single_key(&builder.func, insts[2]);
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
+        let key0 = single_key(&mut analysis, &builder.func, insts[1]);
+        let key1 = single_key(&mut analysis, &builder.func, insts[2]);
 
         assert_eq!(analysis.alias(&key0, &key1), AliasResult::MustAlias);
     }
@@ -1452,7 +1492,8 @@ mod tests {
             .dfg
             .value_inst(load)
             .expect("loop load should stay defined by a load");
-        assert!(maybe_single_key(&builder.func, load_inst).is_none());
+        let mut analysis = MemoryAccessAnalysis::new();
+        assert!(maybe_single_key(&mut analysis, &builder.func, load_inst).is_none());
     }
 
     #[test]
@@ -1475,13 +1516,11 @@ mod tests {
         builder.seal_all();
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
-        let key0 = single_key(&builder.func, insts[2]);
-        let key1 = single_key(&builder.func, insts[3]);
+        let mut analysis = MemoryAccessAnalysis::new();
+        let key0 = single_key(&mut analysis, &builder.func, insts[2]);
+        let key1 = single_key(&mut analysis, &builder.func, insts[3]);
 
-        assert_eq!(
-            MemoryAccessAnalysis::new().alias(&key0, &key1),
-            AliasResult::MustAlias
-        );
+        assert_eq!(analysis.alias(&key0, &key1), AliasResult::MustAlias);
     }
 
     #[test]
@@ -1505,13 +1544,11 @@ mod tests {
         builder.seal_all();
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
-        let key0 = single_key(&builder.func, insts[2]);
-        let key1 = single_key(&builder.func, insts[3]);
+        let mut analysis = MemoryAccessAnalysis::new();
+        let key0 = single_key(&mut analysis, &builder.func, insts[2]);
+        let key1 = single_key(&mut analysis, &builder.func, insts[3]);
 
-        assert_eq!(
-            MemoryAccessAnalysis::new().alias(&key0, &key1),
-            AliasResult::MayAlias
-        );
+        assert_eq!(analysis.alias(&key0, &key1), AliasResult::MayAlias);
     }
 
     #[test]
@@ -1530,9 +1567,9 @@ mod tests {
         builder.seal_all();
 
         let inst = builder.func.layout.first_inst_of(block).expect("load");
-        let key = single_key(&builder.func, inst);
-        let zero = builder.make_imm_value(I256::from(0));
         let mut analysis = MemoryAccessAnalysis::new();
+        let key = single_key(&mut analysis, &builder.func, inst);
+        let zero = builder.make_imm_value(I256::from(0));
         let range = analysis
             .trackable_linear_range(
                 &builder.func,
@@ -1600,10 +1637,10 @@ mod tests {
         builder.seal_all();
 
         let inst = builder.func.layout.first_inst_of(block).expect("load");
-        let key = single_key(&builder.func, inst);
+        let mut analysis = MemoryAccessAnalysis::new();
+        let key = single_key(&mut analysis, &builder.func, inst);
         let range_addr = builder.make_imm_value(I256::from(0));
         let range_len = builder.make_imm_value(I256::from(32));
-        let mut analysis = MemoryAccessAnalysis::new();
         let range = analysis
             .trackable_linear_range(
                 &builder.func,
@@ -1634,9 +1671,9 @@ mod tests {
         builder.seal_all();
 
         let inst = builder.func.layout.first_inst_of(block).expect("load");
-        let key = single_key(&builder.func, inst);
-        let range_len = builder.make_imm_value(I256::from(32));
         let mut analysis = MemoryAccessAnalysis::new();
+        let key = single_key(&mut analysis, &builder.func, inst);
+        let range_len = builder.make_imm_value(I256::from(32));
         let range = analysis
             .trackable_linear_range(
                 &builder.func,
@@ -1695,9 +1732,10 @@ mod tests {
         builder.seal_all();
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
-        let malloc_key = single_key(&builder.func, insts[1]);
+        let mut analysis = MemoryAccessAnalysis::new();
+        let malloc_key = single_key(&mut analysis, &builder.func, insts[1]);
         let free_ptr = Immediate::from_i256(I256::from(64), Type::I256);
-        let absolute_key = MemoryAccessAnalysis::new()
+        let absolute_key = analysis
             .trackable_exact_loc(
                 &builder.func,
                 &exact_imm_access(
@@ -1708,7 +1746,7 @@ mod tests {
             .expect("free pointer access should be trackable");
 
         assert_eq!(
-            MemoryAccessAnalysis::new().alias(&malloc_key, &absolute_key),
+            analysis.alias(&malloc_key, &absolute_key),
             AliasResult::NoAlias
         );
     }
@@ -1735,9 +1773,10 @@ mod tests {
             .dfg
             .value_inst(load)
             .expect("load should stay defined by an instruction");
-        let alloca_key = single_key(&builder.func, load_inst);
+        let mut analysis = MemoryAccessAnalysis::new();
+        let alloca_key = single_key(&mut analysis, &builder.func, load_inst);
         let free_ptr = Immediate::from_i256(I256::from(64), Type::I256);
-        let absolute_key = MemoryAccessAnalysis::new()
+        let absolute_key = analysis
             .trackable_exact_loc(
                 &builder.func,
                 &exact_imm_access(
@@ -1748,7 +1787,7 @@ mod tests {
             .expect("free pointer access should be trackable");
 
         assert_eq!(
-            MemoryAccessAnalysis::new().alias(&alloca_key, &absolute_key),
+            analysis.alias(&alloca_key, &absolute_key),
             AliasResult::NoAlias
         );
     }
@@ -1771,9 +1810,10 @@ mod tests {
         builder.seal_all();
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
-        let malloc_key = single_key(&builder.func, insts[1]);
+        let mut analysis = MemoryAccessAnalysis::new();
+        let malloc_key = single_key(&mut analysis, &builder.func, insts[1]);
         let heap_addr = Immediate::from_i256(I256::from(STATIC_BASE), Type::I256);
-        let absolute_key = MemoryAccessAnalysis::new()
+        let absolute_key = analysis
             .trackable_exact_loc(
                 &builder.func,
                 &exact_imm_access(
@@ -1784,7 +1824,7 @@ mod tests {
             .expect("heap access should be trackable");
 
         assert_eq!(
-            MemoryAccessAnalysis::new().alias(&malloc_key, &absolute_key),
+            analysis.alias(&malloc_key, &absolute_key),
             AliasResult::MayAlias
         );
     }
@@ -1818,8 +1858,9 @@ mod tests {
             .dfg
             .value_inst(load)
             .expect("load should stay defined by an instruction");
-        let malloc_key = single_key(&builder.func, load_inst);
-        let absolute_key = MemoryAccessAnalysis::new()
+        let mut analysis = MemoryAccessAnalysis::new();
+        let malloc_key = single_key(&mut analysis, &builder.func, load_inst);
+        let absolute_key = analysis
             .trackable_exact_loc(
                 &builder.func,
                 &exact_imm_access(
@@ -1830,7 +1871,7 @@ mod tests {
             .expect("absolute meta access should be trackable");
 
         assert_eq!(
-            MemoryAccessAnalysis::new().alias(&malloc_key, &absolute_key),
+            analysis.alias(&malloc_key, &absolute_key),
             AliasResult::MayAlias
         );
     }
@@ -1864,10 +1905,10 @@ mod tests {
             .dfg
             .value_inst(load)
             .expect("load should stay defined by an instruction");
-        let TrackedLocKey::Linear(key) = single_key(&builder.func, load_inst) else {
+        let mut analysis = MemoryAccessAnalysis::new();
+        let TrackedLocKey::Linear(key) = single_key(&mut analysis, &builder.func, load_inst) else {
             panic!("expected a linear key");
         };
-        let mut analysis = MemoryAccessAnalysis::new();
         let range_addr = builder.make_imm_value(I256::from(64));
         let range_len = builder.make_imm_value(I256::from(32));
         let range = analysis
@@ -1909,10 +1950,11 @@ mod tests {
                 .dfg
                 .value_inst(load)
                 .expect("load should stay defined by an instruction");
-            let TrackedLocKey::Linear(key) = single_key(&builder.func, load_inst) else {
+            let mut analysis = MemoryAccessAnalysis::new();
+            let TrackedLocKey::Linear(key) = single_key(&mut analysis, &builder.func, load_inst)
+            else {
                 panic!("expected a linear key");
             };
-            let mut analysis = MemoryAccessAnalysis::new();
             let range_addr = builder.make_imm_value(I256::from(64));
             let range_len = builder.make_imm_value(I256::from(32));
             let range = analysis
@@ -1955,8 +1997,9 @@ mod tests {
             .dfg
             .value_inst(load)
             .expect("load should stay defined by an instruction");
-        let alloca_key = single_key(&builder.func, load_inst);
-        let absolute_key = MemoryAccessAnalysis::new()
+        let mut analysis = MemoryAccessAnalysis::new();
+        let alloca_key = single_key(&mut analysis, &builder.func, load_inst);
+        let absolute_key = analysis
             .trackable_exact_loc(
                 &builder.func,
                 &exact_imm_access(
@@ -1967,7 +2010,7 @@ mod tests {
             .expect("absolute meta access should be trackable");
 
         assert_eq!(
-            MemoryAccessAnalysis::new().alias(&alloca_key, &absolute_key),
+            analysis.alias(&alloca_key, &absolute_key),
             AliasResult::MayAlias
         );
     }
@@ -1994,10 +2037,10 @@ mod tests {
             .dfg
             .value_inst(load)
             .expect("load should stay defined by an instruction");
-        let TrackedLocKey::Linear(key) = single_key(&builder.func, load_inst) else {
+        let mut analysis = MemoryAccessAnalysis::new();
+        let TrackedLocKey::Linear(key) = single_key(&mut analysis, &builder.func, load_inst) else {
             panic!("expected a linear key");
         };
-        let mut analysis = MemoryAccessAnalysis::new();
         let range_addr = builder.make_imm_value(I256::from(64));
         let range_len = builder.make_imm_value(I256::from(32));
         let range = analysis
@@ -2033,11 +2076,11 @@ mod tests {
         builder.seal_all();
 
         let inst = builder.func.layout.first_inst_of(block).expect("load");
-        let TrackedLocKey::Linear(key) = single_key(&builder.func, inst) else {
+        let mut analysis = MemoryAccessAnalysis::new();
+        let TrackedLocKey::Linear(key) = single_key(&mut analysis, &builder.func, inst) else {
             panic!("expected a linear key");
         };
         let range_len = builder.make_imm_value(I256::from(32));
-        let mut analysis = MemoryAccessAnalysis::new();
         let range = analysis
             .trackable_linear_range(
                 &builder.func,
@@ -2071,12 +2114,12 @@ mod tests {
         builder.seal_all();
 
         let inst = builder.func.layout.first_inst_of(block).expect("load");
-        let TrackedLocKey::Linear(key) = single_key(&builder.func, inst) else {
+        let mut analysis = MemoryAccessAnalysis::new();
+        let TrackedLocKey::Linear(key) = single_key(&mut analysis, &builder.func, inst) else {
             panic!("expected a linear key");
         };
         let range_addr = builder.make_imm_value(I256::from(64));
         let range_len = builder.make_imm_value(I256::from(32));
-        let mut analysis = MemoryAccessAnalysis::new();
         let range = analysis
             .trackable_linear_range(
                 &builder.func,
@@ -2118,12 +2161,12 @@ mod tests {
         builder.seal_all();
 
         let inst = builder.func.layout.first_inst_of(block).expect("load");
-        let TrackedLocKey::Linear(key) = single_key(&builder.func, inst) else {
+        let mut analysis = MemoryAccessAnalysis::new();
+        let TrackedLocKey::Linear(key) = single_key(&mut analysis, &builder.func, inst) else {
             panic!("expected a linear key");
         };
         let range_addr = builder.make_imm_value(I256::from(64));
         let range_len = builder.make_imm_value(I256::from(32));
-        let mut analysis = MemoryAccessAnalysis::new();
         let range = analysis
             .trackable_linear_range(
                 &builder.func,
