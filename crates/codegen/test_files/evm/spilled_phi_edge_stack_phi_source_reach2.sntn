@@ -1,0 +1,46 @@
+#! evm.config: { opt: 2, stack_reach: 2 }
+#! evm.case: zero
+#!   calldata: u256(0)
+#!   expect: return u256(100000)
+#! evm.case: one
+#!   calldata: u256(1)
+#!   expect: return u256(1)
+#! evm.case: three
+#!   calldata: u256(3)
+#!   expect: return u256(2003)
+
+# On the backedge, `v2` takes the old value of `v1` while `v1` is overwritten
+# with `v3`. With a reach of 2, `v1` spills and the exact normalizer must read
+# its word before the edge stores the next iteration's `v1`.
+
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (0.i256 block0) (v3 block2);
+    v2.i256 = phi (100.i256 block0) (v1 block2);
+    v4.i1 = lt v1 v0;
+    br v4 block2 block3;
+
+block2:
+    v3.i256 = add v1 1.i256;
+    jump block1;
+
+block3:
+    v5.i256 = mul v2 1000.i256;
+    v6.i256 = add v5 v1;
+    return v6;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = call %f v0;
+    mstore 0.i256 v1 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract { section runtime { entry %entry; } }

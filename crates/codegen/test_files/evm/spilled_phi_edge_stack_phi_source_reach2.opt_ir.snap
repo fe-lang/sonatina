@@ -1,0 +1,35 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/spilled_phi_edge_stack_phi_source_reach2.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        jump block3;
+
+    block3:
+        v5.i256 = phi (0.i256 block0) (v10 block4);
+        v7.i256 = phi (100.i256 block0) (v5 block4);
+        v8.i1 = lt v5 v0;
+        br v8 block4 block5;
+
+    block4:
+        v10.i256 = add v5 1.i256;
+        jump block3;
+
+    block5:
+        v12.i256 = mul v7 1000.i256;
+        v13.i256 = add v12 v5;
+        mstore 0.i256 v13 i256;
+        evm_return 0.i256 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

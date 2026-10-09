@@ -1,0 +1,52 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/spilled_phi_edge_rotation_opt2.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        jump block3;
+
+    block3:
+        v6.i256 = phi (1.i256 block0) (v9 block4);
+        v9.i256 = phi (2.i256 block0) (v12 block4);
+        v12.i256 = phi (3.i256 block0) (v15 block4);
+        v15.i256 = phi (4.i256 block0) (v18 block4);
+        v18.i256 = phi (5.i256 block0) (v21 block4);
+        v21.i256 = phi (6.i256 block0) (v24 block4);
+        v24.i256 = phi (7.i256 block0) (v27 block4);
+        v27.i256 = phi (8.i256 block0) (v30 block4);
+        v30.i256 = phi (9.i256 block0) (v33 block4);
+        v33.i256 = phi (10.i256 block0) (v36 block4);
+        v36.i256 = phi (11.i256 block0) (v39 block4);
+        v39.i256 = phi (12.i256 block0) (v42 block4);
+        v42.i256 = phi (13.i256 block0) (v45 block4);
+        v45.i256 = phi (14.i256 block0) (v48 block4);
+        v48.i256 = phi (15.i256 block0) (v51 block4);
+        v51.i256 = phi (16.i256 block0) (v54 block4);
+        v54.i256 = phi (17.i256 block0) (v57 block4);
+        v57.i256 = phi (18.i256 block0) (v60 block4);
+        v60.i256 = phi (19.i256 block0) (v62 block4);
+        v62.i256 = phi (20.i256 block0) (v6 block4);
+        v64.i256 = phi (0.i256 block0) (v66 block4);
+        v65.i1 = lt v64 v0;
+        br v65 block4 block1;
+
+    block4:
+        v66.i256 = add v64 1.i256;
+        jump block3;
+
+    block1:
+        mstore 0.i256 v62 i256;
+        evm_return 0.i256 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
