@@ -1,0 +1,112 @@
+#! evm.case: boxed_mallocs
+#!   calldata: u256(0)
+#!   expect: return u256(111)
+#! evm.case: boxed_allocas
+#!   calldata: u256(1)
+#!   expect: return u256(111)
+#! evm.case: boxed_alloca
+#!   calldata: u256(2)
+#!   expect: return u256(111)
+#! evm.case: forwarded_allocas
+#!   calldata: u256(3)
+#!   expect: return u256(111)
+
+# `black_box` returns its operand, so a boxed address keeps its allocation
+# live and distinct from later allocations.
+target = "evm-ethereum-osaka"
+
+func private %boxed_mallocs() -> i256 {
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = black_box v1;
+    mstore v2 111.i256 i256;
+    v3.*i256 = evm_malloc 32.i256;
+    v4.i256 = ptr_to_int v3 i256;
+    v5.i256 = black_box v4;
+    mstore v5 222.i256 i256;
+    v6.i256 = mload v2 i256;
+    return v6;
+}
+
+func private %boxed_allocas() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = black_box v1;
+    mstore v2 111.i256 i256;
+    v3.*i256 = alloca i256;
+    v4.i256 = ptr_to_int v3 i256;
+    v5.i256 = black_box v4;
+    mstore v5 222.i256 i256;
+    v6.i256 = mload v2 i256;
+    return v6;
+}
+
+func private %boxed_alloca() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = black_box v1;
+    mstore v2 111.i256 i256;
+    v3.*i256 = alloca i256;
+    mstore v3 222.i256 i256;
+    v4.i256 = mload v2 i256;
+    return v4;
+}
+
+func inline(never) private %forward(v0.i256) -> i256 {
+block0:
+    v1.i256 = black_box v0;
+    return v1;
+}
+
+func private %forwarded_allocas() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = call %forward v1;
+    mstore v2 111.i256 i256;
+    v3.*i256 = alloca i256;
+    v4.i256 = ptr_to_int v3 i256;
+    v5.i256 = call %forward v4;
+    mstore v5 222.i256 i256;
+    v6.i256 = mload v2 i256;
+    return v6;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    br_table v0 block5 (0.i256 block1) (1.i256 block2) (2.i256 block3) (3.i256 block4);
+
+block1:
+    v1.i256 = call %boxed_mallocs;
+    jump block6;
+
+block2:
+    v2.i256 = call %boxed_allocas;
+    jump block6;
+
+block3:
+    v3.i256 = call %boxed_alloca;
+    jump block6;
+
+block4:
+    v4.i256 = call %forwarded_allocas;
+    jump block6;
+
+block5:
+    evm_revert 0.i256 0.i256;
+
+block6:
+    v5.i256 = phi (v1 block1) (v2 block2) (v3 block3) (v4 block4);
+    mstore 0.i256 v5 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
