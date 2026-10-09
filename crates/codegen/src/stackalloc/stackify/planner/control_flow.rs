@@ -9,6 +9,27 @@ use super::{
     Planner,
 };
 
+/// The spilled phi stores of one edge that are not emitted yet.
+struct PendingPhiStores {
+    /// The source of each pending store, keyed by phi result.
+    srcs: BTreeMap<ValueId, ValueId>,
+    /// The number of pending edge reads of each value.
+    readers: BTreeMap<ValueId, usize>,
+    /// Pending stores whose phi's old value is no longer read, emitted last first.
+    ready: SmallVec<[ValueId; 4]>,
+}
+
+impl PendingPhiStores {
+    /// Records one read of `v`, readying its store once nothing else reads its old value.
+    fn read(&mut self, v: ValueId) {
+        let remaining = self.readers.get_mut(&v).expect("value has a pending read");
+        *remaining -= 1;
+        if *remaining == 0 && self.srcs.contains_key(&v) {
+            self.ready.push(v);
+        }
+    }
+}
+
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     pub(in super::super) fn plan_edge_fixup_to_template(
         &mut self,
@@ -40,38 +61,36 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
 
         // The edge is a parallel copy: every source must be read with its predecessor value, but
-        // storing a spilled phi overwrites that phi's old value, which may itself be a source on
-        // this edge. Store a phi once no pending copy still reads it, emitting the ready stores
-        // against the full predecessor stack.
+        // storing a spilled phi overwrites that phi's old value, which may itself be read on this
+        // edge. A store therefore waits until no pending read needs the old value. Emit the stores
+        // nothing waits on first, against the full predecessor stack.
         let mut readers: BTreeMap<ValueId, usize> = BTreeMap::new();
         for &(_, src) in stack_phi_pairs.iter().chain(&spilled_phi_pairs) {
             *readers.entry(src).or_default() += 1;
         }
-        let mut pending: BTreeMap<ValueId, ValueId> = spilled_phi_pairs.iter().copied().collect();
-        let mut ready: SmallVec<[ValueId; 4]> = spilled_phi_pairs
-            .iter()
-            .rev()
-            .map(|&(phi_res, _)| phi_res)
-            .filter(|phi_res| !readers.contains_key(phi_res))
-            .collect();
-        while let Some(phi_res) = ready.pop() {
-            let src = pending
-                .remove(&phi_res)
-                .expect("ready phi store is pending");
-            self.emit_spilled_phi_store(phi_res, src);
-            let remaining = readers.get_mut(&src).expect("phi store reads its source");
-            *remaining -= 1;
-            if *remaining == 0 && pending.contains_key(&src) {
-                ready.push(src);
-            }
-        }
+        let mut stores = PendingPhiStores {
+            srcs: spilled_phi_pairs.iter().copied().collect(),
+            ready: spilled_phi_pairs
+                .iter()
+                .rev()
+                .map(|&(phi_res, _)| phi_res)
+                .filter(|phi_res| !readers.contains_key(phi_res))
+                .collect(),
+            readers,
+        };
+        let mut held = SmallVec::new();
+        self.emit_ready_phi_stores(&mut stores, &mut held);
 
-        // The old value of each remaining phi is still read by a stack phi or by another remaining
-        // store (as in a copy cycle). Stage their sources above the template, so normalization
-        // reads every old value before any of these stores.
+        // Each remaining store's old value is read by a stack phi or by another remaining store. A
+        // remaining store whose source is not a pending phi ends a chain of them read by a stack
+        // phi, so there is at most one per stack phi. Normalization may drop such a source from
+        // the stack, so stage it above the template and hold it until its store.
         let staged: SmallVec<[(ValueId, ValueId); 4]> = spilled_phi_pairs
-            .into_iter()
-            .filter(|(phi_res, _)| pending.contains_key(phi_res))
+            .iter()
+            .copied()
+            .filter(|(phi_res, src)| {
+                stores.srcs.contains_key(phi_res) && !stores.srcs.contains_key(src)
+            })
             .collect();
 
         // Normalize the predecessor stack directly to the staged sources above the successor
@@ -105,15 +124,40 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         desired.extend(tmpl.transfer().iter().copied());
 
         self.normalize_to_exact(desired.as_slice());
+        held.extend(staged.iter().rev().map(|&(phi_res, _)| Some(phi_res)));
 
-        for &(phi_res, src) in &staged {
-            debug_assert_eq!(
-                self.stack.top(),
-                Some(&StackItem::Value(src)),
-                "edge normalization failed to stage phi source for {pred:?}->{succ:?}"
-            );
-            self.mem.emit_store_for_spilled_value(phi_res, self.actions);
-            self.stack.pop_operand();
+        // Normalization read the stack phis' sources. Every store still waiting after the ready
+        // ones is in a copy cycle: hold one phi's old value on the stack for its reader, so the
+        // phi can be stored. Breaking cycles one at a time bounds the stack growth to one held
+        // value, however large the cycles are.
+        for &(_, src) in &stack_phi_pairs {
+            stores.read(src);
+        }
+        self.emit_ready_phi_stores(&mut stores, &mut held);
+        while let Some(&(phi_res, _)) = spilled_phi_pairs
+            .iter()
+            .find(|(phi_res, _)| stores.srcs.contains_key(phi_res))
+        {
+            let (&reader, _) = stores
+                .srcs
+                .iter()
+                .find(|&(_, &src)| src == phi_res)
+                .expect("cycle phi has a pending reader");
+            if let Some(pos) = self
+                .stack
+                .find_reachable_value(phi_res, self.ctx.reach.dup_max)
+            {
+                self.stack.dup(pos, self.actions);
+            } else {
+                self.push_value_from_spill_slot_or_mark(phi_res, phi_res);
+            }
+            held.push(Some(reader));
+            stores.read(phi_res);
+            self.emit_ready_phi_stores(&mut stores, &mut held);
+        }
+        // Drop held values whose stores duplicated them from below the top.
+        for _ in held {
+            self.stack.pop(self.actions);
         }
 
         // Rename stack-resident phi-source placeholders to phi results.
@@ -125,6 +169,49 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 "edge normalization failed to place phi source at depth {depth} for {pred:?}->{succ:?}"
             );
             self.stack.rename_value_at_depth(depth, phi_res);
+        }
+    }
+
+    /// Emits ready spilled phi stores until none is ready. `held` names, top last, the store
+    /// consuming each stack item above the template; that store's source was read into the item.
+    fn emit_ready_phi_stores(
+        &mut self,
+        stores: &mut PendingPhiStores,
+        held: &mut SmallVec<[Option<ValueId>; 4]>,
+    ) {
+        loop {
+            // Prefer the store consuming the top held item.
+            let top = held.last().copied().flatten();
+            let next = stores
+                .ready
+                .iter()
+                .position(|&phi_res| Some(phi_res) == top)
+                .map(|idx| stores.ready.remove(idx))
+                .or_else(|| stores.ready.pop());
+            let Some(phi_res) = next else {
+                return;
+            };
+            let src = stores
+                .srcs
+                .remove(&phi_res)
+                .expect("ready phi store is pending");
+            if Some(phi_res) == top {
+                debug_assert_eq!(
+                    self.stack.top(),
+                    Some(&StackItem::Value(src)),
+                    "held phi source is not on top"
+                );
+                held.pop();
+                self.mem.emit_store_for_spilled_value(phi_res, self.actions);
+                self.stack.pop_operand();
+            } else if let Some(owner) = held.iter_mut().find(|owner| **owner == Some(phi_res)) {
+                // Duplicate the held source from below the top.
+                *owner = None;
+                self.emit_spilled_phi_store(phi_res, src);
+            } else {
+                self.emit_spilled_phi_store(phi_res, src);
+                stores.read(src);
+            }
         }
     }
 
@@ -447,7 +534,9 @@ block3:
     }
 
     #[test]
-    fn spilled_phi_swap_stages_both_sources() {
+    fn spilled_phi_rotation_holds_one_old_value() {
+        // Holding the old `v1` breaks the cycle; every other old value is loaded just before its
+        // phi's store.
         let actions = plan_edge_fixup(EdgeFixup {
             src: r#"
 target = "evm-ethereum-osaka"
@@ -458,20 +547,21 @@ block0:
 
 block1:
     v1.i256 = phi (1.i256 block0) (v2 block2);
-    v2.i256 = phi (2.i256 block0) (v1 block2);
-    v3.i1 = lt v1 v0;
-    br v3 block2 block3;
+    v2.i256 = phi (2.i256 block0) (v3 block2);
+    v3.i256 = phi (3.i256 block0) (v1 block2);
+    v4.i1 = lt v1 v0;
+    br v4 block2 block3;
 
 block2:
     jump block1;
 
 block3:
-    return v2;
+    return v3;
 }
 "#,
             pred: BlockId(2),
             succ: BlockId(1),
-            scratch: &["v1", "v2"],
+            scratch: &["v1", "v2", "v3"],
             spilled: &[],
             stack: &["v0"],
             params: &[],
@@ -484,6 +574,55 @@ block3:
                 Action::MemLoadAbs(0),
                 Action::MemLoadAbs(32),
                 Action::MemStoreAbs(0),
+                Action::MemLoadAbs(64),
+                Action::MemStoreAbs(32),
+                Action::MemStoreAbs(64),
+            ],
+        );
+    }
+
+    #[test]
+    fn stack_phi_reads_spilled_phi_in_copy_cycle() {
+        // Spilled `v2` and `v3` swap, and stack phi `v1` also reads the old `v2`. The cycle is
+        // broken after normalization by duplicating the old `v2` that `v1` placed.
+        let actions = plan_edge_fixup(EdgeFixup {
+            src: r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (0.i256 block0) (v2 block2);
+    v2.i256 = phi (1.i256 block0) (v3 block2);
+    v3.i256 = phi (2.i256 block0) (v2 block2);
+    v4.i1 = lt v2 v0;
+    br v4 block2 block3;
+
+block2:
+    jump block1;
+
+block3:
+    return v1;
+}
+"#,
+            pred: BlockId(2),
+            succ: BlockId(1),
+            scratch: &["v2", "v3"],
+            spilled: &[],
+            stack: &["v0"],
+            params: &["v1"],
+            transfer: &["v0"],
+        });
+
+        assert_eq!(
+            actions.as_slice(),
+            &[
+                Action::MemLoadAbs(0),
+                Action::StackDup(0),
+                Action::MemLoadAbs(32),
+                Action::MemStoreAbs(0),
                 Action::MemStoreAbs(32),
             ],
         );
@@ -491,8 +630,8 @@ block3:
 
     #[test]
     fn spilled_phi_chain_stores_readers_first() {
-        // `v2` reads the old `v1`, so `v2` is stored before `v1` despite the phi order, and no
-        // source needs staging.
+        // `v2` reads the old `v1`, so `v2` is stored before `v1` despite the phi order, all before
+        // normalization.
         let actions = plan_edge_fixup(EdgeFixup {
             src: r#"
 target = "evm-ethereum-osaka"

@@ -234,6 +234,91 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
 }
 
 #[test]
+fn spilled_phi_cycle_wider_than_the_evm_stack_at_every_search_profile() {
+    // Every iteration rotates 1,100 loop-carried lanes left by one, so the backedge is a single
+    // copy cycle wider than the 1,024-word EVM stack. The caller keeps `v1` live below the
+    // callee's return address.
+    const LANES: usize = 1100;
+    let mut source = String::from(
+        "target = \"evm-ethereum-osaka\"\nfunc private %rotate(v0.i256) -> i256 {\nblock0:\n    jump block1;\nblock1:\n",
+    );
+    for lane in 1..=LANES {
+        let next = lane % LANES + 1;
+        source.push_str(&format!(
+            "    v{lane}.i256 = phi ({lane}.i256 block0) (v{next} block2);\n"
+        ));
+    }
+    let counter = LANES + 1;
+    let next_counter = LANES + 2;
+    let cond = LANES + 3;
+    source.push_str(&format!(
+        r#"    v{counter}.i256 = phi (0.i256 block0) (v{next_counter} block2);
+    v{cond}.i1 = lt v{counter} v0;
+    br v{cond} block2 block3;
+block2:
+    v{next_counter}.i256 = add v{counter} 1.i256;
+    jump block1;
+block3:
+    return v{LANES};
+}}
+func public %entry() {{
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = add v0 1000000.i256;
+    v2.i256 = call %rotate v0;
+    v3.i256 = add v2 v1;
+    mstore 0.i256 v3 i256;
+    evm_return 0.i256 32.i256;
+}}
+object @Contract {{ section runtime {{ entry %entry; }} }}
+"#
+    ));
+
+    let parsed = parse_sona(&source);
+    verify_module_or_panic(
+        &parsed.module,
+        &VerifierConfig::for_level(VerificationLevel::Full),
+    );
+    for profile in [
+        StackifySearchProfile::Fast,
+        StackifySearchProfile::GreedyWide,
+        StackifySearchProfile::Exact,
+    ] {
+        let backend = EvmBackend::new(Evm::new(parsed.module.ctx.triple))
+            .with_stackify_search_profile(profile);
+        let artifact = compile_object(
+            &parsed.module,
+            &backend,
+            "Contract",
+            &CompileOptions::default(),
+        )
+        .unwrap();
+        let runtime = artifact
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for (iterations, last_lane) in [(0, LANES), (1, 1), (3, 3)] {
+            let result = harness.call(&IrU256::from(iterations as u64).to_big_endian());
+            let ExecutionResult::Success {
+                output: Output::Call(actual),
+                ..
+            } = result
+            else {
+                panic!("{profile:?}, iterations={iterations}: {result:?}");
+            };
+            let expected = IrU256::from((last_lane + iterations + 1_000_000) as u64);
+            assert_eq!(
+                actual.as_ref(),
+                expected.to_big_endian(),
+                "{profile:?}, iterations={iterations}"
+            );
+        }
+    }
+}
+
+#[test]
 fn code_word_loads_preserve_memory_and_zero_pad_code_tails() {
     let source = r#"
 target = "evm-ethereum-osaka"

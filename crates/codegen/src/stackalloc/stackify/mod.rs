@@ -13,10 +13,10 @@
 //! - For merge blocks, all incoming edges are normalized to the same `StackIn(B)` (often a no-op);
 //!   spilled phi results are stored on the incoming edge instead of being carried in `P(B)`.
 //! - Each edge fixup is a parallel copy. Storing a spilled phi result overwrites that phi's old
-//!   value, which may be another source on the same edge, so the store waits until no pending copy
-//!   reads it. Stores whose old values are still read by a stack phi or by each other (as in a copy
-//!   cycle) have their sources staged above the entry template during normalization, and are
-//!   stored afterwards.
+//!   value, which may be another source on the same edge, so the store waits until no pending read
+//!   needs the old value. Stores waiting on a stack phi's read follow normalization, and copy
+//!   cycles are broken one at a time by holding one old value on the stack, so the fixup's stack
+//!   growth stays bounded however many phis it copies.
 //! - When a value cannot be duplicated from within `DUP16` reach, it is added to `spill_set`,
 //!   assigned a stack object, and reloaded from memory; `spill_set` is discovered via a
 //!   monotone fixed point.
