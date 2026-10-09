@@ -116,11 +116,15 @@ impl SlotPool {
             return Some(slot);
         }
 
-        // Prefer reusing a slot that has been freed within this block (exact last-use tracking).
-        let slot = if let Some(slot) = free_slots.take_released() {
+        // Prefer reusing a slot freed earlier in this block, whose last value is dead from here on.
+        // Only a value confined to this block may reuse it unchecked: a value that outlives the
+        // block can meet the slot's other values elsewhere, or the dead value's next instance,
+        // which this block's outgoing edges store to the slot when it is a successor's phi.
+        let range = interference.range(v);
+        let confined = range.blocks.len() <= 1 && range.phi_edges.is_empty();
+        let slot = if confined && let Some(slot) = free_slots.take_released() {
             slot
         } else {
-            let range = interference.range(v);
             let mut found: Option<u32> = None;
             for candidate in 0..self.next_slot {
                 let idx = candidate as usize;
@@ -160,7 +164,7 @@ impl SlotPool {
             idx < self.slot_live_ranges.len(),
             "slot_live_ranges missing slot"
         );
-        self.slot_live_ranges[idx].union_with(interference.range(v));
+        self.slot_live_ranges[idx].union_with(range);
         Some(slot)
     }
 
@@ -203,5 +207,47 @@ impl FreeSlots {
             return Some(slot);
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{super::spill::SpillSet, *};
+    use cranelift_entity::EntityRef;
+
+    #[test]
+    fn released_slot_is_reused_only_by_values_confined_to_the_block() {
+        // `dead` is a loop header phi whose last use is in the latch. The latch's backedge stores
+        // its next instance, so its slot is released in the latch but written again at the end.
+        let (header, latch) = (BlockId::new(0), BlockId::new(1));
+        let backedge = PhiEdgePoint(0);
+        let [dead, live_out, phi_source, local] = [0, 1, 2, 3].map(ValueId::new);
+
+        let mut interference = SpillSlotInterference::default();
+        interference.ranges[dead].blocks = [header, latch].into_iter().collect();
+        interference.ranges[dead].phi_edges.insert(backedge);
+        interference.ranges[live_out].blocks = [latch, header].into_iter().collect();
+        interference.ranges[phi_source].blocks.insert(latch);
+        interference.ranges[phi_source].phi_edges.insert(backedge);
+        interference.ranges[local].blocks.insert(latch);
+
+        let spill_set: BitSet<ValueId> = [dead, live_out, phi_source, local].into_iter().collect();
+        let spilled = |v| {
+            SpillSet::new(&spill_set)
+                .spilled(v)
+                .expect("value is spilled")
+        };
+        let mut pool = SlotPool::default();
+        let mut free_slots = FreeSlots::default();
+        let mut slot_for = |v, free_slots: &mut FreeSlots| {
+            pool.try_ensure_slot(spilled(v), &interference, free_slots, None)
+        };
+
+        assert_eq!(slot_for(dead, &mut free_slots), Some(0));
+        free_slots.release(0);
+        // Values that outlive the latch overlap `dead`, so they need fresh slots.
+        assert_eq!(slot_for(live_out, &mut free_slots), Some(1));
+        assert_eq!(slot_for(phi_source, &mut free_slots), Some(2));
+        assert_eq!(slot_for(local, &mut free_slots), Some(0));
     }
 }
