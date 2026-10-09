@@ -1,5 +1,6 @@
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, InstId, ValueId};
+use std::collections::BTreeMap;
 
 use crate::{bitset::BitSet, liveness::phi_args_for_edge, stackalloc::Action};
 
@@ -7,6 +8,27 @@ use super::{
     super::{sym_stack::StackItem, templates::BlockTemplate},
     Planner,
 };
+
+/// The spilled phi stores of one edge that are not emitted yet.
+struct PendingPhiStores {
+    /// The source of each pending store, keyed by phi result.
+    srcs: BTreeMap<ValueId, ValueId>,
+    /// The number of pending edge reads of each value.
+    readers: BTreeMap<ValueId, usize>,
+    /// Pending stores whose phi's old value is no longer read, emitted last first.
+    ready: SmallVec<[ValueId; 4]>,
+}
+
+impl PendingPhiStores {
+    /// Records one read of `v`, readying its store once nothing else reads its old value.
+    fn read(&mut self, v: ValueId) {
+        let remaining = self.readers.get_mut(&v).expect("value has a pending read");
+        *remaining -= 1;
+        if *remaining == 0 && self.srcs.contains_key(&v) {
+            self.ready.push(v);
+        }
+    }
+}
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     pub(in super::super) fn plan_edge_fixup_to_template(
@@ -30,25 +52,56 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let mut stack_phi_pairs: SmallVec<[(ValueId, ValueId); 4]> = SmallVec::new();
         let mut spilled_phi_pairs: SmallVec<[(ValueId, ValueId); 4]> = SmallVec::new();
         for (&phi_res, &src) in phi_results.iter().zip(phi_srcs.iter()) {
-            if self.mem.spill_set().contains(phi_res) {
-                spilled_phi_pairs.push((phi_res, src));
-            } else {
+            if !self.mem.spill_set().contains(phi_res) {
                 stack_phi_pairs.push((phi_res, src));
+            } else if src != phi_res {
+                // A spilled self-copy leaves the phi's spill word unchanged.
+                spilled_phi_pairs.push((phi_res, src));
             }
         }
 
-        for &(phi_res, src) in &spilled_phi_pairs {
-            self.emit_spilled_phi_store(phi_res, src);
+        // The edge is a parallel copy: every source must be read with its predecessor value, but
+        // storing a spilled phi overwrites that phi's old value, which may itself be read on this
+        // edge. A store therefore waits until no pending read needs the old value. Emit the stores
+        // nothing waits on first, against the full predecessor stack.
+        let mut readers: BTreeMap<ValueId, usize> = BTreeMap::new();
+        for &(_, src) in stack_phi_pairs.iter().chain(&spilled_phi_pairs) {
+            *readers.entry(src).or_default() += 1;
         }
+        let mut stores = PendingPhiStores {
+            srcs: spilled_phi_pairs.iter().copied().collect(),
+            ready: spilled_phi_pairs
+                .iter()
+                .rev()
+                .map(|&(phi_res, _)| phi_res)
+                .filter(|phi_res| !readers.contains_key(phi_res))
+                .collect(),
+            readers,
+        };
+        let mut held = SmallVec::new();
+        self.emit_ready_phi_stores(&mut stores, &mut held);
 
-        // Normalize the predecessor stack directly to the successor entry template:
+        // Each remaining store's old value is read by a stack phi or by another remaining store. A
+        // remaining store whose source is not a pending phi ends a chain of them read by a stack
+        // phi, so there is at most one per stack phi. Normalization may drop such a source from
+        // the stack, so stage it above the template and hold it until its store.
+        let staged: SmallVec<[(ValueId, ValueId); 4]> = spilled_phi_pairs
+            .iter()
+            .copied()
+            .filter(|(phi_res, src)| {
+                stores.srcs.contains_key(phi_res) && !stores.srcs.contains_key(src)
+            })
+            .collect();
+
+        // Normalize the predecessor stack directly to the staged sources above the successor
+        // entry template:
         //
         //   StackIn(succ) = P(succ) ++ T(succ)
         //
         // Where `P(succ)` includes:
         // - function args (entry block only)
         // - stack-resident phi results (replaced here by per-edge phi sources, then renamed
-        //   in-place; spilled phis were stored directly above and are omitted from `P(succ)`)
+        //   in-place; spilled phis are stored to memory and omitted from `P(succ)`)
         let phi_count = stack_phi_pairs.len();
         debug_assert!(
             phi_count <= tmpl.params.len(),
@@ -65,12 +118,47 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             "template phi prefix mismatch for block {succ:?}"
         );
 
-        let mut desired: SmallVec<[ValueId; 16]> = SmallVec::new();
+        let mut desired: SmallVec<[ValueId; 16]> = staged.iter().map(|&(_, src)| src).collect();
         desired.extend(tmpl.params.iter().take(args_prefix_len).copied());
         desired.extend(stack_phi_pairs.iter().map(|(_, src)| *src));
         desired.extend(tmpl.transfer().iter().copied());
 
         self.normalize_to_exact(desired.as_slice());
+        held.extend(staged.iter().rev().map(|&(phi_res, _)| Some(phi_res)));
+
+        // Normalization read the stack phis' sources. Every store still waiting after the ready
+        // ones is in a copy cycle: hold one phi's old value on the stack for its reader, so the
+        // phi can be stored. Breaking cycles one at a time bounds the stack growth to one held
+        // value, however large the cycles are.
+        for &(_, src) in &stack_phi_pairs {
+            stores.read(src);
+        }
+        self.emit_ready_phi_stores(&mut stores, &mut held);
+        while let Some(&(phi_res, _)) = spilled_phi_pairs
+            .iter()
+            .find(|(phi_res, _)| stores.srcs.contains_key(phi_res))
+        {
+            let (&reader, _) = stores
+                .srcs
+                .iter()
+                .find(|&(_, &src)| src == phi_res)
+                .expect("cycle phi has a pending reader");
+            if let Some(pos) = self
+                .stack
+                .find_reachable_value(phi_res, self.ctx.reach.dup_max)
+            {
+                self.stack.dup(pos, self.actions);
+            } else {
+                self.push_value_from_spill_slot_or_mark(phi_res, phi_res);
+            }
+            held.push(Some(reader));
+            stores.read(phi_res);
+            self.emit_ready_phi_stores(&mut stores, &mut held);
+        }
+        // Drop held values whose stores duplicated them from below the top.
+        for _ in held {
+            self.stack.pop(self.actions);
+        }
 
         // Rename stack-resident phi-source placeholders to phi results.
         for (idx, &(phi_res, src)) in stack_phi_pairs.iter().enumerate() {
@@ -81,6 +169,49 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 "edge normalization failed to place phi source at depth {depth} for {pred:?}->{succ:?}"
             );
             self.stack.rename_value_at_depth(depth, phi_res);
+        }
+    }
+
+    /// Emits ready spilled phi stores until none is ready. `held` names, top last, the store
+    /// consuming each stack item above the template; that store's source was read into the item.
+    fn emit_ready_phi_stores(
+        &mut self,
+        stores: &mut PendingPhiStores,
+        held: &mut SmallVec<[Option<ValueId>; 4]>,
+    ) {
+        loop {
+            // Prefer the store consuming the top held item.
+            let top = held.last().copied().flatten();
+            let next = stores
+                .ready
+                .iter()
+                .position(|&phi_res| Some(phi_res) == top)
+                .map(|idx| stores.ready.remove(idx))
+                .or_else(|| stores.ready.pop());
+            let Some(phi_res) = next else {
+                return;
+            };
+            let src = stores
+                .srcs
+                .remove(&phi_res)
+                .expect("ready phi store is pending");
+            if Some(phi_res) == top {
+                debug_assert_eq!(
+                    self.stack.top(),
+                    Some(&StackItem::Value(src)),
+                    "held phi source is not on top"
+                );
+                held.pop();
+                self.mem.emit_store_for_spilled_value(phi_res, self.actions);
+                self.stack.pop_operand();
+            } else if let Some(owner) = held.iter_mut().find(|owner| **owner == Some(phi_res)) {
+                // Duplicate the held source from below the top.
+                *owner = None;
+                self.emit_spilled_phi_store(phi_res, src);
+            } else {
+                self.emit_spilled_phi_store(phi_res, src);
+                stores.read(src);
+            }
         }
     }
 
@@ -152,6 +283,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 #[cfg(test)]
 mod tests {
     use crate::{
+        bitset::BitSet,
         cfg_scc::CfgSccAnalysis,
         domtree::DomTree,
         liveness::Liveness,
@@ -171,14 +303,10 @@ mod tests {
         },
     };
     use cranelift_entity::SecondaryMap;
-    use smallvec::smallvec;
-    use sonatina_ir::{BlockId, ValueId, cfg::ControlFlowGraph};
+    use sonatina_ir::{BlockId, Immediate, ValueId, cfg::ControlFlowGraph};
     use sonatina_parser::parse_module;
 
-    #[test]
-    fn spilled_phi_edge_slots_keep_parallel_sources_distinct() {
-        let parsed = parse_module(
-            r#"
+    const ENTRY_EDGE: &str = r#"
 target = "evm-ethereum-osaka"
 
 func public %entry(v0.i256) -> i256 {
@@ -191,9 +319,26 @@ block1:
     v3.i256 = phi (v1 block0);
     return v3;
 }
-"#,
-        )
-        .expect("module parses");
+"#;
+
+    struct EdgeFixup<'a> {
+        src: &'a str,
+        pred: BlockId,
+        succ: BlockId,
+        /// Spilled values whose scratch slots are already assigned, in slot order.
+        scratch: &'a [&'a str],
+        /// Spilled values whose scratch slots are assigned by their first store.
+        spilled: &'a [&'a str],
+        /// The predecessor stack, top first.
+        stack: &'a [&'a str],
+        params: &'a [&'a str],
+        transfer: &'a [&'a str],
+    }
+
+    /// Plans the edge fixup into the `params ++ transfer` template of `%entry`'s `succ`, and
+    /// returns the emitted actions.
+    fn plan_edge_fixup(edge: EdgeFixup<'_>) -> Actions {
+        let parsed = parse_module(edge.src).expect("module parses");
         let func_ref = parsed
             .module
             .funcs()
@@ -205,6 +350,12 @@ block1:
                     .func_sig(func, |sig| sig.name() == "entry")
             })
             .expect("entry exists");
+        let value = |name: &str| {
+            parsed
+                .debug
+                .value(func_ref, name)
+                .unwrap_or_else(|| panic!("missing {name}"))
+        };
 
         parsed.module.func_store.view(func_ref, |func| {
             let mut cfg = ControlFlowGraph::default();
@@ -229,37 +380,36 @@ block1:
                 scc,
                 StackifyReachability::new(16),
             );
-            ctx.scratch_spill_slots = 3;
+            ctx.scratch_spill_slots = (edge.scratch.len() + edge.spilled.len()) as u32;
 
-            let source = parsed.debug.value(func_ref, "v1").expect("v1");
-            let first_phi = parsed.debug.value(func_ref, "v2").expect("v2");
-            let second_phi = parsed.debug.value(func_ref, "v3").expect("v3");
-
-            let mut spill_set = crate::bitset::BitSet::default();
-            spill_set.insert(source);
-            spill_set.insert(first_phi);
-            spill_set.insert(second_phi);
-
-            let mut spill_requests = crate::bitset::BitSet::default();
-            let mut object_spill_requests = crate::bitset::BitSet::default();
-            let forced_object_spills = crate::bitset::BitSet::default();
-            let spill_obj: SecondaryMap<ValueId, Option<_>> = SecondaryMap::new();
+            let spill_set: BitSet<ValueId> = edge
+                .scratch
+                .iter()
+                .chain(edge.spilled)
+                .map(|&name| value(name))
+                .collect();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
+            for (slot, &name) in edge.scratch.iter().enumerate() {
+                let spilled = SpillSet::new(&spill_set)
+                    .spilled(value(name))
+                    .expect("scratch value is spilled");
+                assert_eq!(
+                    slots.scratch.try_ensure_slot(
+                        spilled,
+                        &ctx.spill_slot_interference,
+                        &mut free_slots.scratch,
+                        Some(ctx.scratch_spill_slots),
+                    ),
+                    Some(slot as u32),
+                    "{name} gets its own scratch slot"
+                );
+            }
 
-            let spilled_source = SpillSet::new(&spill_set)
-                .spilled(source)
-                .expect("source is spilled");
-            slots
-                .scratch
-                .try_ensure_slot(
-                    spilled_source,
-                    &ctx.spill_slot_interference,
-                    &mut free_slots.scratch,
-                    Some(3),
-                )
-                .expect("source scratch slot");
-
+            let mut spill_requests = BitSet::default();
+            let mut object_spill_requests = BitSet::default();
+            let forced_object_spills = BitSet::default();
+            let spill_obj = SecondaryMap::new();
             let mut mem_state = MemState {
                 spill: SpillSet::new(&spill_set),
                 spill_obj: &spill_obj,
@@ -270,141 +420,292 @@ block1:
             };
             let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
             let mut stack = SymStack::opaque_prefix_empty(false);
+            for &name in edge.stack.iter().rev() {
+                stack.push_value(value(name));
+            }
             let mut actions = Actions::new();
             let mut search_scratch = NormalizeSearchScratch::default();
             let mut planner =
                 Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
 
-            let template = BlockTemplate::new(smallvec![], smallvec![]);
-            planner.plan_edge_fixup_to_template(&template, BlockId(0), BlockId(1));
-
-            assert_eq!(
-                actions.as_slice(),
-                &[
-                    Action::Push(sonatina_ir::Immediate::I256(0.into())),
-                    Action::MemStoreAbs(32),
-                    Action::MemLoadAbs(0),
-                    Action::MemStoreAbs(64),
-                ],
+            let template = BlockTemplate::new(
+                edge.params.iter().map(|&name| value(name)).collect(),
+                edge.transfer.iter().map(|&name| value(name)).collect(),
             );
-            assert_eq!(slots.scratch.slot_for(source), Some(0));
-            assert_eq!(slots.scratch.slot_for(first_phi), Some(1));
-            assert_eq!(slots.scratch.slot_for(second_phi), Some(2));
+            planner.plan_edge_fixup_to_template(&template, edge.pred, edge.succ);
+
+            assert!(
+                spill_requests.is_empty(),
+                "edge fixup requested new spills: {spill_requests:?}"
+            );
+            actions
+        })
+    }
+
+    #[test]
+    fn spilled_phi_edge_slots_keep_parallel_sources_distinct() {
+        let actions = plan_edge_fixup(EdgeFixup {
+            src: ENTRY_EDGE,
+            pred: BlockId(0),
+            succ: BlockId(1),
+            scratch: &["v1"],
+            spilled: &["v2", "v3"],
+            stack: &[],
+            params: &[],
+            transfer: &[],
         });
+
+        assert_eq!(
+            actions.as_slice(),
+            &[
+                Action::Push(Immediate::I256(0.into())),
+                Action::MemStoreAbs(32),
+                Action::MemLoadAbs(0),
+                Action::MemStoreAbs(64),
+            ],
+        );
     }
 
     #[test]
     fn spilled_phi_store_does_not_clobber_later_stack_phi_source() {
-        let parsed = parse_module(
-            r#"
+        let actions = plan_edge_fixup(EdgeFixup {
+            src: ENTRY_EDGE,
+            pred: BlockId(0),
+            succ: BlockId(1),
+            scratch: &["v1"],
+            spilled: &["v2"],
+            stack: &[],
+            params: &["v3"],
+            transfer: &[],
+        });
+
+        assert_eq!(
+            actions.as_slice(),
+            &[
+                Action::Push(Immediate::I256(0.into())),
+                Action::MemStoreAbs(32),
+                Action::MemLoadAbs(0),
+            ],
+        );
+    }
+
+    #[test]
+    fn stack_phi_reads_spilled_phi_before_its_edge_store() {
+        // Stack phi `v1` takes the old `v2`, while spilled `v2` is overwritten with `v3`.
+        let actions = plan_edge_fixup(EdgeFixup {
+            src: r#"
 target = "evm-ethereum-osaka"
 
 func public %entry(v0.i256) -> i256 {
 block0:
-    v1.i256 = add v0 1.i256;
     jump block1;
 
 block1:
-    v2.i256 = phi (0.i256 block0);
-    v3.i256 = phi (v1 block0);
+    v1.i256 = phi (0.i256 block0) (v2 block2);
+    v2.i256 = phi (1.i256 block0) (v3 block2);
+    v4.i1 = lt v2 v0;
+    br v4 block2 block3;
+
+block2:
+    v3.i256 = add v2 1.i256;
+    jump block1;
+
+block3:
+    return v1;
+}
+"#,
+            pred: BlockId(2),
+            succ: BlockId(1),
+            scratch: &["v2"],
+            spilled: &[],
+            stack: &["v3", "v0"],
+            params: &["v1"],
+            transfer: &["v0"],
+        });
+
+        assert_eq!(
+            actions.as_slice(),
+            &[
+                Action::MemLoadAbs(0),
+                Action::StackSwap(1),
+                Action::MemStoreAbs(0),
+            ],
+        );
+    }
+
+    #[test]
+    fn spilled_phi_rotation_holds_one_old_value() {
+        // Holding the old `v1` breaks the cycle; every other old value is loaded just before its
+        // phi's store.
+        let actions = plan_edge_fixup(EdgeFixup {
+            src: r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (1.i256 block0) (v2 block2);
+    v2.i256 = phi (2.i256 block0) (v3 block2);
+    v3.i256 = phi (3.i256 block0) (v1 block2);
+    v4.i1 = lt v1 v0;
+    br v4 block2 block3;
+
+block2:
+    jump block1;
+
+block3:
     return v3;
 }
 "#,
-        )
-        .expect("module parses");
-        let func_ref = parsed
-            .module
-            .funcs()
-            .into_iter()
-            .find(|&func| {
-                parsed
-                    .module
-                    .ctx
-                    .func_sig(func, |sig| sig.name() == "entry")
-            })
-            .expect("entry exists");
-
-        parsed.module.func_store.view(func_ref, |func| {
-            let mut cfg = ControlFlowGraph::default();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let mut ctx = build_stackify_test_context(
-                func,
-                &cfg,
-                &dom,
-                &liveness,
-                entry,
-                scc,
-                StackifyReachability::new(16),
-            );
-            ctx.scratch_spill_slots = 2;
-
-            let source = parsed.debug.value(func_ref, "v1").expect("v1");
-            let spilled_phi = parsed.debug.value(func_ref, "v2").expect("v2");
-            let stack_phi = parsed.debug.value(func_ref, "v3").expect("v3");
-
-            let mut spill_set = crate::bitset::BitSet::default();
-            spill_set.insert(source);
-            spill_set.insert(spilled_phi);
-
-            let mut spill_requests = crate::bitset::BitSet::default();
-            let mut object_spill_requests = crate::bitset::BitSet::default();
-            let forced_object_spills = crate::bitset::BitSet::default();
-            let spill_obj: SecondaryMap<ValueId, Option<_>> = SecondaryMap::new();
-            let mut free_slots = FreeSlotPools::default();
-            let mut slots = SpillSlotPools::default();
-
-            let spilled_source = SpillSet::new(&spill_set)
-                .spilled(source)
-                .expect("source is spilled");
-            slots
-                .scratch
-                .try_ensure_slot(
-                    spilled_source,
-                    &ctx.spill_slot_interference,
-                    &mut free_slots.scratch,
-                    Some(2),
-                )
-                .expect("source scratch slot");
-
-            let mut mem_state = MemState {
-                spill: SpillSet::new(&spill_set),
-                spill_obj: &spill_obj,
-                spill_requests: &mut spill_requests,
-                object_spill_requests: &mut object_spill_requests,
-                forced_object_spills: &forced_object_spills,
-                slots: &mut slots,
-            };
-            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);
-            let mut stack = SymStack::opaque_prefix_empty(false);
-            let mut actions = Actions::new();
-            let mut search_scratch = NormalizeSearchScratch::default();
-            let mut planner =
-                Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
-
-            let template = BlockTemplate::new(smallvec![stack_phi], smallvec![]);
-            planner.plan_edge_fixup_to_template(&template, BlockId(0), BlockId(1));
-
-            assert_eq!(
-                actions.as_slice(),
-                &[
-                    Action::Push(sonatina_ir::Immediate::I256(0.into())),
-                    Action::MemStoreAbs(32),
-                    Action::MemLoadAbs(0),
-                ],
-            );
-            assert_eq!(slots.scratch.slot_for(source), Some(0));
-            assert_eq!(slots.scratch.slot_for(spilled_phi), Some(1));
+            pred: BlockId(2),
+            succ: BlockId(1),
+            scratch: &["v1", "v2", "v3"],
+            spilled: &[],
+            stack: &["v0"],
+            params: &[],
+            transfer: &["v0"],
         });
+
+        assert_eq!(
+            actions.as_slice(),
+            &[
+                Action::MemLoadAbs(0),
+                Action::MemLoadAbs(32),
+                Action::MemStoreAbs(0),
+                Action::MemLoadAbs(64),
+                Action::MemStoreAbs(32),
+                Action::MemStoreAbs(64),
+            ],
+        );
+    }
+
+    #[test]
+    fn stack_phi_reads_spilled_phi_in_copy_cycle() {
+        // Spilled `v2` and `v3` swap, and stack phi `v1` also reads the old `v2`. The cycle is
+        // broken after normalization by duplicating the old `v2` that `v1` placed.
+        let actions = plan_edge_fixup(EdgeFixup {
+            src: r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (0.i256 block0) (v2 block2);
+    v2.i256 = phi (1.i256 block0) (v3 block2);
+    v3.i256 = phi (2.i256 block0) (v2 block2);
+    v4.i1 = lt v2 v0;
+    br v4 block2 block3;
+
+block2:
+    jump block1;
+
+block3:
+    return v1;
+}
+"#,
+            pred: BlockId(2),
+            succ: BlockId(1),
+            scratch: &["v2", "v3"],
+            spilled: &[],
+            stack: &["v0"],
+            params: &["v1"],
+            transfer: &["v0"],
+        });
+
+        assert_eq!(
+            actions.as_slice(),
+            &[
+                Action::MemLoadAbs(0),
+                Action::StackDup(0),
+                Action::MemLoadAbs(32),
+                Action::MemStoreAbs(0),
+                Action::MemStoreAbs(32),
+            ],
+        );
+    }
+
+    #[test]
+    fn spilled_phi_chain_stores_readers_first() {
+        // `v2` reads the old `v1`, so `v2` is stored before `v1` despite the phi order, all before
+        // normalization.
+        let actions = plan_edge_fixup(EdgeFixup {
+            src: r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (1.i256 block0) (v3 block2);
+    v2.i256 = phi (0.i256 block0) (v1 block2);
+    v4.i1 = lt v1 v0;
+    br v4 block2 block3;
+
+block2:
+    v3.i256 = add v1 1.i256;
+    jump block1;
+
+block3:
+    return v2;
+}
+"#,
+            pred: BlockId(2),
+            succ: BlockId(1),
+            scratch: &["v1", "v2"],
+            spilled: &[],
+            stack: &["v3", "v0"],
+            params: &[],
+            transfer: &["v0"],
+        });
+
+        assert_eq!(
+            actions.as_slice(),
+            &[
+                Action::MemLoadAbs(0),
+                Action::MemStoreAbs(32),
+                Action::StackDup(0),
+                Action::MemStoreAbs(0),
+                Action::Pop,
+            ],
+        );
+    }
+
+    #[test]
+    fn spilled_phi_self_copy_needs_no_store() {
+        let actions = plan_edge_fixup(EdgeFixup {
+            src: r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (0.i256 block0) (v1 block2);
+    v2.i1 = lt v1 v0;
+    br v2 block2 block3;
+
+block2:
+    jump block1;
+
+block3:
+    return v1;
+}
+"#,
+            pred: BlockId(2),
+            succ: BlockId(1),
+            scratch: &["v1"],
+            spilled: &[],
+            stack: &["v0"],
+            params: &[],
+            transfer: &["v0"],
+        });
+
+        assert_eq!(actions.as_slice(), &[]);
     }
 }

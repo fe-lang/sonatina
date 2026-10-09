@@ -11,16 +11,21 @@
 //!     frozen merge / function entry) and the `Pending -> Frozen` freeze lifecycle live in one
 //!     place: the block-entry state machine in `entry.rs` (`record_edge` + `resolve_entry`).
 //! - For merge blocks, all incoming edges are normalized to the same `StackIn(B)` (often a no-op);
-//!   spilled phi results are stored directly on the incoming edge instead of being carried in
-//!   `P(B)`.
+//!   spilled phi results are stored on the incoming edge instead of being carried in `P(B)`.
+//! - Each edge fixup is a parallel copy. Storing a spilled phi result overwrites that phi's old
+//!   value, which may be another source on the same edge, so the store waits until no pending read
+//!   needs the old value. Stores waiting on a stack phi's read follow normalization, and copy
+//!   cycles are broken one at a time by holding one old value on the stack, so the fixup's stack
+//!   growth stays bounded however many phis it copies.
 //! - When a value cannot be duplicated from within `DUP16` reach, it is added to `spill_set`,
 //!   assigned a stack object, and reloaded from memory; `spill_set` is discovered via a
 //!   monotone fixed point.
 //! - Scratch spill slots use block liveness plus phi-edge interference, because phi sources and
 //!   results are simultaneous edge assignments even though normal liveness treats phi operands as
 //!   predecessor-tail uses.
-//! - Static-arena spill objects carry the same phi-edge interference in their live regions, so
-//!   edge stores can be emitted directly without first staging every phi source on the stack.
+//! - Every non-rematerialized spilled value gets its own stack object. Final spill words are
+//!   shared only between objects whose emitted loads and stores never overlap
+//!   (`isa::evm::machine::final_spills`).
 //!
 //! Notes specific to this codebase:
 //! - Run `StackifyEdgeSplitter` before this allocator: it canonicalizes all-identical branches

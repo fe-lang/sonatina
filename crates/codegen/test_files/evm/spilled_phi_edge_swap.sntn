@@ -1,0 +1,44 @@
+#! evm.config: { opt: 0 }
+#! evm.case: one
+#!   calldata: u256(1)
+#!   expect: return u256(2)
+#! evm.case: two
+#!   calldata: u256(2)
+#!   expect: return u256(1)
+#! evm.case: three
+#!   calldata: u256(3)
+#!   expect: return u256(2)
+
+# `v1` and `v2` swap on every iteration. The backedge is a copy cycle, so
+# neither spill word can be stored before the other's old value is read.
+
+target = "evm-ethereum-osaka"
+
+func private %swap(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (1.i256 block0) (v2 block2);
+    v2.i256 = phi (2.i256 block0) (v1 block2);
+    v3.i256 = phi (0.i256 block0) (v4 block2);
+    v5.i1 = lt v3 v0;
+    br v5 block2 block3;
+
+block2:
+    v4.i256 = add v3 1.i256;
+    jump block1;
+
+block3:
+    return v1;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = call %swap v0;
+    mstore 0.i256 v1 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract { section runtime { entry %entry; } }

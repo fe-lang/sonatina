@@ -1,0 +1,22 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/spilled_phi_edge_stack_phi_source.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 67 bytes
+  total: 67 bytes
+
+functions:
+  mem: global_dyn_base=0x40 arena_base=0x40 scratch_peak_words=0 stable_chain_peak_words=0
+  shift: ir_blocks=6 ir_insts=11 vcode_ops=45 fixups=3 imm_bytes=4
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  entry: ir_blocks=1 ir_insts=4 vcode_ops=12 fixups=2 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case zero: calldata_len=32 success reason=Return gas_used=21217 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=89
+  case one: calldata_len=32 success reason=Return gas_used=21336 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=196
+  case ten: calldata_len=32 success reason=Return gas_used=22272 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1132

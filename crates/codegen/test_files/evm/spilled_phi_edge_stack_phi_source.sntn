@@ -1,0 +1,54 @@
+#! evm.config: { opt: 0 }
+#! evm.case: zero
+#!   calldata: u256(0)
+#!   expect: return u256(0)
+#! evm.case: one
+#!   calldata: u256(1)
+#!   expect: return u256(1)
+#! evm.case: ten
+#!   calldata: u256(10)
+#!   expect: return u256(10)
+
+# Sonatina #396. On the backedge, stack phi `v16` takes the old value of
+# spilled phi `v4`, while `v4` is overwritten with `v8`. The stack phi must read
+# `v4` before its spill word is stored.
+
+target = "evm-ethereum-osaka"
+
+func private %shift(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    jump block2;
+
+block2:
+    v16.i256 = phi (0.i256 block1) (v4 block6);
+    v4.i256 = phi (1.i256 block1) (v8 block6);
+    v5.i1 = gt v4 v0;
+    v6.i1 = is_zero v5;
+    br v6 block3 block4;
+
+block3:
+    (v8.i256, v9.i1) = uaddo v4 1.i256;
+    br v9 block5 block6;
+
+block4:
+    return v16;
+
+block5:
+    evm_revert 0.i256 0.i256;
+
+block6:
+    jump block2;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = call %shift v0;
+    mstore 0.i256 v1 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract { section runtime { entry %entry; } }

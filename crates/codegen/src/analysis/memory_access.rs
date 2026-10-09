@@ -1,6 +1,10 @@
-use std::hash::{Hash, Hasher};
+use std::{
+    hash::{Hash, Hasher},
+    ops::ControlFlow,
+};
 
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use smallvec::SmallVec;
 use sonatina_ir::{
     AccessLoc, AddressSpaceId, Function, GlobalVariableRef, I256, Immediate, InstDowncast, InstId,
     Type, Value, ValueId,
@@ -119,6 +123,18 @@ pub(crate) struct CanonicalAddr {
 pub struct ExactLocalAddr {
     pub root_alloca: InstId,
     pub offset_bytes: i64,
+}
+
+/// How a value's canonical address derives from the address of the operand being resolved.
+enum AddrFrame {
+    /// The operand's address, displaced by a constant byte offset.
+    Offset(i64),
+    /// The address all phi operands share, or unknown if they differ. `first` is the first
+    /// operand's address once resolved; `rest` holds the operands still to resolve, last first.
+    Phi {
+        first: Option<CanonicalAddr>,
+        rest: SmallVec<[ValueId; 4]>,
+    },
 }
 
 pub struct MemoryAccessAnalysis {
@@ -475,140 +491,157 @@ impl MemoryAccessAnalysis {
         func: &Function,
         addr: ValueId,
     ) -> CanonicalAddr {
-        self.canonical_linear_addr_rec(func, addr, &mut FxHashSet::default())
-    }
+        // A depth-first walk over the values each address is derived from. Address chains through
+        // phis and arithmetic can be arbitrarily long, so pending values live on an explicit stack
+        // rather than the call stack. A value reached again while it is still being resolved is on
+        // a cycle, and its address is unknown.
+        let mut visiting = FxHashSet::default();
+        let mut frames: Vec<(ValueId, AddrFrame)> = Vec::new();
+        let mut next = addr;
+        loop {
+            let mut canonical = if let Some(canonical) = self.canonical_addrs.get(&next) {
+                canonical.clone()
+            } else if !visiting.insert(next) {
+                CanonicalAddr::unknown(next)
+            } else {
+                match self.canonical_addr_step(func, next) {
+                    ControlFlow::Break(canonical) => {
+                        visiting.remove(&next);
+                        self.canonical_addrs.insert(next, canonical.clone());
+                        canonical
+                    }
+                    ControlFlow::Continue((operand, frame)) => {
+                        frames.push((next, frame));
+                        next = operand;
+                        continue;
+                    }
+                }
+            };
 
-    fn canonical_linear_addr_rec(
-        &mut self,
-        func: &Function,
-        addr: ValueId,
-        visiting: &mut FxHashSet<ValueId>,
-    ) -> CanonicalAddr {
-        if let Some(canonical) = self.canonical_addrs.get(&addr) {
-            return canonical.clone();
-        }
-
-        if !visiting.insert(addr) {
-            return CanonicalAddr::unknown(addr);
-        }
-
-        let canonical = match func.dfg.get_value(addr) {
-            Some(Value::Immediate { imm, .. }) => CanonicalAddr {
-                base: BaseObject::Absolute(*imm),
-                offset: 0,
-            },
-            Some(Value::Global { gv, .. }) => CanonicalAddr {
-                base: BaseObject::Global(*gv),
-                offset: 0,
-            },
-            Some(Value::Arg { .. }) => CanonicalAddr {
-                base: BaseObject::Arg(addr),
-                offset: 0,
-            },
-            Some(Value::Inst { inst, .. }) => {
-                self.canonical_addr_from_inst(func, addr, *inst, visiting)
+            // Hand the resolved address to the values waiting on it.
+            loop {
+                let Some((value, frame)) = frames.last_mut() else {
+                    return canonical;
+                };
+                let value = *value;
+                let resolved = match frame {
+                    AddrFrame::Offset(offset) => canonical
+                        .with_offset(*offset)
+                        .unwrap_or_else(|| CanonicalAddr::unknown(value)),
+                    AddrFrame::Phi { first, rest } => {
+                        if first.as_ref().is_some_and(|first| *first != canonical) {
+                            CanonicalAddr::unknown(value)
+                        } else if let Some(operand) = rest.pop() {
+                            first.get_or_insert(canonical);
+                            next = operand;
+                            break;
+                        } else {
+                            first.take().unwrap_or(canonical)
+                        }
+                    }
+                };
+                frames.pop();
+                visiting.remove(&value);
+                self.canonical_addrs.insert(value, resolved.clone());
+                canonical = resolved;
             }
-            Some(Value::Undef { .. }) | None => CanonicalAddr::unknown(addr),
-        };
-
-        visiting.remove(&addr);
-        self.canonical_addrs.insert(addr, canonical.clone());
-        canonical
+        }
     }
 
-    fn canonical_addr_from_inst(
-        &mut self,
+    /// Resolves `value`'s canonical address directly, or continues with the operand the address
+    /// derives from.
+    fn canonical_addr_step(
+        &self,
         func: &Function,
         value: ValueId,
-        inst: InstId,
-        visiting: &mut FxHashSet<ValueId>,
-    ) -> CanonicalAddr {
+    ) -> ControlFlow<CanonicalAddr, (ValueId, AddrFrame)> {
+        let inst = match func.dfg.get_value(value) {
+            Some(Value::Immediate { imm, .. }) => {
+                return ControlFlow::Break(CanonicalAddr {
+                    base: BaseObject::Absolute(*imm),
+                    offset: 0,
+                });
+            }
+            Some(Value::Global { gv, .. }) => {
+                return ControlFlow::Break(CanonicalAddr {
+                    base: BaseObject::Global(*gv),
+                    offset: 0,
+                });
+            }
+            Some(Value::Arg { .. }) => {
+                return ControlFlow::Break(CanonicalAddr {
+                    base: BaseObject::Arg(value),
+                    offset: 0,
+                });
+            }
+            Some(Value::Inst { inst, .. }) => *inst,
+            Some(Value::Undef { .. }) | None => {
+                return ControlFlow::Break(CanonicalAddr::unknown(value));
+            }
+        };
         let inst_data = func.dfg.inst(inst);
         let is = func.inst_set();
 
         if <&Alloca as InstDowncast>::downcast(is, inst_data).is_some() {
-            return CanonicalAddr {
+            return ControlFlow::Break(CanonicalAddr {
                 base: BaseObject::Alloca(inst),
                 offset: 0,
-            };
+            });
         }
 
         if <&EvmMalloc as InstDowncast>::downcast(is, inst_data).is_some() {
-            return CanonicalAddr {
+            return ControlFlow::Break(CanonicalAddr {
                 base: BaseObject::Malloc(inst),
                 offset: 0,
-            };
+            });
         }
 
-        if let Some(gep) = <&Gep as InstDowncast>::downcast(is, inst_data) {
-            let Some((&base, indices)) = gep.values().split_first() else {
-                return CanonicalAddr::unknown(value);
-            };
-            let Some(offset) = self.const_gep_offset(func, base, indices) else {
-                return CanonicalAddr::unknown(value);
-            };
-            let base = self.canonical_linear_addr_rec(func, base, visiting);
-            return base
-                .with_offset(offset)
-                .unwrap_or_else(|| CanonicalAddr::unknown(value));
+        if let Some(gep) = <&Gep as InstDowncast>::downcast(is, inst_data)
+            && let Some((&base, indices)) = gep.values().split_first()
+            && let Some(offset) = self.const_gep_offset(func, base, indices)
+        {
+            return ControlFlow::Continue((base, AddrFrame::Offset(offset)));
         }
 
         if let Some(bitcast) = <&Bitcast as InstDowncast>::downcast(is, inst_data) {
-            return self.canonical_linear_addr_rec(func, *bitcast.from(), visiting);
+            return ControlFlow::Continue((*bitcast.from(), AddrFrame::Offset(0)));
         }
 
         if let Some(int_to_ptr) = <&IntToPtr as InstDowncast>::downcast(is, inst_data) {
-            return self.canonical_linear_addr_rec(func, *int_to_ptr.from(), visiting);
+            return ControlFlow::Continue((*int_to_ptr.from(), AddrFrame::Offset(0)));
         }
 
         if let Some(ptr_to_int) = <&PtrToInt as InstDowncast>::downcast(is, inst_data) {
-            return self.canonical_linear_addr_rec(func, *ptr_to_int.from(), visiting);
+            return ControlFlow::Continue((*ptr_to_int.from(), AddrFrame::Offset(0)));
         }
 
         if let Some(add) = <&Add as InstDowncast>::downcast(is, inst_data) {
             if let Some(offset) = self.value_const_i64(func, *add.rhs()) {
-                return self
-                    .canonical_linear_addr_rec(func, *add.lhs(), visiting)
-                    .with_offset(offset)
-                    .unwrap_or_else(|| CanonicalAddr::unknown(value));
+                return ControlFlow::Continue((*add.lhs(), AddrFrame::Offset(offset)));
             }
             if let Some(offset) = self.value_const_i64(func, *add.lhs()) {
-                return self
-                    .canonical_linear_addr_rec(func, *add.rhs(), visiting)
-                    .with_offset(offset)
-                    .unwrap_or_else(|| CanonicalAddr::unknown(value));
+                return ControlFlow::Continue((*add.rhs(), AddrFrame::Offset(offset)));
             }
-            return CanonicalAddr::unknown(value);
         }
 
-        if let Some(sub) = <&Sub as InstDowncast>::downcast(is, inst_data) {
-            // A representable operand can have an unrepresentable negation.
-            // Such displacements must remain unknown to the address analysis.
-            if let Some(offset) = self
+        // A representable operand can have an unrepresentable negation. Such displacements must
+        // remain unknown to the address analysis.
+        if let Some(sub) = <&Sub as InstDowncast>::downcast(is, inst_data)
+            && let Some(offset) = self
                 .value_const_i64(func, *sub.rhs())
                 .and_then(i64::checked_neg)
-            {
-                return self
-                    .canonical_linear_addr_rec(func, *sub.lhs(), visiting)
-                    .with_offset(offset)
-                    .unwrap_or_else(|| CanonicalAddr::unknown(value));
-            }
-            return CanonicalAddr::unknown(value);
+        {
+            return ControlFlow::Continue((*sub.lhs(), AddrFrame::Offset(offset)));
         }
 
-        if let Some(phi) = <&Phi as InstDowncast>::downcast(is, inst_data) {
-            let mut args = phi.args().iter().map(|(value, _)| *value);
-            let Some(first) = args.next() else {
-                return CanonicalAddr::unknown(value);
-            };
-            let first = self.canonical_linear_addr_rec(func, first, visiting);
-            if args.all(|arg| self.canonical_linear_addr_rec(func, arg, visiting) == first) {
-                return first;
-            }
-            return CanonicalAddr::unknown(value);
+        if let Some(phi) = <&Phi as InstDowncast>::downcast(is, inst_data)
+            && let Some((&(first, _), rest)) = phi.args().split_first()
+        {
+            let rest = rest.iter().rev().map(|&(arg, _)| arg).collect();
+            return ControlFlow::Continue((first, AddrFrame::Phi { first: None, rest }));
         }
 
-        CanonicalAddr::unknown(value)
+        ControlFlow::Break(CanonicalAddr::unknown(value))
     }
 
     fn trackable_value_key(&mut self, func: &Function, value: ValueId) -> Option<ValueKey> {
@@ -1115,6 +1148,33 @@ mod tests {
             .expect("alloca inst exists");
         assert_eq!(exact.root_alloca, alloca_inst);
         assert_eq!(exact.offset_bytes, 64);
+    }
+
+    #[test]
+    fn exact_local_addr_follows_long_address_chains() {
+        // Each step adds a value to resolve before reaching the alloca, far more than the native
+        // stack could hold as nested calls.
+        const STEPS: i64 = 100_000;
+        let mb = test_module_builder();
+        let ptr_ty = mb.ptr_type(Type::I256);
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let base = builder.insert_inst_with(|| Alloca::new(is, Type::I256), ptr_ty);
+        let one = builder.make_imm_value(I256::from(1));
+        let mut addr = builder.insert_inst_with(|| PtrToInt::new(is, base, Type::I256), Type::I256);
+        for _ in 0..STEPS {
+            addr = builder.insert_inst_with(|| Add::new(is, addr, one), Type::I256);
+        }
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let exact = MemoryAccessAnalysis::new()
+            .exact_local_addr(&builder.func, addr)
+            .expect("expected exact local addr");
+        assert_eq!(exact.offset_bytes, STEPS);
     }
 
     #[test]

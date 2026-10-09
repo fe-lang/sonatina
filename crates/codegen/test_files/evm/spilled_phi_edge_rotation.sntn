@@ -1,0 +1,62 @@
+#! evm.config: { opt: 0 }
+#! evm.case: zero
+#!   calldata: u256(0)
+#!   expect: return u256(20)
+#! evm.case: one
+#!   calldata: u256(1)
+#!   expect: return u256(1)
+#! evm.case: three
+#!   calldata: u256(3)
+#!   expect: return u256(3)
+
+# Twenty loop-carried values rotate left once per iteration, which spills them
+# all. The backedge is one 20-element copy cycle through memory.
+
+target = "evm-ethereum-osaka"
+
+func private %rotate(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (1.i256 block0) (v2 block2);
+    v2.i256 = phi (2.i256 block0) (v3 block2);
+    v3.i256 = phi (3.i256 block0) (v4 block2);
+    v4.i256 = phi (4.i256 block0) (v5 block2);
+    v5.i256 = phi (5.i256 block0) (v6 block2);
+    v6.i256 = phi (6.i256 block0) (v7 block2);
+    v7.i256 = phi (7.i256 block0) (v8 block2);
+    v8.i256 = phi (8.i256 block0) (v9 block2);
+    v9.i256 = phi (9.i256 block0) (v10 block2);
+    v10.i256 = phi (10.i256 block0) (v11 block2);
+    v11.i256 = phi (11.i256 block0) (v12 block2);
+    v12.i256 = phi (12.i256 block0) (v13 block2);
+    v13.i256 = phi (13.i256 block0) (v14 block2);
+    v14.i256 = phi (14.i256 block0) (v15 block2);
+    v15.i256 = phi (15.i256 block0) (v16 block2);
+    v16.i256 = phi (16.i256 block0) (v17 block2);
+    v17.i256 = phi (17.i256 block0) (v18 block2);
+    v18.i256 = phi (18.i256 block0) (v19 block2);
+    v19.i256 = phi (19.i256 block0) (v20 block2);
+    v20.i256 = phi (20.i256 block0) (v1 block2);
+    v21.i256 = phi (0.i256 block0) (v22 block2);
+    v23.i1 = lt v21 v0;
+    br v23 block2 block3;
+
+block2:
+    v22.i256 = add v21 1.i256;
+    jump block1;
+
+block3:
+    return v20;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = call %rotate v0;
+    mstore 0.i256 v1 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract { section runtime { entry %entry; } }
