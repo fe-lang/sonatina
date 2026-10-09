@@ -1,0 +1,30 @@
+#! evm.config: { vcode: false, bytecode_hex: false, stackify_trace: false, evm_trace: false, opt: 2 }
+#! evm.case: folded_and_runtime_digests_agree
+#!   calldata: u256(1)
+#!   expect: return u256(0xada5013122d395ba3c54772283fb069b10426056ef8ca54750cb9bb552a59e7d) u256(0xada5013122d395ba3c54772283fb069b10426056ef8ca54750cb9bb552a59e7d) u256(0) u256(0x323100067b777d5a2afe92f35d3908cbfa57c365bbd84f9df57d99aa8082f572)
+#! evm.case: high_bit_word
+#!   calldata: u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#!   expect: return u256(0xada5013122d395ba3c54772283fb069b10426056ef8ca54750cb9bb552a59e7d) u256(0xbbd6e7dddd4326dd7c827841ab9733c6e3fcdf38a516374bd10feec8f674ea8a) u256(0) u256(0x323100067b777d5a2afe92f35d3908cbfa57c365bbd84f9df57d99aa8082f572)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_keccak256_words 1.i256 0.i256;
+        v2.i256 = evm_keccak256_words v0 0.i256;
+        v3.i256 = evm_keccak256_words v0 0.i256;
+        v4.i256 = sub v2 v3;
+        v5.i256 = evm_keccak256_words 0x8000000000000000000000000000000000000000000000000000000000000000.i256 42.i256 255.i256;
+        mstore 0.i256 v1 i256;
+        mstore 32.i256 v2 i256;
+        mstore 64.i256 v4 i256;
+        mstore 96.i256 v5 i256;
+        evm_return 0.i256 128.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

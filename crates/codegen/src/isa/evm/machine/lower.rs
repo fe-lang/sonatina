@@ -376,6 +376,9 @@ impl FuncLowerCtx<'_> {
                 self.lower_zext_or_trunc(source_inst, *cast.from(), *cast.ty())
             }
             EvmInstKind::Sext(cast) => self.lower_sext(source_inst, *cast.from()),
+            EvmInstKind::EvmKeccak256Words(_) => {
+                Err("evm_keccak256_words must be lowered before machine lowering".to_string())
+            }
             _ => self.lower_structural(source_inst),
         }
     }

@@ -113,6 +113,7 @@ pub struct EvmInstSet(
     evm::EvmByte,
     evm::EvmClz,
     evm::EvmKeccak256,
+    evm::EvmKeccak256Words,
     evm::EvmAddress,
     evm::EvmBalance,
     evm::EvmOrigin,

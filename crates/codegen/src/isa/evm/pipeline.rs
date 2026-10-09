@@ -18,7 +18,10 @@ use crate::{
             AggregateExpandAbi, AggregateLowerToMemoryLegalize, ObjectAggregateAbi,
             assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,
         },
-        evm::{ConstDataLower, legalize_evm_section, reuse_terminal_word_buffers},
+        evm::{
+            ConstDataLower, legalize_evm_section, lower_keccak256_words,
+            reuse_terminal_word_buffers,
+        },
     },
 };
 use sonatina_ir::{Module, module::FuncRef};
@@ -66,7 +69,7 @@ impl<'a> EvmPipeline<'a> {
         let _span = info_span!(
             "sonatina.codegen.evm.pipeline.run",
             funcs = ctx.funcs.len(),
-            phases = if optional_cleanup { 7 } else { 4 }
+            phases = if optional_cleanup { 8 } else { 5 }
         )
         .entered();
 
@@ -111,6 +114,11 @@ impl<'a> EvmPipeline<'a> {
                 EvmPipelineContext::run_raw_memory_cleanup,
             )?;
         }
+        ctx.run_phase(
+            "keccak_words_lowering",
+            "mandatory",
+            EvmPipelineContext::run_keccak_words_lowering,
+        )?;
 
         Ok(EvmPipelineArtifacts {
             funcs: ctx.funcs,
@@ -397,6 +405,28 @@ impl EvmPipelineContext<'_> {
         if terminal_payloads_changed {
             self.func_behavior_dirty = true;
             self.run_pass_round("terminal_payload", &[Pass::Sccp, Pass::LoadStore]);
+            self.ptr_escape = Some(compute_ptr_escape_summaries(
+                self.module(),
+                &self.funcs,
+                &self.backend.isa,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Word hashes stay pure values through every optimization round above;
+    /// only now do they become the memory hash the EVM executes, before
+    /// memory planning places the preimages.
+    fn run_keccak_words_lowering(&mut self) -> Result<(), String> {
+        let mut changed = false;
+        {
+            let module = self.module();
+            for &func in &self.funcs {
+                changed |= module.func_store.modify(func, lower_keccak256_words);
+            }
+        }
+        if changed {
+            self.func_behavior_dirty = true;
             self.ptr_escape = Some(compute_ptr_escape_summaries(
                 self.module(),
                 &self.funcs,

@@ -1,0 +1,47 @@
+#! SCCP folds `evm_keccak256_words` when every word is constant.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %keccak256_words_fold() -> i256 {
+# nextln:     block0:
+# nextln:         return -37453343090079225298870253283504062431675071153813376750865614837522423455819.i256;
+func public %keccak256_words_fold() -> i256 {
+    block0:
+        v0.i256 = evm_keccak256_words 0.i256 0.i256;
+        return v0;
+}
+
+# sameln: func public %keccak256_no_words_fold() -> i256 {
+# nextln:     block0:
+# nextln:         return -26314937019391520585146947054695941613947897212292807772047415823230471658384.i256;
+func public %keccak256_no_words_fold() -> i256 {
+    block0:
+        v0.i256 = evm_keccak256_words;
+        return v0;
+}
+
+# sameln: func public %keccak256_words_fold_through_phi(v0.i1) -> i256 {
+# check:          return -35707666377435648211887908874984608119992236509074197713628505308453184860938.i256;
+func public %keccak256_words_fold_through_phi(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i256 = phi (1.i256 block1) (1.i256 block2);
+        v2.i256 = evm_keccak256_words v1;
+        return v2;
+}
+
+# sameln: func public %keccak256_words_unknown_word_stays(v0.i256) -> i256 {
+# check:          v1.i256 = evm_keccak256_words 1.i256 v0;
+func public %keccak256_words_unknown_word_stays(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_keccak256_words 1.i256 v0;
+        return v1;
+}

@@ -1,0 +1,38 @@
+#! `evm_keccak256_words` is a value of its words: equal words share one
+#! digest, whatever memory does in between, and reordered words do not.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %equal_words_share_digest(v0.i256, v1.i256) -> i256 {
+# check:          mstore 0.i256 v1 i256;
+# nextln:         return 0.i256;
+func public %equal_words_share_digest(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = evm_keccak256_words v0 v1;
+        mstore 0.i256 v1 i256;
+        v3.i256 = evm_keccak256_words v0 v1;
+        v4.i256 = sub v2 v3;
+        return v4;
+}
+
+# sameln: func public %reordered_words_differ(v0.i256, v1.i256) -> i256 {
+# check:          v2.i256 = evm_keccak256_words v0 v1;
+# check:          v3.i256 = evm_keccak256_words v1 v0;
+# check:          v4.i256 = sub v2 v3;
+func public %reordered_words_differ(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = evm_keccak256_words v0 v1;
+        v3.i256 = evm_keccak256_words v1 v0;
+        v4.i256 = sub v2 v3;
+        return v4;
+}
+
+# sameln: func public %folds_known_words(v0.i256) -> i256 {
+# nextln:     block0:
+# nextln:         return -37453343090079225298870253283504062431675071153813376750865614837522423455819.i256;
+func public %folds_known_words(v0.i256) -> i256 {
+    block0:
+        v1.i256 = sub v0 v0;
+        v2.i256 = evm_keccak256_words v1 0.i256;
+        return v2;
+}
