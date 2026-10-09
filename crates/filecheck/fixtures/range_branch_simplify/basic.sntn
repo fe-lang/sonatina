@@ -134,3 +134,59 @@ block3:
 block4:
     return 3.i256;
 }
+
+# sameln: func public %latch_bound_narrows_widened_header_phi() -> i256 {
+# not:         br v1
+# check:       jump block3;
+# check:       br v3 block2 block5;
+func public %latch_bound_narrows_widened_header_phi() -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v0.i256 = phi (0.i256 block0) (v2 block2);
+    v1.i1 = lt v0 32.i256;
+    br v1 block3 block4;
+
+block2:
+    jump block1;
+
+block3:
+    v4.i256 = mload v0 i256;
+    v2.i256 = add v0 1.i256;
+    v3.i1 = lt v2 32.i256;
+    br v3 block2 block5;
+
+block4:
+    return 999.i256;
+
+block5:
+    return v4;
+}
+
+# sameln: func public %looser_latch_bound_keeps_header_check() -> i256 {
+# check:       br v1 block3 block4;
+func public %looser_latch_bound_keeps_header_check() -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v0.i256 = phi (0.i256 block0) (v2 block2);
+    v1.i1 = lt v0 32.i256;
+    br v1 block3 block4;
+
+block2:
+    jump block1;
+
+block3:
+    v4.i256 = mload v0 i256;
+    v2.i256 = add v0 1.i256;
+    v3.i1 = lt v2 33.i256;
+    br v3 block2 block5;
+
+block4:
+    return 999.i256;
+
+block5:
+    return v4;
+}

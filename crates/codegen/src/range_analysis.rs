@@ -17,6 +17,12 @@ pub type RangeEnv = FxHashMap<ValueId, RangeFact>;
 
 const LOOP_WIDEN_CAP: u8 = 4;
 
+/// Descending sweeps over a widened fixpoint. Widening jumps a loop header's
+/// bounds to the type extrema; recomputing each entry from its predecessors
+/// recovers the bounds the loop's own exit tests impose on its back edges,
+/// such as `i < n` for a counter `i`.
+const NARROWING_SWEEPS: usize = 2;
+
 #[derive(Clone, Debug, Default)]
 pub struct RangeAnalysis {
     entry_envs: SecondaryMap<BlockId, RangeEnv>,
@@ -61,6 +67,7 @@ impl RangeAnalysis {
         let mut worklist = VecDeque::new();
         let mut queued = SecondaryMap::<BlockId, bool>::default();
         let mut revisit_count = SecondaryMap::<BlockId, u8>::default();
+        let mut widened = false;
 
         for &block in &rpo {
             if static_reachable[block] {
@@ -93,6 +100,7 @@ impl RangeAnalysis {
             }
             if is_loop_header(lpt, block) && revisit_count[block] > LOOP_WIDEN_CAP {
                 new_entry = widen_env(func, &self.entry_envs[block], &new_entry);
+                widened = true;
             }
 
             let entry_changed = !old_initialized || new_entry != self.entry_envs[block];
@@ -113,6 +121,41 @@ impl RangeAnalysis {
 
             if exit_changed || reachability_changed {
                 enqueue_succs(cfg, block, &mut worklist, &mut queued);
+            }
+        }
+
+        // Each step recomputes one block from environments that already
+        // cover every execution, so it covers every execution too: the
+        // sweeps need no monotonicity and stop after a fixed count. A block
+        // the fixpoint left unreachable stays so.
+        if !widened {
+            return;
+        }
+        for _ in 0..NARROWING_SWEEPS {
+            let mut changed = false;
+            for &block in &rpo {
+                if !self.reachable[block] {
+                    continue;
+                }
+                let Some(new_entry) =
+                    compute_block_entry(func, cfg, block, entry, &self.exit_envs, &self.reachable)
+                else {
+                    self.reachable[block] = false;
+                    self.initialized[block] = false;
+                    self.entry_envs[block].clear();
+                    self.exit_envs[block].clear();
+                    changed = true;
+                    continue;
+                };
+                if new_entry == self.entry_envs[block] {
+                    continue;
+                }
+                self.exit_envs[block] = simulate_block_from_entry(func, block, &new_entry);
+                self.entry_envs[block] = new_entry;
+                changed = true;
+            }
+            if !changed {
+                break;
             }
         }
     }
