@@ -2792,6 +2792,10 @@ fn memory_planning_at_all_optimization_levels() {
             "black_box addresses",
             include_str!("../test_files/evm/black_box_pointer_provenance.sntn"),
         ),
+        (
+            "derived frame addresses",
+            include_str!("../test_files/evm/dyn_frame_derived_addresses.sntn"),
+        ),
     ] {
         for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
             let parsed = parse_sona(source);

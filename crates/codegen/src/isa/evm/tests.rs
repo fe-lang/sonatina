@@ -44,7 +44,7 @@ use self::{
         },
     },
     memory_plan::{
-        ArenaCostModel, BackendSpillPlan, BackendSpillReserve, ProgramMemoryPlan,
+        ArenaCostModel, BackendSpillPlan, BackendSpillReserve, DYN_SP_SLOT, ProgramMemoryPlan,
         compute_abs_clobber_words_with_extra, compute_semantic_program_memory_plan,
     },
     prepare::compute_return_escape_caller_clamp_words,
@@ -743,6 +743,80 @@ block2:
         first_mem_op,
         OpCode::MLOAD as u8,
         "recursive lazy frame lowering must read dyn_sp before writing it"
+    );
+}
+
+#[test]
+fn lazy_frame_enters_after_values_combined_with_frame_addresses() {
+    // The gas reading only offsets the frame address, so the frame must be
+    // entered after it rather than before the read.
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) -> i256 {
+block0:
+    v2.i256 = evm_gas;
+    br v0 block1 block2;
+
+block1:
+    return v2;
+
+block2:
+    v3.*i256 = alloca i256;
+    v4.i256 = ptr_to_int v3 i256;
+    v5.i256 = add v4 v2;
+    mstore v5 v1 i256;
+    v6.i256 = call %f 1.i1 v1;
+    v7.i256 = mload v5 i256;
+    v8.i256 = add v6 v7;
+    return v8;
+}
+"#,
+    )
+    .unwrap();
+
+    let f = find_func(&parsed.module, "f");
+    let backend = osaka_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &[f], f))
+        .expect("prepare should succeed");
+    let function_plan = prepared.function_plan(f).expect("missing function plan");
+    assert!(function_plan.frame_summary.lowering.is_some());
+
+    let lowered = backend
+        .lower_function(&prepared, f)
+        .expect("function lowers");
+    let ops: Vec<(u8, &[u8])> = lowered
+        .block_order
+        .iter()
+        .flat_map(|&block| lowered.vcode.block_insns(block))
+        .map(|inst| {
+            let imm = lowered.vcode.inst_imm_bytes.get(inst);
+            (
+                lowered.vcode.insts[inst] as u8,
+                imm.map_or(&[][..], |(_, bytes)| bytes.as_slice()),
+            )
+        })
+        .collect();
+    let gas = ops
+        .iter()
+        .position(|&(op, _)| op == OpCode::GAS as u8)
+        .expect("gas read");
+    let enter = ops
+        .windows(3)
+        .position(|window| {
+            window
+                == [
+                    (OpCode::PUSH1 as u8, &[DYN_SP_SLOT][..]),
+                    (OpCode::MLOAD as u8, &[][..]),
+                    (OpCode::DUP1 as u8, &[][..]),
+                ]
+        })
+        .expect("frame entry");
+    assert!(
+        gas < enter,
+        "frame entry at op {enter} precedes gas read at op {gas}"
     );
 }
 
