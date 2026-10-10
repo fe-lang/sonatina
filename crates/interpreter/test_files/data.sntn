@@ -14,6 +14,14 @@ func private %store_load(v0.i256, v1.i8) -> i8 {
         return v3;
 }
 
+#[(5.i64) -> 5.i64]
+#[(-1.i64) -> -1.i64]
+func private %black_box(v0.i64) -> i64 {
+    block0:
+        v1.i64 = black_box v0;
+        return v1;
+}
+
 #[(1.i16) -> 1.i16]
 #[(65535.i16) -> 65535.i16]
 func private %alloca(v0.i16) -> i8 {

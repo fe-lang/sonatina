@@ -79,6 +79,7 @@ pub trait Interpret {
         inst::cmp::IsZero,
         inst::data::Mload,
         inst::data::Mstore,
+        inst::data::BlackBox,
         inst::data::Gep,
         inst::data::GetFunctionPtr,
         inst::data::Alloca,
