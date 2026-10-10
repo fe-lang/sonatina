@@ -21,6 +21,13 @@ impl Interpret for Mstore {
     }
 }
 
+impl Interpret for BlackBox {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+        single_result(state.lookup_val(*self.arg()))
+    }
+}
+
 impl Interpret for Gep {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
