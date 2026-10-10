@@ -887,6 +887,9 @@ pub(crate) fn compute_provenance(
                     EvmInstKind::Bitcast(bc) => {
                         let _ = next.union_with(&info.value[*bc.from()]);
                     }
+                    EvmInstKind::BlackBox(black_box) => {
+                        let _ = next.union_with(&info.value[*black_box.arg()]);
+                    }
                     EvmInstKind::IntToPtr(i2p) => {
                         let from = *i2p.from();
                         let from_prov = &info.value[from];
@@ -1305,6 +1308,49 @@ block0:
 
         assert!(!ret_prov.is_unknown_ptr());
         assert_eq!(ret_prov.arg_indices().collect::<Vec<_>>(), vec![0]);
+    }
+
+    #[test]
+    fn black_box_forwards_pointer_provenance() {
+        let src = r#"
+target = "evm-ethereum-osaka"
+
+func public %boxed_malloc() -> i256 {
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = black_box v1;
+    return v2;
+}
+
+func public %boxed_arg(v0.*i256) -> i256 {
+block0:
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = black_box v1;
+    return v2;
+}
+
+func private %forward(v0.i256) -> i256 {
+block0:
+    v1.i256 = black_box v0;
+    return v1;
+}
+
+func public %forwarded_alloca() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = call %forward v1;
+    return v2;
+}
+"#;
+
+        let malloc = ret_provenance(src, "boxed_malloc");
+        assert_eq!(malloc.malloc_insts().count(), 1, "{malloc:?}");
+        let arg = ret_provenance(src, "boxed_arg");
+        assert_eq!(arg.arg_indices().collect::<Vec<_>>(), vec![0], "{arg:?}");
+        let alloca = ret_provenance(src, "forwarded_alloca");
+        assert!(alloca.is_local_addr(), "{alloca:?}");
     }
 
     #[test]

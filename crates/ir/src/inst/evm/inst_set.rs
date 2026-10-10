@@ -55,6 +55,7 @@ pub struct EvmInstSet(
     data::Mload,
     data::Mstore,
     data::Memzero,
+    data::BlackBox,
     data::Gep,
     data::GetFunctionPtr,
     data::SymAddr,

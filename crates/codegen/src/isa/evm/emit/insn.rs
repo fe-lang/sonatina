@@ -398,6 +398,8 @@ impl EvmMachineFunctionLowering<'_> {
                 );
                 emit_post_actions(ctx, alloc.post_inst(insn));
             }
+            // The operand stays on the stack as the result.
+            EvmMachineInstKind::BlackBox(_) => basic_op(ctx, &[]),
         }
     }
 }
