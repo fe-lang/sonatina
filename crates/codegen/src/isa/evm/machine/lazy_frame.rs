@@ -152,36 +152,33 @@ pub(crate) fn compute_machine_frame_roots(
                 .any(|alloca| matches!(alloca_loc.get(&alloca), Some(ObjLoc::StableFrame(_))))
         {
             roots.rooted_values.insert(machine_value);
-            collect_root_def_insts(
-                machine,
-                machine_value,
-                &mut roots.root_def_insts,
-                &mut FxHashSet::default(),
+        }
+    }
+
+    // A root's definition needs the frame only where it materializes the frame
+    // address: through other roots and machine-only values such as the dynamic
+    // SP read. Other lowered source values, like a gas reading added to the
+    // address, don't.
+    let lowered: FxHashSet<ValueId> = map.values.values().flatten().copied().collect();
+    let mut work: Vec<ValueId> = roots.rooted_values.iter().copied().collect();
+    while let Some(value) = work.pop() {
+        if let Some(inst) = machine.dfg.value_inst(value)
+            && machine.layout.try_inst_block(inst).is_some()
+            && roots.root_def_insts.insert(inst)
+        {
+            work.extend(
+                machine
+                    .dfg
+                    .inst(inst)
+                    .collect_values()
+                    .into_iter()
+                    .filter(|operand| {
+                        roots.rooted_values.contains(operand) || !lowered.contains(operand)
+                    }),
             );
         }
     }
     roots
-}
-
-fn collect_root_def_insts(
-    function: &Function,
-    value: ValueId,
-    root_def_insts: &mut FxHashSet<InstId>,
-    seen: &mut FxHashSet<ValueId>,
-) {
-    if !seen.insert(value) {
-        return;
-    }
-    let Some(inst) = function.dfg.value_inst(value) else {
-        return;
-    };
-    if function.layout.try_inst_block(inst).is_none() {
-        return;
-    }
-    root_def_insts.insert(inst);
-    for operand in function.dfg.inst(inst).collect_values() {
-        collect_root_def_insts(function, operand, root_def_insts, seen);
-    }
 }
 
 pub(crate) fn compute_frame_summary(
