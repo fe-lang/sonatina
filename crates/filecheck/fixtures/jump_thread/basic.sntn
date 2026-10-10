@@ -1,0 +1,195 @@
+target = "evm-ethereum-osaka"
+
+# sameln: func public %tag_phi_threads_each_pred(v0.i256) -> i256 {
+# check:   block1:
+# nextln:      jump block4;
+# check:   block2:
+# nextln:      jump block5;
+# not:         phi
+# not:     block3:
+func public %tag_phi_threads_each_pred(v0.i256) -> i256 {
+block0:
+    v1.i1 = lt v0 10.i256;
+    br v1 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v2.i1 = phi (1.i1 block1) (0.i1 block2);
+    br v2 block4 block5;
+
+block4:
+    return 1.i256;
+
+block5:
+    return 2.i256;
+}
+
+# sameln: func public %pure_inst_recomputed_in_pred(v0.i256) -> i256 {
+# check:       add 10.i256 1.i256;
+# nextln:      jump block4;
+# check:       add 20.i256 1.i256;
+# nextln:      jump block5;
+# not:     block3:
+func public %pure_inst_recomputed_in_pred(v0.i256) -> i256 {
+block0:
+    v1.i1 = lt v0 10.i256;
+    br v1 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v2.i1 = phi (1.i1 block1) (0.i1 block2);
+    v3.i256 = phi (10.i256 block1) (20.i256 block2);
+    v4.i256 = add v3 1.i256;
+    br v2 block4 block5;
+
+block4:
+    v5.i256 = phi (v4 block3);
+    return v5;
+
+block5:
+    v6.i256 = phi (v4 block3);
+    return v6;
+}
+
+# sameln: func public %latch_tag_phi_threads_to_header() -> i256 {
+# check:       v0.i256 = phi (0.i256 block0) (v2 block2);
+# check:   block2:
+# nextln:      jump block1;
+# check:   block3:
+# nextln:      jump block5;
+# not:     block4:
+func public %latch_tag_phi_threads_to_header() -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v0.i256 = phi (0.i256 block0) (v5 block4);
+    v1.i256 = mload v0 i256;
+    v2.i256 = add v0 1.i256;
+    v3.i1 = lt v2 32.i256;
+    br v3 block2 block3;
+
+block2:
+    jump block4;
+
+block3:
+    jump block4;
+
+block4:
+    v4.i1 = phi (1.i1 block2) (0.i1 block3);
+    v5.i256 = phi (v2 block2) (undef.i256 block3);
+    br v4 block1 block5;
+
+block5:
+    return v0;
+}
+
+# sameln: func public %only_constant_preds_thread(v0.i256, v1.i1) -> i256 {
+# check:   block1:
+# nextln:      jump block4;
+# check:   block2:
+# nextln:      jump block3;
+# check:       br v1 block4 block5;
+func public %only_constant_preds_thread(v0.i256, v1.i1) -> i256 {
+block0:
+    v2.i1 = lt v0 10.i256;
+    br v2 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v3.i1 = phi (1.i1 block1) (v1 block2);
+    br v3 block4 block5;
+
+block4:
+    return 1.i256;
+
+block5:
+    return 2.i256;
+}
+
+# sameln: func public %effectful_block_not_threaded(v0.i256) -> i256 {
+# check:       mstore 0.i256 v0 i256;
+# nextln:      br v2 block4 block5;
+func public %effectful_block_not_threaded(v0.i256) -> i256 {
+block0:
+    v1.i1 = lt v0 10.i256;
+    br v1 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v2.i1 = phi (1.i1 block1) (0.i1 block2);
+    mstore 0.i256 v0 i256;
+    br v2 block4 block5;
+
+block4:
+    return 1.i256;
+
+block5:
+    return 2.i256;
+}
+
+# sameln: func public %value_used_past_successor_phis_not_threaded(v0.i256) -> i256 {
+# check:       br v2 block4 block5;
+func public %value_used_past_successor_phis_not_threaded(v0.i256) -> i256 {
+block0:
+    v1.i1 = lt v0 10.i256;
+    br v1 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v2.i1 = phi (1.i1 block1) (0.i1 block2);
+    v3.i256 = add v0 1.i256;
+    br v2 block4 block5;
+
+block4:
+    return v3;
+
+block5:
+    return 2.i256;
+}
+
+# sameln: func public %loop_header_not_threaded(v0.i256) -> i256 {
+# check:   block0:
+# nextln:      jump block1;
+# check:       br v1 block2 block3;
+func public %loop_header_not_threaded(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i1 = phi (1.i1 block0) (v3 block2);
+    br v1 block2 block3;
+
+block2:
+    v2.i256 = mload 0.i256 i256;
+    v3.i1 = lt v2 v0;
+    jump block1;
+
+block3:
+    return 0.i256;
+}

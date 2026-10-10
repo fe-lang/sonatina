@@ -3,7 +3,7 @@ use sonatina_ir::{
     Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
     inst::{
         BinaryInstKind, CastInstKind, InstClassKind, InstKeyExt, OwnedInstKey, UnaryInstKind, cast,
-        downcast,
+        downcast, evm::EvmKeccak256Words,
     },
 };
 
@@ -731,6 +731,17 @@ fn fold_opaque_with_facts(
     key: &OwnedInstKey,
     facts: &impl ExprFactProvider,
 ) -> Option<SimplifiedInst> {
+    if key.opcode_text() == EvmKeccak256Words::inst_name() {
+        let words = key
+            .values()
+            .iter()
+            .map(|&word| defined_imm(facts, word).map(imm_to_u256))
+            .collect::<Option<SmallVec<[_; 2]>>>()?;
+        let digest = EvmKeccak256Words::digest(words);
+        return Some(SimplifiedInst::one(SimplifiedResult::Const(
+            Immediate::from_i256(I256::from(digest), Type::I256),
+        )));
+    }
     let [lhs, rhs, modulus] = key.values() else {
         return None;
     };

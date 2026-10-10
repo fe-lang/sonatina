@@ -2510,6 +2510,7 @@ dependencies = [
  "sonatina-macros",
  "sonatina-parser",
  "sonatina-triple",
+ "tiny-keccak",
  "vec-collections",
 ]
 

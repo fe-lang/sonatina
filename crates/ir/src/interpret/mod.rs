@@ -113,6 +113,7 @@ pub trait Interpret {
         inst::evm::EvmExp,
         inst::evm::EvmSignExtend,
         inst::evm::EvmByte,
+        inst::evm::EvmKeccak256Words,
     );
 }
 

@@ -20,8 +20,8 @@ mod absolute;
 use absolute::{AbsoluteLocations, absolute_interval};
 
 use crate::analysis::memory_access::{
-    AliasResult, BaseObject, KeyExpr, KeyedLocKey, LinearLocKey, LinearRangeKey,
-    MemoryAccessAnalysis, RangeCoverage, TrackedLocKey, ValueKey, absolute_byte_range,
+    AliasResult, BaseObject, KeyedLocKey, LinearLocKey, LinearRangeKey, MemoryAccessAnalysis,
+    RangeCoverage, TrackedLocKey, absolute_byte_range,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -408,7 +408,7 @@ impl LoadStoreSolver {
             let mut state = in_states[block].clone();
             // Earlier blocks may have deleted values present in the dataflow facts.
             // Prune once here, then validate individual forwarding candidates below.
-            prune_dead_avail_state(func, &mut state);
+            prune_dead_avail_state(func, analysis, &mut state);
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
             for inst in insts {
                 if !func.layout.is_inst_inserted(inst) {
@@ -824,16 +824,24 @@ fn kill_aliasing_key(state: &mut AvailState, analysis: &MemoryAccessAnalysis, ke
     state.exact.retain_no_alias_key(analysis, key);
 }
 
-fn prune_dead_avail_state(func: &Function, state: &mut AvailState) {
-    state
-        .exact
-        .retain(|key, value| func.dfg.has_value(*value) && tracked_key_is_live(func, key));
+fn prune_dead_avail_state(
+    func: &Function,
+    analysis: &MemoryAccessAnalysis,
+    state: &mut AvailState,
+) {
+    state.exact.retain(|key, value| {
+        func.dfg.has_value(*value) && tracked_key_is_live(func, analysis, key)
+    });
 }
 
-fn tracked_key_is_live(func: &Function, key: &TrackedLocKey) -> bool {
+fn tracked_key_is_live(
+    func: &Function,
+    analysis: &MemoryAccessAnalysis,
+    key: &TrackedLocKey,
+) -> bool {
     match key {
         TrackedLocKey::Linear(key) => base_object_is_live(func, &key.base),
-        TrackedLocKey::Keyed(key) => value_key_is_live(func, &key.key),
+        TrackedLocKey::Keyed(key) => analysis.key_is_live(func, key.key),
     }
 }
 
@@ -842,19 +850,6 @@ fn base_object_is_live(func: &Function, base: &BaseObject) -> bool {
         BaseObject::Alloca(inst) | BaseObject::Malloc(inst) => func.dfg.has_inst(*inst),
         BaseObject::Arg(value) | BaseObject::Unknown(value) => func.dfg.has_value(*value),
         BaseObject::Global(_) | BaseObject::Absolute(_) => true,
-    }
-}
-
-fn value_key_is_live(func: &Function, key: &ValueKey) -> bool {
-    match key {
-        ValueKey::Imm(_) => true,
-        ValueKey::Arg(value) => func.dfg.has_value(*value),
-        ValueKey::Expr(expr) => match expr.as_ref() {
-            KeyExpr::Unary { arg, .. } | KeyExpr::Cast { arg, .. } => value_key_is_live(func, arg),
-            KeyExpr::Binary { lhs, rhs, .. } => {
-                value_key_is_live(func, lhs) && value_key_is_live(func, rhs)
-            }
-        },
     }
 }
 

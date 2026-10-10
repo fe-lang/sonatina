@@ -14,6 +14,7 @@ pub mod dead_ret;
 pub mod forwarded_ret;
 pub mod gvn;
 pub mod inliner;
+pub mod jump_thread;
 pub mod known_bits_simplify;
 pub mod licm;
 pub mod load_store;

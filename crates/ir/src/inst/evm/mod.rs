@@ -2,7 +2,10 @@ use macros::Inst;
 pub mod inst_set;
 pub mod machine_inst_set;
 
-use crate::{Type, value::ValueId};
+use smallvec::SmallVec;
+use tiny_keccak::{Hasher, Keccak};
+
+use crate::{Type, U256, value::ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(binary(EvmUdiv)))]
@@ -165,6 +168,29 @@ pub struct EvmClz {
 pub struct EvmKeccak256 {
     addr: ValueId,
     len: ValueId,
+}
+
+/// Keccak-256 of `words`, each taken as 32 big-endian bytes, in order. It
+/// reads no memory: the digest is a value of the words alone, so it folds
+/// and value-numbers like arithmetic. EVM lowering builds the preimage in
+/// compiler-owned memory after optimization.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(arity(at_least(0)))]
+pub struct EvmKeccak256Words {
+    words: SmallVec<[ValueId; 2]>,
+}
+
+impl EvmKeccak256Words {
+    /// The digest of `words`, as `evm_keccak256_words` defines it.
+    pub fn digest(words: impl IntoIterator<Item = U256>) -> U256 {
+        let mut keccak = Keccak::v256();
+        for word in words {
+            keccak.update(&word.to_big_endian());
+        }
+        let mut digest = [0; 32];
+        keccak.finalize(&mut digest);
+        U256::from_big_endian(&digest)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]

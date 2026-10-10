@@ -369,6 +369,22 @@ impl Interpret for EvmAddMod {
     }
 }
 
+impl Interpret for EvmKeccak256Words {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let mut words = Vec::with_capacity(self.words().len());
+        for &word in self.words() {
+            let EvalValue::Imm(word) = state.lookup_val(word) else {
+                return single_result(EvalValue::Undef);
+            };
+            words.push(imm_to_u256(word));
+        }
+        let digest = EvmKeccak256Words::digest(words);
+        single_result(EvalValue::Imm(u256_to_imm(digest, Type::I256)))
+    }
+}
+
 impl Interpret for EvmMulMod {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
@@ -459,6 +475,62 @@ mod tests {
 
     use super::*;
     use crate::interpret::test_state::{TestHasInst, TestState};
+
+    #[test]
+    fn keccak256_words_hashes_big_endian_words_in_order() {
+        let word = |hex: &str| U256::from_str_radix(hex, 16).unwrap();
+        for (words, digest) in [
+            (
+                vec![],
+                "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+            ),
+            (
+                vec![U256::zero()],
+                "290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563",
+            ),
+            (
+                vec![U256::one()],
+                "b10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6",
+            ),
+            (
+                vec![U256::MAX],
+                "a9c584056064687e149968cbab758a3376d22aedc6a55823d1b3ecbee81b8fb9",
+            ),
+            (
+                vec![U256::zero(), U256::zero()],
+                "ad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5",
+            ),
+            (
+                vec![U256::one(), U256::zero()],
+                "ada5013122d395ba3c54772283fb069b10426056ef8ca54750cb9bb552a59e7d",
+            ),
+            (
+                vec![U256::one() << 255, U256::from(42), U256::from(255)],
+                "323100067b777d5a2afe92f35d3908cbfa57c365bbd84f9df57d99aa8082f572",
+            ),
+        ] {
+            assert_eq!(EvmKeccak256Words::digest(words), word(digest));
+        }
+
+        let hi = TestHasInst;
+        let known = crate::ValueId::from_u32(0);
+        let unknown = crate::ValueId::from_u32(1);
+        let mut state = TestState::new([(
+            known,
+            EvalValue::Imm(Immediate::from_i256(I256::one(), Type::I256)),
+        )]);
+        assert_eq!(
+            EvmKeccak256Words::new(&hi, smallvec![known]).interpret(&mut state),
+            single_result(EvalValue::Imm(u256_to_imm(
+                word("b10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6"),
+                Type::I256,
+            )))
+        );
+        assert_eq!(
+            EvmKeccak256Words::new(&hi, smallvec![known, unknown]).interpret(&mut state),
+            single_result(EvalValue::Undef)
+        );
+    }
 
     #[test]
     fn narrow_unsigned_saturating_ops_zero_extend_results() {

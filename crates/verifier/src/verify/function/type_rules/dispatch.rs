@@ -2245,6 +2245,28 @@ impl_evm_arithmetic_rule!(
     evm::EvmSignExtend,
 );
 
+impl VerifyInst for evm::EvmKeccak256Words {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        verifier.verify_evm_rule_common(inst_id, self.words(), false);
+        for &word in self.words() {
+            if let Some(ty) = verifier.value_ty(word)
+                && ty != Type::I256
+            {
+                verifier.emit(
+                    Diagnostic::error(
+                        DiagnosticCode::InstOperandTypeMismatch,
+                        "evm_keccak256_words operands must be i256 words",
+                        location.clone(),
+                    )
+                    .with_note(format!("operand v{} has type {ty:?}", word.as_u32())),
+                );
+            }
+        }
+        verifier.expect_result_ty(inst_id, Type::I256, location);
+    }
+}
+
 impl VerifyInst for evm::EvmCodeLoad {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         verifier.verify_evm_rule_common(inst_id, &self.collect_values(), false);

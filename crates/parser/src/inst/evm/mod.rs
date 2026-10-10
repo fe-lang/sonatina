@@ -1,4 +1,7 @@
-use ir::inst::evm::*;
+use ir::{HasInst, builder::FunctionBuilder, inst::evm::*};
+use smallvec::SmallVec;
+
+use crate::{BuildCtx, Error, ast};
 
 super::impl_inst_build! {EvmUdiv, (lhs: ValueId, rhs:ValueId)}
 super::impl_inst_build! {EvmUdivo, (lhs: ValueId, rhs:ValueId)}
@@ -23,6 +26,7 @@ super::impl_inst_build! {EvmSignExtend, (byte: ValueId, value: ValueId)}
 super::impl_inst_build! {EvmByte, (pos: ValueId, value: ValueId)}
 super::impl_inst_build! {EvmClz, (word: ValueId)}
 super::impl_inst_build! {EvmKeccak256, (addr: ValueId, len: ValueId)}
+super::impl_inst_build_common! {EvmKeccak256Words, build_evm_keccak256_words}
 super::impl_inst_build! {EvmAddress, ()}
 super::impl_inst_build! {EvmBalance, (contract_addr: ValueId)}
 super::impl_inst_build! {EvmOrigin, ()}
@@ -76,3 +80,17 @@ super::impl_inst_build! {EvmStaticCall, (gas: ValueId, ext_addr: ValueId, arg_ad
 super::impl_inst_build! {EvmRevert, (addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmSelfDestruct, (addr: ValueId)}
 super::impl_inst_build! {EvmMalloc, (size: ValueId)}
+
+fn build_evm_keccak256_words(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &[ast::InstArg],
+    has_inst: &dyn HasInst<EvmKeccak256Words>,
+) -> Result<EvmKeccak256Words, Box<Error>> {
+    let mut words = SmallVec::new();
+    let mut ast_args = args.iter().peekable();
+    while ast_args.peek().is_some() {
+        words.push(super::process_arg!(ctx, fb, ast_args, ValueId));
+    }
+    Ok(EvmKeccak256Words::new(has_inst, words))
+}

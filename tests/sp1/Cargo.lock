@@ -4260,6 +4260,7 @@ dependencies = [
  "smol_str",
  "sonatina-macros",
  "sonatina-triple",
+ "tiny-keccak",
  "vec-collections",
 ]
 
