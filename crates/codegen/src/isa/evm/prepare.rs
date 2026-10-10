@@ -1017,15 +1017,14 @@ fn prepare_machine_section_after_pipeline(
                     .module()
                     .func_store
                     .view(func, |machine_function| {
-                        source_module.func_store.view(func, |source_function| {
-                            compute_machine_frame_roots(
-                                source_function,
-                                machine_function,
-                                func_map,
-                                &func_placement.mem_plan.alloca_loc,
-                                &backend.isa,
-                            )
-                        })
+                        compute_machine_frame_roots(
+                            machine_function,
+                            func_map,
+                            &func_placement.mem_plan.alloca_loc,
+                            &expect_func_entry(&pre_analyses, func, "pre-analysis")
+                                .prov
+                                .value,
+                        )
                     });
                 let (frame_summary, malloc_spill_bounds) =
                     machine.work.module().func_store.view(func, |function| {

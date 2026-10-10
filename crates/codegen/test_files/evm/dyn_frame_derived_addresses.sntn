@@ -1,0 +1,110 @@
+#! evm.case: offset
+#!   calldata: u256(0)
+#!   expect: return u256(6)
+#! evm.case: masked
+#!   calldata: u256(1)
+#!   expect: return u256(6)
+#! evm.case: boxed
+#!   calldata: u256(2)
+#!   expect: return u256(6)
+
+# Each recursive frame stores its argument through an address derived from a
+# frame alloca and reloads it after the recursive call. The frame must stay
+# entered until that reload, or the callee's frame overwrites the slot.
+# Offsets load past the end of calldata, so they are zero at runtime but
+# cannot be folded.
+target = "evm-ethereum-osaka"
+
+func private %offset(v0.i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    v2.i256 = ptr_to_int v1 i256;
+    v3.i256 = evm_calldata_load 32.i256;
+    v4.i256 = add v2 v3;
+    mstore v4 v0 i256;
+    v5.i1 = eq v0 0.i256;
+    br v5 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v6.i256 = sub v0 1.i256;
+    v7.i256 = call %offset v6;
+    v8.i256 = mload v4 i256;
+    v9.i256 = add v7 v8;
+    return v9;
+}
+
+func private %masked(v0.i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    v2.i256 = ptr_to_int v1 i256;
+    v3.i256 = evm_calldata_load 32.i256;
+    v4.i256 = or v2 v3;
+    mstore v4 v0 i256;
+    v5.i1 = eq v0 0.i256;
+    br v5 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v6.i256 = sub v0 1.i256;
+    v7.i256 = call %masked v6;
+    v8.i256 = mload v4 i256;
+    v9.i256 = add v7 v8;
+    return v9;
+}
+
+func private %boxed(v0.i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    v2.i256 = ptr_to_int v1 i256;
+    v4.i256 = black_box v2;
+    mstore v4 v0 i256;
+    v5.i1 = eq v0 0.i256;
+    br v5 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v6.i256 = sub v0 1.i256;
+    v7.i256 = call %boxed v6;
+    v8.i256 = mload v4 i256;
+    v9.i256 = add v7 v8;
+    return v9;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    br_table v0 block4 (0.i256 block1) (1.i256 block2) (2.i256 block3);
+
+block1:
+    v1.i256 = call %offset 3.i256;
+    jump block5;
+
+block2:
+    v2.i256 = call %masked 3.i256;
+    jump block5;
+
+block3:
+    v3.i256 = call %boxed 3.i256;
+    jump block5;
+
+block4:
+    evm_revert 0.i256 0.i256;
+
+block5:
+    v4.i256 = phi (v1 block1) (v2 block2) (v3 block3);
+    mstore 0.i256 v4 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

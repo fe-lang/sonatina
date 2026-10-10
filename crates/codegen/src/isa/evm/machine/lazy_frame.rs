@@ -1,9 +1,8 @@
+use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, Function, InstId, InstSetExt, Type, ValueId,
-    cfg::ControlFlowGraph,
-    inst::evm::{inst_set::EvmInstKind, machine_inst_set::EvmMachineInstKind},
-    isa::{Isa, evm::Evm},
+    BlockId, Function, InstId, InstSetExt, ValueId, cfg::ControlFlowGraph,
+    inst::evm::machine_inst_set::EvmMachineInstKind, isa::Isa,
 };
 
 use crate::{
@@ -13,7 +12,9 @@ use crate::{
 };
 
 use super::module::FuncMachineMap;
-use crate::isa::evm::{MachineFuncPlan, ObjLoc, emit::fold_stack_actions};
+use crate::isa::evm::{
+    MachineFuncPlan, ObjLoc, emit::fold_stack_actions, ptr_provenance::Provenance,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum FrameSite {
@@ -134,26 +135,30 @@ struct RootUseDepCtx<'a> {
     order: &'a PointOrderTable,
 }
 
+/// Roots every machine value that may address a dynamic-frame alloca. Pointer
+/// provenance follows frame addresses through casts, arithmetic, memory, and
+/// calls, so every later access through one keeps the frame entered.
 pub(crate) fn compute_machine_frame_roots(
-    source: &Function,
     machine: &Function,
     map: &FuncMachineMap,
     alloca_loc: &FxHashMap<InstId, ObjLoc>,
-    source_isa: &Evm,
+    prov: &SecondaryMap<ValueId, Provenance>,
 ) -> MachineFrameRoots {
-    let source_roots = compute_source_rooted_frame_values(source, alloca_loc, source_isa);
     let mut roots = MachineFrameRoots::default();
-    for source_value in source_roots {
-        let Some(machine_value) = map.values[source_value] else {
-            continue;
-        };
-        roots.rooted_values.insert(machine_value);
-        collect_root_def_insts(
-            machine,
-            machine_value,
-            &mut roots.root_def_insts,
-            &mut FxHashSet::default(),
-        );
+    for (source_value, prov) in prov.iter() {
+        if let Some(machine_value) = map.values[source_value]
+            && prov
+                .alloca_insts()
+                .any(|alloca| matches!(alloca_loc.get(&alloca), Some(ObjLoc::StableFrame(_))))
+        {
+            roots.rooted_values.insert(machine_value);
+            collect_root_def_insts(
+                machine,
+                machine_value,
+                &mut roots.root_def_insts,
+                &mut FxHashSet::default(),
+            );
+        }
     }
     roots
 }
@@ -700,64 +705,6 @@ fn collect_dep_points(
     Some(out)
 }
 
-fn compute_source_rooted_frame_values(
-    function: &Function,
-    alloca_loc: &FxHashMap<InstId, ObjLoc>,
-    isa: &Evm,
-) -> FxHashSet<ValueId> {
-    let mut rooted = FxHashSet::default();
-    for (&inst, &loc) in alloca_loc {
-        if matches!(loc, ObjLoc::StableFrame(_))
-            && let Some(result) = function.dfg.inst_result(inst)
-        {
-            rooted.insert(result);
-        }
-    }
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for block in function.layout.iter_block() {
-            for inst in function.layout.iter_inst(block) {
-                let newly_rooted = if function.dfg.is_phi(inst) {
-                    let phi = function.dfg.cast_phi(inst).expect("phi downcast failed");
-                    phi.args().iter().any(|(value, _)| rooted.contains(value))
-                } else {
-                    let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-                    match data {
-                        EvmInstKind::Bitcast(bitcast) => rooted.contains(bitcast.from()),
-                        EvmInstKind::IntToPtr(int_to_ptr) => {
-                            rooted.contains(int_to_ptr.from())
-                                && scalar_bit_width(
-                                    function.dfg.value_ty(*int_to_ptr.from()),
-                                    &function.dfg.ctx,
-                                ) == Some(256)
-                        }
-                        EvmInstKind::PtrToInt(ptr_to_int) => {
-                            rooted.contains(ptr_to_int.from())
-                                && scalar_bit_width(*ptr_to_int.ty(), &function.dfg.ctx)
-                                    == Some(256)
-                        }
-                        EvmInstKind::Gep(gep) => gep
-                            .values()
-                            .first()
-                            .is_some_and(|value| rooted.contains(value)),
-                        _ => false,
-                    }
-                };
-
-                if newly_rooted {
-                    for &result in function.dfg.inst_results(inst) {
-                        changed |= rooted.insert(result);
-                    }
-                }
-            }
-        }
-    }
-
-    rooted
-}
-
 fn collect_root_use_dep_points(
     function: &Function,
     root_use: &RootUseDepCtx<'_>,
@@ -803,6 +750,9 @@ fn collect_root_use_dep_points(
     }
 }
 
+/// These uses need no frame themselves: their results are rooted too (or, for
+/// lowered geps, feed a rooted result), so the accesses through them carry the
+/// dependency.
 fn is_alias_preserving_root_use(
     function: &Function,
     inst: InstId,
@@ -1086,23 +1036,6 @@ fn postdom_chain(post_dom: &PostDomTree, block: BlockId) -> Vec<PostNode> {
         }
     }
     out
-}
-
-fn scalar_bit_width(ty: Type, module: &sonatina_ir::module::ModuleCtx) -> Option<u16> {
-    let bits = match ty {
-        Type::I1 => 1,
-        Type::I8 => 8,
-        Type::I16 => 16,
-        Type::I32 => 32,
-        Type::I64 => 64,
-        Type::I128 => 128,
-        Type::I256 => 256,
-        Type::EnumTag(_) => return None,
-        Type::Unit => 0,
-        Type::Compound(_) if ty.is_pointer(module) => 256,
-        Type::Compound(_) => return None,
-    };
-    Some(bits)
 }
 
 #[cfg(test)]
