@@ -77,6 +77,70 @@ func public %entry(v3.i256, v4.i256) -> i256 {
 }
 
 #[test]
+fn loop_enum_extract_keeps_its_variant_proof() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI64 = enum {
+    #None,
+    #Some(i64),
+};
+
+func inline(never) private %sum(v0.@OptionI64, v1.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i64 = phi (0.i64 block0) (v8 block3);
+        v3.i64 = phi (0.i64 block0) (v7 block3);
+        v4.i1 = lt v2 v1;
+        br v4 block2 block5;
+
+    block2:
+        v5.i1 = enum.is_variant v0 #Some;
+        br v5 block3 block4;
+
+    block3:
+        enum.assert_variant v0 #Some;
+        v6.i64 = enum.extract v0 #Some 0.i8;
+        v7.i64 = add v3 v6;
+        v8.i64 = add v2 1.i64;
+        jump block1;
+
+    block4:
+        return v3;
+
+    block5:
+        return v3;
+}
+
+func public %entry(v0.i1, v1.i64, v2.i64) -> i64 {
+    block0:
+        br v0 block1 block2;
+    block1:
+        v3.@OptionI64 = enum.make @OptionI64 #Some (v1);
+        jump block3;
+    block2:
+        v4.@OptionI64 = enum.make @OptionI64 #None;
+        jump block3;
+    block3:
+        v5.@OptionI64 = phi (v3 block1) (v4 block2);
+        v6.i64 = call %sum v5 v2;
+        return v6;
+}
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    let mut licm = Pipeline::new();
+    licm.add_step(Step::FuncPasses(vec![Pass::Licm]));
+    for pipeline in [licm, Pipeline::size(), Pipeline::speed()] {
+        let mut parsed = parse_module(source).unwrap();
+        verify_module_or_panic(&parsed.module, &config);
+        pipeline.run(&mut parsed.module);
+        verify_module_or_panic(&parsed.module, &config);
+    }
+}
+
+#[test]
 fn sccp_folds_constant_uaddo_results() {
     let (module, func_ref) = parse_test_module(
         r#"

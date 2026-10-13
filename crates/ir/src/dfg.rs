@@ -15,6 +15,8 @@ use crate::{
     inst::{
         InstId,
         control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
+        data::EnumExtract,
+        downcast,
     },
     ir_writer::{FuncWriteCtx, IrWrite},
     module::ModuleCtx,
@@ -731,7 +733,10 @@ impl DataFlowGraph {
     }
 
     pub fn can_speculate(&self, inst_id: InstId) -> bool {
+        // Payload extraction is pure, but requires an active-variant proof at
+        // its use site. Moving it across control flow can discard that proof.
         self.has_value_semantics(inst_id)
+            && downcast::<&EnumExtract>(self.inst_set(), self.inst(inst_id)).is_none()
     }
 
     pub fn effect_cost_class(&self, inst_id: InstId) -> EffectCostClass {
