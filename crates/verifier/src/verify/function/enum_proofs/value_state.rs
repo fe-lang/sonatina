@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    ops::{Deref, DerefMut},
+    ops::{Bound, Deref, DerefMut, RangeBounds},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU8, Ordering},
@@ -14,6 +14,7 @@ use super::views::{Index, References, Step};
 
 const NO_REFERENCES: u8 = 1;
 const NO_SYMBOLIC_INDICES: u8 = 2;
+const NO_CAPTURED_REFERENCES: u8 = 4;
 
 /// A whole-subtree certificate plus sparse typed overrides. References carry
 /// locations/guards; they never recursively contain their mutable pointee state.
@@ -39,8 +40,8 @@ struct ValueStateData {
     // A self-join may first materialize implicit enum payload facts. Record an
     // identity only after evaluating it and comparing the exact result.
     self_join_identity: AtomicBool,
-    // Negative certificates for stored nodes only. Implicit typed children can
-    // still contain references and are handled by captured/copy_references.
+    // Stored-node absence and captured-reference absence are distinct: capture
+    // also inspects implicit typed children, including inactive enum payloads.
     subtree_absences: AtomicU8,
 }
 
@@ -102,10 +103,11 @@ impl ValueState {
             self_join_identity: AtomicBool::new(false),
             subtree_absences: AtomicU8::new(
                 NO_SYMBOLIC_INDICES
+                    | if complete { 0 } else { NO_CAPTURED_REFERENCES }
                     | if matches!(ty, Type::Compound(_)) {
                         0
                     } else {
-                        NO_REFERENCES
+                        NO_REFERENCES | NO_CAPTURED_REFERENCES
                     },
             ),
         }))
@@ -123,7 +125,14 @@ impl ValueState {
         if self.children.get(&step) != Some(&child) {
             // Keep proven absence across scalar-array inserts instead of
             // rescanning all retained prefixes after every new element.
-            let mut absences = self.0.subtree_absences.load(Ordering::Relaxed)
+            // Inserting a child requires an aggregate. Before its first child
+            // it has no stored reference nodes, regardless of implicit fields.
+            let mut absences = (self.0.subtree_absences.load(Ordering::Relaxed)
+                | if self.children.is_empty() {
+                    NO_REFERENCES
+                } else {
+                    0
+                })
                 & child.0.subtree_absences.load(Ordering::Relaxed);
             if matches!(step, Step::Index(Index::Symbol(_))) {
                 absences &= !NO_SYMBOLIC_INDICES;
@@ -248,6 +257,11 @@ impl ValueState {
             }
             return;
         };
+        if self.children.is_empty() {
+            // Certify implicit cells before insertions retain SSA prefixes.
+            // A negative result can then follow unchanged scalar-array writes.
+            self.captured(ctx);
+        }
         let mut child = self.child(ctx, step);
         child.update(ctx, rest, strong, write);
         if matches!(
@@ -259,7 +273,17 @@ impl ValueState {
                 default.update(ctx, rest, false, write);
                 self.insert_child(Step::Index(Index::Unknown), default);
             }
-            self.update_children(|other, node| {
+            // A known index only overlaps symbolic views. The default covers
+            // other physical cells, and distinct constant cells are disjoint.
+            let bounds = if matches!(step, Step::Index(Index::Constant(_))) {
+                (
+                    Bound::Excluded(Step::Index(Index::Constant(usize::MAX))),
+                    Bound::Excluded(Step::Index(Index::Unknown)),
+                )
+            } else {
+                (Bound::Unbounded, Bound::Unbounded)
+            };
+            self.update_children(bounds, |other, node| {
                 if other != step && other != Step::Index(Index::Unknown) && !step.disjoint(other) {
                     node.update(ctx, rest, false, write);
                 }
@@ -271,7 +295,7 @@ impl ValueState {
         }
         // Symbolic indices can alias other indices. Update overlapping children
         // weakly, while the exact symbolic view receives the strong postcondition.
-        self.update_children(|other, node| {
+        self.update_children(.., |other, node| {
             if other != step && !step.disjoint(other) {
                 if matches!((other, step), (Step::Payload(a, _), Step::Payload(b, _)) if a != b) {
                     node.clear_readability();
@@ -442,10 +466,14 @@ impl ValueState {
     }
 
     // Visit without copying shared map entries unless their values change.
-    fn update_children(&mut self, mut update: impl FnMut(Step, &mut Self)) {
+    fn update_children(
+        &mut self,
+        range: impl RangeBounds<Step>,
+        mut update: impl FnMut(Step, &mut Self),
+    ) {
         let changed: Vec<_> = self
             .children
-            .iter()
+            .range(range)
             .filter_map(|(&step, child)| {
                 let mut next = child.clone();
                 update(step, &mut next);
@@ -463,7 +491,7 @@ impl ValueState {
             self.tag_initialized = false;
             self.tags = None;
         }
-        self.update_children(|_, child| child.clear_readability());
+        self.update_children(.., |_, child| child.clear_readability());
     }
 
     pub fn forget(&mut self, ctx: &ModuleCtx) {
@@ -485,7 +513,7 @@ impl ValueState {
                 self.references.anchors.clear();
             }
         }
-        self.update_children(|_, child| child.forget(ctx));
+        self.update_children(.., |_, child| child.forget(ctx));
     }
 
     pub fn copy_references(&mut self, ctx: &ModuleCtx, source: &Self) {
@@ -525,7 +553,7 @@ impl ValueState {
         {
             self.references = references;
         }
-        self.update_children(|_, child| child.visit_references(ctx, f));
+        self.update_children(.., |_, child| child.visit_references(ctx, f));
     }
 
     // Conditional readability cannot discard references in physically retained
@@ -554,10 +582,13 @@ impl ValueState {
             self.children.remove_mut(&symbol);
             self.insert_child(Step::Index(Index::Unknown), summary);
         }
-        self.update_children(|_, child| child.forget_index(ctx, id));
+        self.update_children(.., |_, child| child.forget_index(ctx, id));
     }
 
     pub fn captured(&self, ctx: &ModuleCtx) -> References {
+        if self.0.subtree_absences.load(Ordering::Relaxed) & NO_CAPTURED_REFERENCES != 0 {
+            return References::default();
+        }
         let mut references = References::default();
         match self.ty.resolve_compound(ctx) {
             Some(CompoundType::ObjRef(_)) => {
@@ -566,7 +597,7 @@ impl ValueState {
             }
             Some(CompoundType::Struct(record)) => {
                 for (i, _) in record.fields.iter().enumerate() {
-                    references = references.join(
+                    references.join_with(
                         &self
                             .child(ctx, Step::Index(Index::Constant(i)))
                             .captured(ctx),
@@ -576,14 +607,14 @@ impl ValueState {
             Some(CompoundType::Enum(enumeration)) => {
                 for (v, variant) in enumeration.variants.iter().enumerate() {
                     for (i, _) in variant.fields.iter().enumerate() {
-                        references = references
-                            .join(&self.child(ctx, Step::Payload(v as u32, i)).captured(ctx));
+                        references
+                            .join_with(&self.child(ctx, Step::Payload(v as u32, i)).captured(ctx));
                     }
                 }
             }
             Some(CompoundType::Array { len, .. }) => {
                 for child in self.children.values() {
-                    references = references.join(&child.captured(ctx));
+                    references.join_with(&child.captured(ctx));
                 }
                 if self
                     .children
@@ -592,10 +623,17 @@ impl ValueState {
                     .count()
                     < len
                 {
-                    references = references.join(&self.array_default(ctx).captured(ctx));
+                    references.join_with(&self.array_default(ctx).captured(ctx));
                 }
             }
             _ => {}
+        }
+        if references == References::default() {
+            // This proves the result including implicit typed children. Facts
+            // are immutable while shared; every mutation invalidates the bit.
+            self.0
+                .subtree_absences
+                .fetch_or(NO_CAPTURED_REFERENCES, Ordering::Relaxed);
         }
         references
     }
@@ -606,7 +644,7 @@ mod tests {
     use std::ptr;
 
     use super::*;
-    use crate::verify::function::enum_proofs::views::Root;
+    use crate::verify::function::enum_proofs::views::{Anchor, Root};
     use sonatina_parser::parse_module;
 
     #[test]
@@ -674,7 +712,6 @@ block0:
         let ctx = &parsed.module.ctx;
         let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
         let mut value = ValueState::new(ty, false);
-        assert!(!value.has_stored_references(ctx));
         assert!(!value.has_symbolic_indices());
         let mut snapshots = vec![value.clone()];
         // Retain every intermediate aggregate, as the verifier does for SSA
@@ -689,7 +726,7 @@ block0:
             // for every retained prefix would reintroduce quadratic scans.
             assert_eq!(
                 value.0.subtree_absences.load(Ordering::Relaxed),
-                NO_REFERENCES | NO_SYMBOLIC_INDICES
+                NO_REFERENCES | NO_SYMBOLIC_INDICES | NO_CAPTURED_REFERENCES
             );
             let previous = snapshots.last().unwrap();
             assert!(!previous.child(ctx, step).readable(ctx));
@@ -721,6 +758,18 @@ block0:
                 assert!(ptr::eq(child, joined.children.get(key).unwrap()));
             }
         }
+        let mut complete = ValueState::new(ty, true);
+        for &step in value.children.keys() {
+            complete.update(ctx, &[step], true, &|child| {
+                *child = ValueState::new(Type::I256, true);
+            });
+            assert_ne!(
+                complete.0.subtree_absences.load(Ordering::Relaxed) & NO_CAPTURED_REFERENCES,
+                0,
+                "implicit scalar cells remain capture-free across every prefix"
+            );
+        }
+        assert_eq!(complete.captured(ctx), References::default());
     }
 
     #[test]
@@ -739,13 +788,26 @@ block0:
         let ctx = &parsed.module.ctx;
         let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
         let payload = Step::Payload(1, 0);
-        let mut value = ValueState::new(ty, true);
+        let mut value = ValueState::new(ty, false);
+        assert_eq!(value.captured(ctx), References::default());
+        assert_ne!(
+            value.0.subtree_absences.load(Ordering::Relaxed) & NO_CAPTURED_REFERENCES,
+            0
+        );
+        let uncaptured = value.clone();
+        value.complete = true;
         value.refine(0);
         assert!(!value.has_stored_references(ctx));
         // An absent stored reference does not prove absence in implicit typed
         // payloads, even when the payload is currently inactive.
         assert!(value.captured(ctx).unknown);
-        let mut same_facts = ValueState::new(ty, true);
+        assert_eq!(uncaptured.captured(ctx), References::default());
+        assert_eq!(
+            value.0.subtree_absences.load(Ordering::Relaxed) & NO_CAPTURED_REFERENCES,
+            0
+        );
+        let mut same_facts = ValueState::new(ty, false);
+        same_facts.complete = true;
         same_facts.refine(0);
         assert_eq!(value, same_facts, "absence caches do not affect equality");
         let sparse = value.clone();
@@ -783,6 +845,151 @@ block0:
         assert!(value.has_stored_references(ctx));
         assert!(!absent.has_stored_references(ctx));
         assert_eq!(value, retained, "cache state is not semantic equality");
+    }
+
+    #[test]
+    fn captured_arrays_preserve_reference_unions_and_implicit_cells() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %entry(v0.[objref<i256>; 3]) {
+block0:
+ return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+        let mut value = ValueState::new(ty, false);
+        assert_eq!(value.captured(ctx), References::default());
+        let empty = value.clone();
+        let mut expected = References::default();
+        for (index, raw_id) in [0, 1, 2].into_iter().enumerate() {
+            let id = ValueId::from_u32(raw_id);
+            let mut references = References::root(Root::Incoming(id));
+            references.cache = Some(id);
+            references.anchors.insert(Anchor {
+                value: id,
+                path: vec![],
+            });
+            let step = Step::Index(Index::Constant(index));
+            value.insert_child(
+                step,
+                ValueState::reference(value.child_ty(ctx, step), references.clone()),
+            );
+            assert_eq!(value.child(ctx, step).captured(ctx), references);
+            expected.views.extend(references.views);
+            assert_eq!(value.captured(ctx), expected);
+        }
+        assert_eq!(empty.captured(ctx), References::default());
+        let full = value.clone();
+        value.complete = true;
+        assert_eq!(value.captured(ctx), expected, "all cells are explicit");
+        let first = Step::Index(Index::Constant(0));
+        value.children.remove_mut(&first);
+        expected
+            .views
+            .retain(|view| view.place.root != Root::Incoming(ValueId::from_u32(0)));
+        expected.unknown = true;
+        assert_eq!(
+            value.captured(ctx),
+            expected,
+            "implicit cells still capture"
+        );
+        assert!(!full.captured(ctx).unknown);
+    }
+
+    #[test]
+    fn array_writes_preserve_disjoint_cells_and_weaken_symbolic_views() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %entry(v0.[i256; 4]) {
+block0:
+ return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+        let symbols = [ValueId::from_u32(10), ValueId::from_u32(11)];
+        let indices = [
+            Index::Constant(0),
+            Index::Constant(2),
+            Index::Symbol(symbols[0]),
+            Index::Symbol(symbols[1]),
+            Index::Unknown,
+        ];
+        for first in indices {
+            for second in indices {
+                for strong in [false, true] {
+                    for written in [false, true] {
+                        let mut value = ValueState::new(ty, true);
+                        let mut physical = [true, false, true, false];
+                        let mut symbolic = [true, false];
+                        let mut default = true;
+                        for (index, complete) in physical.iter().copied().enumerate() {
+                            value.insert_child(
+                                Step::Index(Index::Constant(index)),
+                                ValueState::new(Type::I256, complete),
+                            );
+                        }
+                        for (id, complete) in symbols.into_iter().zip(symbolic) {
+                            value.insert_child(
+                                Step::Index(Index::Symbol(id)),
+                                ValueState::new(Type::I256, complete),
+                            );
+                        }
+                        for index in [first, second] {
+                            let snapshot = value.clone();
+                            let before = physical;
+                            value.update(ctx, &[Step::Index(index)], strong, &|child| {
+                                *child = ValueState::new(Type::I256, written);
+                            });
+                            match index {
+                                Index::Constant(index) => {
+                                    physical[index] = written && (strong || physical[index]);
+                                    for complete in &mut symbolic {
+                                        *complete &= written;
+                                    }
+                                }
+                                Index::Symbol(id) => {
+                                    for complete in &mut physical {
+                                        *complete &= written;
+                                    }
+                                    for (symbol, complete) in symbols.into_iter().zip(&mut symbolic)
+                                    {
+                                        *complete =
+                                            written && (strong && symbol == id || *complete);
+                                    }
+                                    default &= written;
+                                }
+                                Index::Unknown => {
+                                    for complete in physical.iter_mut().chain(&mut symbolic) {
+                                        *complete &= written;
+                                    }
+                                    default &= written;
+                                }
+                            }
+                            for (index, complete) in physical.iter().copied().enumerate() {
+                                let step = Step::Index(Index::Constant(index));
+                                assert_eq!(value.child(ctx, step).complete, complete);
+                                assert_eq!(snapshot.child(ctx, step).complete, before[index]);
+                            }
+                            for (id, complete) in symbols.into_iter().zip(symbolic) {
+                                assert_eq!(
+                                    value.child(ctx, Step::Index(Index::Symbol(id))).complete,
+                                    complete
+                                );
+                            }
+                            assert_eq!(value.array_default(ctx).complete, default);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
