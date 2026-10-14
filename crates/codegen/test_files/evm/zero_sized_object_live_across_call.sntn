@@ -1,0 +1,32 @@
+#! evm.config: { mem_plan_detail: true }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return
+
+target = "evm-ethereum-osaka"
+
+type @empty = {};
+
+func private %touch() {
+    block0:
+        return;
+}
+
+func private %consume(v0.objref<@empty>) {
+    block0:
+        return;
+}
+
+func private %run() {
+    block0:
+        v0.objref<@empty> = obj.alloc @empty;
+        call %touch;
+        call %consume v0;
+        evm_return 0.i256 0.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %run;
+    }
+}

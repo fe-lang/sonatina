@@ -908,9 +908,6 @@ fn verify_program_memory_plan(
 
         if !is_recursive {
             for fact in stack.obj_facts.values() {
-                if fact.size_words == 0 {
-                    continue;
-                }
                 if fact.must_stable {
                     let loc = func_plan.obj_loc.get(&fact.id).copied().unwrap_or_else(|| {
                         panic!("missing object location for obj {}", fact.id.as_u32())
@@ -928,9 +925,6 @@ fn verify_program_memory_plan(
         for call in &stack.call_sites {
             let saved = func_plan.call_preserve.get(&call.inst);
             for &obj in &call.callee_visible_objs {
-                if stack.obj_size_words.get(&obj).copied() == Some(0) {
-                    continue;
-                }
                 let loc =
                     func_plan.obj_loc.get(&obj).copied().unwrap_or_else(|| {
                         panic!("missing object location for obj {}", obj.as_u32())

@@ -272,9 +272,6 @@ impl<'a> PlacementProblem<'a> {
                     .get(&obj)
                     .copied()
                     .unwrap_or_else(|| panic!("missing object size for obj {}", obj.as_u32()));
-                if size == 0 {
-                    continue;
-                }
                 let local_idx = *local_obj_index_by_id
                     .get(obj.as_u32() as usize)
                     .unwrap_or(&u32::MAX);
@@ -982,9 +979,6 @@ fn build_shadow_preserve_for_call(
         let Some(&size) = stack.obj_size_words.get(&obj) else {
             panic!("missing object size for obj {}", obj.as_u32());
         };
-        if size == 0 {
-            continue;
-        }
         let start = *scratch_offsets.get(&obj).unwrap_or_else(|| {
             panic!(
                 "missing scratch offset for obj {} at call {}",
