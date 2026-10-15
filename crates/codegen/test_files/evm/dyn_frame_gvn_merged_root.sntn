@@ -1,0 +1,42 @@
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(6)
+
+# The second word of a frame alloca is addressed twice, once before and once
+# after the recursive call. At O0 both lower to the same machine add, which
+# machine GVN merges, deleting the value the second address maps to.
+target = "evm-ethereum-osaka"
+
+func private %rec(v0.i256) -> i256 {
+block0:
+    v1.*[i256; 2] = alloca [i256; 2];
+    v2.i256 = ptr_to_int v1 i256;
+    v3.i256 = add v2 32.i256;
+    mstore v3 v0 i256;
+    v4.i1 = eq v0 0.i256;
+    br v4 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v5.i256 = sub v0 1.i256;
+    v6.i256 = call %rec v5;
+    v7.i256 = add v2 32.i256;
+    v8.i256 = mload v7 i256;
+    v9.i256 = add v6 v8;
+    return v9;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %rec 3.i256;
+    mstore 0.i256 v0 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

@@ -879,12 +879,13 @@ fn prepare_machine_section_after_pipeline(
             &backend_spills,
         );
 
-        let machine = lower_section_to_machine(&work, &funcs, &placement, backend)?;
+        let mut machine = lower_section_to_machine(&work, &funcs, &placement, backend)?;
         run_machine_opt_pipeline(
             machine.work.module(),
             &funcs,
             backend.late_cleanup_profile == LateCleanupProfile::Size,
         )?;
+        machine.source_to_machine.retain_live(machine.work.module());
 
         let machine_isa = EvmMachine::new(machine.work.module().ctx.triple);
         let machine_schedule = CallGraphSchedule::compute(machine.work.module(), &funcs);
