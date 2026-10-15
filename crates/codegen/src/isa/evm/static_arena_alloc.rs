@@ -23,7 +23,7 @@ use sonatina_ir::{
 use super::{
     escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
     memory_plan::{FuncPreAnalysis, WORD_BYTES},
-    ptr_escape::PtrEscapeSummary,
+    ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo, compute_provenance, memory_load, memory_store},
 };
 use crate::stackalloc::StackifyAlloc;
@@ -169,14 +169,14 @@ impl<'a> StackObjectInput<'a> {
 pub(crate) struct StaticArenaAllocCtx<'a> {
     module: &'a ModuleCtx,
     isa: &'a Evm,
-    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &'a PtrEscapeSummaries,
 }
 
 impl<'a> StaticArenaAllocCtx<'a> {
     pub(crate) fn new(
         module: &'a ModuleCtx,
         isa: &'a Evm,
-        ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+        ptr_escape: &'a PtrEscapeSummaries,
     ) -> Self {
         Self {
             module,
@@ -290,12 +290,7 @@ fn compute_func_stack_objects_from_input(
     let prov_info = match analysis.prov_info {
         Some(prov_info) => prov_info,
         None => {
-            computed_prov_info = compute_provenance(function, ctx.module, ctx.isa, |callee| {
-                ctx.ptr_escape
-                    .get(&callee)
-                    .cloned()
-                    .unwrap_or_else(|| conservative_unknown_ptr_summary(ctx.module, callee))
-            });
+            computed_prov_info = compute_provenance(function, ctx.module, ctx.isa, ctx.ptr_escape);
             &computed_prov_info
         }
     };
@@ -574,15 +569,11 @@ fn compute_func_stack_objects_from_input(
     }
 }
 
-fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
-    PtrEscapeSummary::conservative_unknown_ctx(module, func_ref)
-}
-
 fn compute_escaping_allocas(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &PtrEscapeSummaries,
     prov_info: &ProvenanceInfo,
 ) -> FxHashMap<InstId, Vec<AllocaEscapeSite>> {
     let mut escaping: FxHashMap<InstId, Vec<AllocaEscapeSite>> = FxHashMap::default();

@@ -6,8 +6,8 @@ input_file: test_files/evm/fenew.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 328 bytes
-  total: 328 bytes
+  section runtime: 306 bytes
+  total: 306 bytes
 
 object: Counter
   section init: 92 bytes
@@ -20,13 +20,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Counter_runtime: ir_blocks=12 ir_insts=24 vcode_ops=71 fixups=6 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd: ir_blocks=8 ir_insts=24 vcode_ops=68 fixups=3 imm_bytes=14
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd: ir_blocks=11 ir_insts=23 vcode_ops=61 fixups=4 imm_bytes=11
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  entry: ir_blocks=14 ir_insts=46 vcode_ops=138 fixups=12 imm_bytes=25
+  entry: ir_blocks=17 ir_insts=39 vcode_ops=117 fixups=13 imm_bytes=21
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case test_counter: calldata_len=0 success reason=Return gas_used=91333 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=70333
+  case test_counter: calldata_len=0 success reason=Return gas_used=91285 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=70285
 
 
 --------------- DEBUG ---------------
@@ -126,24 +126,19 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     PUSH1 0x5f (95)  // v12.i256 = gt v8 v11;
     DUP2
     GT
-    PUSH1 block7  // br v12 block8 block6;
+    PUSH1 block7  // br v12 block11 block6;
     JUMPI
   block6:
     POP  // jump block7;
     PUSH1 0x60 (96)
   block7:
     JUMPDEST
-    PUSH1 0x20 (32)  // v15.i256 = add v13 v14;
-    DUP2
-    ADD
-    PUSH1 0x40 (64)  // evm_mstore v6 v15;
-    MSTORE
-    PUSH4 0x1b53398f (458439055)  // evm_mstore v13 v16;
+    PUSH4 0x1b53398f (458439055)  // evm_mstore v13 v14;
     PUSH1 0xe2 (226)
     SHL
     DUP2
     MSTORE
-    PUSH1 0x4 (4)  // v27.i256 = evm_call v17 v0 v22 v13 4.i256 v22 v22;
+    PUSH1 0x4 (4)  // v22.i256 = evm_call v15 v0 v16 v13 v17 v16 v16;
     PUSH0
     SWAP2
     PUSH0
@@ -151,40 +146,40 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     SWAP5
     PUSH3 0x186a0 (100000)
     CALL
-    RETURNDATASIZE  // v28.i256 = evm_return_data_size;
-    PUSH1 0x40 (64)  // v29.i256 = evm_mload v6;
+    RETURNDATASIZE  // v23.i256 = evm_return_data_size;
+    PUSH1 0x40 (64)  // v24.i256 = evm_mload v6;
     MLOAD
-    PUSH1 0x1f (31)  // v19.i256 = add v28 31.i256;
-    DUP3
-    ADD
-    PUSH1 0x1f (31)  // v21.i256 = and v19 -32.i256;
-    NOT
-    AND
-    DUP2  // v30.i256 = add v29 v21;
-    ADD
-    PUSH1 0x40 (64)  // evm_mstore v6 v30;
-    MSTORE
-    DUP2  // evm_return_data_copy v29 v22 v28;
+    PUSH1 0x5f (95)  // v25.i256 = gt v24 v11;
+    DUP2
+    GT
+    PUSH1 block10  // br v25 block12 block9;
+    JUMPI
+  block9:
+    POP  // jump block10;
+    PUSH1 0x60 (96)
+  block10:
+    JUMPDEST
+    DUP2  // evm_return_data_copy v26 v16 v23;
     PUSH0
     DUP3
     RETURNDATACOPY
-    SWAP2  // br v27 block2 block1;
+    SWAP2  // br v22 block2 block1;
     PUSH1 block2
     JUMPI
   block1:
-    SWAP1  // evm_revert v29 v28;
+    SWAP1  // evm_revert v26 v23;
     REVERT
   block2:
     JUMPDEST
-    PUSH1 0x20 (32)  // v24.i256 = lt v28 v14;
+    PUSH1 0x20 (32)  // v20.i256 = lt v23 32.i256;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v24 block3 block4;
+    PUSH1 __evm_shared_tail_0  // br v20 block3 block4;
     JUMPI
   block4:
     JUMPDEST
-    MLOAD  // v25.i256 = evm_mload v29;
-    SWAP1  // return v25;
+    MLOAD  // v21.i256 = evm_mload v26;
+    SWAP1  // return v21;
     JUMP
 
 // func public %entry()
@@ -197,57 +192,46 @@ entry:
     PUSH1 0x5f (95)  // v6.i256 = gt v3 95.i256;
     DUP2
     GT
-    PUSH1 block13  // br v6 block14 block12;
+    PUSH1 block13  // br v6 block17 block12;
     JUMPI
   block12:
     POP  // jump block13;
     PUSH1 0x60 (96)
   block13:
     JUMPDEST
-    PUSH1 0x1f (31)  // v9.i256 = add v0 31.i256;
-    DUP4
-    ADD
-    PUSH1 0x1f (31)  // v11.i256 = and v9 -32.i256;
-    NOT
-    AND
-    DUP2  // v12.i256 = add v7 v11;
-    ADD
-    PUSH1 0x40 (64)  // evm_mstore 64.i256 v12;
-    MSTORE
     DUP3  // evm_code_copy v7 v1 v0;
     SWAP1
     SWAP2
     DUP3
     CODECOPY
-    DUP2  // v13.i256 = add v7 v0;
+    DUP2  // v8.i256 = add v7 v0;
     DUP2
     ADD
-    DUP2  // v14.i256 = lt v13 v7;
+    DUP2  // v9.i256 = lt v8 v7;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v14 block2 block3;
+    PUSH1 __evm_shared_tail_0  // br v9 block2 block3;
     JUMPI
   block3:
-    PUSH0  // v16.i256 = evm_create2 0.i256 v7 v0 0.i256;
+    PUSH0  // v11.i256 = evm_create2 0.i256 v7 v0 0.i256;
     SWAP2
     SWAP1
     PUSH0
     CREATE2
-    DUP1  // br v16 block4 block1;
+    DUP1  // br v11 block4 block1;
     PUSH1 block4
     JUMPI
   block1:
-    RETURNDATASIZE  // v18.i256 = evm_return_data_size;
-    PUSH1 0x40 (64)  // v19.i256 = evm_mload 64.i256;
-    MLOAD
-    DUP2  // evm_return_data_copy v19 0.i256 v18;
+    RETURNDATASIZE  // v13.i256 = evm_return_data_size;
+    DUP1  // evm_return_data_copy 96.i256 0.i256 v13;
     PUSH0
-    DUP3
+    PUSH1 0x60 (96)
     RETURNDATACOPY
-    REVERT  // evm_revert v19 v18;
+    PUSH1 0x60 (96)  // evm_revert 96.i256 v13;
+    REVERT
   block4:
     JUMPDEST
-    DUP1  // v21.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v16 100000.i256 0.i256;
+    DUP1  // v15.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v11 100000.i256 0.i256;
     PUSH0
     PUSH3 0x186a0 (100000)
     PUSH1 `pc + (4)`
@@ -255,22 +239,27 @@ entry:
     PUSH1 FuncRef(10)
     JUMP
     JUMPDEST
-    PUSH1 __evm_shared_tail_0  // br v21 block5 block6;
+    PUSH1 __evm_shared_tail_0  // br v15 block5 block6;
     JUMPI
   block6:
-    PUSH1 0x40 (64)  // v23.i256 = evm_mload 64.i256;
+    PUSH1 0x40 (64)  // v17.i256 = evm_mload 64.i256;
     MLOAD
-    PUSH1 0x20 (32)  // v25.i256 = add v23 32.i256;
+    PUSH1 0x5f (95)  // v18.i256 = gt v17 95.i256;
     DUP2
-    ADD
-    PUSH1 0x40 (64)  // evm_mstore 64.i256 v25;
-    MSTORE
-    PUSH4 0x684ef045 (1750003781)  // evm_mstore v23 -21432072031172259149098304932151112453092825142662437103785846030156425068544.i256;
+    GT
+    PUSH1 block16  // br v18 block18 block15;
+    JUMPI
+  block15:
+    POP  // jump block16;
+    PUSH1 0x60 (96)
+  block16:
+    JUMPDEST
+    PUSH4 0x684ef045 (1750003781)  // evm_mstore v19 -21432072031172259149098304932151112453092825142662437103785846030156425068544.i256;
     PUSH1 0xe1 (225)
     SHL
     DUP2
     MSTORE
-    PUSH0  // v28.i256 = evm_call 100000.i256 v16 0.i256 v23 4.i256 0.i256 0.i256;
+    PUSH0  // v22.i256 = evm_call 100000.i256 v11 0.i256 v19 4.i256 0.i256 0.i256;
     PUSH1 0x4 (4)
     PUSH0
     SWAP3
@@ -278,33 +267,20 @@ entry:
     DUP6
     PUSH3 0x186a0 (100000)
     CALL
-    RETURNDATASIZE  // v29.i256 = evm_return_data_size;
-    PUSH1 0x40 (64)  // v30.i256 = evm_mload 64.i256;
-    MLOAD
-    PUSH1 0x1f (31)  // v31.i256 = add v29 31.i256;
-    DUP3
-    ADD
-    PUSH1 0x1f (31)  // v32.i256 = and v31 -32.i256;
-    NOT
-    AND
-    DUP2  // v33.i256 = add v30 v32;
-    ADD
-    PUSH1 0x40 (64)  // evm_mstore 64.i256 v33;
-    MSTORE
-    DUP2  // evm_return_data_copy v30 0.i256 v29;
+    RETURNDATASIZE  // v23.i256 = evm_return_data_size;
+    DUP1  // evm_return_data_copy 96.i256 0.i256 v23;
     PUSH0
-    DUP3
+    PUSH1 0x60 (96)
     RETURNDATACOPY
-    SWAP2  // br v28 block8 block7;
+    SWAP1  // br v22 block8 block7;
     PUSH1 block8
     JUMPI
   block7:
-    SWAP1  // evm_revert v30 v29;
+    PUSH1 0x60 (96)  // evm_revert 96.i256 v23;
     REVERT
   block8:
     JUMPDEST
-    POP  // v35.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v16 100000.i256 0.i256;
-    POP
+    POP  // v25.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v11 100000.i256 0.i256;
     PUSH0
     PUSH3 0x186a0 (100000)
     PUSH1 `pc + (4)`
@@ -312,10 +288,10 @@ entry:
     PUSH1 FuncRef(10)
     JUMP
     JUMPDEST
-    PUSH1 0x1 (1)  // v37.i256 = eq v35 1.i256;
+    PUSH1 0x1 (1)  // v27.i256 = eq v25 1.i256;
     EQ
     ISZERO
-    PUSH1 __evm_shared_tail_0  // br v37 block10 block9;
+    PUSH1 __evm_shared_tail_0  // br v27 block10 block9;
     JUMPI
   block10:
     JUMPDEST

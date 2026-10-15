@@ -59,7 +59,7 @@ use super::{
         compute_abs_clobber_words_with_extra, expect_func_entry,
     },
     pipeline::EvmPipeline,
-    ptr_escape::PtrEscapeSummary,
+    ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, compute_provenance, compute_value_provenance},
 };
 
@@ -847,7 +847,7 @@ fn prepare_machine_section_after_pipeline(
     backend: &EvmBackend,
     work: SectionWorkModule,
     funcs: Vec<FuncRef>,
-    ptr_escape: FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: PtrEscapeSummaries,
     membership: SectionMembership,
 ) -> Result<EvmPreparedSection, String> {
     let source_module = work.module();
@@ -1476,7 +1476,7 @@ pub(crate) fn prepare_free_ptr_restore(
     function: &mut Function,
     module: &ModuleCtx,
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &PtrEscapeSummaries,
 ) {
     let _span = trace_span!("sonatina.codegen.evm.prepare_free_ptr_restore").entered();
     let mut did_insert = false;
@@ -1493,9 +1493,7 @@ pub(crate) fn prepare_free_ptr_restore(
         let mut inst_liveness = InstLiveness::new();
         inst_liveness.compute(function, &cfg, &liveness);
 
-        let prov_info = compute_provenance(function, module, &backend.isa, |callee| {
-            PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
-        });
+        let prov_info = compute_provenance(function, module, &backend.isa, ptr_escape);
         let transient_mallocs = malloc_plan::compute_transient_mallocs(
             function,
             module,
@@ -1529,7 +1527,7 @@ fn prepare_high_evm_pre_analysis(
     function: &mut Function,
     module: &ModuleCtx,
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &PtrEscapeSummaries,
 ) -> memory_plan::FuncPreAnalysis {
     let _span = trace_span!("sonatina.codegen.evm.prepare_high_evm_pre_analysis").entered();
     let mut cfg = ControlFlowGraph::new();
@@ -1568,12 +1566,13 @@ fn prepare_high_evm_pre_analysis(
 
     let (prov, prov_conservative_value) = {
         let _span = trace_span!("sonatina.codegen.evm.pre_analysis.compute_provenance").entered();
-        let prov = compute_provenance(function, module, &backend.isa, |callee| {
-            PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
-        });
-        let conservative = compute_value_provenance(function, module, &backend.isa, |callee| {
-            PtrEscapeSummary::conservative_unknown_ctx(module, callee)
-        });
+        let prov = compute_provenance(function, module, &backend.isa, ptr_escape);
+        let conservative = compute_value_provenance(
+            function,
+            module,
+            &backend.isa,
+            &PtrEscapeSummaries::conservative(),
+        );
         (prov, conservative)
     };
 
@@ -1591,7 +1590,7 @@ fn compute_high_evm_pre_analyses(
     module: &Module,
     funcs: &[FuncRef],
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &PtrEscapeSummaries,
 ) -> FxHashMap<FuncRef, memory_plan::FuncPreAnalysis> {
     let _span = debug_span!("sonatina.codegen.evm.compute_high_evm_pre_analyses").entered();
     let mut results: Vec<_> = funcs

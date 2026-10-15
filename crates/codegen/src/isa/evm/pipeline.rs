@@ -1,6 +1,5 @@
 use std::iter;
 
-use rustc_hash::FxHashMap;
 use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
@@ -27,13 +26,13 @@ use crate::{
 use sonatina_ir::{Module, module::FuncRef};
 
 use super::{
-    EvmBackend, LateCleanupProfile, PtrEscapeSummary, collect_unsupported_evm_calls,
+    EvmBackend, LateCleanupProfile, PtrEscapeSummaries, collect_unsupported_evm_calls,
     compute_ptr_escape_summaries, prepare_free_ptr_restore, validate_supported_lowering_ir,
 };
 
 pub(crate) struct EvmPipelineArtifacts {
     pub(crate) funcs: Vec<FuncRef>,
-    pub(crate) ptr_escape: FxHashMap<FuncRef, PtrEscapeSummary>,
+    pub(crate) ptr_escape: PtrEscapeSummaries,
 }
 
 pub(crate) struct EvmPipeline<'a> {
@@ -46,7 +45,7 @@ struct EvmPipelineContext<'a> {
     funcs: Vec<FuncRef>,
     roots: Vec<FuncRef>,
     func_behavior_dirty: bool,
-    ptr_escape: Option<FxHashMap<FuncRef, PtrEscapeSummary>>,
+    ptr_escape: Option<PtrEscapeSummaries>,
 }
 
 impl<'a> EvmPipeline<'a> {

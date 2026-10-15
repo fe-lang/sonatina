@@ -17,7 +17,7 @@ use super::{
     frame_layout::DynamicFrameLayout,
     malloc_plan::MallocEscapeKind,
     placement_search::{FuncPlacementEval, solve_func_placement},
-    ptr_escape::PtrEscapeSummary,
+    ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo},
     static_arena_alloc::{FuncStackObjects, ObjFacts, StackObjId, StaticArenaAllocCtx},
 };
@@ -593,7 +593,7 @@ pub(crate) fn compute_semantic_program_memory_plan(
     module: &Module,
     schedule: &CallGraphSchedule,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &PtrEscapeSummaries,
     isa: &Evm,
     cost_model: &ArenaCostModel,
 ) -> ProgramMemoryPlan {

@@ -1,4 +1,4 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use sonatina_ir::{
     Function, InstId, InstSetExt, ValueId,
     inst::evm::inst_set::EvmInstKind,
@@ -7,7 +7,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    ptr_escape::PtrEscapeSummary,
+    ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo, memory_store},
 };
 
@@ -73,7 +73,7 @@ pub(crate) struct EscapeEvent {
 pub(crate) struct EscapeScanCtx<'a> {
     pub(crate) module: &'a ModuleCtx,
     pub(crate) isa: &'a Evm,
-    pub(crate) ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+    pub(crate) ptr_escape: &'a PtrEscapeSummaries,
     pub(crate) prov_info: &'a ProvenanceInfo,
     pub(crate) escaping_mallocs: FxHashSet<InstId>,
 }
@@ -83,7 +83,7 @@ impl<'a> EscapeScanCtx<'a> {
         function: &Function,
         module: &'a ModuleCtx,
         isa: &'a Evm,
-        ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+        ptr_escape: &'a PtrEscapeSummaries,
         prov_info: &'a ProvenanceInfo,
     ) -> Self {
         let mut ctx = Self {
@@ -202,8 +202,7 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
         }
         EvmInstKind::Call(call) => {
             let callee = *call.callee();
-            let callee_sum =
-                PtrEscapeSummary::get_or_conservative(ctx.ptr_escape, ctx.module, callee);
+            let callee_sum = ctx.ptr_escape.get_or_conservative(ctx.module, callee);
 
             for (origin, effect) in callee_sum.argument_effects() {
                 let arg_index = origin.index as usize;

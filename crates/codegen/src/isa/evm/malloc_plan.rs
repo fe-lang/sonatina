@@ -25,7 +25,7 @@ use super::{
     },
     memory_plan::SemanticFuncPlan,
     private_malloc::PrivateMallocUseAnalysis,
-    ptr_escape::PtrEscapeSummary,
+    ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo},
 };
 
@@ -86,7 +86,7 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &PtrEscapeSummaries,
     prov_info: &ProvenanceInfo,
     transient_mallocs: &FxHashSet<InstId>,
 ) -> bool {
@@ -97,7 +97,8 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
             if let EvmInstKind::Call(call) = data
-                && PtrEscapeSummary::get_or_conservative(ptr_escape, module, *call.callee())
+                && ptr_escape
+                    .get_or_conservative(module, *call.callee())
                     .may_publish_heap
             {
                 // Restoring the entry cursor also frees allocations published
@@ -183,7 +184,7 @@ pub(crate) fn compute_transient_mallocs(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &PtrEscapeSummaries,
     prov_info: &ProvenanceInfo,
     call_barriers: Option<&TransientMallocCallBarriers>,
     inst_liveness: &InstLiveness,
@@ -315,7 +316,7 @@ pub(crate) fn compute_malloc_escape_kinds_for_function(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &PtrEscapeSummaries,
     prov_info: &ProvenanceInfo,
 ) -> FxHashMap<InstId, MallocEscapeKind> {
     let scan_ctx = EscapeScanCtx::new(function, module, isa, ptr_escape, prov_info);
