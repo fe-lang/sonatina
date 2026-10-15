@@ -77,8 +77,9 @@ func public %entry(v3.i256, v4.i256) -> i256 {
 }
 
 #[test]
-fn loop_enum_extract_keeps_its_variant_proof() {
-    let source = r#"
+fn enum_extract_keeps_its_variant_proof() {
+    // LICM must not hoist the guarded payload read out of the loop.
+    let loop_source = r#"
 target = "evm-ethereum-osaka"
 
 type @OptionI64 = enum {
@@ -129,14 +130,71 @@ func public %entry(v0.i1, v1.i64, v2.i64) -> i64 {
         return v6;
 }
 "#;
+    // Jump threading must not recompute the payload read in `block5`, ahead
+    // of the branch whose `block1` edge has not proven the variant yet.
+    let join_source = r#"
+target = "evm-ethereum-osaka"
+
+type @Res = enum {
+    #Err(i256),
+    #Ok(i256),
+};
+
+func inline(never) private %guarded(v0.@Res, v1.i1, v2.i256, v3.i1) -> i256 {
+    block0:
+        br v1 block5 block6;
+
+    block5:
+        v4.i1 = enum.is_variant v0 #Ok;
+        br v4 block2 block1;
+
+    block1:
+        enum.assert_variant v0 #Ok;
+        jump block2;
+
+    block2:
+        v5.i1 = phi (1.i1 block5) (0.i1 block1);
+        v6.i256 = enum.extract v0 #Ok 0.i256;
+        br v5 block3 block4;
+
+    block6:
+        br v3 block3 block4;
+
+    block3:
+        v7.i256 = phi (v6 block2) (v2 block6);
+        return v7;
+
+    block4:
+        v8.i256 = phi (v6 block2) (0.i256 block6);
+        v9.i256 = add v8 1.i256;
+        return v9;
+}
+
+func public %entry(v0.i1, v1.i256, v2.i1, v3.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+    block1:
+        v4.@Res = enum.make @Res #Ok (v1);
+        jump block3;
+    block2:
+        v5.@Res = enum.make @Res #Err (v1);
+        jump block3;
+    block3:
+        v6.@Res = phi (v4 block1) (v5 block2);
+        v7.i256 = call %guarded v6 v2 v1 v3;
+        return v7;
+}
+"#;
     let config = VerifierConfig::for_level(VerificationLevel::Full);
-    let mut licm = Pipeline::new();
-    licm.add_step(Step::FuncPasses(vec![Pass::Licm]));
-    for pipeline in [licm, Pipeline::size(), Pipeline::speed()] {
-        let mut parsed = parse_module(source).unwrap();
-        verify_module_or_panic(&parsed.module, &config);
-        pipeline.run(&mut parsed.module);
-        verify_module_or_panic(&parsed.module, &config);
+    for (source, pass) in [(loop_source, Pass::Licm), (join_source, Pass::JumpThread)] {
+        let mut single = Pipeline::new();
+        single.add_step(Step::FuncPasses(vec![pass]));
+        for pipeline in [single, Pipeline::size(), Pipeline::speed()] {
+            let mut parsed = parse_module(source).unwrap();
+            verify_module_or_panic(&parsed.module, &config);
+            pipeline.run(&mut parsed.module);
+            verify_module_or_panic(&parsed.module, &config);
+        }
     }
 }
 
