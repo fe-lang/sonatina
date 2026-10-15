@@ -118,7 +118,10 @@ pub(crate) struct CallSiteObjects {
     pub(crate) call_rank: u32,
     pub(crate) callee: FuncRef,
     pub(crate) result_count: u8,
+    /// The objects live across the call that have storage: a zero-sized
+    /// object has no location to keep.
     pub(crate) live_across_objs: Vec<StackObjId>,
+    /// The objects with storage the callee can reach through its arguments.
     pub(crate) callee_visible_objs: Vec<StackObjId>,
 }
 
@@ -483,7 +486,7 @@ fn compute_func_stack_objects_from_input(
         obj_id_by_local: &obj_id_by_local,
         alloca_ids: &alloca_ids,
     };
-    let (regions, call_sites) =
+    let (regions, mut call_sites) =
         compute_regions_and_calls(function, &cfg, &block_order, &mut liveness_ctx);
     for (idx, region) in regions.into_iter().enumerate() {
         objects[idx].region = region;
@@ -493,6 +496,19 @@ fn compute_func_stack_objects_from_input(
     for obj in &objects {
         obj_size_words.insert(obj.id, obj.size_words);
     }
+    // A zero-sized object has no storage for a call to keep or expose.
+    let has_storage = |obj: &StackObjId| {
+        obj_size_words
+            .get(obj)
+            .copied()
+            .unwrap_or_else(|| panic!("missing object size for obj {}", obj.as_u32()))
+            != 0
+    };
+    for call in &mut call_sites {
+        call.live_across_objs.retain(|obj| has_storage(obj));
+        call.callee_visible_objs.retain(|obj| has_storage(obj));
+    }
+    unknown_barrier_objs.retain(|obj| has_storage(obj));
 
     let mut obj_facts: FxHashMap<StackObjId, ObjFacts> = FxHashMap::default();
     for obj in &objects {
