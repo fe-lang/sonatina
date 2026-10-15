@@ -1,0 +1,30 @@
+target = "evm-ethereum-osaka"
+
+type @Res = enum {
+    #Err(i256),
+    #Ok(i256),
+};
+
+# A payload read sinks below its proof: the variant stays proven wherever the
+# read's original position dominates.
+# sameln: func private %sink_enum_extract(v0.@Res, v1.i1) -> i256 {
+# check:       block0:
+# nextln:          enum.assert_variant v0 #Ok;
+# nextln:          br v1 block1 block2;
+# check:       block1:
+# nextln:          v2.i256 = enum.extract v0 #Ok 0.i256;
+# nextln:          v3.i256 = add v2 1.i256;
+# nextln:          return v3;
+func private %sink_enum_extract(v0.@Res, v1.i1) -> i256 {
+    block0:
+        enum.assert_variant v0 #Ok;
+        v2.i256 = enum.extract v0 #Ok 0.i256;
+        v3.i256 = add v2 1.i256;
+        br v1 block1 block2;
+
+    block1:
+        return v3;
+
+    block2:
+        return 0.i256;
+}
