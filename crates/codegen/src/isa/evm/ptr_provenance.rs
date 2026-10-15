@@ -411,21 +411,33 @@ pub(crate) fn memory_store(
     }
 }
 
-/// Writes whose bytes may form pointers this analysis cannot name. Calldata is
-/// fixed before the frame allocates anything, so, like `evm_calldata_load`, a
-/// copy of it holds no pointer to the frame's memory.
-fn unmodeled_write_addr(data: &EvmInstKind, untracked: UntrackedMemory) -> Option<ValueId> {
-    let external = |addr| (untracked == UntrackedMemory::MayHoldPointers).then_some(addr);
+/// A write the analysis does not model as storing a value.
+enum UnmodeledWrite {
+    /// Its bytes may form pointers this analysis cannot name.
+    MayFormPointer(ValueId),
+    /// Its bytes hold no pointer to the frame's memory, but may overwrite part
+    /// of a stored one.
+    PointerFree(ValueId),
+}
+
+/// Calldata is fixed before the frame allocates anything, so, like
+/// `evm_calldata_load`, a copy of it holds no pointer to the frame's memory.
+fn unmodeled_write(data: &EvmInstKind, untracked: UntrackedMemory) -> Option<UnmodeledWrite> {
+    let external = |addr| match untracked {
+        UntrackedMemory::PointerFree => UnmodeledWrite::PointerFree(addr),
+        UntrackedMemory::MayHoldPointers => UnmodeledWrite::MayFormPointer(addr),
+    };
     match data {
-        EvmInstKind::EvmMstore8(mstore8) => Some(*mstore8.addr()),
-        EvmInstKind::EvmMcopy(mcopy) => Some(*mcopy.dest()),
-        EvmInstKind::Memzero(memzero) => Some(*memzero.dest()),
-        EvmInstKind::EvmExtCodeCopy(copy) => external(*copy.dst_addr()),
-        EvmInstKind::EvmReturnDataCopy(copy) => external(*copy.dst_addr()),
-        EvmInstKind::EvmCall(call) => external(*call.ret_addr()),
-        EvmInstKind::EvmCallCode(call) => external(*call.ret_addr()),
-        EvmInstKind::EvmDelegateCall(call) => external(*call.ret_addr()),
-        EvmInstKind::EvmStaticCall(call) => external(*call.ret_addr()),
+        EvmInstKind::EvmMstore8(mstore8) => Some(UnmodeledWrite::MayFormPointer(*mstore8.addr())),
+        EvmInstKind::EvmMcopy(mcopy) => Some(UnmodeledWrite::MayFormPointer(*mcopy.dest())),
+        EvmInstKind::Memzero(memzero) => Some(UnmodeledWrite::MayFormPointer(*memzero.dest())),
+        EvmInstKind::EvmCalldataCopy(copy) => Some(UnmodeledWrite::PointerFree(*copy.dst_addr())),
+        EvmInstKind::EvmExtCodeCopy(copy) => Some(external(*copy.dst_addr())),
+        EvmInstKind::EvmReturnDataCopy(copy) => Some(external(*copy.dst_addr())),
+        EvmInstKind::EvmCall(call) => Some(external(*call.ret_addr())),
+        EvmInstKind::EvmCallCode(call) => Some(external(*call.ret_addr())),
+        EvmInstKind::EvmDelegateCall(call) => Some(external(*call.ret_addr())),
+        EvmInstKind::EvmStaticCall(call) => Some(external(*call.ret_addr())),
         _ => None,
     }
 }
@@ -840,20 +852,35 @@ pub(crate) fn compute_provenance(
                     }
                     _ => false,
                 };
-                if let Some(dst) =
-                    unmodeled_write_addr(&data, info.untracked_memory).filter(|_| !complete_write)
-                {
-                    changed |=
-                        poison_allocation_mem(&mut info.local_mem, info.value[dst].alloca_insts());
-                    changed |=
-                        poison_allocation_mem(&mut info.malloc_mem, info.value[dst].malloc_insts());
-                    changed |= poison_allocation_mem(
-                        &mut info.imprecise_mem,
-                        info.value[dst]
-                            .alloca_insts()
-                            .chain(info.value[dst].malloc_insts()),
-                    );
-                    changed |= poison_arg_mem(&mut info.arg_mem, &info.value[dst]);
+                match unmodeled_write(&data, info.untracked_memory).filter(|_| !complete_write) {
+                    Some(UnmodeledWrite::MayFormPointer(dst)) => {
+                        changed |= poison_allocation_mem(
+                            &mut info.local_mem,
+                            info.value[dst].alloca_insts(),
+                        );
+                        changed |= poison_allocation_mem(
+                            &mut info.malloc_mem,
+                            info.value[dst].malloc_insts(),
+                        );
+                        changed |= poison_allocation_mem(
+                            &mut info.imprecise_mem,
+                            info.value[dst]
+                                .alloca_insts()
+                                .chain(info.value[dst].malloc_insts()),
+                        );
+                        changed |= poison_arg_mem(&mut info.arg_mem, &info.value[dst]);
+                    }
+                    // A stored pointer that the write overwrites in part keeps
+                    // its bases at an unknown offset, as pointer arithmetic does.
+                    Some(UnmodeledWrite::PointerFree(dst)) => {
+                        let dest = info.value[dst].clone();
+                        let offset_unknown = Provenance {
+                            imprecise: true,
+                            ..Provenance::default()
+                        };
+                        changed |= info.store_memory(&dest, &offset_unknown);
+                    }
+                    None => {}
                 }
 
                 if let EvmInstKind::Call(call) = &data {
@@ -1353,6 +1380,37 @@ block0:
                 );
             }
         }
+    }
+
+    #[test]
+    fn partial_pointer_free_writes_leave_stored_pointers_at_unknown_offsets() {
+        // The calldata byte replaces the low byte of the stored pointer to v2,
+        // so the reloaded pointer may address either of v2's cells.
+        let provenance = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+func public %f(v0.*i256, v1.*i256) -> *i256 {
+block0:
+    v2.**i256 = evm_malloc 64.i256;
+    mstore v2 v0 *i256;
+    v3.i256 = ptr_to_int v2 i256;
+    v4.i256 = add v3 32.i256;
+    v5.**i256 = int_to_ptr v4 **i256;
+    mstore v5 v1 *i256;
+    v6.***i256 = alloca **i256;
+    mstore v6 v2 **i256;
+    v7.i256 = ptr_to_int v6 i256;
+    v8.i256 = add v7 31.i256;
+    evm_calldata_copy v8 0.i256 1.i256;
+    v9.**i256 = mload v6 **i256;
+    v10.*i256 = mload v9 *i256;
+    return v10;
+}
+"#,
+            "f",
+        );
+        assert_eq!(provenance.arg_indices().collect::<Vec<_>>(), vec![0, 1]);
+        assert!(!provenance.is_unknown_ptr(), "{provenance:?}");
     }
 
     #[test]
