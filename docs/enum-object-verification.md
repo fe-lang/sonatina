@@ -55,6 +55,12 @@ the variants of its ancestors.
 a snapshot when its source object changes; references within the snapshot still
 refer to mutable objects and retain their own guards.
 
+`enum.extract` has pure value semantics, but its active-variant proof must hold
+at the use site. It is not unconditionally speculatable: moving or recomputing
+an extraction above a branch or assumption can invalidate that proof.
+Pure-value elimination, unused-result removal, and sinking to positions the
+extraction dominates remain permitted.
+
 An incoming `objref<T>` has no encoded parent-enum obligation. It predates fresh
 allocations in this invocation. Incoming references may alias each other; a
 reference recovered later from a holder or opaque call may alias a fresh local

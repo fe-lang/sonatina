@@ -1,0 +1,41 @@
+target = "evm-ethereum-osaka"
+
+type @Res = enum {
+    #Err(i256),
+    #Ok(i256),
+};
+
+# The payload read is valid where the block is entered. Recomputed at the end
+# of `block0`, it would also run on the edge to `block1`, before the variant is
+# proven, so only the edge from `block1` is threaded.
+# sameln: func private %guarded_extract(v0.@Res) -> i256 {
+# check:   block0:
+# nextln:      v1.i1 = enum.is_variant v0 #Ok;
+# nextln:      br v1 block2 block1;
+# check:   block1:
+# nextln:      enum.assert_variant v0 #Ok;
+# nextln:      v11.i256 = enum.extract v0 #Ok 0.i256;
+# nextln:      jump block4;
+func private %guarded_extract(v0.@Res) -> i256 {
+    block0:
+        v1.i1 = enum.is_variant v0 #Ok;
+        br v1 block2 block1;
+
+    block1:
+        enum.assert_variant v0 #Ok;
+        jump block2;
+
+    block2:
+        v2.i1 = phi (1.i1 block0) (0.i1 block1);
+        v3.i256 = enum.extract v0 #Ok 0.i256;
+        br v2 block3 block4;
+
+    block3:
+        v5.i256 = phi (v3 block2);
+        return v5;
+
+    block4:
+        v6.i256 = phi (v3 block2);
+        v4.i256 = add v6 1.i256;
+        return v4;
+}

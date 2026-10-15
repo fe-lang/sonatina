@@ -12,8 +12,9 @@ pub(crate) enum ReadPrefixRequirement {
     SingleExecution,
 }
 
-/// Reads guaranteed to execute before any non-speculatable instruction. This
-/// proves placement only; consumers must separately establish unchanged contents.
+/// Reads guaranteed to execute before any instruction without value semantics.
+/// This proves placement only; consumers must separately establish unchanged
+/// contents.
 pub(crate) fn unconditional_read_prefix(
     func: &Function,
     requirement: ReadPrefixRequirement,
@@ -46,7 +47,7 @@ pub(crate) fn unconditional_read_prefix(
                 }
                 block = *jump.dest();
                 continue 'prefix;
-            } else if !func.dfg.can_speculate(inst) {
+            } else if !func.dfg.has_value_semantics(inst) {
                 break 'prefix;
             }
         }

@@ -6,7 +6,8 @@
 //! successor: `B`'s other instructions, which must be pure and few, are
 //! recomputed at the end of `P` from `P`'s incoming values, and the
 //! successor's phis take what `B` would have passed them. `B` is deleted
-//! once no predecessor is left.
+//! once no predecessor is left. When `P` has other successors, the recomputed
+//! instructions also run on their paths, so they must be speculatable.
 //!
 //! A cursor loop's `Option` test is the motivating shape: the latch tests
 //! the next cursor, enters a join that materializes the tag as `phi(1, 0)`,
@@ -190,7 +191,8 @@ fn thread_block(editor: &mut CfgEditor<'_>, domtree: &DomTree, block: BlockId) -
 }
 
 /// The edge `pred -> block` and the successor its constant condition
-/// selects, when `pred` enters once and does not already branch there.
+/// selects, when `pred` enters once, does not already branch there, and may
+/// run the block's body on its other successors' paths.
 fn threadable_edge(
     editor: &CfgEditor<'_>,
     block: BlockId,
@@ -220,7 +222,10 @@ fn threadable_edge(
     let dests = func.dfg.branch_info(term)?.dests();
     let mut edges = dests.iter().enumerate().filter(|(_, to)| **to == block);
     let (edge_idx, _) = edges.next()?;
-    if edges.next().is_some() || dests.contains(&dest) {
+    if edges.next().is_some()
+        || dests.contains(&dest)
+        || (dests.len() > 1 && !cand.body.iter().all(|&inst| func.dfg.can_speculate(inst)))
+    {
         return None;
     }
     Some((edge_idx, dest))

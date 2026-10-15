@@ -15,6 +15,8 @@ use crate::{
     inst::{
         InstId,
         control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
+        data::EnumExtract,
+        downcast,
     },
     ir_writer::{FuncWriteCtx, IrWrite},
     module::ModuleCtx,
@@ -730,8 +732,14 @@ impl DataFlowGraph {
             && !self.effect_summary(inst_id).has_effect()
     }
 
+    /// Whether `inst_id` may also run on paths that did not run it, such as
+    /// when hoisted above a branch. Moving it only to positions its old one
+    /// dominates needs [`Self::has_value_semantics`] alone.
     pub fn can_speculate(&self, inst_id: InstId) -> bool {
+        // Payload extraction is pure, but requires an active-variant proof at
+        // its use site, which hoisting above a branch or assumption can lose.
         self.has_value_semantics(inst_id)
+            && downcast::<&EnumExtract>(self.inst_set(), self.inst(inst_id)).is_none()
     }
 
     pub fn effect_cost_class(&self, inst_id: InstId) -> EffectCostClass {

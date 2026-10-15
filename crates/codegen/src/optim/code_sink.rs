@@ -75,7 +75,9 @@ impl SinkFacts {
 
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if (func.dfg.can_speculate(inst) || is_constant_calldata_load(func, inst))
+                // A sunk instruction runs only where its old position
+                // dominates, so it needs value semantics, not speculation.
+                if (func.dfg.has_value_semantics(inst) || is_constant_calldata_load(func, inst))
                     && !func.dfg.inst_results(inst).is_empty()
                 {
                     facts.sink_candidates.insert(inst);
