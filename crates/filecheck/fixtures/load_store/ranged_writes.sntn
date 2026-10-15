@@ -1,0 +1,180 @@
+target = "evm-ethereum-osaka"
+
+#! A memzero that a later store overwrites before the payload read is dead.
+# sameln: func public %removes_overwritten_memzero(v0.i256) {
+# not:         memzero
+# check:       mstore v2 v0 i256;
+# nextln:      evm_return v2 32.i256;
+func public %removes_overwritten_memzero(v0.i256) {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        memzero v2 32.i256;
+        mstore v2 v0 i256;
+        evm_return v2 32.i256;
+}
+
+#! Adjacent stores together overwrite a memzero.
+# sameln: func public %removes_memzero_overwritten_by_adjacent_stores(v0.i256) {
+# not:         memzero
+# check:       mstore v2 v0 i256;
+# nextln:      v3.i256 = add v2 32.i256;
+# nextln:      mstore v3 v0 i256;
+func public %removes_memzero_overwritten_by_adjacent_stores(v0.i256) {
+    block0:
+        v1.*i8 = evm_malloc 64.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        memzero v2 64.i256;
+        mstore v2 v0 i256;
+        v3.i256 = add v2 32.i256;
+        mstore v3 v0 i256;
+        evm_return v2 64.i256;
+}
+
+#! Stores on every path to the payload read overwrite a memzero.
+# sameln: func public %removes_memzero_overwritten_on_every_path(v0.i1) {
+# not:         memzero
+# check:       br v0 block1 block2;
+func public %removes_memzero_overwritten_on_every_path(v0.i1) {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        memzero v2 32.i256;
+        br v0 block1 block2;
+
+    block1:
+        mstore v2 1.i256 i256;
+        jump block3;
+
+    block2:
+        mstore v2 0.i256 i256;
+        jump block3;
+
+    block3:
+        evm_return v2 32.i256;
+}
+
+#! A memzero stays when an overwrite misses some of its bytes.
+# sameln: func public %keeps_partially_overwritten_memzero(v0.i256) {
+# check:       memzero v2 64.i256;
+# nextln:      mstore v2 v0 i256;
+func public %keeps_partially_overwritten_memzero(v0.i256) {
+    block0:
+        v1.*i8 = evm_malloc 64.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        memzero v2 64.i256;
+        mstore v2 v0 i256;
+        evm_return v2 64.i256;
+}
+
+#! A memzero stays when one path to the payload read does not overwrite it.
+# sameln: func public %keeps_memzero_overwritten_on_one_path(v0.i1) {
+# check:       memzero v2 32.i256;
+func public %keeps_memzero_overwritten_on_one_path(v0.i1) {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        memzero v2 32.i256;
+        br v0 block1 block2;
+
+    block1:
+        mstore v2 1.i256 i256;
+        jump block2;
+
+    block2:
+        evm_return v2 32.i256;
+}
+
+#! Loads of zeroed bytes keep the memzero.
+# sameln: func public %keeps_memzero_read_by_load() -> i256 {
+# check:       memzero v0 32.i256;
+# nextln:      v1.i256 = mload v0 i256;
+func public %keeps_memzero_read_by_load() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        memzero v0 32.i256;
+        v1.i256 = mload v0 i256;
+        return v1;
+}
+
+#! A caller can read heap memory after a returning exit.
+# sameln: func public %keeps_memzero_visible_after_return() -> i256 {
+# check:       memzero v1 32.i256;
+# nextln:      return v1;
+func public %keeps_memzero_visible_after_return() -> i256 {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        memzero v1 32.i256;
+        return v1;
+}
+
+#! Nothing reads a memzero before a revert without a payload.
+# sameln: func public %removes_memzero_before_empty_revert() {
+# not:         memzero
+# check:       evm_revert 0.i256 0.i256;
+func public %removes_memzero_before_empty_revert() {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        memzero v1 32.i256;
+        evm_revert 0.i256 0.i256;
+}
+
+#! A memzero overwrites earlier stores to its bytes.
+# sameln: func public %memzero_kills_earlier_store(v0.i256) {
+# not:         mstore
+# check:       memzero v2 32.i256;
+# nextln:      evm_revert v2 32.i256;
+func public %memzero_kills_earlier_store(v0.i256) {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        mstore v2 v0 i256;
+        memzero v2 32.i256;
+        evm_revert v2 32.i256;
+}
+
+#! A calldata copy overwrites earlier stores to its destination.
+# sameln: func public %calldata_copy_kills_earlier_store(v0.i256) {
+# not:         mstore
+# check:       evm_calldata_copy v2 0.i256 32.i256;
+func public %calldata_copy_kills_earlier_store(v0.i256) {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        mstore v2 v0 i256;
+        evm_calldata_copy v2 0.i256 32.i256;
+        evm_revert v2 32.i256;
+}
+
+#! A call may fill only part of its output, so earlier stores there stay.
+# sameln: func public %call_output_keeps_earlier_store(v0.i256) {
+# check:       mstore v2 v0 i256;
+# nextln:      v3.i256 = evm_call v0 v0 0.i256 0.i256 0.i256 v2 32.i256;
+func public %call_output_keeps_earlier_store(v0.i256) {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        mstore v2 v0 i256;
+        v3.i256 = evm_call v0 v0 0.i256 0.i256 0.i256 v2 32.i256;
+        evm_revert v2 32.i256;
+}
+
+#! A copy into another buffer does not keep overwritten stores live.
+# sameln: func public %copy_destination_keeps_no_unrelated_store() {
+# not:         mstore v1 0.i256 i256;
+# check:       mstore v1 50.i256 i256;
+# nextln:      v2.*i8 = evm_malloc 36.i256;
+func public %copy_destination_keeps_no_unrelated_store() {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        mstore v1 0.i256 i256;
+        mstore v1 50.i256 i256;
+        v2.*i8 = evm_malloc 36.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v4.i256 = add v3 4.i256;
+        evm_mcopy v4 v1 32.i256;
+        evm_revert v3 36.i256;
+}

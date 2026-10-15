@@ -85,12 +85,29 @@ pub struct LinearLocKey {
     pub ty: Type,
 }
 
+impl LinearLocKey {
+    pub fn range(&self) -> LinearRangeKey {
+        LinearRangeKey {
+            space: self.space,
+            base: self.base.clone(),
+            offset: self.offset,
+            bytes: i64::from(self.bytes),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LinearRangeKey {
     pub space: AddressSpaceId,
     pub base: BaseObject,
     pub offset: i64,
     pub bytes: i64,
+}
+
+impl LinearRangeKey {
+    pub fn absolute_interval(&self) -> Option<(i64, i64)> {
+        absolute_byte_range(&self.base, self.offset, self.bytes)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +132,15 @@ pub struct KeyedLocKey {
 pub enum TrackedLocKey {
     Linear(LinearLocKey),
     Keyed(KeyedLocKey),
+}
+
+impl TrackedLocKey {
+    pub fn space(&self) -> AddressSpaceId {
+        match self {
+            TrackedLocKey::Linear(key) => key.space,
+            TrackedLocKey::Keyed(key) => key.space,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,9 +312,13 @@ impl MemoryAccessAnalysis {
 
     pub fn range_may_alias_key(&self, range: &LinearRangeKey, key: &TrackedLocKey) -> bool {
         match key {
-            TrackedLocKey::Linear(key) => self.range_may_alias_linear(range, key),
+            TrackedLocKey::Linear(key) => self.ranges_may_alias(range, &key.range()),
             TrackedLocKey::Keyed(_) => false,
         }
+    }
+
+    pub fn ranges_may_alias(&self, lhs: &LinearRangeKey, rhs: &LinearRangeKey) -> bool {
+        self.write_coverage(lhs, rhs) != RangeCoverage::NoOverlap
     }
 
     pub fn access_may_alias_key(
@@ -297,12 +327,7 @@ impl MemoryAccessAnalysis {
         access: &sonatina_ir::MemoryAccess,
         key: &TrackedLocKey,
     ) -> bool {
-        if access.space
-            != match key {
-                TrackedLocKey::Linear(key) => key.space,
-                TrackedLocKey::Keyed(key) => key.space,
-            }
-        {
+        if access.space != key.space() {
             return false;
         }
 
@@ -411,57 +436,49 @@ impl MemoryAccessAnalysis {
         }
     }
 
-    fn range_may_alias_linear(&self, range: &LinearRangeKey, key: &LinearLocKey) -> bool {
-        !matches!(
-            self.exact_write_coverage(range, key),
-            RangeCoverage::NoOverlap
-        )
-    }
-
-    pub fn exact_write_coverage(
-        &self,
-        range: &LinearRangeKey,
-        key: &LinearLocKey,
-    ) -> RangeCoverage {
-        if range.space != key.space || range.bytes == 0 || key.bytes == 0 {
+    /// How much of `range` a write of all of `write` overwrites.
+    pub fn write_coverage(&self, range: &LinearRangeKey, write: &LinearRangeKey) -> RangeCoverage {
+        if range.space != write.space || range.bytes == 0 || write.bytes == 0 {
             return RangeCoverage::NoOverlap;
         }
 
-        if let Some(((range_start, range_end), (key_start, key_end))) =
-            absolute_byte_range(&range.base, range.offset, range.bytes).zip(absolute_byte_range(
-                &key.base,
-                key.offset,
-                i64::from(key.bytes),
-            ))
+        if let Some(((range_start, range_end), (write_start, write_end))) =
+            range.absolute_interval().zip(write.absolute_interval())
         {
-            return self.coverage_from_intervals(range, range_start, range_end, key_start, key_end);
+            return self.coverage_from_intervals(
+                range,
+                range_start,
+                range_end,
+                write_start,
+                write_end,
+            );
         }
 
         if reserved_meta_shortcut_applies(
             &range.base,
             range.offset,
             range.bytes,
-            &key.base,
-            key.offset,
-            i64::from(key.bytes),
+            &write.base,
+            write.offset,
+            write.bytes,
         ) {
             return RangeCoverage::NoOverlap;
         }
 
-        match self.alias_linear_bases(&range.base, &key.base) {
+        match self.alias_linear_bases(&range.base, &write.base) {
             AliasResult::NoAlias => RangeCoverage::NoOverlap,
             AliasResult::MayAlias => RangeCoverage::Unknown,
             AliasResult::MustAlias => range
                 .offset
                 .checked_add(range.bytes)
-                .zip(key.offset.checked_add(i64::from(key.bytes)))
-                .map_or(RangeCoverage::Unknown, |(range_end, key_end)| {
+                .zip(write.offset.checked_add(write.bytes))
+                .map_or(RangeCoverage::Unknown, |(range_end, write_end)| {
                     self.coverage_from_intervals(
                         range,
                         range.offset,
                         range_end,
-                        key.offset,
-                        key_end,
+                        write.offset,
+                        write_end,
                     )
                 }),
         }
@@ -1923,7 +1940,7 @@ mod tests {
             .expect("absolute meta range should be trackable");
 
         assert_eq!(
-            analysis.exact_write_coverage(&range, &key),
+            analysis.write_coverage(&range, &key.range()),
             RangeCoverage::Unknown
         );
     }
@@ -1969,7 +1986,7 @@ mod tests {
                 .expect("absolute meta range should be trackable");
 
             assert_eq!(
-                analysis.exact_write_coverage(&range, &key),
+                analysis.write_coverage(&range, &key.range()),
                 RangeCoverage::NoOverlap
             );
         }
@@ -2055,7 +2072,7 @@ mod tests {
             .expect("absolute meta range should be trackable");
 
         assert_eq!(
-            analysis.exact_write_coverage(&range, &key),
+            analysis.write_coverage(&range, &key.range()),
             RangeCoverage::Unknown
         );
     }
@@ -2093,7 +2110,7 @@ mod tests {
             .expect("range should be trackable");
 
         assert_eq!(
-            analysis.exact_write_coverage(&range, &key),
+            analysis.write_coverage(&range, &key.range()),
             RangeCoverage::FullyCovered
         );
     }
@@ -2132,7 +2149,7 @@ mod tests {
             .expect("range should be trackable");
 
         assert_eq!(
-            analysis.exact_write_coverage(&range, &key),
+            analysis.write_coverage(&range, &key.range()),
             RangeCoverage::PartiallyCovered {
                 before: Some(LinearRangeKey {
                     space: range.space,
@@ -2179,7 +2196,7 @@ mod tests {
             .expect("range should be trackable");
 
         assert_eq!(
-            analysis.exact_write_coverage(&range, &key),
+            analysis.write_coverage(&range, &key.range()),
             RangeCoverage::NoOverlap
         );
     }

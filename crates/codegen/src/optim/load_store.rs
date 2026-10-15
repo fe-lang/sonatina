@@ -6,7 +6,7 @@ use sonatina_ir::{
     bitset::BitSet,
     inst::{
         control_flow,
-        data::{Alloca, Mload, Mstore},
+        data::{Alloca, Memzero, Mload, Mstore},
         evm::{
             EvmCalldataLoad, EvmCodeLoad, EvmInvalid, EvmMstore8, EvmReturn, EvmRevert,
             EvmSelfDestruct, EvmSload, EvmSstore, EvmStop, EvmTload, EvmTstore,
@@ -203,14 +203,13 @@ impl ExactLiveSet {
         self.other.retain(keep);
     }
 
-    fn candidates(&self, key: &TrackedLocKey) -> impl Iterator<Item = &TrackedLocKey> {
-        let (space, interval) = match key {
-            TrackedLocKey::Linear(key) => (
-                Some(key.space),
-                absolute_byte_range(&key.base, key.offset, i64::from(key.bytes)),
-            ),
-            TrackedLocKey::Keyed(_) => (None, None),
-        };
+    /// Keys that may alias an access in `space`, within `interval` if the
+    /// access is absolute. Keyed accesses pass no space.
+    fn candidates(
+        &self,
+        space: Option<AddressSpaceId>,
+        interval: Option<(i64, i64)>,
+    ) -> impl Iterator<Item = &TrackedLocKey> {
         self.other.iter().chain(
             self.absolute
                 .candidates(space, interval)
@@ -220,17 +219,23 @@ impl ExactLiveSet {
 
     fn retain_candidates(
         &mut self,
-        key: &TrackedLocKey,
+        space: Option<AddressSpaceId>,
+        interval: Option<(i64, i64)>,
         mut keep: impl FnMut(&TrackedLocKey) -> bool,
     ) {
         self.other.retain(|other| keep(other));
-        if let TrackedLocKey::Linear(key) = key {
-            self.absolute.retain_candidates(
-                key.space,
-                absolute_byte_range(&key.base, key.offset, i64::from(key.bytes)),
-                |other, _| keep(other),
-            );
+        if let Some(space) = space {
+            self.absolute
+                .retain_candidates(space, interval, |other, _| keep(other));
         }
+    }
+}
+
+/// The space and absolute interval that select `key`'s alias candidates.
+fn candidate_query(key: &TrackedLocKey) -> (Option<AddressSpaceId>, Option<(i64, i64)>) {
+    match key {
+        TrackedLocKey::Linear(key) => (Some(key.space), key.range().absolute_interval()),
+        TrackedLocKey::Keyed(_) => (None, None),
     }
 }
 
@@ -723,12 +728,7 @@ fn transfer_forward(
         };
 
         if state.exact.get(&key) == Some(&stored_value) && store_is_removable(func, inst) {
-            if rewrite {
-                remove_inst(func, inst);
-                analysis.clear();
-                return true;
-            }
-            return false;
+            return remove_store(func, inst, analysis, rewrite);
         }
 
         kill_aliasing_key(state, analysis, &key);
@@ -763,36 +763,78 @@ fn transfer_backward(
                 }
             }
             AccessKind::Write => {
-                let Some(key) = analysis.trackable_exact_loc(func, access) else {
-                    live.whole_space_live.insert(access.space);
-                    continue;
-                };
+                if let Some(key) = analysis.trackable_exact_loc(func, access) {
+                    let base = match &key {
+                        TrackedLocKey::Linear(key) => Some(&key.base),
+                        TrackedLocKey::Keyed(_) => None,
+                    };
+                    let has_whole_space_live = whole_space_liveness_may_observe(
+                        func,
+                        live,
+                        key.space(),
+                        base,
+                        alloca_visibility,
+                    );
+                    let has_exact_live = has_may_alias_live(&live.exact_live, &key, analysis);
+                    let has_range_live = has_may_alias_live_range(&live.range_live, &key, analysis);
+                    let live_at_exit = committing_exit_reachable
+                        && write_visible_at_committing_exit(func, key.space(), base)
+                        && !has_must_alias_live(&live.exit_live, &key, analysis);
+                    let dead = !has_whole_space_live
+                        && !has_exact_live
+                        && !has_range_live
+                        && !live_at_exit;
 
-                let has_whole_space_live =
-                    whole_space_liveness_may_observe_key(func, live, &key, alloca_visibility);
-                let has_exact_live = has_may_alias_live(&live.exact_live, &key, analysis);
-                let has_range_live = has_may_alias_live_range(&live.range_live, &key, analysis);
-                let live_at_exit = committing_exit_reachable
-                    && write_visible_at_committing_exit(func, &key)
-                    && !has_must_alias_live(&live.exit_live, &key, analysis);
-                let dead =
-                    !has_whole_space_live && !has_exact_live && !has_range_live && !live_at_exit;
-
-                if dead && store_is_removable(func, inst) {
-                    if rewrite {
-                        remove_inst(func, inst);
-                        analysis.clear();
-                        return true;
+                    if dead && store_is_removable(func, inst) {
+                        return remove_store(func, inst, analysis, rewrite);
                     }
-                    return false;
-                }
 
-                kill_must_alias_live(&mut live.exact_live, &key, analysis);
-                discharge_live_ranges(&mut live.range_live, &key, analysis);
-                if live_at_exit {
-                    kill_must_alias_live(&mut live.exit_live, &key, analysis);
-                    live.exit_live.insert(key);
+                    kill_must_alias_live(&mut live.exact_live, &key, analysis);
+                    if let TrackedLocKey::Linear(key) = &key {
+                        discharge_live_ranges(&mut live.range_live, &key.range(), analysis);
+                    }
+                    if live_at_exit {
+                        kill_must_alias_live(&mut live.exit_live, &key, analysis);
+                        live.exit_live.insert(key);
+                    }
+                } else if access.must_happen
+                    && let Some(range) = analysis.trackable_linear_range(func, access)
+                {
+                    let interval = range.absolute_interval();
+                    let live_at_exit = committing_exit_reachable
+                        && write_visible_at_committing_exit(func, range.space, Some(&range.base))
+                        && !exit_live_covers(&live.exit_live, &range, analysis);
+                    let dead = !live_at_exit
+                        && !whole_space_liveness_may_observe(
+                            func,
+                            live,
+                            range.space,
+                            Some(&range.base),
+                            alloca_visibility,
+                        )
+                        && !live
+                            .exact_live
+                            .candidates(Some(range.space), interval)
+                            .any(|key| analysis.range_may_alias_key(&range, key))
+                        && !live
+                            .range_live
+                            .iter()
+                            .any(|other| analysis.ranges_may_alias(other, &range));
+
+                    if dead && store_is_removable(func, inst) {
+                        return remove_store(func, inst, analysis, rewrite);
+                    }
+
+                    live.exact_live
+                        .retain_candidates(Some(range.space), interval, |key| {
+                            !matches!(key, TrackedLocKey::Linear(key)
+                                if analysis.write_coverage(&key.range(), &range)
+                                    == RangeCoverage::FullyCovered)
+                        });
+                    discharge_live_ranges(&mut live.range_live, &range, analysis);
                 }
+                // Any other write may leave every byte unchanged: it neither
+                // reads memory nor ends a prior store's liveness.
             }
         }
     }
@@ -858,7 +900,8 @@ fn has_may_alias_live(
     key: &TrackedLocKey,
     analysis: &MemoryAccessAnalysis,
 ) -> bool {
-    live.candidates(key)
+    let (space, interval) = candidate_query(key);
+    live.candidates(space, interval)
         .any(|other| analysis.alias(other, key) != AliasResult::NoAlias)
 }
 
@@ -867,8 +910,25 @@ fn has_must_alias_live(
     key: &TrackedLocKey,
     analysis: &MemoryAccessAnalysis,
 ) -> bool {
-    live.candidates(key)
+    let (space, interval) = candidate_query(key);
+    live.candidates(space, interval)
         .any(|other| analysis.alias(other, key) == AliasResult::MustAlias)
+}
+
+/// Whether exact stores that every path writes before a committing exit
+/// together overwrite all of `range`.
+fn exit_live_covers(
+    exit_live: &ExactLiveSet,
+    range: &LinearRangeKey,
+    analysis: &MemoryAccessAnalysis,
+) -> bool {
+    let mut uncovered = FxHashSet::from_iter([range.clone()]);
+    for key in exit_live.candidates(Some(range.space), range.absolute_interval()) {
+        if let TrackedLocKey::Linear(key) = key {
+            discharge_live_ranges(&mut uncovered, &key.range(), analysis);
+        }
+    }
+    uncovered.is_empty()
 }
 
 fn has_may_alias_live_range(
@@ -880,29 +940,19 @@ fn has_may_alias_live_range(
         .any(|range| analysis.range_may_alias_key(range, key))
 }
 
-fn whole_space_liveness_may_observe_key(
+/// Whether an unknown read can observe a write to `base` in `space`. A
+/// linear write has a base; a keyed one has none.
+fn whole_space_liveness_may_observe(
     func: &Function,
     live: &LiveState,
-    key: &TrackedLocKey,
+    space: AddressSpaceId,
+    base: Option<&BaseObject>,
     alloca_visibility: &AllocaVisibility,
 ) -> bool {
-    let space = match key {
-        TrackedLocKey::Linear(key) => key.space,
-        TrackedLocKey::Keyed(key) => key.space,
-    };
-    if !live.whole_space_live.contains(space) {
-        return false;
-    }
-
-    !matches!(
-        key,
-        TrackedLocKey::Linear(LinearLocKey {
-            space,
-            base: BaseObject::Alloca(alloca),
-            ..
-        }) if *space == func.ctx().address_spaces().default_space()
-            && alloca_visibility.local_only.contains(alloca)
-    )
+    live.whole_space_live.contains(space)
+        && !(space == func.ctx().address_spaces().default_space()
+            && matches!(base, Some(BaseObject::Alloca(alloca))
+                if alloca_visibility.local_only.contains(alloca)))
 }
 
 fn kill_must_alias_live(
@@ -910,23 +960,21 @@ fn kill_must_alias_live(
     key: &TrackedLocKey,
     analysis: &MemoryAccessAnalysis,
 ) {
-    live.retain_candidates(key, |other| {
+    let (space, interval) = candidate_query(key);
+    live.retain_candidates(space, interval, |other| {
         analysis.alias(other, key) != AliasResult::MustAlias
     });
 }
 
+/// Removes the parts of live ranges that a write of all of `write` overwrites.
 fn discharge_live_ranges(
     live: &mut FxHashSet<LinearRangeKey>,
-    key: &TrackedLocKey,
+    write: &LinearRangeKey,
     analysis: &MemoryAccessAnalysis,
 ) {
-    let TrackedLocKey::Linear(key) = key else {
-        return;
-    };
-
     let ranges: Vec<_> = live.drain().collect();
     for range in ranges {
-        match analysis.exact_write_coverage(&range, key) {
+        match analysis.write_coverage(&range, write) {
             RangeCoverage::NoOverlap | RangeCoverage::Unknown => {
                 live.insert(range);
             }
@@ -1016,8 +1064,24 @@ fn store_is_removable(func: &Function, inst: InstId) -> bool {
 
     <&Mstore as InstDowncast>::downcast(is, inst_data).is_some()
         || <&EvmMstore8 as InstDowncast>::downcast(is, inst_data).is_some()
+        || <&Memzero as InstDowncast>::downcast(is, inst_data).is_some()
         || <&EvmSstore as InstDowncast>::downcast(is, inst_data).is_some()
         || <&EvmTstore as InstDowncast>::downcast(is, inst_data).is_some()
+}
+
+/// Removes a store found redundant or dead, when rewriting. The fixed point
+/// treats the store as already removed.
+fn remove_store(
+    func: &mut Function,
+    inst: InstId,
+    analysis: &mut MemoryAccessAnalysis,
+    rewrite: bool,
+) -> bool {
+    if rewrite {
+        remove_inst(func, inst);
+        analysis.clear();
+    }
+    rewrite
 }
 
 fn blocks_reaching_committing_exit(
@@ -1092,13 +1156,13 @@ fn preceding_terminal_call(func: &Function, term: InstId) -> Option<&dyn control
     func.dfg.call_info(prev)
 }
 
-fn write_visible_at_committing_exit(func: &Function, key: &TrackedLocKey) -> bool {
-    let default_space = func.ctx().address_spaces().default_space();
-    match key {
-        TrackedLocKey::Keyed(_) => true,
-        TrackedLocKey::Linear(key) if key.space != default_space => true,
-        TrackedLocKey::Linear(key) => !matches!(key.base, BaseObject::Alloca(_)),
-    }
+fn write_visible_at_committing_exit(
+    func: &Function,
+    space: AddressSpaceId,
+    base: Option<&BaseObject>,
+) -> bool {
+    space != func.ctx().address_spaces().default_space()
+        || !matches!(base, Some(BaseObject::Alloca(_)))
 }
 
 fn remove_inst(func: &mut Function, inst: InstId) {

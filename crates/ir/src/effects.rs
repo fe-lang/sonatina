@@ -91,6 +91,8 @@ pub enum AccessLoc {
 pub struct MemoryAccess {
     pub space: AddressSpaceId,
     pub kind: AccessKind,
+    /// The access happens whenever the instruction completes. A range write
+    /// that must happen writes every byte of its range.
     pub must_happen: bool,
     pub loc: AccessLoc,
 }
@@ -358,7 +360,10 @@ trait EffectSink {
     fn read_keyed(&mut self, space: AddressSpaceId, key: ValueId, bytes: u32);
     fn write_keyed(&mut self, space: AddressSpaceId, key: ValueId, bytes: u32);
     fn read_range(&mut self, space: AddressSpaceId, addr: ValueId, len: ValueId);
+    /// Writes every byte of `[addr, addr + len)`.
     fn write_range(&mut self, space: AddressSpaceId, addr: ValueId, len: ValueId);
+    /// Writes any part of `[addr, addr + len)`, possibly none of it.
+    fn may_write_range(&mut self, space: AddressSpaceId, addr: ValueId, len: ValueId);
     fn read_whole(&mut self, space: AddressSpaceId);
     fn write_whole(&mut self, space: AddressSpaceId);
     fn add_other(&mut self, other: OtherEffects);
@@ -446,6 +451,15 @@ impl EffectSink for DetailedEffectSink {
         self.push_access(MemoryAccess {
             space,
             kind: AccessKind::Write,
+            must_happen: true,
+            loc: AccessLoc::LinearRange { addr, len },
+        });
+    }
+
+    fn may_write_range(&mut self, space: AddressSpaceId, addr: ValueId, len: ValueId) {
+        self.push_access(MemoryAccess {
+            space,
+            kind: AccessKind::Write,
             must_happen: false,
             loc: AccessLoc::LinearRange { addr, len },
         });
@@ -524,6 +538,10 @@ impl EffectSink for SummaryEffectSink {
     }
 
     fn write_range(&mut self, _: AddressSpaceId, _: ValueId, _: ValueId) {
+        self.record_access(AccessKind::Write);
+    }
+
+    fn may_write_range(&mut self, _: AddressSpaceId, _: ValueId, _: ValueId) {
         self.record_access(AccessKind::Write);
     }
 
@@ -888,7 +906,8 @@ fn record_external_call_effects<S: EffectSink>(
     may_write_state: bool,
 ) {
     sink.read_range(MEMORY, arg_addr, arg_len);
-    sink.write_range(MEMORY, ret_addr, ret_len);
+    // The callee's return data fills only a prefix of the output range.
+    sink.may_write_range(MEMORY, ret_addr, ret_len);
     sink.read_whole(STORAGE);
     sink.read_whole(TRANSIENT);
     sink.write_whole(RETURNDATA);
@@ -1225,6 +1244,42 @@ mod tests {
                 assert!(summary.may_mutate_state());
             }
         }
+    }
+
+    #[test]
+    fn fills_write_their_whole_range_but_call_outputs_may_not() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256], Type::I256);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let arg = builder.func.arg_values[0];
+        builder.insert_inst_no_result_with(|| Memzero::new(is, arg, arg));
+        builder.insert_inst_no_result_with(|| EvmCalldataCopy::new(is, arg, arg, arg));
+        builder.insert_inst_with(
+            || EvmCall::new(is, arg, arg, arg, arg, arg, arg, arg),
+            Type::I256,
+        );
+        builder.insert_inst_no_result_with(|| Return::new_single(is, arg));
+        builder.seal_all();
+
+        let memory_write_must_happen = |effects: InstEffects| {
+            effects
+                .accesses
+                .into_iter()
+                .find(|access| access.space == MEMORY && access.kind == AccessKind::Write)
+                .expect("memory write")
+                .must_happen
+        };
+        assert!(memory_write_must_happen(effects_for_inst::<Memzero>(
+            &builder.func
+        )));
+        assert!(memory_write_must_happen(
+            effects_for_inst::<EvmCalldataCopy>(&builder.func)
+        ));
+        assert!(!memory_write_must_happen(effects_for_inst::<EvmCall>(
+            &builder.func
+        )));
     }
 
     #[test]

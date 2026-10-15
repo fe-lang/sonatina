@@ -12,7 +12,6 @@ func public %entry() {
         br v4 block1 block4;
 
     block1:
-        mstore 0.i256 7.i256 i256;
         call %clobber;
         v0.i256 = evm_calldata_load 32.i256;
         v1.i256 = evm_calldata_load 64.i256;
