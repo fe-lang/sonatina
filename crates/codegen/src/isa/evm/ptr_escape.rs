@@ -16,7 +16,9 @@ use super::{
         escape_source_may_be_heap_derived, for_each_escape_event_at_inst,
         for_each_ptr_transfer_at_inst,
     },
-    ptr_provenance::{ArgumentOrigin, Provenance, compute_provenance},
+    ptr_provenance::{
+        ArgumentOrigin, Exposure, Provenance, UntrackedMemory, compute_exposure, compute_provenance,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -110,6 +112,8 @@ pub(crate) struct PtrEscapeSummary {
     /// separately: a caller may discard them without publishing their storage.
     /// This is conservative for writes through caller-local output arguments.
     pub(crate) may_publish_heap: bool,
+    /// Values the function exposes to untracked memory, including through callees.
+    pub(crate) exposure: Exposure,
 }
 
 impl PtrEscapeSummary {
@@ -119,6 +123,7 @@ impl PtrEscapeSummary {
             arg_memory: Vec::new(),
             returns: vec![PtrReturnEscape::default(); ret_count],
             may_publish_heap: false,
+            exposure: Exposure::default(),
         }
     }
 
@@ -130,8 +135,10 @@ impl PtrEscapeSummary {
         let (arg_count, ret_count) =
             module.func_sig(func, |sig| (sig.args().len(), sig.ret_tys().len()));
         let mut out = Self::new(arg_count, ret_count);
-        // An unknown body can allocate and publish memory even without args.
+        // An unknown body can allocate and publish memory even without args,
+        // and pass any pointer it can reach to another call frame.
         out.may_publish_heap = true;
+        out.exposure.pointer = true;
         module.func_sig(func, |sig| {
             for (ret_idx, &ret_ty) in sig.ret_tys().iter().enumerate() {
                 if ret_ty.is_pointer(module) {
@@ -159,17 +166,6 @@ impl PtrEscapeSummary {
             }
         });
         out
-    }
-
-    pub(crate) fn get_or_conservative(
-        summaries: &FxHashMap<FuncRef, Self>,
-        module: &ModuleCtx,
-        func: FuncRef,
-    ) -> Self {
-        summaries
-            .get(&func)
-            .cloned()
-            .unwrap_or_else(|| Self::conservative_unknown_ctx(module, func))
     }
 
     fn arg_effect_mut(&mut self, origin: ArgumentOrigin) -> &mut PtrArgEscape {
@@ -308,20 +304,78 @@ impl PtrEscapeSummary {
     }
 }
 
+/// The escape summaries of a section's functions, with what memory outside the
+/// provenance analysis's records may hold.
+pub(crate) struct PtrEscapeSummaries {
+    funcs: FxHashMap<FuncRef, PtrEscapeSummary>,
+    pub(crate) untracked_memory: UntrackedMemory,
+}
+
+impl PtrEscapeSummaries {
+    /// Assumes nothing about any callee or about untracked memory.
+    pub(crate) fn conservative() -> Self {
+        Self {
+            funcs: FxHashMap::default(),
+            untracked_memory: UntrackedMemory::MayHoldPointers,
+        }
+    }
+
+    pub(crate) fn get(&self, func: FuncRef) -> Option<&PtrEscapeSummary> {
+        self.funcs.get(&func)
+    }
+
+    pub(crate) fn get_or_conservative(
+        &self,
+        module: &ModuleCtx,
+        func: FuncRef,
+    ) -> PtrEscapeSummary {
+        self.get(func)
+            .cloned()
+            .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, func))
+    }
+}
+
 pub(crate) fn compute_ptr_escape_summaries(
     module: &Module,
     funcs: &[FuncRef],
     isa: &Evm,
-) -> FxHashMap<FuncRef, PtrEscapeSummary> {
+) -> PtrEscapeSummaries {
+    // Untracked memory, such as another call frame or a callee's heap object,
+    // can hold a pointer to this frame's memory only after a function exposes
+    // one there. Until then it holds none; if no function exposes a pointer
+    // under that assumption, none ever does.
+    let summaries = compute_summaries(module, funcs, isa, UntrackedMemory::PointerFree);
+    if summaries
+        .funcs
+        .values()
+        .any(|summary| summary.exposure.pointer)
+    {
+        compute_summaries(module, funcs, isa, UntrackedMemory::MayHoldPointers)
+    } else {
+        summaries
+    }
+}
+
+fn compute_summaries(
+    module: &Module,
+    funcs: &[FuncRef],
+    isa: &Evm,
+    untracked_memory: UntrackedMemory,
+) -> PtrEscapeSummaries {
     let schedule = CallGraphSchedule::compute(module, funcs);
 
-    let mut summaries: FxHashMap<FuncRef, PtrEscapeSummary> = FxHashMap::default();
+    let mut summaries = PtrEscapeSummaries {
+        funcs: FxHashMap::default(),
+        untracked_memory,
+    };
     for &f in funcs {
         module.func_store.view(f, |func| {
             let sig_arg_count = module.ctx.func_sig(f, |sig| sig.args().len());
             debug_assert_eq!(func.arg_values.len(), sig_arg_count);
         });
-        summaries.insert(f, PtrEscapeSummary::empty_for_func(&module.ctx, f));
+        summaries
+            .funcs
+            .insert(f, PtrEscapeSummary::empty_for_func(&module.ctx, f));
     }
 
     for &scc_ref in schedule.topo.iter().rev() {
@@ -330,9 +384,8 @@ pub(crate) fn compute_ptr_escape_summaries(
             let mut changed = false;
             for &f in component {
                 let new_summary = compute_summary_for_func(module, f, isa, &summaries);
-                let cur = summaries.get(&f).expect("missing ptr escape summary");
-                if *cur != new_summary {
-                    summaries.insert(f, new_summary);
+                if summaries.funcs[&f] != new_summary {
+                    summaries.funcs.insert(f, new_summary);
                     changed = true;
                 }
             }
@@ -350,22 +403,28 @@ fn compute_summary_for_func(
     module: &Module,
     func: FuncRef,
     isa: &Evm,
-    summaries: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    summaries: &PtrEscapeSummaries,
 ) -> PtrEscapeSummary {
     module.func_store.view(func, |function| {
         let sig_arg_count = module.ctx.func_sig(func, |sig| sig.args().len());
         debug_assert_eq!(function.arg_values.len(), sig_arg_count);
         let mut summary = PtrEscapeSummary::empty_for_func(&module.ctx, func);
 
-        let prov_info = compute_provenance(function, &module.ctx, isa, |callee| {
-            PtrEscapeSummary::get_or_conservative(summaries, &module.ctx, callee)
-        });
+        let prov_info = compute_provenance(function, &module.ctx, isa, summaries);
         for &(origin, ref stored) in &prov_info.arg_mem {
             let effect = summary.arg_effect_mut(origin);
             effect.stored_heap_pointer |= stored.may_reference_heap();
             effect.stored_unknown_pointer |= stored.may_reference_unknown_local();
         }
         let scan_ctx = EscapeScanCtx::new(function, &module.ctx, isa, summaries, &prov_info);
+        summary.exposure = compute_exposure(
+            function,
+            &module.ctx,
+            isa,
+            summaries,
+            &prov_info,
+            &scan_ctx.escaping_mallocs,
+        );
         SummaryComputer {
             function,
             scan_ctx: &scan_ctx,
@@ -398,12 +457,11 @@ impl<'a> SummaryComputer<'a> {
                             );
                     });
                     if let Some(call) = self.function.dfg.call_info(inst) {
-                        self.summary.may_publish_heap |= PtrEscapeSummary::get_or_conservative(
-                            self.scan_ctx.ptr_escape,
-                            self.scan_ctx.module,
-                            call.callee(),
-                        )
-                        .may_publish_heap;
+                        self.summary.may_publish_heap |= self
+                            .scan_ctx
+                            .ptr_escape
+                            .get_or_conservative(self.scan_ctx.module, call.callee())
+                            .may_publish_heap;
                     }
                 }
             }

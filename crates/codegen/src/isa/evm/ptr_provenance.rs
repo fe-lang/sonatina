@@ -1,17 +1,20 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, InstId, InstSetExt, Type, ValueId,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
-    module::{FuncRef, ModuleCtx},
+    module::ModuleCtx,
     types::{CompoundType, CompoundTypeRef},
 };
 
 use crate::analysis::memory_access::{BaseObject, MemoryAccessAnalysis};
 
-use super::{prepare::value_imm_u32, ptr_escape::PtrEscapeSummary};
+use super::{
+    prepare::value_imm_u32,
+    ptr_escape::{PtrEscapeSummaries, PtrEscapeSummary},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum PtrBase {
@@ -82,6 +85,37 @@ impl ArgumentOrigin {
         }
         origins.sort_unstable();
         true
+    }
+}
+
+/// What memory whose contents the analysis does not record may hold: bytes
+/// from other call frames (call results, return data, external code) and heap
+/// objects that other functions allocated. Such memory can hold a pointer to
+/// this frame's memory only if a function exposes one there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UntrackedMemory {
+    PointerFree,
+    MayHoldPointers,
+}
+
+/// Values that reach untracked memory: other call frames, storage, heap objects
+/// shared between functions, and memory at addresses the analysis cannot name.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Exposure {
+    /// Argument-relative values, which each caller resolves.
+    pub(crate) origins: SmallVec<[ArgumentOrigin; 4]>,
+    /// A pointer to this frame's memory that is not an argument.
+    pub(crate) pointer: bool,
+}
+
+impl Exposure {
+    fn add(&mut self, provenance: &Provenance) {
+        self.pointer |= provenance.is_unknown_ptr()
+            || provenance.alloca_insts().next().is_some()
+            || provenance.malloc_insts().next().is_some();
+        for origin in provenance.argument_origins() {
+            ArgumentOrigin::join_into(&mut self.origins, origin);
+        }
     }
 }
 
@@ -254,6 +288,13 @@ impl Provenance {
             && self.bases.iter().all(|b| matches!(b, PtrBase::Alloca(_)))
     }
 
+    /// A store to this address may land outside every allocation and argument
+    /// whose contents the analysis records.
+    fn is_untracked_memory(&self) -> bool {
+        self.is_unknown_ptr()
+            || (self.has_no_known_bases() && self.argument_origins().next().is_none())
+    }
+
     pub(crate) fn may_be_nonlocal_nonarg_without_malloc(&self) -> bool {
         self.unknown_non_arg
             || self.unknown_heap
@@ -370,18 +411,33 @@ pub(crate) fn memory_store(
     }
 }
 
-fn unmodeled_write_addr(data: &EvmInstKind) -> Option<ValueId> {
+/// A write the analysis does not model as storing a value.
+enum UnmodeledWrite {
+    /// Its bytes may form pointers this analysis cannot name.
+    MayFormPointer(ValueId),
+    /// Its bytes hold no pointer to the frame's memory, but may overwrite part
+    /// of a stored one.
+    PointerFree(ValueId),
+}
+
+/// Calldata is fixed before the frame allocates anything, so, like
+/// `evm_calldata_load`, a copy of it holds no pointer to the frame's memory.
+fn unmodeled_write(data: &EvmInstKind, untracked: UntrackedMemory) -> Option<UnmodeledWrite> {
+    let external = |addr| match untracked {
+        UntrackedMemory::PointerFree => UnmodeledWrite::PointerFree(addr),
+        UntrackedMemory::MayHoldPointers => UnmodeledWrite::MayFormPointer(addr),
+    };
     match data {
-        EvmInstKind::EvmMstore8(mstore8) => Some(*mstore8.addr()),
-        EvmInstKind::EvmMcopy(mcopy) => Some(*mcopy.dest()),
-        EvmInstKind::Memzero(memzero) => Some(*memzero.dest()),
-        EvmInstKind::EvmCalldataCopy(copy) => Some(*copy.dst_addr()),
-        EvmInstKind::EvmExtCodeCopy(copy) => Some(*copy.dst_addr()),
-        EvmInstKind::EvmReturnDataCopy(copy) => Some(*copy.dst_addr()),
-        EvmInstKind::EvmCall(call) => Some(*call.ret_addr()),
-        EvmInstKind::EvmCallCode(call) => Some(*call.ret_addr()),
-        EvmInstKind::EvmDelegateCall(call) => Some(*call.ret_addr()),
-        EvmInstKind::EvmStaticCall(call) => Some(*call.ret_addr()),
+        EvmInstKind::EvmMstore8(mstore8) => Some(UnmodeledWrite::MayFormPointer(*mstore8.addr())),
+        EvmInstKind::EvmMcopy(mcopy) => Some(UnmodeledWrite::MayFormPointer(*mcopy.dest())),
+        EvmInstKind::Memzero(memzero) => Some(UnmodeledWrite::MayFormPointer(*memzero.dest())),
+        EvmInstKind::EvmCalldataCopy(copy) => Some(UnmodeledWrite::PointerFree(*copy.dst_addr())),
+        EvmInstKind::EvmExtCodeCopy(copy) => Some(external(*copy.dst_addr())),
+        EvmInstKind::EvmReturnDataCopy(copy) => Some(external(*copy.dst_addr())),
+        EvmInstKind::EvmCall(call) => Some(external(*call.ret_addr())),
+        EvmInstKind::EvmCallCode(call) => Some(external(*call.ret_addr())),
+        EvmInstKind::EvmDelegateCall(call) => Some(external(*call.ret_addr())),
+        EvmInstKind::EvmStaticCall(call) => Some(external(*call.ret_addr())),
         _ => None,
     }
 }
@@ -453,6 +509,7 @@ pub(crate) struct ProvenanceInfo {
     exact_addresses: SecondaryMap<ValueId, Option<AllocationAddress>>,
     cells: FxHashMap<InstId, Vec<MemoryCell>>,
     imprecise_mem: FxHashMap<InstId, Provenance>,
+    untracked_memory: UntrackedMemory,
 }
 
 impl ProvenanceInfo {
@@ -521,8 +578,11 @@ impl ProvenanceInfo {
             }
         }
         // Callee-created heap objects lack an allocation identity here. Their
-        // contents, like other unknown addresses, remain conservative.
-        if addr.is_unknown_ptr() {
+        // contents are untracked memory; other unknown addresses stay
+        // conservative.
+        if addr.may_reference_unknown_local()
+            || (addr.unknown_heap && self.untracked_memory == UntrackedMemory::MayHoldPointers)
+        {
             out.mark_unknown_non_arg();
         }
         if bytes.is_some_and(|bytes| bytes != 32) {
@@ -694,7 +754,7 @@ pub(crate) fn compute_provenance(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
-    callee_summary: impl Fn(FuncRef) -> PtrEscapeSummary,
+    summaries: &PtrEscapeSummaries,
 ) -> ProvenanceInfo {
     let non_code_uses = non_code_address_uses(function, isa);
     let mut prov: SecondaryMap<ValueId, Provenance> = SecondaryMap::new();
@@ -756,6 +816,7 @@ pub(crate) fn compute_provenance(
         exact_addresses,
         cells: FxHashMap::default(),
         imprecise_mem: FxHashMap::default(),
+        untracked_memory: summaries.untracked_memory,
     };
 
     let mut changed = true;
@@ -789,36 +850,41 @@ pub(crate) fn compute_provenance(
                         info.covers_allocation(function, *copy.dest(), *copy.len())
                             && info.covers_allocation(function, *copy.addr(), *copy.len())
                     }
-                    EvmInstKind::EvmCalldataCopy(copy) => {
-                        function
-                            .dfg
-                            .value_inst(*copy.data_offset())
-                            .is_some_and(|inst| {
-                                matches!(
-                                    isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-                                    EvmInstKind::EvmCalldataSize(_)
-                                )
-                            })
-                            && info.covers_allocation(function, *copy.dst_addr(), *copy.len())
-                    }
                     _ => false,
                 };
-                if let Some(dst) = unmodeled_write_addr(&data).filter(|_| !complete_write) {
-                    changed |=
-                        poison_allocation_mem(&mut info.local_mem, info.value[dst].alloca_insts());
-                    changed |=
-                        poison_allocation_mem(&mut info.malloc_mem, info.value[dst].malloc_insts());
-                    changed |= poison_allocation_mem(
-                        &mut info.imprecise_mem,
-                        info.value[dst]
-                            .alloca_insts()
-                            .chain(info.value[dst].malloc_insts()),
-                    );
-                    changed |= poison_arg_mem(&mut info.arg_mem, &info.value[dst]);
+                match unmodeled_write(&data, info.untracked_memory).filter(|_| !complete_write) {
+                    Some(UnmodeledWrite::MayFormPointer(dst)) => {
+                        changed |= poison_allocation_mem(
+                            &mut info.local_mem,
+                            info.value[dst].alloca_insts(),
+                        );
+                        changed |= poison_allocation_mem(
+                            &mut info.malloc_mem,
+                            info.value[dst].malloc_insts(),
+                        );
+                        changed |= poison_allocation_mem(
+                            &mut info.imprecise_mem,
+                            info.value[dst]
+                                .alloca_insts()
+                                .chain(info.value[dst].malloc_insts()),
+                        );
+                        changed |= poison_arg_mem(&mut info.arg_mem, &info.value[dst]);
+                    }
+                    // A stored pointer that the write overwrites in part keeps
+                    // its bases at an unknown offset, as pointer arithmetic does.
+                    Some(UnmodeledWrite::PointerFree(dst)) => {
+                        let dest = info.value[dst].clone();
+                        let offset_unknown = Provenance {
+                            imprecise: true,
+                            ..Provenance::default()
+                        };
+                        changed |= info.store_memory(&dest, &offset_unknown);
+                    }
+                    None => {}
                 }
 
                 if let EvmInstKind::Call(call) = &data {
-                    let summary = callee_summary(*call.callee());
+                    let summary = summaries.get_or_conservative(module, *call.callee());
                     let args = call.args();
                     summary.for_each_store_effect(|source, dest| {
                         let src_prov = info.resolve_argument(args, source);
@@ -959,9 +1025,99 @@ pub(crate) fn compute_value_provenance(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
-    callee_summary: impl Fn(FuncRef) -> PtrEscapeSummary,
+    summaries: &PtrEscapeSummaries,
 ) -> SecondaryMap<ValueId, Provenance> {
-    compute_provenance(function, module, isa, callee_summary).value
+    compute_provenance(function, module, isa, summaries).value
+}
+
+/// Values a function exposes to untracked memory: operands and inputs of
+/// external calls and creates, storage values, and stores to heap objects other
+/// functions can reach or to addresses the analysis cannot name.
+pub(crate) fn compute_exposure(
+    function: &Function,
+    module: &ModuleCtx,
+    isa: &Evm,
+    summaries: &PtrEscapeSummaries,
+    info: &ProvenanceInfo,
+    escaping_mallocs: &FxHashSet<InstId>,
+) -> Exposure {
+    let untracked = |dest: &Provenance| {
+        dest.is_untracked_memory()
+            || dest
+                .malloc_insts()
+                .any(|malloc| escaping_mallocs.contains(&malloc))
+    };
+    let mut exposure = Exposure::default();
+    for inst in function.layout.iter_all_insts() {
+        let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
+        if let Some((addr, value, _)) = memory_store(&data, module) {
+            if untracked(&info.value[addr]) {
+                exposure.add(&info.value[value]);
+            }
+            continue;
+        }
+        let (input, operands): (Option<ValueId>, SmallVec<[ValueId; 4]>) = match &data {
+            EvmInstKind::EvmCall(call) => (
+                Some(*call.arg_addr()),
+                smallvec![*call.gas(), *call.addr(), *call.val(), *call.arg_len()],
+            ),
+            EvmInstKind::EvmCallCode(call) => (
+                Some(*call.arg_addr()),
+                smallvec![*call.gas(), *call.addr(), *call.val(), *call.arg_len()],
+            ),
+            EvmInstKind::EvmDelegateCall(call) => (
+                Some(*call.arg_addr()),
+                smallvec![*call.gas(), *call.ext_addr(), *call.arg_len()],
+            ),
+            EvmInstKind::EvmStaticCall(call) => (
+                Some(*call.arg_addr()),
+                smallvec![*call.gas(), *call.ext_addr(), *call.arg_len()],
+            ),
+            EvmInstKind::EvmCreate(create) => (
+                Some(*create.addr()),
+                smallvec![*create.val(), *create.len()],
+            ),
+            EvmInstKind::EvmCreate2(create) => (
+                Some(*create.addr()),
+                smallvec![*create.val(), *create.len(), *create.salt()],
+            ),
+            EvmInstKind::EvmSstore(store) => (None, smallvec![*store.val()]),
+            EvmInstKind::EvmTstore(store) => (None, smallvec![*store.val()]),
+            EvmInstKind::EvmMcopy(copy) => {
+                if untracked(&info.value[*copy.dest()]) {
+                    exposure.add(&info.load_memory(&info.value[*copy.addr()]));
+                }
+                continue;
+            }
+            EvmInstKind::Call(call) => {
+                let summary = summaries.get_or_conservative(module, *call.callee());
+                let args = call.args();
+                exposure.pointer |= summary.exposure.pointer;
+                for &origin in &summary.exposure.origins {
+                    exposure.add(&info.resolve_argument(args, origin));
+                }
+                summary.for_each_store_effect(|source, dest| {
+                    if untracked(&info.resolve_argument(args, dest)) {
+                        exposure.add(&info.resolve_argument(args, source));
+                    }
+                });
+                for (origin, effect) in summary.argument_effects() {
+                    exposure.pointer |= (effect.stored_heap_pointer
+                        || effect.stored_unknown_pointer)
+                        && untracked(&info.resolve_argument(args, origin));
+                }
+                continue;
+            }
+            _ => continue,
+        };
+        if let Some(input) = input {
+            exposure.add(&info.load_memory(&info.value[input]));
+        }
+        for value in operands {
+            exposure.add(&info.value[value]);
+        }
+    }
+    exposure
 }
 
 #[cfg(test)]
@@ -989,10 +1145,7 @@ mod tests {
         let summaries = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
 
         parsed.module.func_store.view(func_ref, |function| {
-            let prov = compute_provenance(function, &parsed.module.ctx, &isa, |callee| {
-                PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
-            })
-            .value;
+            let prov = compute_provenance(function, &parsed.module.ctx, &isa, &summaries).value;
 
             for block in function.layout.iter_block() {
                 for inst in function.layout.iter_inst(block) {
@@ -1146,19 +1299,14 @@ block0:
     }
 
     #[test]
-    fn partial_or_external_writes_keep_unknown_and_known_origins() {
+    fn partial_writes_keep_unknown_and_known_origins() {
         for write in [
             "memzero v1 1.i256;",
-            "v4.i256 = evm_calldata_size;\n    evm_calldata_copy v1 v4 1.i256;",
-            "evm_calldata_copy v1 0.i256 32.i256;",
-            "evm_return_data_copy v1 0.i256 32.i256;",
             "evm_mcopy v1 v2 31.i256;",
             "evm_mcopy v1 v2 v3;",
             "memzero v1 v3;",
             "v4.i256 = ptr_to_int v2 i256;\n    v6.i256 = add v4 1.i256;\n    evm_mcopy v1 v6 32.i256;",
             "v4.i256 = ptr_to_int v1 i256;\n    v6.i256 = add v4 1.i256;\n    evm_mcopy v6 v2 32.i256;",
-            "evm_return_data_copy v2 0.i256 32.i256;\n    evm_mcopy v1 v2 32.i256;",
-            "evm_return_data_copy v1 0.i256 32.i256;\n    memzero v1 32.i256;",
         ] {
             let source = format!(
                 r#"
@@ -1178,6 +1326,127 @@ block0:
             let provenance = ret_provenance(&source, "f");
             assert_eq!(provenance.arg_indices().collect::<Vec<_>>(), vec![0]);
             assert!(provenance.is_unknown_ptr(), "{write}: {provenance:?}");
+        }
+    }
+
+    #[test]
+    fn external_bytes_hold_pointers_only_after_one_is_exposed() {
+        for (write, from_other_frame) in [
+            (
+                "v4.i256 = evm_calldata_size;\n    evm_calldata_copy v1 v4 1.i256;",
+                false,
+            ),
+            ("evm_calldata_copy v1 0.i256 32.i256;", false),
+            ("evm_return_data_copy v1 0.i256 32.i256;", true),
+            (
+                "v4.i256 = evm_static_call 0.i256 4.i256 0.i256 0.i256 v1 32.i256;",
+                true,
+            ),
+            (
+                "evm_return_data_copy v2 0.i256 32.i256;\n    evm_mcopy v1 v2 32.i256;",
+                true,
+            ),
+            (
+                "evm_return_data_copy v1 0.i256 32.i256;\n    memzero v1 32.i256;",
+                true,
+            ),
+        ] {
+            for exposure in [
+                "",
+                "v7.i256 = ptr_to_int v2 i256;\n    evm_sstore 0.i256 v7;",
+            ] {
+                let source = format!(
+                    r#"
+target = "evm-ethereum-osaka"
+func public %f(v0.*i256, v3.i256) -> *i256 {{
+block0:
+    v1.**i256 = evm_malloc 32.i256;
+    v2.**i256 = alloca *i256;
+    mstore v1 v0 *i256;
+    mstore v2 v0 *i256;
+    {exposure}
+    {write}
+    v5.*i256 = mload v1 *i256;
+    return v5;
+}}
+"#
+                );
+                let provenance = ret_provenance(&source, "f");
+                assert_eq!(provenance.arg_indices().collect::<Vec<_>>(), vec![0]);
+                assert_eq!(
+                    provenance.is_unknown_ptr(),
+                    from_other_frame && !exposure.is_empty(),
+                    "{exposure} {write}: {provenance:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn partial_pointer_free_writes_leave_stored_pointers_at_unknown_offsets() {
+        // The calldata byte replaces the low byte of the stored pointer to v2,
+        // so the reloaded pointer may address either of v2's cells.
+        let provenance = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+func public %f(v0.*i256, v1.*i256) -> *i256 {
+block0:
+    v2.**i256 = evm_malloc 64.i256;
+    mstore v2 v0 *i256;
+    v3.i256 = ptr_to_int v2 i256;
+    v4.i256 = add v3 32.i256;
+    v5.**i256 = int_to_ptr v4 **i256;
+    mstore v5 v1 *i256;
+    v6.***i256 = alloca **i256;
+    mstore v6 v2 **i256;
+    v7.i256 = ptr_to_int v6 i256;
+    v8.i256 = add v7 31.i256;
+    evm_calldata_copy v8 0.i256 1.i256;
+    v9.**i256 = mload v6 **i256;
+    v10.*i256 = mload v9 *i256;
+    return v10;
+}
+"#,
+            "f",
+        );
+        assert_eq!(provenance.arg_indices().collect::<Vec<_>>(), vec![0, 1]);
+        assert!(!provenance.is_unknown_ptr(), "{provenance:?}");
+    }
+
+    #[test]
+    fn callee_heap_contents_hold_pointers_only_after_one_is_exposed() {
+        for (store, unknown) in [
+            ("", false),
+            (
+                "v1.*i256 = evm_malloc 32.i256;\n    v2.i256 = ptr_to_int v1 i256;\n    mstore v0 v2 i256;",
+                true,
+            ),
+        ] {
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+func private %make() -> i256 {{
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    mstore v1 7.i256 i256;
+    return v1;
+}}
+func public %f() -> i256 {{
+block0:
+    v0.i256 = call %make;
+    {store}
+    v3.i256 = mload v0 i256;
+    return v3;
+}}
+"#
+            );
+            let provenance = ret_provenance(&source, "f");
+            assert_eq!(
+                provenance.is_unknown_ptr(),
+                unknown,
+                "{store}: {provenance:?}"
+            );
         }
     }
 
@@ -1226,9 +1495,7 @@ block0:
             });
             let summaries = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
             parsed.module.func_store.view(func_ref, |function| {
-                let info = compute_provenance(function, &parsed.module.ctx, &isa, |callee| {
-                    PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
-                });
+                let info = compute_provenance(function, &parsed.module.ctx, &isa, &summaries);
                 let cast = parsed.debug.value(func_ref, "v2").unwrap();
                 assert_eq!(
                     info.value[cast].may_reference_unknown_local(),

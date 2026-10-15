@@ -32,7 +32,7 @@ use super::{
         private_malloc::{
             PrivateMallocUseAnalysis, malloc_private_uses_are_compatible_with_fixed_base,
         },
-        ptr_escape::PtrEscapeSummary,
+        ptr_escape::PtrEscapeSummaries,
         static_arena_alloc::{
             BlockLiveSegment, LiveRegion, PackedObject, StackObjId, compute_block_order,
             pack_objects_presorted,
@@ -145,7 +145,7 @@ pub(crate) fn compute_semantic_memory_placement(
     module: &Module,
     section: MemoryPlacementSection<'_>,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &PtrEscapeSummaries,
     fixed_slot_effects: &FxHashSet<FuncRef>,
     backend: &EvmBackend,
     backend_spills: &BackendSpillPlan,

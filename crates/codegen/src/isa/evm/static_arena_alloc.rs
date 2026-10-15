@@ -23,7 +23,7 @@ use sonatina_ir::{
 use super::{
     escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
     memory_plan::{FuncPreAnalysis, WORD_BYTES},
-    ptr_escape::PtrEscapeSummary,
+    ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo, compute_provenance, memory_load, memory_store},
 };
 use crate::stackalloc::StackifyAlloc;
@@ -169,14 +169,14 @@ impl<'a> StackObjectInput<'a> {
 pub(crate) struct StaticArenaAllocCtx<'a> {
     module: &'a ModuleCtx,
     isa: &'a Evm,
-    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &'a PtrEscapeSummaries,
 }
 
 impl<'a> StaticArenaAllocCtx<'a> {
     pub(crate) fn new(
         module: &'a ModuleCtx,
         isa: &'a Evm,
-        ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+        ptr_escape: &'a PtrEscapeSummaries,
     ) -> Self {
         Self {
             module,
@@ -290,12 +290,7 @@ fn compute_func_stack_objects_from_input(
     let prov_info = match analysis.prov_info {
         Some(prov_info) => prov_info,
         None => {
-            computed_prov_info = compute_provenance(function, ctx.module, ctx.isa, |callee| {
-                ctx.ptr_escape
-                    .get(&callee)
-                    .cloned()
-                    .unwrap_or_else(|| conservative_unknown_ptr_summary(ctx.module, callee))
-            });
+            computed_prov_info = compute_provenance(function, ctx.module, ctx.isa, ctx.ptr_escape);
             &computed_prov_info
         }
     };
@@ -574,15 +569,11 @@ fn compute_func_stack_objects_from_input(
     }
 }
 
-fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
-    PtrEscapeSummary::conservative_unknown_ctx(module, func_ref)
-}
-
 fn compute_escaping_allocas(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &PtrEscapeSummaries,
     prov_info: &ProvenanceInfo,
 ) -> FxHashMap<InstId, Vec<AllocaEscapeSite>> {
     let mut escaping: FxHashMap<InstId, Vec<AllocaEscapeSite>> = FxHashMap::default();
@@ -1072,21 +1063,26 @@ func private %loop_alloca_phi() -> i256 {
     }
 
     #[test]
-    fn unknown_contents_keep_backedge_allocations_but_exclude_future_ones() {
-        let (parsed, func_ref, _, stack) = analyze_function(
-            r#"
+    fn contents_keep_backedge_allocations_but_exclude_future_ones() {
+        // Unknown contents name every allocation that may exist; known contents
+        // name the stored child, which a flow-insensitive closure includes even
+        // before it is allocated.
+        for clobber in ["evm_mstore8 v1 1.i8;", ""] {
+            let (parsed, func_ref, _, stack) = analyze_function(
+                &format!(
+                    r#"
 target = "evm-ethereum-osaka"
 
-func private %touch(v0.*i256) {
+func private %touch(v0.*i256) {{
 block0:
     v1.i256 = mload v0 i256;
     return;
-}
+}}
 
-func private %entry(v0.i1) {
+func private %entry(v0.i1) {{
 block0:
     v1.*i256 = alloca i256;
-    evm_calldata_copy v1 0.i256 32.i256;
+    {clobber}
     call %touch v1;
     jump block1;
 block1:
@@ -1099,31 +1095,34 @@ block2:
     jump block1;
 block3:
     return;
-}
-"#,
-            "entry",
-            16,
-        );
-        parsed.module.func_store.view(func_ref, |function| {
-            let child = parsed.debug.value(func_ref, "v2").unwrap();
-            let child_inst = function.dfg.value_inst(child).unwrap();
-            let child_obj = stack.alloca_ids[&child_inst];
-            for call in &stack.call_sites {
-                let block = function.layout.inst_block(call.inst);
-                assert_eq!(
-                    call.callee_visible_objs.contains(&child_obj),
-                    block == BlockId::from_u32(1),
-                    "the child exists at the loop header through the backedge, but not at entry"
-                );
-            }
-            assert!(
-                stack.obj_facts[&child_obj]
-                    .region
-                    .segments
-                    .iter()
-                    .any(|segment| segment.block == BlockId::from_u32(1))
+}}
+"#
+                ),
+                "entry",
+                16,
             );
-        });
+            parsed.module.func_store.view(func_ref, |function| {
+                let child = parsed.debug.value(func_ref, "v2").unwrap();
+                let child_inst = function.dfg.value_inst(child).unwrap();
+                let child_obj = stack.alloca_ids[&child_inst];
+                for call in &stack.call_sites {
+                    let block = function.layout.inst_block(call.inst);
+                    assert_eq!(
+                        call.callee_visible_objs.contains(&child_obj),
+                        block == BlockId::from_u32(1),
+                        "{clobber}: the child exists at the loop header through the backedge, but not at entry"
+                    );
+                }
+                assert!(
+                    stack.obj_facts[&child_obj]
+                        .region
+                        .segments
+                        .iter()
+                        .any(|segment| segment.block == BlockId::from_u32(1)),
+                    "{clobber}"
+                );
+            });
+        }
     }
 
     #[test]

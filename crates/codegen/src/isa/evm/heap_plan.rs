@@ -435,11 +435,7 @@ mod tests {
             function,
             module,
             isa,
-            |callee| {
-                crate::isa::evm::ptr_escape::PtrEscapeSummary::conservative_unknown_ctx(
-                    module, callee,
-                )
-            },
+            &crate::isa::evm::ptr_escape::PtrEscapeSummaries::conservative(),
         );
 
         TestAnalysis {

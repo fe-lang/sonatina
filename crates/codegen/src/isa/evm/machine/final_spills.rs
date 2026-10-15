@@ -26,7 +26,7 @@ use super::{
     super::{
         EvmBackend,
         memory_plan::{BackendSpillPlan, FuncPreAnalysis},
-        ptr_escape::PtrEscapeSummary,
+        ptr_escape::PtrEscapeSummaries,
     },
     placement::{MemoryPlacementSection, compute_semantic_memory_placement},
 };
@@ -368,7 +368,7 @@ pub(crate) struct FinalSpillReplanCtx<'a> {
     pub(crate) section_entry: FuncRef,
     pub(crate) section_includes: &'a [FuncRef],
     pub(crate) pre_analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
-    pub(crate) ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+    pub(crate) ptr_escape: &'a PtrEscapeSummaries,
     pub(crate) backend: &'a EvmBackend,
 }
 

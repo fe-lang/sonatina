@@ -45,7 +45,7 @@ pub(crate) use memory_plan::{
 };
 pub(crate) use opcode::OpCode;
 pub(crate) use prepare::{EvmFunctionPlan, EvmSectionPlan, prepare_free_ptr_restore};
-pub(crate) use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
+pub(crate) use ptr_escape::{PtrEscapeSummaries, compute_ptr_escape_summaries};
 #[cfg(test)]
 pub(crate) use sonatina_ir::isa::evm::Evm;
 pub(crate) use sonatina_ir::module::FuncRef;

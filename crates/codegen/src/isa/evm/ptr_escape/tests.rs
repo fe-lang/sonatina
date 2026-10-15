@@ -47,7 +47,7 @@ fn compute(
 
     let mut out: FxHashMap<String, PtrEscapeSummary> = FxHashMap::default();
     for (name, f) in &names {
-        if let Some(sum) = summaries.get(f) {
+        if let Some(sum) = summaries.get(*f) {
             out.insert(name.clone(), sum.clone());
         }
     }
@@ -77,10 +77,7 @@ fn call_arg_may_escape_from_src(src: &str, func_name: &str, arg_index: usize) ->
         .expect("function exists");
 
     parsed.module.func_store.view(func_ref, |function| {
-        let prov = compute_provenance(function, &parsed.module.ctx, &isa, |callee| {
-            PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
-        })
-        .value;
+        let prov = compute_provenance(function, &parsed.module.ctx, &isa, &summaries).value;
         let call_inst = function
             .layout
             .iter_all_insts()
@@ -90,8 +87,7 @@ fn call_arg_may_escape_from_src(src: &str, func_name: &str, arg_index: usize) ->
         else {
             panic!("expected internal call");
         };
-        let callee_sum =
-            PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, *call.callee());
+        let callee_sum = summaries.get_or_conservative(&parsed.module.ctx, *call.callee());
 
         callee_sum.call_arg_may_escape_nonlocal(arg_index, call.args(), &prov)
     })
@@ -119,10 +115,7 @@ fn ret_provenance_from_src(src: &str, func_name: &str) -> Provenance {
         .expect("function exists");
 
     parsed.module.func_store.view(func_ref, |function| {
-        let prov = compute_provenance(function, &parsed.module.ctx, &isa, |callee| {
-            PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
-        })
-        .value;
+        let prov = compute_provenance(function, &parsed.module.ctx, &isa, &summaries).value;
 
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
@@ -1240,7 +1233,7 @@ block0:
 }
 func private %clobber(v0.*i256) {
 block0:
-    evm_calldata_copy v0 0.i256 32.i256;
+    evm_mstore8 v0 1.i8;
     return;
 }
 func private %clobber_relay(v0.*i256) {
@@ -1286,7 +1279,7 @@ target = "evm-ethereum-osaka"
 func private %hash() -> i256 {
 block0:
     v0.*i256 = evm_malloc 32.i256;
-    evm_calldata_copy v0 0.i256 32.i256;
+    evm_mstore8 v0 1.i8;
     v1.i256 = mload v0 i256;
     v2.*i256 = evm_malloc 32.i256;
     mstore v2 v1 i256;
@@ -1315,7 +1308,7 @@ block0:
     v1.*i256 = evm_malloc 32.i256;
     mstore v1 v0 i256;
     v2.*i256 = evm_malloc 32.i256;
-    evm_calldata_copy v2 0.i256 32.i256;
+    evm_mstore8 v2 1.i8;
     v3.i256 = mload v2 i256;
     return v3;
 }
@@ -1362,5 +1355,120 @@ block0:
             "{provenance:?}"
         );
         assert!(!provenance.is_unknown_ptr(), "{provenance:?}");
+    }
+}
+
+fn untracked_memory(src: &str) -> UntrackedMemory {
+    let parsed = parse_module(src).unwrap();
+    let isa = Evm::new(TargetTriple {
+        architecture: Architecture::Evm,
+        vendor: Vendor::Ethereum,
+        operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+    });
+    compute_ptr_escape_summaries(&parsed.module, &parsed.module.funcs(), &isa).untracked_memory
+}
+
+#[test]
+fn pointers_reaching_untracked_memory_are_exposed() {
+    for (body, ret, exposed) in [
+        ("evm_sstore 0.i256 v1;", "0.i256", true),
+        ("evm_tstore 0.i256 v1;", "0.i256", true),
+        ("mstore 64.i256 v1 i256;", "0.i256", true),
+        (
+            "v2.i256 = evm_call 0.i256 4.i256 v1 0.i256 0.i256 0.i256 0.i256;",
+            "0.i256",
+            true,
+        ),
+        (
+            "v2.*i256 = evm_malloc 32.i256;\n    mstore v2 v1 i256;\n    v3.i256 = evm_static_call 0.i256 4.i256 v2 32.i256 0.i256 0.i256;",
+            "0.i256",
+            true,
+        ),
+        (
+            "v2.*i256 = evm_malloc 32.i256;\n    mstore v2 v1 i256;\n    evm_mcopy 64.i256 v2 32.i256;",
+            "0.i256",
+            true,
+        ),
+        (
+            "v2.*i256 = evm_malloc 32.i256;\n    mstore v2 v1 i256;\n    v3.i256 = ptr_to_int v2 i256;",
+            "v3",
+            true,
+        ),
+        (
+            "v2.*i256 = evm_malloc 32.i256;\n    mstore v2 v1 i256;\n    v3.i256 = evm_keccak256 v2 32.i256;",
+            "v3",
+            false,
+        ),
+        (
+            "v2.*i256 = evm_malloc 32.i256;\n    mstore v2 7.i256 i256;\n    v3.i256 = evm_static_call 0.i256 4.i256 v2 32.i256 v2 32.i256;\n    v4.i256 = ptr_to_int v2 i256;",
+            "v4",
+            false,
+        ),
+        (
+            "v2.i256 = evm_calldata_load 0.i256;\n    evm_sstore 0.i256 v2;",
+            "0.i256",
+            false,
+        ),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func public %f() -> i256 {{
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    {body}
+    return {ret};
+}}
+"#
+        );
+        assert_eq!(
+            untracked_memory(&source),
+            if exposed {
+                UntrackedMemory::MayHoldPointers
+            } else {
+                UntrackedMemory::PointerFree
+            },
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn callers_resolve_values_their_callees_expose() {
+    for (value, exposed) in [
+        ("v0.i256 = evm_calldata_load 0.i256;", false),
+        (
+            "v1.*i256 = evm_malloc 32.i256;\n    v0.i256 = ptr_to_int v1 i256;",
+            true,
+        ),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %send(v0.i256) {{
+block0:
+    v1.*i256 = evm_malloc 32.i256;
+    mstore v1 v0 i256;
+    v2.i256 = evm_call 0.i256 4.i256 0.i256 v1 32.i256 0.i256 0.i256;
+    return;
+}}
+func public %f() {{
+block0:
+    {value}
+    call %send v0;
+    return;
+}}
+"#
+        );
+        let (summaries, _) = compute(&source);
+        assert_eq!(summaries["send"].exposure.origins.len(), 1, "{value}");
+        assert!(!summaries["send"].exposure.pointer, "{value}");
+        assert_eq!(summaries["f"].exposure.pointer, exposed, "{value}");
+        assert_eq!(
+            untracked_memory(&source) == UntrackedMemory::MayHoldPointers,
+            exposed,
+            "{value}"
+        );
     }
 }

@@ -116,7 +116,7 @@ fn compute_test_pre_analysis(
     function: &mut Function,
     module: &ModuleCtx,
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    ptr_escape: &PtrEscapeSummaries,
 ) -> memory_plan::FuncPreAnalysis {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
@@ -136,13 +136,13 @@ fn compute_test_pre_analysis(
         function,
         module,
         &backend.isa,
-        |callee| PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee),
+        ptr_escape,
     );
     let prov_conservative_value = crate::isa::evm::ptr_provenance::compute_value_provenance(
         function,
         module,
         &backend.isa,
-        |callee| PtrEscapeSummary::conservative_unknown_ctx(module, callee),
+        &PtrEscapeSummaries::conservative(),
     );
     memory_plan::FuncPreAnalysis {
         block_order: dom.rpo().to_owned(),
@@ -1170,6 +1170,78 @@ block0:
 }
 
 #[test]
+fn precompile_results_keep_private_loop_buffers_transient_until_a_pointer_is_exposed() {
+    for (exposure, expected_transient) in [
+        ("", true),
+        (
+            "v20.*i8 = evm_malloc 32.i256;\n    v21.i256 = ptr_to_int v20 i256;\n    evm_sstore 0.i256 v21;",
+            false,
+        ),
+    ] {
+        // The call keeps unknown words a barrier for every earlier buffer, as in
+        // a contract entry: only exposing a pointer makes the digests unknown.
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %noop() {{
+block0:
+    return;
+}}
+func public %entry() {{
+block0:
+    call %noop;
+    {exposure}
+    v0.i256 = evm_calldata_load 0.i256;
+    jump block1;
+block1:
+    v2.i256 = phi (0.i256 block0) (v13 block2);
+    v3.i256 = phi (0.i256 block0) (v12 block2);
+    v4.i1 = lt v2 v0;
+    br v4 block2 block3;
+block2:
+    v9.*i8 = evm_malloc 64.i256;
+    v10.i256 = ptr_to_int v9 i256;
+    mstore v10 v3 i256;
+    v11.i256 = add v10 32.i256;
+    mstore v11 v2 i256;
+    v14.i256 = evm_gas;
+    v15.i256 = evm_static_call v14 2.i256 v10 64.i256 v10 32.i256;
+    v12.i256 = mload v10 i256;
+    v13.i256 = add v2 1.i256;
+    jump block1;
+block3:
+    mstore 0.i256 v3 i256;
+    evm_return 0.i256 32.i256;
+}}
+"#
+        );
+        let parsed = parse_module(&source).expect("loop parses");
+        let entry = find_func(&parsed.module, "entry");
+        let backend = osaka_backend();
+        let digest_buffer = parsed.module.func_store.view(entry, |function| {
+            function
+                .layout
+                .iter_all_insts()
+                .find(|&inst| {
+                    matches!(backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                        EvmInstKind::EvmMalloc(malloc)
+                        if prepare::value_imm_u32(function, *malloc.size()) == Some(64))
+                })
+                .unwrap()
+        });
+        let placement = compute_test_memory_placement(&parsed.module, &backend, entry);
+        assert_eq!(
+            placement.funcs[&entry]
+                .mem_plan
+                .transient_mallocs
+                .contains(&digest_buffer),
+            expected_transient,
+            "{exposure}"
+        );
+    }
+}
+
+#[test]
 fn unknown_scalar_words_do_not_retain_private_loop_hash_buffers() {
     for (read, stored, expected_transient) in [
         ("v8.i256 = add v6 0.i256;", "v8", true),
@@ -1201,17 +1273,20 @@ fn unknown_scalar_words_do_not_retain_private_loop_hash_buffers() {
         ),
         ("v8.i256 = add v6 0.i256;", "v10", false),
     ] {
+        // Storing a pointer exposes it to a reentrant frame, so the return
+        // data copied into `v0` may hold pointers: its words are unknown.
         let source = format!(
             r#"
 target = "evm-ethereum-osaka"
 func public %entry() {{
 block0:
-    v18.i256 = evm_calldata_size;
+    v18.i256 = evm_return_data_size;
     v17.i256 = evm_udiv v18 32.i256;
     v19.i256 = mul v17 32.i256;
     v0.*i8 = evm_malloc v19;
     v1.i256 = ptr_to_int v0 i256;
-    evm_calldata_copy v1 0.i256 v19;
+    evm_sstore 0.i256 v1;
+    evm_return_data_copy v1 0.i256 v19;
     jump block1;
 block1:
     v2.i256 = phi (0.i256 block0) (v13 block2);
