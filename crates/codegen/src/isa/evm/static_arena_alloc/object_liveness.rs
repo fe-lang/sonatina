@@ -135,11 +135,18 @@ impl AllocaClosureCtx<'_> {
         roots: impl IntoIterator<Item = InstId>,
         available: &BitSet<InstId>,
     ) -> ExpandedAllocaRoots {
+        // A pointer can name only an allocation that may already have executed,
+        // including one reaching this access around a backedge. Memory facts
+        // are flow-insensitive, so a known closure can include objects from
+        // mutually exclusive or later paths; those cannot exist at this access.
         let (allocas, hit_unknown) = match closure_allocas(roots, self.edges, self.unknown) {
-            Ok(allocas) => (allocas, false),
-            // Unknown contents can retain any allocation that may already have
-            // executed, including those reaching this access around a backedge.
-            // Objects from mutually exclusive paths cannot exist at this access.
+            Ok(allocas) => (
+                allocas
+                    .into_iter()
+                    .filter(|&alloca| available.contains(alloca))
+                    .collect(),
+                false,
+            ),
             Err(UnknownLocalPtr) => (available.iter().collect(), true),
         };
         ExpandedAllocaRoots {
@@ -612,16 +619,7 @@ pub(super) fn compute_regions_and_calls(
     block_order: &[BlockId],
     ctx: &mut ComputeCtx<'_, '_>,
 ) -> (Vec<LiveRegion>, Vec<CallSiteObjects>) {
-    let availability = if ctx.closure.unknown.is_empty()
-        && !function
-            .dfg
-            .value_ids()
-            .any(|value| ctx.prov[value].may_reference_unknown_local())
-    {
-        AllocaAvailability::default()
-    } else {
-        AllocaAvailability::compute(function, cfg, block_order, ctx.alloca_ids)
-    };
+    let availability = AllocaAvailability::compute(function, cfg, block_order, ctx.alloca_ids);
     let events = build_object_event_index(function, block_order, &availability, ctx);
     let block_live = solve_object_block_liveness(function, cfg, block_order, &events);
     let regions = emit_regions(
