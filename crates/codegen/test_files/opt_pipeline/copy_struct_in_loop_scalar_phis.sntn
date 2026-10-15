@@ -1,0 +1,40 @@
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+# `prev = x` in a loop that writes only `x.0`: promoting `x` leaves the phi of
+# `x.1` trivial, and the SSA builder removes the scalar phi of `prev.1` it
+# makes trivial, which the scalarizer must follow as an alias.
+func public %copy_in_loop(v0.i256) -> i256 {
+    block0:
+        v1.objref<@pair> = obj.alloc @pair;
+        v2.objref<i256> = obj.proj v1 0.i256;
+        obj.store v2 0.i256;
+        v3.objref<i256> = obj.proj v1 1.i256;
+        obj.store v3 0.i256;
+        v4.@pair = insert_value undef.@pair 0.i256 0.i256;
+        v5.@pair = insert_value v4 1.i256 0.i256;
+        jump block1;
+
+    block1:
+        v6.@pair = phi (v5 block0) (v9 block2);
+        v7.i256 = phi (0.i256 block0) (v12 block2);
+        v8.i1 = lt v7 v0;
+        br v8 block2 block3;
+
+    block2:
+        v9.@pair = obj.load v1;
+        v10.i256 = obj.load v2;
+        v11.i256 = add v10 1.i256;
+        obj.store v2 v11;
+        v12.i256 = add v7 1.i256;
+        jump block1;
+
+    block3:
+        v13.i256 = extract_value v6 1.i256;
+        v14.i256 = extract_value v6 0.i256;
+        v15.i256 = obj.load v2;
+        v16.i256 = add v13 v14;
+        v17.i256 = add v16 v15;
+        return v17;
+}

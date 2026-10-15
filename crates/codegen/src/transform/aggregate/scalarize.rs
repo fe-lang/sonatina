@@ -343,6 +343,13 @@ impl AggregateScalarize {
             &modified_leaves,
             &mut ssa,
         );
+        // Removing a trivial phi, the SSA builder also removes the scalar phis
+        // that become trivial through it, recording each as an alias.
+        for leaf_phis in scalar_phi_results.values_mut().flatten() {
+            for leaf_phi in leaf_phis {
+                *leaf_phi = ssa.resolve_alias(*leaf_phi);
+            }
+        }
         self.simplify_scalar_phi_results(func, &mut scalar_phi_results);
         self.changed |= self.cleanup_scalarized_artifacts(func, &projection_of, &promoted_by_root);
         #[cfg(debug_assertions)]
