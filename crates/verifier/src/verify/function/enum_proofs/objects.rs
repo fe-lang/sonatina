@@ -366,6 +366,7 @@ impl State {
         let mut result = Self {
             objects: self.objects.clone(),
             bound: self.bound.union(&other.bound).copied().collect(),
+            view_index: self.view_index.clone(),
             ..Self::default()
         };
         // Allocation facts are conditional on that allocation existing. Phi
@@ -383,20 +384,26 @@ impl State {
                 result.values.insert(id, a.join(ctx, b));
             }
         }
+        // Joined views are a subset of our views; values and guard facts do not
+        // affect the index. Only changed or missing references need reindexing.
         for (&id, a) in &self.views {
             if let Some(b) = other.views.get(&id) {
+                let references = a.references.join(&b.references);
+                if references != a.references {
+                    result.view_index.update(id, &a.references, false);
+                    result.view_index.update(id, &references, true);
+                }
                 result.views.insert(
                     id,
                     ViewFact {
-                        references: a.references.join(&b.references),
+                        references,
                         value: a.value.join(ctx, &b.value),
                         guards: a.guards && b.guards,
                     },
                 );
+            } else {
+                result.view_index.update(id, &a.references, false);
             }
-        }
-        for (&id, fact) in &result.views {
-            result.view_index.update(id, &fact.references, true);
         }
         for (&id, refs) in &self.observations {
             if let Some(other) = other.observations.get(&id)
