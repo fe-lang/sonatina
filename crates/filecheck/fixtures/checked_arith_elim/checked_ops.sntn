@@ -404,3 +404,20 @@ block3:
 block4:
     return v3;
 }
+
+# check: func public %uaddo_return_data_size() -> i256 {
+# check: add v0 32.i256;
+# not: uaddo
+# not: 999.i256
+func public %uaddo_return_data_size() -> i256 {
+block0:
+    v0.i256 = evm_return_data_size;
+    (v1.i256, v2.i1) = uaddo v0 32.i256;
+    br v2 block1 block2;
+
+block1:
+    return 999.i256;
+
+block2:
+    return v1;
+}

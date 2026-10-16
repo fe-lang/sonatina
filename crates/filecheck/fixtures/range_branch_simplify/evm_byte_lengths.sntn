@@ -1,0 +1,67 @@
+#! EVM byte lengths are below 2**62, so bounds well above that fold.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %calldata_size_within_allocation_bound() -> i256 {
+# not:         br v1
+# check:       jump block2;
+func public %calldata_size_within_allocation_bound() -> i256 {
+block0:
+    v0.i256 = evm_calldata_size;
+    v1.i1 = gt v0 18446744073709551615.i256;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return v0;
+}
+
+# sameln: func public %return_data_size_plus_header_within_allocation_bound() -> i256 {
+# not:         br v2
+# check:       jump block2;
+func public %return_data_size_plus_header_within_allocation_bound() -> i256 {
+block0:
+    v0.i256 = evm_return_data_size;
+    v1.i256 = add v0 32.i256;
+    v2.i1 = gt v1 18446744073709551615.i256;
+    br v2 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return v1;
+}
+
+# sameln: func public %code_size_at_the_bound_folds() -> i256 {
+# not:         br v1
+# check:       jump block2;
+func public %code_size_at_the_bound_folds() -> i256 {
+block0:
+    v0.i256 = evm_code_size;
+    v1.i1 = gt v0 4611686018427387903.i256;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return v0;
+}
+
+# sameln: func public %calldata_size_below_the_bound_remains() -> i256 {
+# check:       br v1 block1 block2;
+func public %calldata_size_below_the_bound_remains() -> i256 {
+block0:
+    v0.i256 = evm_calldata_size;
+    v1.i1 = gt v0 4611686018427387902.i256;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return v0;
+}
