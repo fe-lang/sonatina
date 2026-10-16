@@ -8,7 +8,7 @@ use sonatina_ir::{
         control_flow,
         data::{Alloca, Memzero, Mload, Mstore},
         evm::{
-            EvmCalldataLoad, EvmCodeLoad, EvmInvalid, EvmMstore8, EvmReturn, EvmRevert,
+            EvmCalldataLoad, EvmCodeLoad, EvmInvalid, EvmMalloc, EvmMstore8, EvmReturn, EvmRevert,
             EvmSelfDestruct, EvmSload, EvmSstore, EvmStop, EvmTload, EvmTstore,
         },
     },
@@ -757,6 +757,15 @@ fn transfer_backward(
     // The fixed point does not mutate IR, and backward rewriting only removes
     // stores. Neither can delete the values or allocation roots in live keys.
     let effects = func.dfg.effects(inst);
+
+    // Before an `evm_malloc` runs, its keys name an earlier object, such as
+    // the previous loop iteration's, which writes after it do not overwrite.
+    if <&EvmMalloc as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        let base = BaseObject::Malloc(inst);
+        live.exit_live
+            .retain(|key| !matches!(key, TrackedLocKey::Linear(key) if key.base == base));
+        live.exit_ranges.retain(|range| range.base != base);
+    }
 
     for access in effects.accesses.iter().rev() {
         match access.kind {
