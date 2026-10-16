@@ -333,12 +333,9 @@ pub(crate) fn transfer_inst(func: &Function, env: &mut RangeEnv, inst: InstId) {
             transfer_bool_unary_inst(func, env, inst, kind)
         }
         InstClassKind::Binary(kind) => transfer_binary_inst(func, env, inst, kind),
-        _ => match (
-            evm_byte_len_fact(func, inst),
-            func.dfg.inst_result_at(inst, 0),
-        ) {
-            (Some(fact), Some(result)) => set_env_fact(func, env, result, fact),
-            _ => clear_inst_results(func, env, inst),
+        _ => match evm_byte_len_fact(func, inst) {
+            Some((result, fact)) => set_env_fact(func, env, result, fact),
+            None => clear_inst_results(func, env, inst),
         },
     }
 }
@@ -347,17 +344,20 @@ pub(crate) fn transfer_inst(func: &Function, env: &mut RangeEnv, inst: InstId) {
 /// transaction data costs at least 4 gas per byte. Memory expansion costs
 /// quadratic gas, which keeps memory below `2**42` bytes, and message-call
 /// data and return data come from memory or from a precompile's input.
-/// EIP-170 and EIP-3860 cap code.
-fn evm_byte_len_fact(func: &Function, inst: InstId) -> Option<RangeFact> {
+/// EIP-170 and EIP-3860 cap code. A result type too narrow for the bound
+/// keeps only what fits it.
+fn evm_byte_len_fact(func: &Function, inst: InstId) -> Option<(ValueId, RangeFact)> {
     let (set, data) = (func.inst_set(), func.dfg.inst(inst));
     let is_byte_len = <&EvmCalldataSize as InstDowncast>::downcast(set, data).is_some()
         || <&EvmReturnDataSize as InstDowncast>::downcast(set, data).is_some()
         || <&EvmCodeSize as InstDowncast>::downcast(set, data).is_some()
         || <&EvmExtCodeSize as InstDowncast>::downcast(set, data).is_some()
         || <&EvmMsize as InstDowncast>::downcast(set, data).is_some();
-    is_byte_len.then(|| {
+    let result = func.dfg.inst_result_at(inst, 0)?;
+    let ty = func.dfg.value_ty(result);
+    (is_byte_len && supports_range_facts(ty)).then(|| {
         let hi = (U256::one() << 62) - U256::one();
-        RangeFact {
+        let len = RangeFact {
             unsigned: UnsignedInterval {
                 lo: U256::zero(),
                 hi,
@@ -366,7 +366,8 @@ fn evm_byte_len_fact(func: &Function, inst: InstId) -> Option<RangeFact> {
                 lo: I256::zero(),
                 hi: I256::from(hi),
             },
-        }
+        };
+        (result, trunc_fact(len, ty))
     })
 }
 

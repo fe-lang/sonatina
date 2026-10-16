@@ -65,3 +65,36 @@ block1:
 block2:
     return v0;
 }
+
+# A result too narrow for the bound gets no fact: 128 bytes of calldata is
+# -128 as an i8.
+# sameln: func public %narrow_calldata_size_sign_test_remains() -> i8 {
+# check:       br v1 block1 block2;
+func public %narrow_calldata_size_sign_test_remains() -> i8 {
+block0:
+    v0.i8 = evm_calldata_size;
+    v1.i1 = slt v0 0.i8;
+    br v1 block1 block2;
+
+block1:
+    return 1.i8;
+
+block2:
+    return v0;
+}
+
+# sameln: func public %i64_calldata_size_within_allocation_bound() -> i64 {
+# not:         br v1
+# check:       jump block2;
+func public %i64_calldata_size_within_allocation_bound() -> i64 {
+block0:
+    v0.i64 = evm_calldata_size;
+    v1.i1 = slt v0 0.i64;
+    br v1 block1 block2;
+
+block1:
+    return 1.i64;
+
+block2:
+    return v0;
+}
