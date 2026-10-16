@@ -200,18 +200,35 @@ impl InitializedValue {
 
     pub(crate) fn join(&self, ctx: &ModuleCtx, other: &Self) -> Self {
         debug_assert_eq!(self.ty, other.ty);
-        if self.defined(ctx) && other.defined(ctx) && self.variant != other.variant {
+        if self.default_defined == other.default_defined
+            && self.variant == other.variant
+            && self.children.ptr_eq(&other.children)
+        {
+            return self.clone();
+        }
+        if self.variant != other.variant && self.defined(ctx) && other.defined(ctx) {
             return Self::new(self.ty, true);
         }
-        let mut result = Self::new(self.ty, self.default_defined && other.default_defined);
+        let mut result = self.clone();
+        result.default_defined &= other.default_defined;
         result.variant = self
             .variant
             .filter(|variant| Some(*variant) == other.variant);
-        for &index in self.children.keys().chain(other.children.keys()) {
+        // Join overlapping keys once. Retained snapshots share unchanged
+        // entries, and only changed children need a new persistent map path.
+        for &index in self.children.keys().chain(
+            other
+                .children
+                .keys()
+                .filter(|index| !self.children.contains_key(*index)),
+        ) {
             if let Some(a) = self.child(ctx, index)
                 && let Some(b) = other.child(ctx, index)
             {
-                result.children.insert_mut(index, a.join(ctx, &b));
+                let child = a.join(ctx, &b);
+                if result.children.get(&index) != Some(&child) {
+                    result.children.insert_mut(index, child);
+                }
             }
         }
         result

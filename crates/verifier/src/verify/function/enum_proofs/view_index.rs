@@ -1,43 +1,44 @@
 //! Conservative write candidates. Facts remain in State; this index only skips
 //! facts whose anchors, physical locations and guard locations are disjoint.
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     ops::Bound::{Excluded, Unbounded},
 };
 
+use rpds::{RedBlackTreeMapSync, RedBlackTreeSetSync};
 use sonatina_ir::ValueId;
 
 use super::views::{Index, References, Root, Step};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Paths {
-    values: BTreeSet<ValueId>,
-    children: BTreeMap<Step, Self>,
+    values: RedBlackTreeSetSync<ValueId>,
+    children: RedBlackTreeMapSync<Step, Self>,
 }
 
 impl Paths {
     fn update(&mut self, path: &[Step], id: ValueId, insert: bool) {
         if let Some((step, rest)) = path.split_first() {
             if insert {
-                self.children
-                    .entry(*step)
-                    .or_default()
-                    .update(rest, id, true);
+                if !self.children.contains_key(step) {
+                    self.children.insert_mut(*step, Self::default());
+                }
+                self.children.get_mut(step).unwrap().update(rest, id, true);
             } else if let Some(child) = self.children.get_mut(step) {
                 child.update(rest, id, false);
                 if child.values.is_empty() && child.children.is_empty() {
-                    self.children.remove(step);
+                    self.children.remove_mut(step);
                 }
             }
         } else if insert {
-            self.values.insert(id);
+            self.values.insert_mut(id);
         } else {
-            self.values.remove(&id);
+            self.values.remove_mut(&id);
         }
     }
 
     fn all(&self, found: &mut BTreeSet<ValueId>) {
-        found.extend(&self.values);
+        found.extend(self.values.iter().copied());
         for child in self.children.values() {
             child.all(found);
         }
@@ -48,7 +49,7 @@ impl Paths {
             self.all(found);
             return;
         };
-        found.extend(&self.values);
+        found.extend(self.values.iter().copied());
         match step {
             Step::Index(Index::Constant(_)) => {
                 if let Some(child) = self.children.get(step) {
@@ -82,42 +83,55 @@ impl Paths {
 }
 
 fn update_paths<K: Copy + Ord>(
-    paths: &mut BTreeMap<K, Paths>,
+    paths: &mut RedBlackTreeMapSync<K, Paths>,
     key: K,
     path: &[Step],
     id: ValueId,
     insert: bool,
 ) {
     if insert {
-        paths.entry(key).or_default().update(path, id, true);
+        if !paths.contains_key(&key) {
+            paths.insert_mut(key, Paths::default());
+        }
+        paths.get_mut(&key).unwrap().update(path, id, true);
     } else if let Some(tree) = paths.get_mut(&key) {
         tree.update(path, id, false);
         if tree.values.is_empty() && tree.children.is_empty() {
-            paths.remove(&key);
+            paths.remove_mut(&key);
         }
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct ViewIndex {
-    places: BTreeMap<Root, Paths>,
-    anchors: BTreeMap<ValueId, Paths>,
-    bindings: BTreeMap<ValueId, BTreeSet<ValueId>>,
+    // CFG snapshots share unchanged roots and paths. Updating an index copies
+    // only the map search paths and the affected reference path.
+    places: RedBlackTreeMapSync<Root, Paths>,
+    anchors: RedBlackTreeMapSync<ValueId, Paths>,
+    bindings: RedBlackTreeMapSync<ValueId, RedBlackTreeSetSync<ValueId>>,
 }
 
 impl ViewIndex {
     pub fn binding_candidates(&self, binding: ValueId) -> BTreeSet<ValueId> {
-        self.bindings.get(&binding).cloned().unwrap_or_default()
+        self.bindings
+            .get(&binding)
+            .into_iter()
+            .flat_map(|values| values.iter().copied())
+            .collect()
     }
 
     pub fn update(&mut self, id: ValueId, refs: &References, insert: bool) {
         for binding in refs.bindings() {
             if insert {
-                self.bindings.entry(binding).or_default().insert(id);
+                if !self.bindings.contains_key(&binding) {
+                    self.bindings
+                        .insert_mut(binding, RedBlackTreeSetSync::new_sync());
+                }
+                self.bindings.get_mut(&binding).unwrap().insert_mut(id);
             } else if let Some(values) = self.bindings.get_mut(&binding) {
-                values.remove(&id);
+                values.remove_mut(&id);
                 if values.is_empty() {
-                    self.bindings.remove(&binding);
+                    self.bindings.remove_mut(&binding);
                 }
             }
         }
