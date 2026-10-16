@@ -138,9 +138,7 @@ pub(crate) fn compute_malloc_spill_bounds(
         .map(|(inst, block)| {
             // CFG cleanup can remove a mapped block. Without a surviving boundary
             // retain all function spill accesses, without adding dead semantic objects.
-            let bound = map.blocks[block]
-                .filter(|&block| machine.layout.is_block_inserted(block))
-                .map_or(full_bound, |block| bounds[block]);
+            let bound = map.blocks[block].map_or(full_bound, |block| bounds[block]);
             (inst, bound)
         })
         .collect()
