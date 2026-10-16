@@ -54,6 +54,56 @@ func public %removes_memzero_overwritten_on_every_path(v0.i1) {
         evm_return v2 32.i256;
 }
 
+#! A copy that overwrites a memzero hides it from a committing exit.
+# sameln: func public %removes_memzero_overwritten_by_copy(v0.i256) {
+# not:         memzero
+# check:       evm_calldata_copy v2 v0 32.i256;
+# nextln:      evm_return v2 32.i256;
+func public %removes_memzero_overwritten_by_copy(v0.i256) {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        memzero v2 32.i256;
+        evm_calldata_copy v2 v0 32.i256;
+        evm_return v2 32.i256;
+}
+
+#! Copies on every path to a committing exit overwrite a memzero.
+# sameln: func public %removes_memzero_overwritten_by_copies_on_every_path(v0.i1) {
+# not:         memzero
+# check:       br v0 block1 block2;
+func public %removes_memzero_overwritten_by_copies_on_every_path(v0.i1) {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        memzero v2 32.i256;
+        br v0 block1 block2;
+
+    block1:
+        evm_calldata_copy v2 0.i256 32.i256;
+        jump block3;
+
+    block2:
+        evm_calldata_copy v2 32.i256 32.i256;
+        jump block3;
+
+    block3:
+        evm_return v2 32.i256;
+}
+
+#! A caller sees the bytes of a memzero that a copy leaves.
+# sameln: func public %keeps_memzero_partly_overwritten_by_copy_before_return() -> i256 {
+# check:       memzero v1 64.i256;
+# nextln:      evm_calldata_copy v1 0.i256 32.i256;
+func public %keeps_memzero_partly_overwritten_by_copy_before_return() -> i256 {
+    block0:
+        v0.*i8 = evm_malloc 64.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        memzero v1 64.i256;
+        evm_calldata_copy v1 0.i256 32.i256;
+        return v1;
+}
+
 #! A memzero stays when an overwrite misses some of its bytes.
 # sameln: func public %keeps_partially_overwritten_memzero(v0.i256) {
 # check:       memzero v2 64.i256;
@@ -146,6 +196,20 @@ func public %calldata_copy_kills_earlier_store(v0.i256) {
         mstore v2 v0 i256;
         evm_calldata_copy v2 0.i256 32.i256;
         evm_revert v2 32.i256;
+}
+
+#! A caller cannot see a store that a copy overwrites.
+# sameln: func public %calldata_copy_hides_earlier_store_from_caller(v0.i256) -> i256 {
+# not:         mstore
+# check:       evm_calldata_copy v2 0.i256 32.i256;
+# nextln:      return v2;
+func public %calldata_copy_hides_earlier_store_from_caller(v0.i256) -> i256 {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        mstore v2 v0 i256;
+        evm_calldata_copy v2 0.i256 32.i256;
+        return v2;
 }
 
 #! A call may fill only part of its output, so earlier stores there stay.

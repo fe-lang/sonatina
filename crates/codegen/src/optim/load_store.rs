@@ -33,6 +33,7 @@ struct AvailState {
 struct LiveState {
     exact_live: ExactLiveSet,
     exit_live: ExactLiveSet,
+    exit_ranges: FxHashSet<LinearRangeKey>,
     range_live: FxHashSet<LinearRangeKey>,
     whole_space_live: BitSet<AddressSpaceId>,
 }
@@ -540,15 +541,21 @@ fn meet_live(states: impl Iterator<Item = (LiveState, bool)>) -> LiveState {
         out.exact_live.extend(state.exact_live.into_iter());
         out.range_live.extend(state.range_live);
         if committing_exit_reachable {
-            exit_states.push(state.exit_live);
+            exit_states.push((state.exit_live, state.exit_ranges));
         }
     }
 
-    let Some(mut exit_live) = exit_states.first().cloned() else {
+    let Some((mut exit_live, mut exit_ranges)) = exit_states.first().cloned() else {
         return out;
     };
-    exit_live.retain(|key| exit_states[1..].iter().all(|state| state.contains(key)));
+    exit_live.retain(|key| exit_states[1..].iter().all(|(live, _)| live.contains(key)));
+    exit_ranges.retain(|range| {
+        exit_states[1..]
+            .iter()
+            .all(|(_, ranges)| ranges.contains(range))
+    });
     out.exit_live = exit_live;
+    out.exit_ranges = exit_ranges;
 
     out
 }
@@ -779,7 +786,9 @@ fn transfer_backward(
                     let has_range_live = has_may_alias_live_range(&live.range_live, &key, analysis);
                     let live_at_exit = committing_exit_reachable
                         && write_visible_at_committing_exit(func, key.space(), base)
-                        && !has_must_alias_live(&live.exit_live, &key, analysis);
+                        && !has_must_alias_live(&live.exit_live, &key, analysis)
+                        && !matches!(&key, TrackedLocKey::Linear(key)
+                            if exit_live_covers(live, &key.range(), analysis));
                     let dead = !has_whole_space_live
                         && !has_exact_live
                         && !has_range_live
@@ -803,7 +812,7 @@ fn transfer_backward(
                     let interval = range.absolute_interval();
                     let live_at_exit = committing_exit_reachable
                         && write_visible_at_committing_exit(func, range.space, Some(&range.base))
-                        && !exit_live_covers(&live.exit_live, &range, analysis);
+                        && !exit_live_covers(live, &range, analysis);
                     let dead = !live_at_exit
                         && !whole_space_liveness_may_observe(
                             func,
@@ -832,6 +841,9 @@ fn transfer_backward(
                                     == RangeCoverage::FullyCovered)
                         });
                     discharge_live_ranges(&mut live.range_live, &range, analysis);
+                    if live_at_exit {
+                        live.exit_ranges.insert(range);
+                    }
                 }
                 // Any other write may leave every byte unchanged: it neither
                 // reads memory nor ends a prior store's liveness.
@@ -915,18 +927,23 @@ fn has_must_alias_live(
         .any(|other| analysis.alias(other, key) == AliasResult::MustAlias)
 }
 
-/// Whether exact stores that every path writes before a committing exit
-/// together overwrite all of `range`.
+/// Whether the stores and fills that every path writes before a committing
+/// exit together overwrite all of `range`.
 fn exit_live_covers(
-    exit_live: &ExactLiveSet,
+    live: &LiveState,
     range: &LinearRangeKey,
     analysis: &MemoryAccessAnalysis,
 ) -> bool {
     let mut uncovered = FxHashSet::from_iter([range.clone()]);
-    for key in exit_live.candidates(Some(range.space), range.absolute_interval()) {
-        if let TrackedLocKey::Linear(key) = key {
-            discharge_live_ranges(&mut uncovered, &key.range(), analysis);
-        }
+    let stores = live
+        .exit_live
+        .candidates(Some(range.space), range.absolute_interval())
+        .filter_map(|key| match key {
+            TrackedLocKey::Linear(key) => Some(key.range()),
+            TrackedLocKey::Keyed(_) => None,
+        });
+    for write in stores.chain(live.exit_ranges.iter().cloned()) {
+        discharge_live_ranges(&mut uncovered, &write, analysis);
     }
     uncovered.is_empty()
 }

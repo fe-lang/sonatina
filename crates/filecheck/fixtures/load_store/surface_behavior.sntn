@@ -308,6 +308,20 @@ func public %removes_overwritten_absolute_memory_store_before_function_exit() {
         return;
 }
 
+#! Absolute memory stores that later stores together overwrite are removed before returning exits.
+# sameln: func public %removes_absolute_memory_store_overwritten_by_adjacent_stores_before_function_exit() {
+# not:         mstore 80.i256 7.i256 i256;
+# check:       mstore 64.i256 8.i256 i256;
+# nextln:      mstore 96.i256 9.i256 i256;
+# nextln:      return;
+func public %removes_absolute_memory_store_overwritten_by_adjacent_stores_before_function_exit() {
+    block0:
+        mstore 80.i256 7.i256 i256;
+        mstore 64.i256 8.i256 i256;
+        mstore 96.i256 9.i256 i256;
+        return;
+}
+
 #! A store is live if any committing exit can observe its value.
 # sameln: func public %keeps_store_when_only_one_commit_path_overwrites_exit_visible_value(v0.i1) {
 # check:       mstore 64.i256 7.i256 i256;
