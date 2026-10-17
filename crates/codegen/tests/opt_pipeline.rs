@@ -1884,3 +1884,86 @@ fn assert_fast_verified(module: &Module) {
     let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Fast));
     assert!(report.is_ok(), "module failed verification: {report:?}");
 }
+
+#[test]
+fn undefined_reference_merges_verify_after_passes() {
+    // A merge of `undef` with a defined reference, dispatched on a correlated
+    // site tag, must still verify after the passes that thread or merge the
+    // dispatch. The object comes in as an argument so it stays an object.
+    let shape = |undefined_arm: &str, defined_arm: &str, ty: &str, defined: &str, read: &str| {
+        format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+func inline(never) private %shape(v100.i1, v0.objref<@E>) -> i256 {{
+block0:
+ br v100 block1 block2;
+block1:
+{undefined_arm}
+ jump block3;
+block2:
+{defined_arm}
+ jump block3;
+block3:
+ v2.{ty} = phi (undef.{ty} block1) ({defined} block2);
+ v3.i8 = phi (0.i8 block1) (1.i8 block2);
+ br_table v3 block5 (1.i8 block4);
+block4:
+{read}
+block5:
+ return 0.i256;
+}}
+func public %entry(v100.i1) -> i256 {{
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.set_tag v0 #None;
+ v1.i256 = call %shape v100 v0;
+ return v1;
+}}
+"#
+        )
+    };
+    let cases = [
+        // A guarded read through the merge.
+        shape(
+            "",
+            " enum.write_variant v0 #Some (17.i256);",
+            "objref<@E>",
+            "v0",
+            " v4.objref<i256> = enum.proj v2 #Some 0.i8;\n v5.i256 = obj.load v4;\n return v5;",
+        ),
+        // A strong write through the merge, read back through the object.
+        shape(
+            "",
+            "",
+            "objref<@E>",
+            "v0",
+            " enum.write_variant v2 #Some (17.i256);\n v4.objref<i256> = enum.proj v0 #Some 0.i8;\n v5.i256 = obj.load v4;\n return v5;",
+        ),
+        // A guarded payload view through the merge.
+        shape(
+            " enum.set_tag v0 #None;",
+            " enum.write_variant v0 #Some (17.i256);\n v1.objref<i256> = enum.proj v0 #Some 0.i8;",
+            "objref<i256>",
+            "v1",
+            " v4.i256 = obj.load v2;\n return v4;",
+        ),
+    ];
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for source in &cases {
+        let mut single = Pipeline::new();
+        single.add_step(Step::FuncPasses(vec![Pass::JumpThread]));
+        for pipeline in [single, Pipeline::size(), Pipeline::speed()] {
+            let mut parsed = parse_module(source).unwrap();
+            verify_module_or_panic(&parsed.module, &config);
+            pipeline.run(&mut parsed.module);
+            verify_module_or_panic(&parsed.module, &config);
+            // The merge and its read survive, so the check is not vacuous.
+            let text = ModuleWriter::new(&parsed.module).dump_string();
+            assert!(
+                text.contains("phi (undef.objref") && text.contains("obj.load"),
+                "{text}"
+            );
+        }
+    }
+}

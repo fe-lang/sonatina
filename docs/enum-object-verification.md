@@ -30,6 +30,21 @@ Scalar SSA results follow the existing definedness contract after their source
 read is checked. Aggregate snapshots retain their source subtree facts. The
 concrete tests use defined scalar inputs for claims about executed reads.
 
+An `undef` object reference names no location (`Value::Undef`). Copying,
+merging, projecting, passing, returning or storing it as a value is defined; a
+load, store, tag read or write, constant initialization, materialization or
+trusted variant assumption that needs its location has no defined behavior.
+The verifier therefore takes no facts from an undefined alternative of a
+reference: a merge of an undefined alternative with a defined one has the
+defined one's provenance and view certificate. A strict use of a reference that
+is undefined on every path to it is reported and ends the analyzed path, except
+a trusted variant assumption, which is contradicted and ends it silently.
+This differs from a reference of unresolved provenance, which is still rejected
+when used, and from a real cell whose contents are uninitialized, which is still
+unproven. Calls are not strict in reference operands. Acceptance is conditional
+on the path; it does not license moving a strict use across the condition that
+guards it.
+
 `enum.set_tag` selects a variant without initializing its fields. Setting the
 same tag preserves established selected-payload facts. Selecting a payloadless
 variant creates a complete enum value. A different payload-bearing tag does not
@@ -179,6 +194,10 @@ The finite vocabulary is derived from the validated function and its types:
 - A guarded alternative pairs a possible location with a set of
   `(ancestor location, variant)` guards. Deduplicate repeated guards. Unknown
   targets and unknown local guard provenance are explicit alternatives.
+- A literal `undef` object reference is the bottom of the reference
+  alternatives. It has no targets, no unknown contributor and no equalities, so
+  a join with a defined reference is that reference, view certificate included.
+  A strict use of a reference undefined on every path is `NoFlow`.
 - Symbolic views are keyed by SSA value and structural child path. They carry
   guarantees about the location denoted by that value on the current path, in
   addition to conservative facts about its candidate allocations. Reference

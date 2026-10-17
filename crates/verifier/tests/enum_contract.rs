@@ -1523,3 +1523,36 @@ block0:
 "#;
     assert_eq!(errors(stored), [UNDEFINED]);
 }
+
+#[test]
+fn undefined_reference_projection_is_transport() {
+    // Address formation from `undef` is not a use: the projection may run on
+    // the fallback path ahead of the dispatch that guards the read.
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %entry(v100.i1) -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.write_variant v0 #Some (17.i256);
+ br v100 block1 block2;
+block1:
+ jump block3;
+block2:
+ jump block3;
+block3:
+ v2.objref<@E> = phi (undef.objref<@E> block1) (v0 block2);
+ v3.i8 = phi (0.i8 block1) (1.i8 block2);
+ v4.objref<i256> = enum.proj v2 #Some 0.i8;
+ br_table v3 block5 (1.i8 block4);
+block4:
+ v5.i256 = obj.load v4;
+ return v5;
+block5:
+ return 0.i256;
+}
+"#;
+    let run = execute(source, 128);
+    assert_eq!(run.invalid_reads(), 0);
+    assert_eq!(run.returned, 2);
+}

@@ -50,6 +50,11 @@ impl IrWrite<FuncWriteCtx<'_>> for ValueId {
 }
 
 /// An value data definition.
+///
+/// An `Undef` object reference names no location: copying, merging, passing,
+/// returning or storing it as a value is defined, but a load, store, tag read
+/// or write, constant initialization, materialization or trusted variant
+/// assumption that needs its location has no defined behavior.
 #[derive(Debug, Clone)]
 pub enum Value {
     /// The value is defined by an instruction.
