@@ -393,3 +393,68 @@ fn retiring_a_binding_preserves_unrelated_roots_and_invalidates_each_proof_posit
         assert_eq!(updated, ViewIndex::default());
     }
 }
+
+#[test]
+fn undefined_references_are_the_join_identity() {
+    let anchored = |refs: References, value: u32| {
+        let value = ValueId::from_u32(value);
+        References {
+            anchors: BTreeSet::from([Anchor {
+                value,
+                path: vec![],
+            }]),
+            cache: Some(value),
+            ..refs
+        }
+    };
+    let root = References::root(Root::Recent(ValueId::from_u32(0)));
+    let cases = [
+        References::undefined(),
+        anchored(References::undefined(), 1),
+        anchored(References::undefined(), 2),
+        References::default(),
+        References::unknown(),
+        root.clone(),
+        anchored(root.clone(), 1),
+        anchored(References::root(Root::External), 2),
+    ];
+    for a in &cases {
+        assert_eq!(a.join(a), *a);
+        for b in &cases {
+            assert_eq!(a.join(b), b.join(a), "{a:?} {b:?}");
+            if !a.undefined && b.undefined {
+                assert_eq!(a.join(b), *a, "undefined is the identity");
+            }
+            if a.unknown {
+                assert!(a.join(b).unknown, "unknown absorbs");
+            }
+            for c in &cases {
+                assert_eq!(a.join(b).join(c), a.join(&b.join(c)));
+            }
+        }
+    }
+    // An unwritten cell's empty references are not the identity: they drop
+    // the other side's equalities.
+    let equal = anchored(root, 1);
+    assert_ne!(References::default().join(&equal), equal);
+
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %entry(v0.objref<@E>) {
+block0:
+ return;
+}
+"#,
+    )
+    .unwrap();
+    let ctx = &parsed.module.ctx;
+    let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+    let undefined = ValueState::reference(ty, References::undefined());
+    assert_eq!(undefined.captured(ctx), References::default());
+    // A forgotten cell may have been replaced, so it is no longer undefined.
+    let mut forgotten = undefined.clone();
+    forgotten.forget(ctx);
+    assert!(forgotten.references.unknown && !forgotten.references.undefined);
+}

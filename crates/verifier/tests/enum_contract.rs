@@ -187,10 +187,13 @@ fn calls_preserve_private_objects_and_reference_cells() {
 }
 
 #[test]
-fn call_eligibility_includes_undefined_enum_reference_arguments() {
+fn call_eligibility_includes_unresolved_enum_reference_arguments() {
+    // The only enum-typed value in the caller is the argument, loaded from an
+    // unwritten cell: an unresolved reference, not an undefined one.
     let source = r#"
 target = "evm-ethereum-osaka"
 type @E = enum { #Some(i256) };
+type @UnknownHolder = { objref<@E> };
 func private %derive(v0.objref<@E>) -> objref<i256> {
 block0:
  v1.objref<i256> = enum.proj v0 #Some 0.i8;
@@ -198,7 +201,10 @@ block0:
 }
 func private %entry() -> i256 {
 block0:
- v0.objref<i256> = call %derive undef.objref<@E>;
+ v20.objref<@UnknownHolder> = obj.alloc @UnknownHolder;
+ v21.objref<objref<@E>> = obj.proj v20 0.i8;
+ v22.objref<@E> = obj.load v21;
+ v0.objref<i256> = call %derive v22;
  v1.i256 = obj.load v0;
  return v1;
 }
@@ -206,12 +212,11 @@ block0:
     let parsed = parse_module(source).unwrap();
     for level in [VerificationLevel::Standard, VerificationLevel::Full] {
         let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
-        assert!(
-            report
-                .errors()
-                .any(|error| error.message.contains("unknown local reference provenance")),
-            "{report}"
-        );
+        let errors: Vec<_> = report
+            .errors()
+            .map(|error| error.message.as_str())
+            .collect();
+        assert_eq!(errors, ["unknown local reference provenance"], "{report}");
     }
 }
 
@@ -1218,6 +1223,7 @@ fn calls_do_not_reclassify_unresolved_local_references_as_imports() {
     let source = r#"
 target = "evm-ethereum-osaka"
 type @E = enum { #None, #Some(i256) };
+type @UnknownHolder = { objref<i256> };
 func private %identity(v100.objref<i256>) -> objref<i256> {
 block0:
  return v100;
@@ -1227,7 +1233,10 @@ block0:
  v0.objref<@E> = obj.alloc @E;
  enum.set_tag v0 #Some;
  v1.objref<i256> = enum.proj v0 #Some 0.i8;
- v2.objref<i256> = call %identity undef.objref<i256>;
+ v20.objref<@UnknownHolder> = obj.alloc @UnknownHolder;
+ v21.objref<objref<i256>> = obj.proj v20 0.i8;
+ v22.objref<i256> = obj.load v21;
+ v2.objref<i256> = call %identity v22;
  v3.objref<@E> = enum.assert_variant_ref v0 #Some;
  v4.i256 = obj.load v2;
  return v4;
@@ -1236,15 +1245,155 @@ block0:
     for level in [VerificationLevel::Standard, VerificationLevel::Full] {
         let parsed = parse_module(source).unwrap();
         let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
-        assert!(
-            report
-                .errors()
-                .any(|diagnostic| diagnostic.message == "unknown local reference provenance"),
-            "{report}"
-        );
-        let known = source.replace("call %identity undef.objref<i256>", "call %identity v1");
+        let errors: Vec<_> = report
+            .errors()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect();
+        assert_eq!(errors, ["unknown local reference provenance"], "{report}");
+        let known = source.replace("call %identity v22", "call %identity v1");
         let parsed = parse_module(&known).unwrap();
         let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
         assert!(report.is_ok(), "{report}");
     }
+}
+
+/// The verifier's error messages, which must agree at Standard and Full.
+fn errors(source: &str) -> Vec<String> {
+    let parsed = parse_module(source).unwrap();
+    let [standard, full] = [VerificationLevel::Standard, VerificationLevel::Full].map(|level| {
+        verify_module(&parsed.module, &VerifierConfig::for_level(level))
+            .errors()
+            .map(|error| error.message.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(standard, full, "{source}");
+    standard
+}
+
+#[test]
+fn undefined_reference_phi_takes_defined_provenance() {
+    // An undefined reference names no location, so its merge with a defined
+    // one has the defined one's provenance and certificate. The correlated
+    // site tag keeps the undefined path away from the read, as in a slide of
+    // an inlined projection with several yield sites.
+    for (object, setup, projection) in [
+        (
+            "@S",
+            " v1.objref<i256> = obj.proj v0 1.i8;\n obj.store v1 5.i256;",
+            "obj.proj v2 1.i8",
+        ),
+        (
+            "@E",
+            " enum.write_variant v0 #Some (17.i256);",
+            "enum.proj v2 #Some 0.i8",
+        ),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+type @S = {{ i256, i256 }};
+func private %entry(v100.i1) -> i256 {{
+block0:
+ v9.objref<@E> = obj.alloc @E;
+ v0.objref<{object}> = obj.alloc {object};
+{setup}
+ br v100 block1 block2;
+block1:
+ jump block3;
+block2:
+ jump block3;
+block3:
+ v2.objref<{object}> = phi (undef.objref<{object}> block1) (v0 block2);
+ v3.i8 = phi (0.i8 block1) (1.i8 block2);
+ br_table v3 block5 (1.i8 block4);
+block4:
+ v4.objref<i256> = {projection};
+ v5.i256 = obj.load v4;
+ return v5;
+block5:
+ return 0.i256;
+}}
+"#
+        );
+        let run = execute(&source, 128);
+        assert_eq!(run.invalid_reads(), 0);
+        assert_eq!(run.returned, 2);
+    }
+}
+
+#[test]
+fn calls_are_not_strict_in_undefined_reference_arguments() {
+    // A callee may ignore an undefined argument and return a usable reference.
+    let ignored = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %ignore(v0.objref<@E>) -> objref<i256> {
+block0:
+ v1.objref<i256> = obj.alloc i256;
+ obj.store v1 17.i256;
+ return v1;
+}
+func private %entry() -> i256 {
+block0:
+ v0.objref<i256> = call %ignore undef.objref<@E>;
+ v1.i256 = obj.load v0;
+ return v1;
+}
+"#;
+    let run = execute(ignored, 128);
+    assert_eq!(run.invalid_reads(), 0);
+    assert_eq!(run.returned, 1);
+    // Ignoring an undefined argument does not hide the other argument's effects.
+    let poked = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %poke(v0.objref<@E>, v1.objref<@E>) {
+block0:
+ enum.set_tag v1 #None;
+ return;
+}
+func private %entry() -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.write_variant v0 #Some (17.i256);
+ v1.objref<i256> = enum.proj v0 #Some 0.i8;
+ call %poke undef.objref<@E> v0;
+ v2.i256 = obj.load v1;
+ return v2;
+}
+"#;
+    assert_eq!(execute(poked, 128).invalid_reads(), 1);
+    assert_eq!(
+        errors(poked),
+        ["an ancestor enum variant is not proven active"]
+    );
+}
+
+#[test]
+fn havoc_replaces_an_undefined_reference_cell() {
+    // A call can replace an exposed cell holding `undef`: what is reloaded is
+    // the call's reference alternative. Verifier-domain only, since `%noop`
+    // leaves the cell undefined and the concrete load would have no meaning.
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+type @Cell = { objref<i256> };
+func private %noop(v0.objref<@Cell>) {
+block0:
+ return;
+}
+func private %entry() -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ v1.objref<@Cell> = obj.alloc @Cell;
+ v2.objref<objref<i256>> = obj.proj v1 0.i8;
+ obj.store v2 undef.objref<i256>;
+ call %noop v1;
+ v3.objref<i256> = obj.load v2;
+ v4.i256 = obj.load v3;
+ return v4;
+}
+"#;
+    assert_eq!(errors(source), Vec::<String>::new());
 }

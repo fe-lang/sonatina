@@ -126,11 +126,16 @@ impl State {
 
     pub fn value(&self, verifier: &FunctionVerifier<'_>, id: ValueId) -> ValueState {
         self.values.get(&id).cloned().unwrap_or_else(|| {
-            let complete = matches!(
-                verifier.func.dfg.value(id),
-                Value::Immediate { .. } | Value::Undef { .. } | Value::Arg { .. }
-            );
-            ValueState::new(verifier.func.dfg.value_ty(id), complete)
+            let ty = verifier.func.dfg.value_ty(id);
+            match verifier.func.dfg.value(id) {
+                Value::Undef { .. } if ty.is_obj_ref(verifier.ctx) => {
+                    ValueState::reference(ty, References::undefined())
+                }
+                Value::Immediate { .. } | Value::Undef { .. } | Value::Arg { .. } => {
+                    ValueState::new(ty, true)
+                }
+                _ => ValueState::new(ty, false),
+            }
         })
     }
 
@@ -179,6 +184,7 @@ impl State {
 
     pub fn guards_hold(&self, ctx: &ModuleCtx, refs: &References) -> bool {
         !refs.unknown
+            && !refs.undefined
             && refs.views.iter().all(|view| {
                 view.guards.iter().all(|guard| {
                     guard
@@ -386,21 +392,24 @@ impl State {
         }
         // Joined views are a subset of our views; values and guard facts do not
         // affect the index. Only changed or missing references need reindexing.
+        // An undefined reference's certificate describes no pointee, so the
+        // defined side's certificate is the join.
         for (&id, a) in &self.views {
             if let Some(b) = other.views.get(&id) {
-                let references = a.references.join(&b.references);
-                if references != a.references {
-                    result.view_index.update(id, &a.references, false);
-                    result.view_index.update(id, &references, true);
-                }
-                result.views.insert(
-                    id,
-                    ViewFact {
-                        references,
+                let fact = match (a.references.undefined, b.references.undefined) {
+                    (true, false) => b.clone(),
+                    (false, true) => a.clone(),
+                    _ => ViewFact {
+                        references: a.references.join(&b.references),
                         value: a.value.join(ctx, &b.value),
                         guards: a.guards && b.guards,
                     },
-                );
+                };
+                if fact.references != a.references {
+                    result.view_index.update(id, &a.references, false);
+                    result.view_index.update(id, &fact.references, true);
+                }
+                result.views.insert(id, fact);
             } else {
                 result.view_index.update(id, &a.references, false);
             }
