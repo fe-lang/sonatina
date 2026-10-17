@@ -1,0 +1,61 @@
+# Required enum contract: accept
+# `v2` is `undef` on the fallback arm, where the site tag keeps the write away.
+# Two trampolines delay one arm: in %entry the undefined arm reaches the merge
+# first, in %defined_first the defined arm does. A no-op write through `undef`
+# would leave the unwritten payload in the successor's join.
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %entry(v100.i1) -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.set_tag v0 #None;
+ br v100 block1 block2;
+block1:
+ jump block3;
+block2:
+ jump block7;
+block7:
+ jump block8;
+block8:
+ jump block3;
+block3:
+ v2.objref<@E> = phi (undef.objref<@E> block1) (v0 block8);
+ v3.i8 = phi (0.i8 block1) (1.i8 block8);
+ br_table v3 block6 (1.i8 block4);
+block4:
+ enum.write_variant v2 #Some (17.i256);
+ jump block5;
+block5:
+ v4.objref<i256> = enum.proj v0 #Some 0.i8;
+ v5.i256 = obj.load v4;
+ return v5;
+block6:
+ return 0.i256;
+}
+func private %defined_first(v100.i1) -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.set_tag v0 #None;
+ br v100 block1 block2;
+block1:
+ jump block7;
+block2:
+ jump block3;
+block7:
+ jump block8;
+block8:
+ jump block3;
+block3:
+ v2.objref<@E> = phi (undef.objref<@E> block8) (v0 block2);
+ v3.i8 = phi (0.i8 block8) (1.i8 block2);
+ br_table v3 block6 (1.i8 block4);
+block4:
+ enum.write_variant v2 #Some (17.i256);
+ jump block5;
+block5:
+ v4.objref<i256> = enum.proj v0 #Some 0.i8;
+ v5.i256 = obj.load v4;
+ return v5;
+block6:
+ return 0.i256;
+}

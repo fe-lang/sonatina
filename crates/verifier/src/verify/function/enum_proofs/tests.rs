@@ -96,6 +96,8 @@ fn worklist_order_does_not_change_the_solution() {
         include_str!("../../../../tests/fixtures/enum_contract/phi-unwritten-scalar.sntn"),
         include_str!("../../../../tests/fixtures/enum_contract/private-container.sntn"),
         include_str!("../../../../tests/fixtures/enum_contract/assertion-revisit.sntn"),
+        include_str!("../../../../tests/fixtures/enum_contract/undefined-merge-strict-write.sntn"),
+        include_str!("../../../../tests/fixtures/enum_contract/undefined-merge-guarded-view.sntn"),
         r#"
 target = "evm-ethereum-osaka"
 type @E = enum { #None, #Some(i256) };
@@ -249,9 +251,9 @@ block0:
                         let mut lower = a.clone();
                         let mut upper = a.join(ctx, b);
                         let lower_flows =
-                            transfer::instruction(&verifier, &mut lower, inst).is_some();
+                            transfer::instruction(&verifier, &mut lower, inst).continues();
                         let upper_flows =
-                            transfer::instruction(&verifier, &mut upper, inst).is_some();
+                            transfer::instruction(&verifier, &mut upper, inst).continues();
                         assert!(
                             !lower_flows || upper_flows,
                             "joining cannot turn a feasible assertion into NoFlow"
@@ -297,7 +299,7 @@ block0:
         let mut state = State::boundary(&verifier);
         let insts = &verifier.block_to_insts[&verifier.block_order[0]];
         for &inst in insts {
-            assert!(transfer::instruction(&verifier, &mut state, inst).is_some());
+            assert!(transfer::instruction(&verifier, &mut state, inst).continues());
         }
         // Reexecute the load, as on a loop revisit: it now returns the second
         // object. The reference captured in v3 must still denote the first.
@@ -310,7 +312,7 @@ block0:
         let old = state.reference(&verifier, result);
         let ty = verifier.objref_ty(body.dfg.value_ty(result)).unwrap();
         assert!(state.contents(ctx, &old, ty).active(1));
-        assert!(transfer::instruction(&verifier, &mut state, load).is_some());
+        assert!(transfer::instruction(&verifier, &mut state, load).continues());
         let current = state.reference(&verifier, result);
         assert!(state.contents(ctx, &current, ty).active(0));
         let holder = insts

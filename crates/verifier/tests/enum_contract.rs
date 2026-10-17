@@ -1397,3 +1397,129 @@ block0:
 "#;
     assert_eq!(errors(source), Vec::<String>::new());
 }
+
+#[test]
+fn undefined_reference_strict_write_is_order_independent() {
+    let source = include_str!("fixtures/enum_contract/undefined-merge-strict-write.sntn");
+    let run = execute(source, 128);
+    assert_eq!(run.invalid_reads(), 0);
+    assert_eq!(run.returned, 2);
+    // Setting the tag alone leaves the payload unwritten on the defined arm.
+    let unwritten = source.replace(
+        "enum.write_variant v2 #Some (17.i256);",
+        "enum.set_tag v2 #Some;",
+    );
+    assert_eq!(execute(&unwritten, 128).invalid_reads(), 1);
+    assert_eq!(
+        errors(&unwritten),
+        ["the demanded enum payload subtree is not proven initialized"; 2]
+    );
+}
+
+#[test]
+fn undefined_reference_guarded_view_is_kept_and_still_invalidated() {
+    let source = include_str!("fixtures/enum_contract/undefined-merge-guarded-view.sntn");
+    let run = execute(source, 128);
+    assert_eq!(run.invalid_reads(), 0);
+    assert_eq!(run.returned, 2);
+    // A write to the object after the merge must reach the merged view.
+    let retagged = source.replace(
+        " v4.i256 = obj.load v2;",
+        " enum.set_tag v0 #None;\n v4.i256 = obj.load v2;",
+    );
+    assert_eq!(execute(&retagged, 128).invalid_reads(), 1);
+    assert_eq!(
+        errors(&retagged),
+        ["an ancestor enum variant is not proven active"; 2]
+    );
+}
+
+#[test]
+fn undefined_reference_strict_uses_are_reported() {
+    // A strict use of a reference that is `undef` on every path is reported
+    // and ends the path, so the invalid read after it is not.
+    const UNDEFINED: &str = "object reference operand is undefined";
+    for (strict, expected) in [
+        ("v9.i256 = obj.load undef.objref<i256>;", &[UNDEFINED][..]),
+        ("obj.store undef.objref<i256> 1.i256;", &[UNDEFINED]),
+        (
+            "v9.enumtag(@E) = enum.get_tag undef.objref<@E>;",
+            &[UNDEFINED],
+        ),
+        ("enum.set_tag undef.objref<@E> #None;", &[UNDEFINED]),
+        (
+            "enum.write_variant undef.objref<@E> #Some (1.i256);",
+            &[UNDEFINED],
+        ),
+        ("obj.init.const undef.objref<@P> v8;", &[UNDEFINED]),
+        (
+            "v9.*@E = obj.materialize.stack undef.objref<@E>;",
+            &[UNDEFINED],
+        ),
+        (
+            "v9.*@E = obj.materialize.heap undef.objref<@E>;",
+            &[UNDEFINED],
+        ),
+        // A trusted assumption about no location is contradicted, not a use.
+        (
+            "v9.objref<@E> = enum.assert_variant_ref undef.objref<@E> #Some;",
+            &[],
+        ),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+type @P = {{ i256 }};
+global private const @P $p = {{1}};
+func private %entry() {{
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ v8.constref<@P> = const.ref $p;
+ {strict}
+ v1.objref<i256> = enum.proj v0 #Some 0.i8;
+ v2.i256 = obj.load v1;
+ return;
+}}
+"#
+        );
+        assert_eq!(errors(&source), expected, "{strict}");
+    }
+    // Undefined on every path into a merge.
+    let merged = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %entry(v100.i1) -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ br v100 block1 block2;
+block1:
+ jump block3;
+block2:
+ jump block3;
+block3:
+ v1.objref<i256> = phi (undef.objref<i256> block1) (undef.objref<i256> block2);
+ v2.i256 = obj.load v1;
+ return v2;
+}
+"#;
+    assert_eq!(errors(merged), [UNDEFINED]);
+    // A real cell holding `undef`: loading the cell is fine, dereferencing the
+    // loaded reference is not.
+    let stored = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+type @Cell = { objref<i256> };
+func private %entry() -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ v1.objref<@Cell> = obj.alloc @Cell;
+ v2.objref<objref<i256>> = obj.proj v1 0.i8;
+ obj.store v2 undef.objref<i256>;
+ v3.objref<i256> = obj.load v2;
+ v4.i256 = obj.load v3;
+ return v4;
+}
+"#;
+    assert_eq!(errors(stored), [UNDEFINED]);
+}

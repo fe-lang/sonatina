@@ -1,0 +1,57 @@
+# Required enum contract: accept
+# The element arm contributes a guarded payload view and the fallback arm
+# `undef`; the merged view keeps the element arm's certificate although the
+# object's tag joins to {None, Some}. Two trampolines delay one arm: in %entry
+# the undefined arm reaches the merge first, in %defined_first the defined arm.
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %entry(v100.i1) -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ br v100 block1 block2;
+block1:
+ enum.set_tag v0 #None;
+ jump block3;
+block2:
+ enum.write_variant v0 #Some (17.i256);
+ v1.objref<i256> = enum.proj v0 #Some 0.i8;
+ jump block7;
+block7:
+ jump block8;
+block8:
+ jump block3;
+block3:
+ v2.objref<i256> = phi (undef.objref<i256> block1) (v1 block8);
+ v3.i8 = phi (0.i8 block1) (1.i8 block8);
+ br_table v3 block5 (1.i8 block4);
+block4:
+ v4.i256 = obj.load v2;
+ return v4;
+block5:
+ return 0.i256;
+}
+func private %defined_first(v100.i1) -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ br v100 block1 block2;
+block1:
+ enum.set_tag v0 #None;
+ jump block7;
+block2:
+ enum.write_variant v0 #Some (17.i256);
+ v1.objref<i256> = enum.proj v0 #Some 0.i8;
+ jump block3;
+block7:
+ jump block8;
+block8:
+ jump block3;
+block3:
+ v2.objref<i256> = phi (undef.objref<i256> block8) (v1 block2);
+ v3.i8 = phi (0.i8 block8) (1.i8 block2);
+ br_table v3 block5 (1.i8 block4);
+block4:
+ v4.i256 = obj.load v2;
+ return v4;
+block5:
+ return 0.i256;
+}
