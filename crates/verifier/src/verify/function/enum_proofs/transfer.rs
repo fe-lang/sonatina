@@ -57,12 +57,31 @@ fn project(
     );
 }
 
-// None is NoFlow: no admissible execution reaches the next instruction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Outcome {
+    /// The path continues; the final pass reports an unproved obligation.
+    Continue(Proof),
+    /// NoFlow: no admissible execution reaches the next instruction. `Some`
+    /// is a diagnostic for the final pass; `None` a contradicted assumption.
+    Stop(Option<&'static str>),
+}
+
+impl Outcome {
+    pub fn continues(self) -> bool {
+        matches!(self, Self::Continue(_))
+    }
+}
+
+// A strict use of an `undef` object reference, which names no location, has
+// no defined continuation. Ending the path keeps the transfer monotone: an
+// empty write would leave the pre-write state in a later join.
+const UNDEFINED_REFERENCE: &str = "object reference operand is undefined";
+
 pub(super) fn instruction(
     verifier: &FunctionVerifier<'_>,
     state: &mut State,
     id: InstId,
-) -> Option<Proof> {
+) -> Outcome {
     let ctx = verifier.ctx;
     let inst = verifier.func.dfg.inst(id);
     let is = ctx.inst_set;
@@ -115,6 +134,9 @@ pub(super) fn instruction(
         let result = result.unwrap();
         let ty = verifier.func.dfg.value_ty(result);
         let refs = state.reference(verifier, *load.object());
+        if refs.undefined {
+            return Outcome::Stop(Some(UNDEFINED_REFERENCE));
+        }
         proof = read(state, verifier, &refs, ty, false);
         let mut value = state.contents(ctx, &refs, ty);
         if !matches!(
@@ -133,6 +155,9 @@ pub(super) fn instruction(
             .objref_ty(verifier.func.dfg.value_ty(*tag.object()))
             .unwrap();
         let refs = state.reference(verifier, *tag.object());
+        if refs.undefined {
+            return Outcome::Stop(Some(UNDEFINED_REFERENCE));
+        }
         proof = read(state, verifier, &refs, ty, true);
         state.bind(
             verifier,
@@ -146,11 +171,12 @@ pub(super) fn instruction(
         let ty = verifier
             .objref_ty(verifier.func.dfg.value_ty(*assertion.object()))
             .unwrap();
-        if !state
-            .contents(ctx, &refs, ty)
-            .possible(assertion.variant().index())
+        if refs.undefined
+            || !state
+                .contents(ctx, &refs, ty)
+                .possible(assertion.variant().index())
         {
-            return None;
+            return Outcome::Stop(None);
         }
         state.write(ctx, &refs, ty, true, |value| {
             value.assert_variant(ctx, assertion.variant().index())
@@ -163,12 +189,18 @@ pub(super) fn instruction(
         );
     } else if let Some(store) = downcast::<&data::ObjStore>(is, inst) {
         let refs = state.reference(verifier, *store.object());
+        if refs.undefined {
+            return Outcome::Stop(Some(UNDEFINED_REFERENCE));
+        }
         let value = state.value(verifier, *store.value());
         state.write(ctx, &refs, value.ty, false, |target| {
             *target = value.clone()
         });
     } else if let Some(init) = downcast::<&data::ObjInitConst>(is, inst) {
         let refs = state.reference(verifier, *init.object());
+        if refs.undefined {
+            return Outcome::Stop(Some(UNDEFINED_REFERENCE));
+        }
         let ty = verifier
             .objref_ty(verifier.func.dfg.value_ty(*init.object()))
             .unwrap();
@@ -177,6 +209,9 @@ pub(super) fn instruction(
         });
     } else if let Some(tag) = downcast::<&data::EnumSetTag>(is, inst) {
         let refs = state.reference(verifier, *tag.object());
+        if refs.undefined {
+            return Outcome::Stop(Some(UNDEFINED_REFERENCE));
+        }
         let ty = verifier
             .objref_ty(verifier.func.dfg.value_ty(*tag.object()))
             .unwrap();
@@ -185,6 +220,9 @@ pub(super) fn instruction(
         });
     } else if let Some(write) = downcast::<&data::EnumWriteVariant>(is, inst) {
         let refs = state.reference(verifier, *write.object());
+        if refs.undefined {
+            return Outcome::Stop(Some(UNDEFINED_REFERENCE));
+        }
         let ty = verifier
             .objref_ty(verifier.func.dfg.value_ty(*write.object()))
             .unwrap();
@@ -260,7 +298,7 @@ pub(super) fn instruction(
     } else if let Some(assertion) = downcast::<&data::EnumAssertVariant>(is, inst) {
         let mut value = state.value(verifier, *assertion.value());
         if !value.possible(assertion.variant().index()) {
-            return None;
+            return Outcome::Stop(None);
         }
         value.assert_variant(ctx, assertion.variant().index());
         state.values.insert(*assertion.value(), value);
@@ -277,7 +315,11 @@ pub(super) fn instruction(
             .child(ctx, index(verifier, *extract.idx()));
         state.bind(verifier, result.unwrap(), value, None);
     } else if let Some(mat) = downcast::<&data::ObjMaterializeStack>(is, inst) {
-        state.expose(ctx, &state.reference(verifier, *mat.object()));
+        let refs = state.reference(verifier, *mat.object());
+        if refs.undefined {
+            return Outcome::Stop(Some(UNDEFINED_REFERENCE));
+        }
+        state.expose(ctx, &refs);
         state.bind(
             verifier,
             result.unwrap(),
@@ -285,7 +327,11 @@ pub(super) fn instruction(
             None,
         );
     } else if let Some(mat) = downcast::<&data::ObjMaterializeHeap>(is, inst) {
-        state.expose(ctx, &state.reference(verifier, *mat.object()));
+        let refs = state.reference(verifier, *mat.object());
+        if refs.undefined {
+            return Outcome::Stop(Some(UNDEFINED_REFERENCE));
+        }
+        state.expose(ctx, &refs);
         state.bind(
             verifier,
             result.unwrap(),
@@ -347,7 +393,7 @@ pub(super) fn instruction(
             }
         }
     }
-    Some(proof)
+    Outcome::Continue(proof)
 }
 
 fn raw_write(verifier: &FunctionVerifier<'_>, id: InstId) -> bool {

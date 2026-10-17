@@ -136,6 +136,9 @@ pub(super) struct Anchor {
 pub(super) struct References {
     pub views: BTreeSet<View>,
     pub unknown: bool,
+    /// A literal `undef`, which names no location. Implies no views and not
+    /// `unknown`. Distinct from `default()`, an unwritten cell's references.
+    pub undefined: bool,
     pub anchors: BTreeSet<Anchor>,
     pub cache: Option<ValueId>,
 }
@@ -166,6 +169,13 @@ impl References {
         }
     }
 
+    pub fn undefined() -> Self {
+        Self {
+            undefined: true,
+            ..Self::default()
+        }
+    }
+
     pub fn join(&self, other: &Self) -> Self {
         let mut result = self.clone();
         result.join_with(other);
@@ -173,6 +183,15 @@ impl References {
     }
 
     pub fn join_with(&mut self, other: &Self) {
+        // An undefined reference is the bottom: joined with a defined one, it
+        // contributes nothing, so the defined side keeps its equalities.
+        if self.undefined != other.undefined {
+            if self.undefined {
+                *self = other.clone();
+            }
+            return;
+        }
+        debug_assert!(!self.undefined || self.views.is_empty() && !self.unknown);
         self.views.extend(other.views.iter().cloned());
         self.unknown |= other.unknown;
         self.anchors.retain(|anchor| other.anchors.contains(anchor));

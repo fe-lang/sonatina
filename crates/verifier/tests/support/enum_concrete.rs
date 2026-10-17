@@ -442,6 +442,14 @@ fn execute_block(
                 initialized: true,
                 data: Data::RawPointer(Some(view.location.object)),
             })
+        } else if let Some(base) = downcast::<&data::EnumProj>(is, data)
+            .map(|proj| *proj.object())
+            .or_else(|| downcast::<&data::ObjProj>(is, data).map(|proj| proj.values()[0]))
+            .or_else(|| downcast::<&data::ObjIndex>(is, data).map(|index| *index.object()))
+            .filter(|&base| matches!(value(base).data, Data::Reference(None)))
+        {
+            // Address formation from an `undef` reference denotes no location.
+            Some(value(base))
         } else if let Some(proj) = downcast::<&data::EnumProj>(is, data) {
             let mut view = value(*proj.object()).view();
             let variant = proj.variant().index() as usize;

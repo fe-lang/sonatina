@@ -12,6 +12,7 @@ use sonatina_ir::{
 use super::FunctionVerifier;
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
 use objects::State;
+use transfer::Outcome;
 use value_state::ValueState;
 use views::{Anchor, References};
 
@@ -123,15 +124,20 @@ pub(super) fn verify(verifier: &mut FunctionVerifier<'_>) {
             continue;
         };
         for inst in verifier.block_to_insts[&block].clone() {
-            let Some(proof) = transfer::instruction(verifier, &mut state, inst) else {
-                break;
+            let (reason, stop) = match transfer::instruction(verifier, &mut state, inst) {
+                Outcome::Continue(Proof::Unproved(reason)) => (Some(reason), false),
+                Outcome::Continue(_) => (None, false),
+                Outcome::Stop(reason) => (reason, true),
             };
-            if let Proof::Unproved(reason) = proof {
+            if let Some(reason) = reason {
                 verifier.emit(Diagnostic::error(
                     DiagnosticCode::InstOperandTypeMismatch,
                     reason,
                     verifier.inst_location(inst),
                 ));
+            }
+            if stop {
+                break;
             }
         }
     }
@@ -157,7 +163,7 @@ fn solve(verifier: &FunctionVerifier<'_>) -> BTreeMap<BlockId, State> {
         queued.remove(&block);
         let mut state = entries[&block].clone();
         for &inst in &verifier.block_to_insts[&block] {
-            if transfer::instruction(verifier, &mut state, inst).is_none() {
+            if !transfer::instruction(verifier, &mut state, inst).continues() {
                 continue 'worklist;
             }
         }

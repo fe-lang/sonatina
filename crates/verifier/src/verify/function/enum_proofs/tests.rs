@@ -96,6 +96,8 @@ fn worklist_order_does_not_change_the_solution() {
         include_str!("../../../../tests/fixtures/enum_contract/phi-unwritten-scalar.sntn"),
         include_str!("../../../../tests/fixtures/enum_contract/private-container.sntn"),
         include_str!("../../../../tests/fixtures/enum_contract/assertion-revisit.sntn"),
+        include_str!("../../../../tests/fixtures/enum_contract/undefined-merge-strict-write.sntn"),
+        include_str!("../../../../tests/fixtures/enum_contract/undefined-merge-guarded-view.sntn"),
         r#"
 target = "evm-ethereum-osaka"
 type @E = enum { #None, #Some(i256) };
@@ -249,9 +251,9 @@ block0:
                         let mut lower = a.clone();
                         let mut upper = a.join(ctx, b);
                         let lower_flows =
-                            transfer::instruction(&verifier, &mut lower, inst).is_some();
+                            transfer::instruction(&verifier, &mut lower, inst).continues();
                         let upper_flows =
-                            transfer::instruction(&verifier, &mut upper, inst).is_some();
+                            transfer::instruction(&verifier, &mut upper, inst).continues();
                         assert!(
                             !lower_flows || upper_flows,
                             "joining cannot turn a feasible assertion into NoFlow"
@@ -297,7 +299,7 @@ block0:
         let mut state = State::boundary(&verifier);
         let insts = &verifier.block_to_insts[&verifier.block_order[0]];
         for &inst in insts {
-            assert!(transfer::instruction(&verifier, &mut state, inst).is_some());
+            assert!(transfer::instruction(&verifier, &mut state, inst).continues());
         }
         // Reexecute the load, as on a loop revisit: it now returns the second
         // object. The reference captured in v3 must still denote the first.
@@ -310,7 +312,7 @@ block0:
         let old = state.reference(&verifier, result);
         let ty = verifier.objref_ty(body.dfg.value_ty(result)).unwrap();
         assert!(state.contents(ctx, &old, ty).active(1));
-        assert!(transfer::instruction(&verifier, &mut state, load).is_some());
+        assert!(transfer::instruction(&verifier, &mut state, load).continues());
         let current = state.reference(&verifier, result);
         assert!(state.contents(ctx, &current, ty).active(0));
         let holder = insts
@@ -392,4 +394,69 @@ fn retiring_a_binding_preserves_unrelated_roots_and_invalidates_each_proof_posit
         updated.update(owner, &rewritten, false);
         assert_eq!(updated, ViewIndex::default());
     }
+}
+
+#[test]
+fn undefined_references_are_the_join_identity() {
+    let anchored = |refs: References, value: u32| {
+        let value = ValueId::from_u32(value);
+        References {
+            anchors: BTreeSet::from([Anchor {
+                value,
+                path: vec![],
+            }]),
+            cache: Some(value),
+            ..refs
+        }
+    };
+    let root = References::root(Root::Recent(ValueId::from_u32(0)));
+    let cases = [
+        References::undefined(),
+        anchored(References::undefined(), 1),
+        anchored(References::undefined(), 2),
+        References::default(),
+        References::unknown(),
+        root.clone(),
+        anchored(root.clone(), 1),
+        anchored(References::root(Root::External), 2),
+    ];
+    for a in &cases {
+        assert_eq!(a.join(a), *a);
+        for b in &cases {
+            assert_eq!(a.join(b), b.join(a), "{a:?} {b:?}");
+            if !a.undefined && b.undefined {
+                assert_eq!(a.join(b), *a, "undefined is the identity");
+            }
+            if a.unknown {
+                assert!(a.join(b).unknown, "unknown absorbs");
+            }
+            for c in &cases {
+                assert_eq!(a.join(b).join(c), a.join(&b.join(c)));
+            }
+        }
+    }
+    // An unwritten cell's empty references are not the identity: they drop
+    // the other side's equalities.
+    let equal = anchored(root, 1);
+    assert_ne!(References::default().join(&equal), equal);
+
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %entry(v0.objref<@E>) {
+block0:
+ return;
+}
+"#,
+    )
+    .unwrap();
+    let ctx = &parsed.module.ctx;
+    let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+    let undefined = ValueState::reference(ty, References::undefined());
+    assert_eq!(undefined.captured(ctx), References::default());
+    // A forgotten cell may have been replaced, so it is no longer undefined.
+    let mut forgotten = undefined.clone();
+    forgotten.forget(ctx);
+    assert!(forgotten.references.unknown && !forgotten.references.undefined);
 }

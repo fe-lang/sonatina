@@ -508,7 +508,9 @@ impl ValueState {
             self.tag_initialized = false;
             self.tags = None;
             if reference {
+                // A replaced `undef` cell may now hold any reference.
                 self.references.unknown = true;
+                self.references.undefined = false;
                 self.references.cache = None;
                 self.references.anchors.clear();
             }
@@ -591,7 +593,8 @@ impl ValueState {
         }
         let mut references = References::default();
         match self.ty.resolve_compound(ctx) {
-            Some(CompoundType::ObjRef(_)) => {
+            // An undefined reference names no location and captures nothing.
+            Some(CompoundType::ObjRef(_)) if !self.references.undefined => {
                 references = self.references.clone();
                 references.unknown |= self.complete && references.views.is_empty();
             }
