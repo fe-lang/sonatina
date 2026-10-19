@@ -6,28 +6,28 @@ input_file: test_files/evm/malloc_free_ptr_floor.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 65 bytes
-  total: 65 bytes
+  section runtime: 47 bytes
+  total: 47 bytes
 
 functions:
-  mem: global_dyn_base=0x80 arena_base=0x60 scratch_peak_words=0 stable_chain_peak_words=1
+  mem: global_dyn_base=0x60 arena_base=0x60 scratch_peak_words=0 stable_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=4 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  two_mallocs: ir_blocks=4 ir_insts=12 vcode_ops=41 fixups=2 imm_bytes=9
+  two_mallocs: ir_blocks=4 ir_insts=12 vcode_ops=27 fixups=1 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   read_free_ptr: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=0 imm_bytes=1
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
-  call_preserves_floor: ir_blocks=4 ir_insts=13 vcode_ops=54 fixups=4 imm_bytes=12
-    mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0x60) entry_abs_words=0 abs_words_end=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  call_preserves_floor: ir_blocks=4 ir_insts=13 vcode_ops=31 fixups=3 imm_bytes=8
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   write_free_ptr: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  call_kills_floor: ir_blocks=7 ir_insts=18 vcode_ops=61 fixups=6 imm_bytes=14
+  call_kills_floor: ir_blocks=7 ir_insts=18 vcode_ops=38 fixups=4 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  join_uses_min_floor: ir_blocks=10 ir_insts=21 vcode_ops=64 fixups=5 imm_bytes=16
+  join_uses_min_floor: ir_blocks=10 ir_insts=21 vcode_ops=42 fixups=3 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21154 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=154
+  case ok: calldata_len=0 success reason=Return gas_used=21119 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=119
 
 
 --------------- DEBUG ---------------
@@ -55,43 +55,26 @@ two_mallocs:
     PUSH1 0x5f (95)  // v4.i256 = gt v1 95.i256;
     DUP2
     GT
-    PUSH1 block4  // br v4 block4 block2;
+    PUSH1 block3  // br v4 block4 block2;
     JUMPI
   block2:
     POP  // jump block3;
     PUSH1 0x60 (96)
-    PUSH0
-    MSTORE
-    PUSH1 block3
-    JUMP
-  block4:
-    JUMPDEST
-    DUP1  // jump block3;
-    PUSH0
-    MSTORE
-    POP
   block3:
     JUMPDEST
     PUSH1 0x20 (32)  // v7.i256 = add v5 32.i256;
-    PUSH0
-    MLOAD
+    DUP2
     ADD
     PUSH1 0x40 (64)  // evm_mstore v0 v7;
     MSTORE
     PUSH1 0x40 (64)  // v8.i256 = evm_mload v0;
     MLOAD
-    DUP1
-    PUSH1 0x20 (32)
-    MSTORE
     PUSH1 0x20 (32)  // v9.i256 = add v8 32.i256;
     DUP2
     ADD
     PUSH1 0x40 (64)  // evm_mstore v0 v9;
     MSTORE
-    PUSH0  // return (v5, v8);
-    MLOAD
-    SWAP1
-    SWAP2
+    SWAP2  // return (v5, v8);
     JUMP
 
 // func public %read_free_ptr() -> i256
@@ -108,29 +91,18 @@ call_preserves_floor:
   block0:
     PUSH1 0x40 (64)  // v1.i256 = evm_mload v0;
     MLOAD
-    PUSH1 0x7f (127)  // v4.i256 = gt v1 127.i256;
+    PUSH1 0x5f (95)  // v4.i256 = gt v1 95.i256;
     DUP2
     GT
-    PUSH1 block4  // br v4 block4 block2;
+    PUSH1 block3  // br v4 block4 block2;
     JUMPI
   block2:
     POP  // jump block3;
-    PUSH1 0x80 (128)
-    PUSH0
-    MSTORE
-    PUSH1 block3
-    JUMP
-  block4:
-    JUMPDEST
-    DUP1  // jump block3;
-    PUSH0
-    MSTORE
-    POP
+    PUSH1 0x60 (96)
   block3:
     JUMPDEST
     PUSH1 0x20 (32)  // v7.i256 = add v5 32.i256;
-    PUSH0
-    MLOAD
+    DUP2
     ADD
     PUSH1 0x40 (64)  // evm_mstore v0 v7;
     MSTORE
@@ -138,27 +110,14 @@ call_preserves_floor:
     PUSH1 FuncRef(2)
     JUMP
     JUMPDEST
-    DUP1
-    PUSH1 0x20 (32)
-    MSTORE
     PUSH1 0x40 (64)  // v9.i256 = evm_mload v0;
     MLOAD
-    DUP1
-    PUSH1 0x60 (96)
-    MSTORE
     PUSH1 0x20 (32)  // v10.i256 = add v9 32.i256;
     DUP2
     ADD
     PUSH1 0x40 (64)  // evm_mstore v0 v10;
     MSTORE
-    POP  // return (v5, v8, v9);
-    POP
-    PUSH1 0x60 (96)
-    MLOAD
-    PUSH1 0x20 (32)
-    MLOAD
-    PUSH0
-    MLOAD
+    SWAP2  // return (v5, v8, v9);
     SWAP1
     SWAP2
     SWAP3
@@ -181,26 +140,15 @@ call_kills_floor:
     PUSH1 0x5f (95)  // v4.i256 = gt v1 95.i256;
     DUP2
     GT
-    PUSH1 block7  // br v4 block7 block2;
+    PUSH1 block3  // br v4 block7 block2;
     JUMPI
   block2:
     POP  // jump block3;
     PUSH1 0x60 (96)
-    PUSH0
-    MSTORE
-    PUSH1 block3
-    JUMP
-  block7:
-    JUMPDEST
-    DUP1  // jump block3;
-    PUSH0
-    MSTORE
-    POP
   block3:
     JUMPDEST
     PUSH1 0x20 (32)  // v7.i256 = add v5 32.i256;
-    PUSH0
-    MLOAD
+    DUP2
     ADD
     PUSH1 0x40 (64)  // evm_mstore v0 v7;
     MSTORE
@@ -213,35 +161,19 @@ call_kills_floor:
     PUSH1 0x5f (95)  // v9.i256 = gt v8 95.i256;
     DUP2
     GT
-    PUSH1 block8  // br v9 block8 block5;
+    PUSH1 block6  // br v9 block8 block5;
     JUMPI
   block5:
     POP  // jump block6;
     PUSH1 0x60 (96)
-    PUSH1 0x20 (32)
-    MSTORE
-    PUSH1 block6
-    JUMP
-  block8:
-    JUMPDEST
-    DUP1  // jump block6;
-    PUSH1 0x20 (32)
-    MSTORE
-    POP
   block6:
     JUMPDEST
     PUSH1 0x20 (32)  // v11.i256 = add v10 32.i256;
-    PUSH1 0x20 (32)
-    MLOAD
+    DUP2
     ADD
     PUSH1 0x40 (64)  // evm_mstore v0 v11;
     MSTORE
-    PUSH1 0x20 (32)  // return (v5, v10);
-    MLOAD
-    PUSH0
-    MLOAD
-    SWAP1
-    SWAP2
+    SWAP2  // return (v5, v10);
     JUMP
 
 // func public %join_uses_min_floor(v0.i256) -> (i256, i256)
@@ -252,30 +184,20 @@ join_uses_min_floor:
     PUSH1 0x5f (95)  // v5.i256 = gt v2 95.i256;
     DUP2
     GT
-    PUSH1 block10  // br v5 block10 block5;
+    PUSH1 block6  // br v5 block10 block5;
     JUMPI
   block5:
     POP  // jump block6;
     PUSH1 0x60 (96)
-    PUSH0
-    MSTORE
-    PUSH1 block6
-    JUMP
-  block10:
-    JUMPDEST
-    DUP1  // jump block6;
-    PUSH0
-    MSTORE
-    POP
   block6:
     JUMPDEST
     PUSH1 0x20 (32)  // v8.i256 = add v6 32.i256;
-    PUSH0
-    MLOAD
+    DUP2
     ADD
     PUSH1 0x40 (64)  // evm_mstore v1 v8;
     MSTORE
-    ISZERO  // br v0 block1 block12;
+    SWAP1  // br v0 block1 block12;
+    ISZERO
     PUSH1 block3
     JUMPI
   block1:
@@ -289,33 +211,17 @@ join_uses_min_floor:
     PUSH1 0x5f (95)  // v10.i256 = gt v9 95.i256;
     DUP2
     GT
-    PUSH1 block11  // br v10 block11 block8;
+    PUSH1 block9  // br v10 block11 block8;
     JUMPI
   block8:
     POP  // jump block9;
     PUSH1 0x60 (96)
-    PUSH1 0x20 (32)
-    MSTORE
-    PUSH1 block9
-    JUMP
-  block11:
-    JUMPDEST
-    DUP1  // jump block9;
-    PUSH1 0x20 (32)
-    MSTORE
-    POP
   block9:
     JUMPDEST
     PUSH1 0x20 (32)  // v12.i256 = add v11 32.i256;
-    PUSH1 0x20 (32)
-    MLOAD
+    DUP2
     ADD
     PUSH1 0x40 (64)  // evm_mstore v1 v12;
     MSTORE
-    PUSH1 0x20 (32)  // return (v6, v11);
-    MLOAD
-    PUSH0
-    MLOAD
-    SWAP1
-    SWAP2
+    SWAP2  // return (v6, v11);
     JUMP

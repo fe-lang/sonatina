@@ -1222,15 +1222,19 @@ pub(super) fn solve_optimal_normalize_plan(
         ],
     };
 
-    let run = run_bounded_astar(
-        &problem,
-        &mut scratch.exact,
-        start,
-        upper_bound,
-        incumbent_steps.is_some(),
-        cfg.max_expansions,
-        debug.then_some("normalize_search"),
-    );
+    let run = (cfg.max_expansions != 0)
+        .then(|| {
+            run_bounded_astar(
+                &problem,
+                &mut scratch.exact,
+                start,
+                upper_bound,
+                incumbent_steps.is_some(),
+                cfg.max_expansions,
+                debug.then_some("normalize_search"),
+            )
+        })
+        .flatten();
 
     if let Some((goal_state, _goal_cost)) = run {
         debug_assert_eq!(goal_state, goal);
@@ -1496,15 +1500,19 @@ pub(super) fn solve_optimal_repair_prefix_plan(
         ],
     };
 
-    let run = run_bounded_astar(
-        &problem,
-        &mut scratch.exact,
-        start,
-        upper_bound,
-        incumbent_steps.is_some(),
-        cfg.max_expansions,
-        debug.then_some("repair_normalize_search"),
-    );
+    let run = (cfg.max_expansions != 0)
+        .then(|| {
+            run_bounded_astar(
+                &problem,
+                &mut scratch.exact,
+                start,
+                upper_bound,
+                incumbent_steps.is_some(),
+                cfg.max_expansions,
+                debug.then_some("repair_normalize_search"),
+            )
+        })
+        .flatten();
 
     if let Some((goal_state, _goal_cost)) = run {
         debug_assert_eq!(goal_state, goal);

@@ -65,7 +65,6 @@ impl BeamSlack {
 
 /// Search-effort knobs for a `StackifySearchProfile`, expressed as data instead of code.
 pub(super) struct SearchBudgets {
-    pub(super) exact_normalize: bool,
     pub(super) exact_operand_prep: bool,
     pub(super) exact_expansions: usize,
     pub(super) operand_prep_exact_expansions: usize,
@@ -87,7 +86,6 @@ impl SearchBudgets {
 }
 
 const FAST_BUDGETS: SearchBudgets = SearchBudgets {
-    exact_normalize: false,
     exact_operand_prep: false,
     exact_expansions: 0,
     operand_prep_exact_expansions: 0,
@@ -98,7 +96,6 @@ const FAST_BUDGETS: SearchBudgets = SearchBudgets {
 };
 
 const GREEDY_WIDE_BUDGETS: SearchBudgets = SearchBudgets {
-    exact_normalize: true,
     exact_operand_prep: true,
     exact_expansions: 1_000,
     operand_prep_exact_expansions: 250,
@@ -109,7 +106,6 @@ const GREEDY_WIDE_BUDGETS: SearchBudgets = SearchBudgets {
 };
 
 const EXACT_BUDGETS: SearchBudgets = SearchBudgets {
-    exact_normalize: true,
     exact_operand_prep: true,
     exact_expansions: 50_000,
     operand_prep_exact_expansions: 50_000,

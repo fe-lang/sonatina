@@ -7,9 +7,9 @@ input_file: test_files/evm/fe_large_by_value_array_args.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section init: 1508 bytes
-  section runtime: 1497 bytes
-  total: 3005 bytes
+  section init: 1370 bytes
+  section runtime: 1359 bytes
+  total: 2729 bytes
 
 functions:
   mem: global_dyn_base=0xa80 arena_base=0xa0 scratch_peak_words=38 stable_chain_peak_words=41
@@ -21,23 +21,23 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=38 abs_words_end=0
   __fe_contract_recv_abi_C_16909060: ir_blocks=8 ir_insts=47 vcode_ops=128 fixups=15 imm_bytes=30
     mem: scratch_words=4 stable_words=3 stable_mode=StableAbs(base=0x560) entry_abs_words=38 abs_words_end=41
-  decoder_new: ir_blocks=1 ir_insts=15 vcode_ops=72 fixups=2 imm_bytes=29
-    mem: scratch_words=2 stable_words=17 stable_mode=StableAbs(base=0x5c0) entry_abs_words=41 abs_words_end=58
-  new_1: ir_blocks=1 ir_insts=10 vcode_ops=53 fixups=2 imm_bytes=14
-    mem: scratch_words=6 stable_words=0 stable_mode=None entry_abs_words=58 abs_words_end=6
-  new_2: ir_blocks=1 ir_insts=7 vcode_ops=36 fixups=0 imm_bytes=10
+  decoder_new: ir_blocks=1 ir_insts=15 vcode_ops=52 fixups=2 imm_bytes=23
+    mem: scratch_words=0 stable_words=17 stable_mode=StableAbs(base=0x5c0) entry_abs_words=41 abs_words_end=58
+  new_1: ir_blocks=1 ir_insts=10 vcode_ops=33 fixups=2 imm_bytes=8
     mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=58 abs_words_end=4
+  new_2: ir_blocks=1 ir_insts=7 vcode_ops=19 fixups=0 imm_bytes=6
+    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=58 abs_words_end=3
   encode: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=41 abs_words_end=0
   write_word: ir_blocks=1 ir_insts=6 vcode_ops=18 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=41 abs_words_end=0
   add_0: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=41 abs_words_end=0
-  encoder_new: ir_blocks=1 ir_insts=8 vcode_ops=39 fixups=2 imm_bytes=10
-    mem: scratch_words=1 stable_words=3 stable_mode=StableAbs(base=0x5c0) entry_abs_words=41 abs_words_end=44
-  new_0: ir_blocks=1 ir_insts=7 vcode_ops=38 fixups=0 imm_bytes=10
-    mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=44 abs_words_end=4
-  finish: ir_blocks=1 ir_insts=11 vcode_ops=41 fixups=2 imm_bytes=11
+  encoder_new: ir_blocks=1 ir_insts=8 vcode_ops=22 fixups=2 imm_bytes=6
+    mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0x5c0) entry_abs_words=41 abs_words_end=44
+  new_0: ir_blocks=1 ir_insts=7 vcode_ops=21 fixups=0 imm_bytes=6
+    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=44 abs_words_end=3
+  finish: ir_blocks=1 ir_insts=11 vcode_ops=30 fixups=2 imm_bytes=9
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=41 abs_words_end=3
   sub: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=41 abs_words_end=0
@@ -51,5 +51,5 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=38 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=376617 gas_refunded=0 logs=0 output=create len=1497 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=346822 gas_refunded=0 logs=0 output=create len=1359 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   <no evm.case directives>
