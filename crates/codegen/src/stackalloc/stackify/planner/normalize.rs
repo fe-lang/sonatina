@@ -82,19 +82,20 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             max_expansions: self.ctx.search_profile.budgets().exact_expansions,
         };
 
-        let mut plan =
-            if limit <= self.ctx.reach.swap_max && desired.len() <= self.ctx.reach.swap_max {
-                solve_optimal_normalize_plan(
-                    self.ctx,
-                    self.stack,
-                    desired,
-                    &cost,
-                    search_cfg,
-                    self.search_scratch,
-                )
-            } else {
-                None
-            };
+        let full_window =
+            limit <= self.ctx.reach.swap_max && desired.len() <= self.ctx.reach.swap_max;
+        let mut plan = if full_window {
+            solve_optimal_normalize_plan(
+                self.ctx,
+                self.stack,
+                desired,
+                &cost,
+                search_cfg,
+                self.search_scratch,
+            )
+        } else {
+            None
+        };
 
         if plan.is_none() {
             let base_len = self.stack.common_suffix_len(desired);
@@ -107,7 +108,11 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 );
             }
 
-            if start_repair <= self.ctx.reach.swap_max && goal_repair <= self.ctx.reach.swap_max {
+            // Without a common suffix, the repair window is the full window searched above.
+            if start_repair <= self.ctx.reach.swap_max
+                && goal_repair <= self.ctx.reach.swap_max
+                && !(full_window && base_len == 0)
+            {
                 plan = solve_optimal_repair_normalize_plan(
                     self.ctx,
                     self.stack,

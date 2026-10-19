@@ -1173,36 +1173,29 @@ pub(super) fn solve_optimal_normalize_plan(
     let goal_counts = compute_goal_counts(&goal_keys);
     let goal_mask = key_mask_from_counts(&goal_counts);
 
-    let mut upper_bound = estimate_flush_rebuild_cost(ctx, stack, desired, cost);
-    let mut incumbent_steps: Option<StepList> = None;
-
-    if let Some(steps) = build_delete_tail_under_prefix_upper_bound(&start_keys, &goal_keys, cfg) {
-        let greedy_cost = cost_for_steps(&steps, &key_infos, cost);
-        if greedy_cost <= upper_bound {
-            if debug && greedy_cost < upper_bound {
-                eprintln!(
-                    "normalize_search: upper_bound improved by prefix-tail plan: ub={upper_bound:?} greedy={greedy_cost:?}"
-                );
-            }
-            upper_bound = greedy_cost;
-            incumbent_steps = Some(steps);
-        }
-    }
-
-    if let Some(steps) =
-        build_dup_and_star_swap_upper_bound(&start_keys, &goal_keys, &goal_counts, cfg)
-    {
-        let greedy_cost = cost_for_steps(&steps, &key_infos, cost);
-        if greedy_cost <= upper_bound {
-            if debug && greedy_cost < upper_bound {
-                eprintln!(
-                    "normalize_search: upper_bound improved by greedy plan: ub={upper_bound:?} greedy={greedy_cost:?}"
-                );
-            }
-            upper_bound = greedy_cost;
-            incumbent_steps = Some(steps);
-        }
-    }
+    let (upper_bound, mut incumbent_steps) = best_normalize_incumbent(
+        estimate_flush_rebuild_cost(ctx, stack, desired, cost),
+        [
+            build_greedy_repair_prefix_upper_bound(
+                &start_keys,
+                &goal_keys,
+                &[],
+                &key_infos,
+                cost,
+                cfg,
+            ),
+            build_delete_tail_under_prefix_upper_bound(&start_keys, &goal_keys, cfg),
+            build_dup_and_star_swap_upper_bound(
+                &start_keys,
+                &goal_keys,
+                &goal_counts,
+                &key_infos,
+                cfg,
+            ),
+        ],
+        &key_infos,
+        cost,
+    );
 
     let push0_kid = find_push0_kid(&key_infos, &materializable_imm);
     let push0_cost = cost_push0_kid(push0_kid, &key_infos, cost);
@@ -1455,27 +1448,28 @@ pub(super) fn solve_optimal_repair_prefix_plan(
             upper_bound = upper_bound.saturating_add(cost.cost_load(v));
         }
     }
-    let mut incumbent_steps: Option<StepList> = None;
-
-    if let Some(steps) = build_greedy_repair_prefix_upper_bound(
-        &start_keys,
-        &goal_keys,
-        &suffix_ctx_keys,
+    let (upper_bound, mut incumbent_steps) = best_normalize_incumbent(
+        upper_bound,
+        [
+            build_dup_and_star_swap_upper_bound(
+                &start_keys,
+                &goal_keys,
+                &goal_counts,
+                &key_infos,
+                cfg,
+            ),
+            build_greedy_repair_prefix_upper_bound(
+                &start_keys,
+                &goal_keys,
+                &suffix_ctx_keys,
+                &key_infos,
+                cost,
+                cfg,
+            ),
+        ],
         &key_infos,
         cost,
-        cfg,
-    ) {
-        let greedy_cost = cost_for_steps(&steps, &key_infos, cost);
-        if greedy_cost <= upper_bound {
-            if debug && greedy_cost < upper_bound {
-                eprintln!(
-                    "repair_normalize_search: upper_bound improved by greedy repair plan: ub={upper_bound:?} greedy={greedy_cost:?}"
-                );
-            }
-            upper_bound = greedy_cost;
-            incumbent_steps = Some(steps);
-        }
-    }
+    );
 
     let push0_kid = find_push0_kid(&key_infos, &materializable_imm);
     let push0_cost = cost_push0_kid(push0_kid, &key_infos, cost);
@@ -3005,6 +2999,26 @@ fn intern_key(
     Some(kid)
 }
 
+/// The cheapest constructive plan that does not exceed `flush_cost`; later candidates win ties.
+fn best_normalize_incumbent<const N: usize>(
+    flush_cost: Cost,
+    candidates: [Option<StepList>; N],
+    key_infos: &[KeyInfo],
+    cost: &impl CostModel,
+) -> (Cost, Option<StepList>) {
+    candidates
+        .into_iter()
+        .flatten()
+        .fold((flush_cost, None), |(upper_bound, incumbent), steps| {
+            let plan_cost = cost_for_steps(&steps, key_infos, cost);
+            if plan_cost <= upper_bound {
+                (plan_cost, Some(steps))
+            } else {
+                (upper_bound, incumbent)
+            }
+        })
+}
+
 fn estimate_flush_rebuild_cost(
     ctx: &StackifyContext<'_>,
     stack: &SymStack,
@@ -3854,6 +3868,7 @@ fn build_dup_and_star_swap_upper_bound(
     start_keys: &[u8],
     goal_keys: &[u8],
     goal_counts: &[u8; 64],
+    key_infos: &[KeyInfo],
     cfg: SearchCfg,
 ) -> Option<StepList> {
     if goal_keys.len() > cfg.max_len {
@@ -3862,15 +3877,6 @@ fn build_dup_and_star_swap_upper_bound(
 
     let mut cur: Vec<u8> = start_keys.to_vec();
     let mut cur_counts = compute_counts(&cur);
-
-    // This upper-bound builder only handles cases where every required key already exists
-    // (so we never need PUSH/LOAD).
-    for (kid, &want) in goal_counts.iter().enumerate() {
-        if want != 0 && cur_counts[kid] == 0 {
-            return None;
-        }
-    }
-
     let mut steps = StepList::new();
 
     trim_excess_keys(
@@ -3882,38 +3888,33 @@ fn build_dup_and_star_swap_upper_bound(
         apply_step_to_vec,
     )?;
 
-    // 2) Duplicate keys to satisfy any remaining deficits.
-    if cfg.dup_max == 0 {
-        return None;
-    }
+    // Copy keys to cover the remaining deficits, materializing the ones the stack lacks; the
+    // final star routing puts every copy in place.
     for (kid, &want) in goal_counts.iter().enumerate() {
-        let mut have = cur_counts[kid];
-        while have < want {
+        let kid = kid as u8;
+        while cur_counts[kid as usize] < want {
             if cur.len() >= cfg.max_len {
                 return None;
             }
 
-            let pos = cur
-                .iter()
-                .position(|&x| x == kid as u8)
-                .expect("deficit key missing from vector");
-
-            if pos < cfg.dup_max {
-                steps.push(Step::Dup(pos as u8));
-                apply_step_to_vec(&mut cur, Step::Dup(pos as u8));
-            } else {
+            let step = match cur.iter().position(|&x| x == kid) {
+                Some(pos) if pos < cfg.dup_max => Step::Dup(pos as u8),
                 // Only reachable when `pos == 16` and `dup_max == 16`.
-                if pos >= cfg.swap_max {
-                    return None;
+                Some(pos) if cfg.dup_max != 0 && pos < cfg.swap_max => {
+                    steps.push(Step::Swap(pos as u8));
+                    apply_step_to_vec(&mut cur, Step::Swap(pos as u8));
+                    Step::Dup(0)
                 }
-                steps.push(Step::Swap(pos as u8));
-                apply_step_to_vec(&mut cur, Step::Swap(pos as u8));
-                steps.push(Step::Dup(0));
-                apply_step_to_vec(&mut cur, Step::Dup(0));
-            }
-
-            have += 1;
-            cur_counts[kid] = have;
+                Some(_) => return None,
+                None => match key_infos[kid as usize] {
+                    KeyInfo::Imm { .. } => Step::PushImm(kid),
+                    KeyInfo::Val { .. } => Step::LoadVal(kid),
+                    KeyInfo::Ignored => return None,
+                },
+            };
+            steps.push(step);
+            apply_step_to_vec(&mut cur, step);
+            cur_counts[kid as usize] += 1;
         }
     }
 
@@ -4940,17 +4941,27 @@ func public %f() {
                 max_expansions: 0,
             };
 
-            let plan =
-                solve_test_optimal_repair_prefix_plan(&ctx, &stack, &desired, 0, &cost, search_cfg)
-                    .expect("expected greedy repair plan");
-
+            let key_infos: KeyInfos = smallvec![KeyInfo::Val { vid: a }, KeyInfo::Val { vid: b }];
+            let greedy = build_greedy_repair_prefix_upper_bound(
+                &[0, 1, 1, 0],
+                &[0],
+                &[],
+                &key_infos,
+                &cost,
+                search_cfg,
+            )
+            .expect("expected greedy repair plan");
             assert!(
-                matches!(plan.steps.first(), Some(Step::Swap(1)))
-                    && matches!(plan.steps.get(1), Some(Step::Pop)),
-                "expected trim to remove the cheap surplus before popping the goal key: {:?}",
-                plan.steps
+                matches!(greedy.first(), Some(Step::Swap(1)))
+                    && matches!(greedy.get(1), Some(Step::Pop)),
+                "expected trim to remove the cheap surplus before popping the goal key: {greedy:?}"
             );
 
+            // Popping all three slots above the bottom `a` is cheaper still.
+            let plan =
+                solve_test_optimal_repair_prefix_plan(&ctx, &stack, &desired, 0, &cost, search_cfg)
+                    .expect("expected repair plan");
+            assert_eq!(plan.steps.as_slice(), [Step::Pop; 3]);
             let replayed = replay_plan(&stack, &plan);
             assert!(stack_matches_exact(&replayed, &desired));
         });
@@ -5267,6 +5278,42 @@ func public %f() {
             );
 
             let replayed = replay_plan(&stack, &plan);
+            assert!(stack_matches_exact(&replayed, &desired));
+        });
+    }
+
+    #[test]
+    fn normalize_incumbent_materializes_missing_keys_before_routing() {
+        with_stackify_ctx!(16, |func, ctx| {
+            let vals = make_undefs(func, 5);
+            let imms = [
+                func.dfg.make_imm_value(Immediate::I8(2)),
+                func.dfg.make_imm_value(Immediate::I8(4)),
+                func.dfg.make_imm_value(Immediate::I8(6)),
+            ];
+        } {
+            let mut stack = SymStack::entry_stack(func, false);
+            push_values(&mut stack, &[vals[0], vals[2], vals[4], vals[1], vals[3]]);
+            let desired = [
+                vals[0], vals[1], imms[0], vals[2], imms[1], vals[3], imms[2], vals[4],
+            ];
+
+            let cost = EstimatedCostModel::default();
+            let plan = solve_test_optimal_normalize_plan(
+                &ctx,
+                &stack,
+                &desired,
+                &cost,
+                default_search_cfg(&ctx, 0),
+            )
+            .expect("expected constructive plan without search");
+            assert!(
+                cost_for_steps(&plan.steps, &plan.key_infos, &cost)
+                    < estimate_flush_rebuild_cost(&ctx, &stack, &desired, &cost)
+            );
+
+            let mut replayed = replay_plan(&stack, &plan);
+            rename_immediate_stack_values(&ctx, &mut replayed, &desired);
             assert!(stack_matches_exact(&replayed, &desired));
         });
     }
