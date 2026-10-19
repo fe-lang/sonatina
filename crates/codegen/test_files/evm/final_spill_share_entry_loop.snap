@@ -6,14 +6,14 @@ input_file: test_files/evm/final_spill_share_entry_loop.sntn
 evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false mem_plan_detail=true
 
 object: Contract
-  section runtime: 235 bytes
-  total: 235 bytes
+  section runtime: 238 bytes
+  total: 238 bytes
 
 functions:
   mem: global_dyn_base=0x180 arena_base=0xa0 scratch_peak_words=2 stable_chain_peak_words=5
   entry: ir_blocks=1 ir_insts=9 vcode_ops=34 fixups=2 imm_bytes=7
     mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xe0) entry_abs_words=2 abs_words_end=3
-  spin: ir_blocks=3 ir_insts=39 vcode_ops=136 fixups=6 imm_bytes=25
+  spin: ir_blocks=3 ir_insts=39 vcode_ops=139 fixups=6 imm_bytes=25
     mem: scratch_words=0 stable_words=4 stable_mode=StableAbs(base=0x100) entry_abs_words=3 abs_words_end=7
   one: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=2
@@ -35,7 +35,7 @@ evm mem plan: one scratch_words=2 stable_words=0 stable_mode=None entry_abs_word
 
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=22256 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1116
+  case ok: calldata_len=32 success reason=Return gas_used=22265 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1125
 
 
 --------------- DEBUG ---------------
@@ -199,18 +199,21 @@ spin:
     ADD
     XOR  // v42.i256 = xor v41 v13;
     SWAP1  // v43.i256 = xor v42 v27;
-    SWAP2
     SWAP3
     XOR
-    XOR  // v44.i256 = xor v43 v25;
+    SWAP1  // v44.i256 = xor v43 v25;
+    SWAP2
+    XOR
     XOR  // v45.i256 = xor v44 v23;
     SWAP1  // v46.i256 = xor v45 v21;
-    SWAP2
-    SWAP3
     SWAP4
     XOR
-    XOR  // v47.i256 = xor v46 v10;
-    XOR  // v48.i256 = xor v47 v19;
+    SWAP1  // v47.i256 = xor v46 v10;
+    SWAP3
+    XOR
+    SWAP1  // v48.i256 = xor v47 v19;
+    SWAP2
+    XOR
     XOR  // v49.i256 = xor v48 v17;
     SWAP1  // return v49;
     JUMP

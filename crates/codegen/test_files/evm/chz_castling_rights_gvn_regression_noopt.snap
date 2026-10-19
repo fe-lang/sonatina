@@ -6,14 +6,14 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression_noopt.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 4058 bytes
-  total: 4058 bytes
+  section runtime: 4049 bytes
+  total: 4049 bytes
 
 functions:
   mem: global_dyn_base=0xc60 arena_base=0xa0 scratch_peak_words=7 stable_chain_peak_words=87
   abs_diff: ir_blocks=9 ir_insts=33 vcode_ops=69 fixups=4 imm_bytes=21
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=89 abs_words_end=2
-  apply_rook: ir_blocks=18 ir_insts=121 vcode_ops=326 fixups=31 imm_bytes=78
+  apply_rook: ir_blocks=18 ir_insts=121 vcode_ops=313 fixups=31 imm_bytes=78
     mem: scratch_words=7 stable_words=9 stable_mode=StableAbs(base=0xaa0) entry_abs_words=80 abs_words_end=89
   clear_piece: ir_blocks=1 ir_insts=7 vcode_ops=22 fixups=2 imm_bytes=5
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=89 abs_words_end=2
@@ -65,7 +65,7 @@ functions:
     mem: scratch_words=0 stable_words=6 stable_mode=StableAbs(base=0x180) entry_abs_words=7 abs_words_end=13
   meta_castling_rights: ir_blocks=1 ir_insts=6 vcode_ops=16 fixups=2 imm_bytes=4
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=80 abs_words_end=1
-  validate_rook_capture: ir_blocks=74 ir_insts=268 vcode_ops=1107 fixups=111 imm_bytes=290
+  validate_rook_capture: ir_blocks=74 ir_insts=268 vcode_ops=1110 fixups=111 imm_bytes=291
     mem: scratch_words=7 stable_words=67 stable_mode=StableAbs(base=0x240) entry_abs_words=13 abs_words_end=80
   meta_custom: ir_blocks=1 ir_insts=45 vcode_ops=112 fixups=14 imm_bytes=35
     mem: scratch_words=1 stable_words=13 stable_mode=StableAbs(base=0xaa0) entry_abs_words=80 abs_words_end=93
@@ -93,7 +93,7 @@ functions:
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=80 abs_words_end=1
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=32647 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=11647
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=32611 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=11611
 
 
 --------------- DEBUG ---------------
@@ -473,50 +473,37 @@ apply_rook:
     PUSH1 0x40 (64)  // v113.i256 = add v0 64.i256;
     DUP9
     ADD
-    DUP8  // evm_mstore v113 v134;
+    SWAP7  // evm_mstore v113 v134;
     SWAP1
+    SWAP7
     MSTORE
     PUSH1 0x60 (96)  // v114.i256 = add v0 96.i256;
-    DUP9
-    ADD
-    DUP7  // evm_mstore v114 v135;
-    SWAP1
-    MSTORE
-    PUSH1 0x80 (128)  // v115.i256 = add v0 128.i256;
-    DUP9
-    ADD
-    DUP6  // evm_mstore v115 v104;
-    SWAP1
-    MSTORE
-    PUSH1 0xa0 (160)  // v116.i256 = add v0 v14;
-    DUP9
-    ADD
-    SWAP1  // evm_mstore v116 v106;
-    SWAP2
-    SWAP3
-    SWAP4
-    SWAP1
-    MSTORE
-    PUSH1 0xc0 (192)  // v117.i256 = add v0 192.i256;
     DUP8
     ADD
-    SWAP1  // evm_mstore v117 v108;
-    SWAP2
-    SWAP3
+    SWAP5  // evm_mstore v114 v135;
     SWAP1
+    SWAP5
     MSTORE
-    PUSH1 0xe0 (224)  // v119.i256 = add v0 224.i256;
+    PUSH1 0x80 (128)  // v115.i256 = add v0 128.i256;
     DUP7
     ADD
-    SWAP1  // evm_mstore v119 v110;
-    SWAP2
+    SWAP3  // evm_mstore v115 v104;
     SWAP1
+    SWAP3
     MSTORE
-    SWAP3  // v121.i256 = add v0 256.i256;
-    POP
-    POP
-    POP
-    SWAP1
+    PUSH1 0xa0 (160)  // v116.i256 = add v0 v14;
+    DUP6
+    ADD
+    MSTORE  // evm_mstore v116 v106;
+    PUSH1 0xc0 (192)  // v117.i256 = add v0 192.i256;
+    DUP5
+    ADD
+    MSTORE  // evm_mstore v117 v108;
+    PUSH1 0xe0 (224)  // v119.i256 = add v0 224.i256;
+    DUP4
+    ADD
+    MSTORE  // evm_mstore v119 v110;
+    SWAP1  // v121.i256 = add v0 256.i256;
     PUSH2 0x100 (256)
     ADD
     MSTORE  // evm_mstore v121 v112;
@@ -2353,6 +2340,9 @@ validate_rook_capture:
     MSTORE
     PUSH2 0x720 (1824)  // v247.i256 = evm_mload v45;
     MLOAD
+    DUP1
+    PUSH1 0x20 (32)
+    MSTORE
     DUP1  // jump block50;
     PUSH2 0x920 (2336)
     MSTORE

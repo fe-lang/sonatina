@@ -785,6 +785,7 @@ contract_runtime_root_DepositContract:
     SWAP6
     SWAP8
     SWAP10
+    SWAP13
     SWAP1
     SWAP3
     SWAP5
@@ -793,7 +794,6 @@ contract_runtime_root_DepositContract:
     SWAP11
     SWAP12
     SWAP13
-    SWAP1
     PUSH1 block77
     JUMP
   block76:
@@ -927,9 +927,9 @@ contract_runtime_root_DepositContract:
     SWAP2  // jump block86;
     POP
     SWAP1
-    SWAP2
     SWAP3
     SWAP2
+    SWAP3
     PUSH1 block86
     JUMP
   block85:

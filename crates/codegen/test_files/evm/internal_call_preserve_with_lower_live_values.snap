@@ -6,8 +6,8 @@ input_file: test_files/evm/internal_call_preserve_with_lower_live_values.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 93 bytes
-  total: 93 bytes
+  section runtime: 92 bytes
+  total: 92 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
@@ -15,11 +15,11 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   is_lt: ir_blocks=3 ir_insts=4 vcode_ops=12 fixups=1 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  helper: ir_blocks=3 ir_insts=8 vcode_ops=23 fixups=1 imm_bytes=4
+  helper: ir_blocks=3 ir_insts=8 vcode_ops=22 fixups=1 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21350 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=210
+  case ok: calldata_len=32 success reason=Return gas_used=21347 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=207
 
 
 --------------- DEBUG ---------------
@@ -53,7 +53,7 @@ evm:
     inherited from block0: [v7, v3, v5]
     // v10.i256 = call %helper v3 v5 v7;
     - stack=[v7, v3, v5], last_use=[v3, v5, v7]
-      pre: [SWAP1, SWAP1, SWAP1, SWAP2, PUSH_CONT, SWAP3]
+      pre: [SWAP1, SWAP2, PUSH_CONT, SWAP3]
       call [v5, v7, v3] -> v10
     // evm_mstore 0.i256 v10;
     - stack=[v10], last_use=[v10]
@@ -110,8 +110,8 @@ evm:
       eq [8, v2] -> v8
     // v9.i256 = and v4 v6;
     - stack=[v8, v4, v6, <RET>], last_use=[v4, v6]
-      pre: [SWAP2, SWAP1]
-      and [v4, v6] -> v9
+      pre: [SWAP2]
+      and [v6, v4] -> v9
     // v10.i256 = and v9 v8;
     - stack=[v9, v8, <RET>], last_use=[v8, v9]
       and [v9, v8] -> v10
@@ -208,7 +208,6 @@ helper:
     PUSH1 0x8 (8)
     EQ
     SWAP2  // v9.i256 = and v4 v6;
-    SWAP1
     AND
     AND  // v10.i256 = and v9 v8;
     ISZERO  // br v10 block1 block2;

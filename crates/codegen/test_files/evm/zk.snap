@@ -340,7 +340,7 @@ evm:
       add [32, v10] -> v27
     // jump block14;
     - stack=[v27, v9, v26, v11, v12, v13, v14, <RET>]
-      exit(block14): [SWAP1, SWAP2, SWAP1]
+      exit(block14): [SWAP2, SWAP1, SWAP2]
       jump -> block14
   block19 P=[] T=[v25, v9, v10, v11, v12, v13, v14]
     inherited from block10: [v25, v9, v10, v11, v12, v13, v14, <RET>]
@@ -413,7 +413,7 @@ evm:
       shr [1, v13] -> v37
     // jump block9;
     - stack=[v37, v34, v15, v35, v36, v17, <RET>]
-      exit(block9): [SWAP4, SWAP3, SWAP1, SWAP5, SWAP2, SWAP1]
+      exit(block9): [SWAP4, SWAP3, SWAP2, SWAP1, SWAP5, SWAP2]
       jump -> block9
   block11 P=[] T=[v11]
     inherited from block9: [v9x, v10x, v11, v12x, v13x, v14x, <RET>]
@@ -985,7 +985,7 @@ evm:
       add [32, v17] -> v104
     // jump block37;
     - stack=[v104, v15, v16, v103, v18, v19, v20, v21]
-      exit(block37): [SWAP1, SWAP2, SWAP3, SWAP1]
+      exit(block37): [SWAP3, SWAP1, SWAP2, SWAP3]
       jump -> block37
   block56 P=[] T=[v102, v15, v16, v17, v18, v19, v20, v21]
     inherited from block33: [v102, v15, v16, v17, v18, v19, v20, v21]
@@ -1512,9 +1512,9 @@ smt_root_from_calldata:
     SWAP2  // v45.i256 = add v92 v19;
     PUSH1 0x20 (32)
     ADD
-    SWAP1  // jump block14;
-    SWAP2
+    SWAP2  // jump block14;
     SWAP1
+    SWAP2
     PUSH1 block14
     JUMP
   block19:
@@ -1569,10 +1569,10 @@ smt_root_from_calldata:
     SHR
     SWAP4  // jump block9;
     SWAP3
+    SWAP2
     SWAP1
     SWAP5
     SWAP2
-    SWAP1
     PUSH1 block9
     JUMP
   block18:
@@ -2007,10 +2007,10 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     SWAP3  // v104.i256 = add v63 v23;
     PUSH1 0x20 (32)
     ADD
-    SWAP1  // jump block37;
+    SWAP3  // jump block37;
+    SWAP1
     SWAP2
     SWAP3
-    SWAP1
     PUSH1 block37
     JUMP
   block56:

@@ -1,11 +1,12 @@
 use crate::{bitset::BitSet, isa::evm::immediate_materialization_cost_i256};
 use rustc_hash::{FxHashMap, FxHasher};
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{I256, Immediate, ValueId};
 use std::{
     cmp::Ordering,
     collections::{BinaryHeap, VecDeque},
     hash::{Hash, Hasher},
+    iter,
     sync::OnceLock,
 };
 
@@ -2204,6 +2205,154 @@ fn build_linear_operand_prep_upper_bound(
     .then_some((steps, total_cost))
 }
 
+const OPERAND_PREP_STAR_SWAP_SELECTIONS: usize = 64;
+
+/// Swap-only operand preparation for windows that already hold every operand and preserve
+/// copy. Chooses which copies feed the operand prefix, treats every other window slot as one
+/// interchangeable filler key, and routes each choice exactly with [`build_star_swap_plan`].
+fn build_star_swap_operand_prep_upper_bound(
+    problem: &OperandPrepProblem,
+    swap_max: usize,
+) -> Option<StepList> {
+    let start = problem.start_state;
+    let window: StackKeyIds = (0..start.window.len())
+        .map(|pos| start.window.get(pos))
+        .collect();
+    let filler = u8::try_from(problem.key_infos.len())
+        .ok()
+        .filter(|&kid| kid < 64)?;
+    if window.len() < problem.goal_keys.len()
+        || operand_prep_missing_count(start, &problem.goal_counts, problem.preserve_mask) != 0
+    {
+        return None;
+    }
+
+    // Per operand key, every way to pick its operand copies, as window-position masks.
+    let mut choices: SmallVec<[SmallVec<[u32; 4]>; 8]> = SmallVec::new();
+    let mut selections = 1usize;
+    let mut goal_mask = problem.goal_mask;
+    while goal_mask != 0 {
+        let kid = goal_mask.trailing_zeros() as u8;
+        goal_mask &= goal_mask - 1;
+        let copies: SmallVec<[usize; 8]> = (0..window.len())
+            .filter(|&pos| window[pos] == kid)
+            .collect();
+        let mut masks: SmallVec<[u32; 4]> = SmallVec::new();
+        // Gosper's hack: visit every subset of `copies` with `goal_counts[kid]` members.
+        let mut subset = (1u32 << problem.goal_counts[kid as usize]) - 1;
+        while subset < 1 << copies.len() {
+            if masks.len() == OPERAND_PREP_STAR_SWAP_SELECTIONS {
+                return None;
+            }
+            masks.push(
+                copies
+                    .iter()
+                    .enumerate()
+                    .filter(|&(idx, _)| subset & (1 << idx) != 0)
+                    .fold(0u32, |mask, (_, &pos)| mask | 1 << pos),
+            );
+            let low = subset.isolate_lowest_one();
+            let ripple = subset + low;
+            subset = (((ripple ^ subset) >> 2) / low) | ripple;
+        }
+        selections = selections.saturating_mul(masks.len());
+        if selections > OPERAND_PREP_STAR_SWAP_SELECTIONS {
+            return None;
+        }
+        choices.push(masks);
+    }
+
+    let target: StackKeyIds = problem
+        .goal_keys
+        .iter()
+        .copied()
+        .chain(iter::repeat_n(
+            filler,
+            window.len() - problem.goal_keys.len(),
+        ))
+        .collect();
+    let mut digits: SmallVec<[usize; 8]> = smallvec![0; choices.len()];
+    let mut best: Option<StepList> = None;
+    'select: loop {
+        let chosen = choices
+            .iter()
+            .zip(&digits)
+            .fold(0u32, |mask, (masks, &digit)| mask | masks[digit]);
+        let mut cur: Vec<u8> = window
+            .iter()
+            .enumerate()
+            .map(|(pos, &kid)| {
+                if chosen & (1 << pos) != 0 {
+                    kid
+                } else {
+                    filler
+                }
+            })
+            .collect();
+        if let Some(steps) = build_star_swap_plan(&mut cur, &target, swap_max)
+            && best.as_ref().is_none_or(|best| steps.len() < best.len())
+        {
+            best = Some(steps);
+        }
+
+        for (digit, masks) in digits.iter_mut().zip(&choices) {
+            *digit += 1;
+            if *digit < masks.len() {
+                continue 'select;
+            }
+            *digit = 0;
+        }
+        break;
+    }
+
+    let steps = best?;
+    let window = steps.iter().fold(start.window, |window, step| match *step {
+        Step::Swap(depth) => window.swap(depth as usize),
+        _ => unreachable!("star swap plans only swap"),
+    });
+    operand_prep_goal(
+        PrepState { window, ..start },
+        &problem.goal_keys,
+        problem.preserve_mask,
+        &problem.goal_counts,
+    )
+    .then_some(steps)
+}
+
+/// The cheapest constructive operand-prep plan. The linear builder and the beam search bounded
+/// by it come first, so exact swap-only routing only replaces them when strictly cheaper: equal
+/// local costs keep their layouts for the instructions that follow.
+fn build_operand_prep_incumbent(
+    ctx: &StackifyContext<'_>,
+    problem: &OperandPrepProblem,
+    allow_copy_swap: bool,
+    cost: &impl CostModel,
+    cfg: SearchCfg,
+) -> Option<(StepList, Cost)> {
+    let linear = build_linear_operand_prep_upper_bound(problem, allow_copy_swap, cost, cfg);
+    let linear_cost = linear
+        .as_ref()
+        .map_or(UNAVAILABLE_COST, |&(_, plan_cost)| plan_cost);
+    let budgets = ctx.search_profile.budgets();
+    let greedy = build_greedy_operand_prep_upper_bound(
+        problem,
+        cost,
+        cfg,
+        linear_cost,
+        budgets.operand_prep_beam_width,
+        budgets.operand_prep_beam_depth_slack.resolve(cfg.swap_max),
+    )
+    .filter(|&(_, greedy_cost)| greedy_cost < linear_cost);
+    let swap = build_star_swap_operand_prep_upper_bound(problem, cfg.swap_max).map(|steps| {
+        let swap_cost = cost_for_steps(&steps, &problem.key_infos, cost);
+        (steps, swap_cost)
+    });
+    [greedy.or(linear), swap]
+        .into_iter()
+        .flatten()
+        .min_by_key(|&(_, plan_cost)| plan_cost)
+}
+
 fn operand_prep_goal_run_anywhere(state: PrepState, goal_keys: &[u8]) -> (usize, usize, usize) {
     let window_len = state.window.len().min(goal_keys.len());
     if window_len == 0 {
@@ -2602,21 +2751,7 @@ pub(super) fn solve_greedy_operand_prep_plan(
         max_len: problem.max_len,
         ..cfg
     };
-    let (linear_steps, linear_cost) =
-        build_linear_operand_prep_upper_bound(&problem, allow_copy_swap, cost, cfg)?;
-    let (steps, cost) = build_greedy_operand_prep_upper_bound(
-        &problem,
-        cost,
-        cfg,
-        linear_cost,
-        ctx.search_profile.budgets().operand_prep_beam_width,
-        ctx.search_profile
-            .budgets()
-            .operand_prep_beam_depth_slack
-            .resolve(cfg.swap_max),
-    )
-    .filter(|(_, greedy_cost)| *greedy_cost < linear_cost)
-    .unwrap_or((linear_steps, linear_cost));
+    let (steps, cost) = build_operand_prep_incumbent(ctx, &problem, allow_copy_swap, cost, cfg)?;
     Some(NormalizePlan {
         cost,
         steps,
@@ -2705,11 +2840,11 @@ pub(super) fn solve_optimal_operand_prep_plan(
     let push0_kid = problem.push0_kid();
     let push0_cost = push0_kid.map(|kid| prep_costs.materialize_cost(kid));
     let surplus_last_use_penalty = prep_costs.surplus_last_use_penalty;
-    let Some((linear_steps, linear_cost)) =
-        build_linear_operand_prep_upper_bound(&problem, true, cost, cfg)
+    let Some((mut incumbent_steps, mut incumbent_cost)) =
+        build_operand_prep_incumbent(ctx, &problem, true, cost, cfg)
     else {
         if debug {
-            eprintln!("operand_prep_search: linear greedy plan failed goal check");
+            eprintln!("operand_prep_search: no constructive plan reached the goal");
         }
         scratch.plan_cache.insert(cache_key, PlanCacheVal::None);
         return None;
@@ -2720,32 +2855,6 @@ pub(super) fn solve_optimal_operand_prep_plan(
             .iter()
             .all(|&v| constraints.consume_last_use.contains(v))
         && problem.preserve_mask == 0;
-
-    let mut upper_bound = linear_cost;
-    let mut incumbent_steps = linear_steps;
-    let mut incumbent_cost = upper_bound;
-
-    if let Some((steps, greedy_cost)) = build_greedy_operand_prep_upper_bound(
-        &problem,
-        cost,
-        cfg,
-        upper_bound,
-        ctx.search_profile.budgets().operand_prep_beam_width,
-        ctx.search_profile
-            .budgets()
-            .operand_prep_beam_depth_slack
-            .resolve(cfg.swap_max),
-    ) && greedy_cost < upper_bound
-    {
-        if debug {
-            eprintln!(
-                "operand_prep_search: upper_bound improved by greedy plan: ub={upper_bound:?} greedy={greedy_cost:?}"
-            );
-        }
-        upper_bound = greedy_cost;
-        incumbent_steps = steps;
-        incumbent_cost = greedy_cost;
-    }
 
     let finish_incumbent = |scratch: &mut NormalizeSearchScratch,
                             steps: StepList,
@@ -2799,7 +2908,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
         &search_problem,
         &mut scratch.prep,
         problem.start_state,
-        upper_bound,
+        incumbent_cost,
         true,
         cfg.max_expansions,
         debug.then_some("operand_prep_search"),
@@ -3065,95 +3174,73 @@ fn apply_repair_step_to_vec(cur: &mut Vec<u8>, suffix_ctx_keys: &[u8], step: Ste
     }
 }
 
+const NO_STAR_ARC: u8 = u8::MAX;
+
+/// Minimal `SWAP` sequence turning `cur` into `goal` (same keys, same multiset), where equal
+/// keys are interchangeable: colored token swapping on a star, solved exactly by Euler tours
+/// (Bonnet, Miltzow, Rzążewski, "Complexity of Token Swapping and Its Variants", Theorem 7).
+///
+/// Each misplaced non-top slot `i` is an arc `goal[i] -> cur[i]`; swapping it while the top
+/// holds `goal[i]` fixes the slot and leaves `cur[i]` on top. An Euler trail from the top's key
+/// covers its component, and every other component costs one extra swap to enter. Slots at
+/// depth `swap_max` or deeper must already be in place.
 fn build_star_swap_plan(cur: &mut Vec<u8>, goal: &[u8], swap_max: usize) -> Option<StepList> {
-    if cur.len() != goal.len() {
-        return None;
-    }
-    if cur.len() > swap_max {
-        return None;
-    }
-
-    if compute_counts(cur) != compute_counts(goal) {
+    if cur.len() != goal.len()
+        || cur.len() > PackedState::MAX_LEN
+        || compute_counts(cur) != compute_counts(goal)
+    {
         return None;
     }
 
-    let n = cur.len();
-    if n <= 1 {
-        return Some(StepList::new());
-    }
-
-    let mut goal_pos: Vec<Vec<usize>> = vec![Vec::new(); 64];
-    for (idx, &kid) in goal.iter().enumerate() {
-        goal_pos[kid as usize].push(idx);
-    }
-
-    let mut next_idx = [0usize; 64];
-    let mut p: Vec<usize> = vec![0usize; n];
-    for (i, &kid) in cur.iter().enumerate() {
-        let kid = kid as usize;
-        let pos_list = &goal_pos[kid];
-        let next = next_idx[kid];
-        if next >= pos_list.len() {
+    // `head[key]` lists, through `next`, the misplaced slots that need `key`.
+    let mut head = [NO_STAR_ARC; 64];
+    let mut next = [NO_STAR_ARC; PackedState::MAX_LEN];
+    for pos in (1..cur.len()).rev().filter(|&pos| cur[pos] != goal[pos]) {
+        if pos >= swap_max {
             return None;
         }
-        p[i] = pos_list[next];
-        next_idx[kid] += 1;
+        next[pos] = head[goal[pos] as usize];
+        head[goal[pos] as usize] = pos as u8;
     }
 
-    // Generate a minimal star-transposition sequence for `p`:
-    // - cycle containing 0: (0 a1 a2 .. ak) => (0 a1)(0 a2)...(0 ak)
-    // - other cycle: (a1 a2 .. ak) => (0 a1)(0 a2)...(0 ak)(0 a1)
-    let mut visited = vec![false; n];
-    let mut steps = StepList::new();
+    let trail = |start: u8, head: &mut [u8; 64]| {
+        let mut stack: SmallVec<[(u8, u8); 16]> = smallvec![(start, NO_STAR_ARC)];
+        let mut slots: SmallVec<[u8; 16]> = SmallVec::new();
+        while let Some(&(key, slot)) = stack.last() {
+            let pos = head[key as usize];
+            if pos == NO_STAR_ARC {
+                stack.pop();
+                if slot != NO_STAR_ARC {
+                    slots.push(slot);
+                }
+            } else {
+                head[key as usize] = next[pos as usize];
+                stack.push((cur[pos as usize], pos));
+            }
+        }
+        slots.reverse();
+        slots
+    };
 
-    for i in 0..n {
-        if visited[i] {
+    let Some(&top) = cur.first() else {
+        return Some(StepList::new());
+    };
+    let mut steps: StepList = trail(top, &mut head).into_iter().map(Step::Swap).collect();
+    for key in 0..64u8 {
+        if head[key as usize] == NO_STAR_ARC {
             continue;
         }
-        let mut cycle: Vec<usize> = Vec::new();
-        let mut cur_idx = i;
-        while !visited[cur_idx] {
-            visited[cur_idx] = true;
-            cycle.push(cur_idx);
-            cur_idx = p[cur_idx];
-        }
-
-        if cycle.len() <= 1 {
-            continue;
-        }
-
-        if let Some(z) = cycle.iter().position(|&x| x == 0) {
-            cycle.rotate_left(z);
-            debug_assert_eq!(cycle[0], 0);
-            for &idx in &cycle[1..] {
-                if idx >= swap_max {
-                    return None;
-                }
-                steps.push(Step::Swap(idx as u8));
-            }
-        } else {
-            for &idx in &cycle {
-                if idx >= swap_max {
-                    return None;
-                }
-                steps.push(Step::Swap(idx as u8));
-            }
-            let first = cycle[0];
-            if first >= swap_max {
-                return None;
-            }
-            steps.push(Step::Swap(first as u8));
-        }
+        let circuit = trail(key, &mut head);
+        let (&enter, rest) = circuit.split_last()?;
+        steps.push(Step::Swap(enter));
+        steps.extend(rest.iter().copied().map(Step::Swap));
+        steps.push(Step::Swap(enter));
     }
 
-    for step in steps.iter().copied() {
+    for &step in &steps {
         apply_step_to_vec(cur, step);
     }
-    if cur.as_slice() != goal {
-        return None;
-    }
-
-    Some(steps)
+    (cur.as_slice() == goal).then_some(steps)
 }
 
 fn build_delete_tail_under_prefix_upper_bound(
@@ -4413,6 +4500,52 @@ func public %f() {
     }
 
     #[test]
+    fn star_swap_plan_is_minimal_for_interchangeable_keys() {
+        for len in 1..=6u32 {
+            for code in 0..3usize.pow(len) {
+                let start: Vec<u8> = (0..len)
+                    .map(|idx| (code / 3usize.pow(idx) % 3) as u8)
+                    .collect();
+                let mut dist: FxHashMap<Vec<u8>, usize> = FxHashMap::default();
+                dist.insert(start.clone(), 0);
+                let mut queue = VecDeque::from([start.clone()]);
+                while let Some(cur) = queue.pop_front() {
+                    let d = dist[&cur];
+                    for depth in 1..cur.len() {
+                        let mut next = cur.clone();
+                        next.swap(0, depth);
+                        dist.entry(next.clone()).or_insert_with(|| {
+                            queue.push_back(next);
+                            d + 1
+                        });
+                    }
+                }
+
+                for (goal, &want) in &dist {
+                    let mut cur = start.clone();
+                    let steps = build_star_swap_plan(&mut cur, goal, 17)
+                        .unwrap_or_else(|| panic!("no plan for {start:?} -> {goal:?}"));
+                    assert_eq!(&cur, goal);
+                    assert_eq!(steps.len(), want, "{start:?} -> {goal:?}: {steps:?}");
+                }
+            }
+        }
+
+        // Two duplicate pairings close separate cycles; routing both through one tour saves a swap.
+        let mut cur = vec![0, 1, 2, 1, 3];
+        let steps = build_star_swap_plan(&mut cur, &[0, 2, 1, 3, 1], 17).unwrap();
+        assert_eq!(steps.len(), 5);
+
+        let mut cur = vec![0, 1, 2, 3];
+        assert!(build_star_swap_plan(&mut cur, &[0, 2, 1, 3], 2).is_none());
+        let mut cur = vec![1, 0, 2, 3];
+        assert_eq!(
+            build_star_swap_plan(&mut cur, &[0, 1, 2, 3], 2).as_deref(),
+            Some(&[Step::Swap(1)][..])
+        );
+    }
+
+    #[test]
     fn operand_prep_copy_help_prunes_surplus_available_copy() {
         let problem = operand_prep_test_problem(&[0], 0);
         assert!(!copy_can_help(&problem, prep_state(&[0, 0], 0, 0), 0));
@@ -5554,6 +5687,41 @@ func public %f() {
                 plan.cost, greedy_cost,
                 "zero-budget exact search should return the best incumbent"
             );
+        });
+    }
+
+    #[test]
+    fn operand_prep_routes_last_use_permutation_with_minimal_swaps() {
+        with_stackify_ctx!(16, |func, ctx| {
+            let args = make_undefs(func, 16);
+            let order = [14, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 15, 13];
+            let start_vals: Vec<ValueId> = order.iter().map(|&idx| args[idx]).collect();
+        } {
+            let mut stack = SymStack::entry_stack(func, false);
+            push_values(&mut stack, &start_vals);
+
+            let mut consume_last_use = BitSet::default();
+            for &arg in &args {
+                consume_last_use.insert(arg);
+            }
+
+            let plan = solve_test_optimal_operand_prep_plan(
+                &ctx,
+                &stack,
+                &args,
+                &consume_last_use,
+                &EstimatedCostModel::default(),
+                default_search_cfg(&ctx, 0),
+            )
+            .expect("expected operand-prep plan");
+
+            // One 4-cycle through the top and six 2-cycles among the other slots.
+            assert_eq!(plan.steps.len(), 3 + 6 * 3, "{:?}", plan.steps);
+            assert!(plan.steps.iter().all(|step| matches!(step, Step::Swap(_))));
+            let replayed = replay_plan(&stack, &plan);
+            for (depth, &arg) in args.iter().enumerate() {
+                assert_eq!(replayed.item_at(depth), Some(&StackItem::Value(arg)));
+            }
         });
     }
 
