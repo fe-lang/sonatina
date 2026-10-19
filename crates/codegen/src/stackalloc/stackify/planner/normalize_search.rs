@@ -1553,6 +1553,7 @@ struct OperandPrepSearchProblem<'a> {
     problem: &'a OperandPrepProblem,
     costs: &'a OperandPrepCostTable,
     cfg: SearchCfg,
+    load_mask: u64,
     dup_gas_lb: u32,
     surplus_last_use_penalty: Cost,
     push0_kid: Option<u8>,
@@ -1578,6 +1579,7 @@ impl BoundedAStarProblem for OperandPrepSearchProblem<'_> {
             &self.problem.goal_counts,
             self.problem.goal_mask,
             self.problem.preserve_mask,
+            self.load_mask,
             self.dup_gas_lb,
             self.costs,
         )
@@ -2891,6 +2893,10 @@ pub(super) fn solve_optimal_operand_prep_plan(
         problem: &problem,
         costs: &prep_costs,
         cfg,
+        load_mask: problem
+            .materializable_val
+            .iter()
+            .fold(0, |mask, &kid| mask | 1u64 << kid),
         dup_gas_lb: prep_costs.min_dup_gas,
         surplus_last_use_penalty,
         push0_kid,
@@ -4109,6 +4115,7 @@ fn heuristic_operand_prep(
     goal_counts: &[u8; 64],
     goal_mask: u64,
     preserve_mask: u64,
+    load_mask: u64,
     dup_gas: u32,
     costs: &OperandPrepCostTable,
 ) -> Cost {
@@ -4127,10 +4134,16 @@ fn heuristic_operand_prep(
         missing_mask &= missing_mask - 1;
         let need_operands = goal_counts[kid as usize];
         let bit = 1u64 << kid;
-        let preserve_extra = u8::from((preserve_mask & bit) != 0 && (state.mem & bit) == 0);
+        let have_window = win_counts[kid as usize];
+        // Without a window copy, a loadable key's first copy is a load, and loading a preserved
+        // value already keeps it in memory.
+        let preserve_extra = u8::from(
+            (preserve_mask & bit) != 0
+                && (state.mem & bit) == 0
+                && (have_window != 0 || (load_mask & bit) == 0),
+        );
         let need_total = need_operands.saturating_add(preserve_extra);
 
-        let have_window = win_counts[kid as usize];
         let have_total = have_window.saturating_add(u8::from((state.tail & bit) != 0));
 
         let missing_operands = need_operands.saturating_sub(have_window);
@@ -4544,6 +4557,29 @@ func public %f() {
             build_star_swap_plan(&mut cur, &[0, 1, 2, 3], 2).as_deref(),
             Some(&[Step::Swap(1)][..])
         );
+    }
+
+    #[test]
+    fn operand_prep_heuristic_lets_a_load_satisfy_preservation() {
+        with_stackify_ctx!(16, |func, ctx| {
+            let x = func.dfg.make_undef_value(Type::I256);
+            let y = func.dfg.make_undef_value(Type::I256);
+        } {
+            let cost = EstimatedCostModel::default();
+            let cfg = default_search_cfg(&ctx, 0);
+            let key_infos = [KeyInfo::Val { vid: x }, KeyInfo::Val { vid: y }];
+            let costs = OperandPrepCostTable::new(&cost, &key_infos, cfg).unwrap();
+            let goal_counts = compute_goal_counts(&[0, 1]);
+            let heuristic = |state| {
+                heuristic_operand_prep(state, &goal_counts, 0b11, 0b11, 0b11, costs.min_dup_gas, &costs)
+            };
+
+            // `LoadVal(y); LoadVal(x)` reaches the goal for 30 gas: each load also preserves
+            // its value in memory, so no extra stack copy is owed.
+            assert_eq!(heuristic(prep_state(&[], 0, 0)).gas, 30);
+            // A window copy is reused by `DUP`, so the preserve copy is still owed.
+            assert_eq!(heuristic(prep_state(&[0], 0, 0)).gas, 3 + 15);
+        });
     }
 
     #[test]
