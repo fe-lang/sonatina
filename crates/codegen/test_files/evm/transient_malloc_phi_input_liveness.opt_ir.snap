@@ -1,0 +1,52 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/transient_malloc_phi_input_liveness.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.*i256 = evm_malloc 33.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        mstore v1 9.i256 i256;
+        v2.i256 = add v1 32.i256;
+        evm_mstore8 v2 3.i256;
+        v3.*i256 = evm_malloc 64.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        memzero v4 64.i256;
+        jump block1;
+
+    block1:
+        v5.i256 = phi (0.i256 block0) (v6 block2);
+        v7.i256 = phi (v1 block0) (v8 block2);
+        v9.i1 = lt v5 1.i256;
+        br v9 block2 block3;
+
+    block2:
+        v10.i256 = add v7 32.i256;
+        v11.i256 = mload v10 i256;
+        v12.i256 = shr 248.i256 v11;
+        mstore v4 v12 i256;
+        v6.i256 = add v5 1.i256;
+        v8.i256 = add v7 33.i256;
+        jump block1;
+
+    block3:
+        v13.i256 = mload v4 i256;
+        v14.i1 = eq v13 3.i256;
+        br v14 block4 block5;
+
+    block4:
+        evm_stop;
+
+    block5:
+        evm_revert 0.i256 0.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
