@@ -114,7 +114,7 @@ const EXACT_BUDGETS: SearchBudgets = SearchBudgets {
     exact_expansions: 50_000,
     operand_prep_exact_expansions: 50_000,
     normalize_max_states: (200_000, 500_000),
-    operand_prep_max_states: 400_000,
+    operand_prep_max_states: 150_000,
     operand_prep_beam_width: 192,
     operand_prep_beam_depth_slack: BeamSlack::SwapMax,
 };
