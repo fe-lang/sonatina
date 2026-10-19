@@ -1875,6 +1875,9 @@ fn build_operand_prep_problem(
         }
     }
 
+    // Values that are not operands are never copied, materialized, or checked, so one shared
+    // key stands for all of them; the search then does not tell their orders apart.
+    let mut ignored_kid: Option<u8> = None;
     let mut start_keys: StackKeyIds = SmallVec::new();
     for depth in 0..window_len {
         let Some(StackItem::Value(v)) = stack.item_at(depth) else {
@@ -1883,12 +1886,15 @@ fn build_operand_prep_problem(
         let key = canonical_key(ctx, *v);
         let kid = if let Some(&kid) = key_ids.get(&key) {
             kid
+        } else if let Some(kid) = ignored_kid {
+            kid
         } else {
             if key_infos.len() >= 64 {
                 return None;
             }
             let kid = key_infos.len() as u8;
             key_infos.push(KeyInfo::Ignored);
+            ignored_kid = Some(kid);
             kid
         };
         start_keys.push(kid);
@@ -5643,8 +5649,8 @@ func public %f() {
 
             assert_eq!(ids.len(), 3);
             assert_eq!(lhs.start_state.window, rhs.start_state.window);
-            assert_eq!(lhs.key_infos.len(), 3);
-            assert_ne!(ids[0], ids[1]);
+            assert_eq!(lhs.key_infos.len(), 2);
+            assert_eq!(ids[0], ids[1]);
             assert_ne!(ids[0], ids[2]);
             assert!(matches!(lhs.key_infos[ids[0] as usize], KeyInfo::Ignored));
             assert!(matches!(lhs.key_infos[ids[1] as usize], KeyInfo::Ignored));
