@@ -26,7 +26,10 @@ use super::{
     ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo, compute_provenance, memory_load, memory_store},
 };
-use crate::stackalloc::StackifyAlloc;
+use crate::{
+    liveness::{InstLiveness, Liveness},
+    stackalloc::StackifyAlloc,
+};
 
 mod exact_pack;
 mod object_liveness;
@@ -139,6 +142,7 @@ pub(super) struct StackObjectInput<'a> {
     block_order: &'a [BlockId],
     value_aliases: &'a SecondaryMap<ValueId, Option<ValueId>>,
     prov_info: Option<&'a ProvenanceInfo>,
+    inst_liveness: Option<&'a InstLiveness>,
 }
 
 impl<'a> StackObjectInput<'a> {
@@ -149,6 +153,7 @@ impl<'a> StackObjectInput<'a> {
             block_order: &analysis.block_order,
             value_aliases: &analysis.value_aliases,
             prov_info: None,
+            inst_liveness: None,
         }
     }
 
@@ -158,6 +163,7 @@ impl<'a> StackObjectInput<'a> {
             block_order: &analysis.block_order,
             value_aliases: &analysis.value_aliases,
             prov_info: Some(&analysis.prov),
+            inst_liveness: Some(&analysis.inst_liveness),
         }
     }
 
@@ -295,6 +301,20 @@ fn compute_func_stack_objects_from_input(
         }
     };
     let prov = &prov_info.value;
+    let computed_inst_liveness;
+    let inst_liveness = match analysis.inst_liveness {
+        Some(inst_liveness) => inst_liveness,
+        None => {
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+            computed_inst_liveness = {
+                let mut inst_liveness = InstLiveness::new();
+                inst_liveness.compute(function, &cfg, &liveness);
+                inst_liveness
+            };
+            &computed_inst_liveness
+        }
+    };
 
     let mut local_edges: FxHashMap<InstId, FxHashSet<InstId>> = FxHashMap::default();
     let mut local_unknown: FxHashSet<InstId> = FxHashSet::default();
@@ -474,6 +494,7 @@ fn compute_func_stack_objects_from_input(
         analysis,
         isa: ctx.isa,
         prov,
+        inst_liveness,
         spill_local_by_value: &spill_local_by_value,
         alloca_local_by_inst: &alloca_local_by_inst,
         closure: &closure,
