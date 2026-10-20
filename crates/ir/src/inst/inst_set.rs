@@ -54,6 +54,7 @@ define_inst_set_base! {
         logic::And,
         logic::Or,
         logic::Xor,
+        logic::Bswap,
         cast::Sext,
         cast::Zext,
         cast::Trunc,

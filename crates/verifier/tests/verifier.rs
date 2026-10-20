@@ -1036,6 +1036,69 @@ func public %bad_i1(v0.i1, v1.i1) -> unit {
 }
 
 #[test]
+fn bswap_rejects_i1_and_mismatched_results() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_i1(v0.i1) -> unit {
+    block0:
+        v1.i1 = bswap v0;
+        return;
+}
+
+func public %bad_result(v0.i32) -> unit {
+    block0:
+        v1.i64 = bswap v0;
+        return;
+}
+
+func public %bad_operand(v0.*i32) -> unit {
+    block0:
+        v1.*i32 = bswap v0;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(&report, "bswap does not support i1 operands"),
+        "expected the i1 rejection, got {report}"
+    );
+    assert!(
+        has_message(&report, "bswap operand must be integral"),
+        "expected the pointer rejection, got {report}"
+    );
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn bswap_accepts_every_integer_width_from_i8() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %widths(v0.i8, v1.i16, v2.i32, v3.i64, v4.i128, v5.i256) -> unit {
+    block0:
+        v6.i8 = bswap v0;
+        v7.i16 = bswap v1;
+        v8.i32 = bswap v2;
+        v9.i64 = bswap v3;
+        v10.i128 = bswap v4;
+        v11.i256 = bswap v5;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(!report.has_errors(), "unexpected errors: {report}");
+}
+
+#[test]
 fn evm_checked_divmod_result_types_are_checked() {
     let src = r#"
 target = "evm-ethereum-london"

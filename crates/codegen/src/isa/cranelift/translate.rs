@@ -531,6 +531,21 @@ fn translate_function(
                         value_map.insert(result, result_val);
                     }
                 }
+                NativeInstKind::Bswap(bswap) => {
+                    let arg = *bswap.arg();
+                    let result_val = match function.dfg.value_ty(arg) {
+                        Type::I256 => emit_i256_bswap(function, arg, &value_map, &mut builder)?,
+                        // A single byte has no order to reverse.
+                        Type::I8 => resolve_value(function, arg, &value_map, &mut builder)?,
+                        _ => {
+                            let val = resolve_value(function, arg, &value_map, &mut builder)?;
+                            builder.ins().bswap(val)
+                        }
+                    };
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        value_map.insert(result, result_val);
+                    }
+                }
                 NativeInstKind::Lt(lt) => {
                     translate_icmp(
                         IntCC::UnsignedLessThan,

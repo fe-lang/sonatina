@@ -19,6 +19,7 @@ pub enum UnaryInstKind {
     Neg,
     Snego,
     Not,
+    Bswap,
     IsZero,
     EvmClz,
 }

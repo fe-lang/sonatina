@@ -813,6 +813,25 @@ pub(super) fn emit_i256_not(
     Ok(result)
 }
 
+/// Reversing all 32 bytes reverses the limb order and the bytes within each limb.
+pub(super) fn emit_i256_bswap(
+    function: &Function,
+    value: ValueId,
+    value_map: &HashMap<ValueId, clif::Value>,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    let value = resolve_value(function, value, value_map, builder)?;
+    let limbs: [clif::Value; I256_LIMBS] =
+        std::array::from_fn(|limb| load_i256_limb(value, limb, builder));
+    let result = create_i256_slot(builder);
+    for (limb, source) in limbs.into_iter().rev().enumerate() {
+        let swapped = builder.ins().bswap(source);
+        store_i256_limb(result, limb, swapped, builder);
+    }
+
+    Ok(result)
+}
+
 pub(super) enum I256ShiftKind {
     Shl,
     Shr,

@@ -1,3 +1,5 @@
+use std::iter;
+
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -550,6 +552,10 @@ impl<'a> FunctionLegalizer<'a> {
             downcast::<&logic::Not>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
         {
             self.rewrite_not(inst, arg);
+        } else if let Some(arg) =
+            downcast::<&logic::Bswap>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
+        {
+            self.rewrite_bswap(inst, arg);
         } else if let Some((lhs, rhs)) =
             downcast::<&cmp::Slt>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
@@ -2123,6 +2129,66 @@ impl<'a> FunctionLegalizer<'a> {
                 self.replace_with_aliases(inst, &[result]);
             }
         }
+    }
+
+    /// The EVM has no byte swap. Each round swaps the halves of every lane,
+    /// from the whole value down to byte pairs; a canonical narrow value stays
+    /// within its width throughout.
+    fn rewrite_bswap(&mut self, inst: InstId, arg: ValueId) {
+        let width = self
+            .single_result_width(inst)
+            .expect("missing bswap result width");
+        let bits = match width {
+            ScalarWidth::Bool => panic!("bswap does not support i1"),
+            ScalarWidth::Narrow(8) => {
+                self.replace_with_aliases(inst, &[arg]);
+                return;
+            }
+            ScalarWidth::Narrow(bits) => bits,
+            ScalarWidth::Full256 => 256,
+        };
+        let mut word = arg;
+        for half in iter::successors(Some(bits / 2), |&half| (half > 8).then_some(half / 2)) {
+            let shift = self.shift_value(half);
+            let lane = low_mask(half);
+            let mask = (0..bits)
+                .step_by(usize::from(half) * 2)
+                .fold(U256::zero(), |mask, offset| {
+                    mask | (lane << usize::from(offset))
+                });
+            let mask = self.imm_i256(mask);
+            let high = self.insert_before_one(
+                inst,
+                arith::Shr::new(self.evm_inst_set(), shift, word),
+                Type::I256,
+                Some(width),
+            );
+            let high = self.insert_before_one(
+                inst,
+                And::new(self.evm_inst_set(), high, mask),
+                Type::I256,
+                Some(width),
+            );
+            let low = self.insert_before_one(
+                inst,
+                And::new(self.evm_inst_set(), word, mask),
+                Type::I256,
+                Some(width),
+            );
+            let low = self.insert_before_one(
+                inst,
+                arith::Shl::new(self.evm_inst_set(), shift, low),
+                Type::I256,
+                Some(width),
+            );
+            word = self.insert_before_one(
+                inst,
+                Or::new(self.evm_inst_set(), high, low),
+                Type::I256,
+                Some(width),
+            );
+        }
+        self.replace_with_aliases(inst, &[word]);
     }
 
     fn rewrite_signed_cmp(

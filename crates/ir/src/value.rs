@@ -169,6 +169,20 @@ impl Immediate {
         Self::from_i256(self.as_i256(), ty)
     }
 
+    /// Reverses the order of the value's bytes; `i1` and `i8` values are
+    /// unchanged.
+    pub fn bswap(self) -> Self {
+        match self {
+            Self::I1(_) | Self::I8(_) => self,
+            Self::I16(val) => Self::I16(val.swap_bytes()),
+            Self::I32(val) => Self::I32(val.swap_bytes()),
+            Self::I64(val) => Self::I64(val.swap_bytes()),
+            Self::I128(val) => Self::I128(val.swap_bytes()),
+            Self::I256(val) => Self::I256(I256::from_le_bytes(&val.to_u256().to_big_endian())),
+            Self::EnumTag { .. } => panic!("enum tags have no byte order"),
+        }
+    }
+
     pub fn zext(self, ty: Type) -> Self {
         debug_assert!(self.ty() <= ty);
         let i256: I256 = match self {
