@@ -107,8 +107,9 @@ impl Sp1Runtime {
     /// so the cache can change or be deleted afterwards. Cargo may fetch the
     /// pinned dependencies; installing the Succinct toolchain remains explicit.
     pub fn build(toolchain: Sp1Toolchain, cache: impl AsRef<Path>) -> Result<Self, Sp1Error> {
-        let cache = cache.as_ref();
-        fs::create_dir_all(cache.join("src"))?;
+        fs::create_dir_all(cache.as_ref().join("src"))?;
+        // Cargo resolves the target directory from inside the cache.
+        let cache = cache.as_ref().canonicalize()?;
         let lock = fs::File::create(cache.join(".lock"))?;
         lock.lock()?;
         for (path, contents) in [
@@ -137,7 +138,7 @@ impl Sp1Runtime {
         .join("\x1f");
         let mut command = Command::new("cargo");
         command
-            .current_dir(cache)
+            .current_dir(&cache)
             .args([
                 "build",
                 "--locked",

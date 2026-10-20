@@ -1,4 +1,4 @@
-use std::fs;
+use std::{env, fs};
 
 use object::{
     Architecture, BinaryFormat, Endianness, SymbolFlags, SymbolKind, SymbolScope,
@@ -82,24 +82,24 @@ fn out_of_range_call_is_a_link_error() {
 
 #[test]
 fn runtime_cache_is_reused_and_repaired() {
-    let cache = tempfile::tempdir().unwrap();
-    let archive = cache
+    // Build through a relative path, as callers configuring a cache may.
+    let cache = tempfile::tempdir_in(".").unwrap();
+    let relative = cache
         .path()
+        .strip_prefix(env::current_dir().unwrap())
+        .unwrap();
+    let archive = relative
         .join("target")
         .join(TARGET)
         .join("release/libsonatina_sp1_runtime.a");
-    let build = || Sp1Runtime::build(Sp1Toolchain::from_env().unwrap(), cache.path()).unwrap();
+    let build = || Sp1Runtime::build(Sp1Toolchain::from_env().unwrap(), relative).unwrap();
     let modified = || fs::metadata(&archive).unwrap().modified().unwrap();
     build();
     let built = modified();
     build();
     assert_eq!(modified(), built, "an unchanged cache must not rebuild");
 
-    fs::write(
-        cache.path().join("src/lib.rs"),
-        "compile_error!(\"stale\");",
-    )
-    .unwrap();
+    fs::write(relative.join("src/lib.rs"), "compile_error!(\"stale\");").unwrap();
     let runtime = build();
     // A built runtime links from its own archive copy, not the cache.
     drop(cache);
