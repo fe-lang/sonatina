@@ -843,6 +843,32 @@ fn verify_program_memory_plan(
                     }
                 }
             }
+
+            // The shadow holds saved scratch words for the whole call, so it
+            // must not share words with any stable object the call keeps live.
+            if let Some(preserve) = saved
+                && let Some(&shadow_start) = stable_offsets.get(&preserve.shadow_obj)
+            {
+                let shadow_words: u32 = preserve.runs.iter().map(|run| run.len_words).sum();
+                let shadow_end = shadow_start + shadow_words;
+                for &obj in call
+                    .live_across_objs
+                    .iter()
+                    .chain(&call.callee_visible_objs)
+                {
+                    let Some(&start) = stable_offsets.get(&obj) else {
+                        continue;
+                    };
+                    let end = start + stack.obj_size_words[&obj];
+                    assert!(
+                        end <= shadow_start || shadow_end <= start,
+                        "shadow of call {} in func {} overlaps stable object {}",
+                        call.inst.as_u32(),
+                        func.as_u32(),
+                        obj.as_u32()
+                    );
+                }
+            }
         }
 
         if !stable_subset.is_empty() {
