@@ -56,8 +56,8 @@ use super::{
     malloc_plan,
     memory_plan::{
         self, BackendSpillPlan, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan,
-        ProgramMemoryPlan, STATIC_BASE, SemanticFuncPlan, WORD_BYTES,
-        compute_abs_clobber_words_with_extra, expect_func_entry,
+        ProgramMemoryPlan, STATIC_BASE, SemanticFuncPlan, WORD_BYTES, compute_abs_clobber_words,
+        expect_func_entry,
     },
     pipeline::EvmPipeline,
     ptr_escape::PtrEscapeSummaries,
@@ -1483,10 +1483,8 @@ fn validate_committed_final_spill_section(
 pub(crate) fn compute_return_escape_caller_clamp_words(
     schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
-    extra_clobber_words: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, u32> {
-    let abs_clobber_words =
-        compute_abs_clobber_words_with_extra(schedule, plan, extra_clobber_words);
+    let abs_clobber_words = compute_abs_clobber_words(schedule, plan);
     let clobber = |func: FuncRef| {
         abs_clobber_words
             .get(&func)

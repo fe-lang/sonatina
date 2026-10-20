@@ -46,7 +46,7 @@ use self::{
     },
     memory_plan::{
         ArenaCostModel, BackendSpillPlan, BackendSpillReserve, DYN_SP_SLOT, ProgramMemoryPlan,
-        compute_abs_clobber_words_with_extra, compute_semantic_program_memory_plan,
+        compute_abs_clobber_words, compute_semantic_program_memory_plan,
     },
     prepare::compute_return_escape_caller_clamp_words,
 };
@@ -1883,36 +1883,11 @@ block0:
 
     let mk = ctx.names["mk"];
     let main = ctx.names["main"];
-    let abs_clobber_words = compute_abs_clobber_words_with_extra(
-        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
-        &ctx.plan,
-        &FxHashMap::default(),
-    );
-    let clamp_words = compute_return_escape_caller_clamp_words(
-        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
-        &ctx.plan,
-        &FxHashMap::default(),
-    );
-    let main_clobber_words = abs_clobber_words[&main];
+    let schedule = crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs);
+    let abs_clobber_words = compute_abs_clobber_words(&schedule, &ctx.plan);
+    let clamp_words = compute_return_escape_caller_clamp_words(&schedule, &ctx.plan);
 
-    assert_eq!(clamp_words[&mk], main_clobber_words);
-
-    let extra_reserve = BackendSpillReserve {
-        scratch_words: 3,
-        stable_words: 0,
-    };
-    let extra_main_clobber_words = main_clobber_words
-        .checked_add(extra_reserve.scratch_words)
-        .expect("test clobber overflow");
-    let mut extra_clobber_words = FxHashMap::default();
-    extra_clobber_words.insert(main, extra_reserve);
-    let clamp_words = compute_return_escape_caller_clamp_words(
-        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
-        &ctx.plan,
-        &extra_clobber_words,
-    );
-
-    assert_eq!(clamp_words[&mk], extra_main_clobber_words);
+    assert_eq!(clamp_words[&mk], abs_clobber_words[&main]);
 }
 
 #[test]

@@ -279,7 +279,7 @@ pub(crate) fn compute_semantic_memory_placement(
     let private_static_reserves = private_static_mallocs.backend_spill_reserves();
     semantic_plan.apply_backend_spill_reserves(schedule, &private_static_reserves);
     let return_escape_caller_abs_words =
-        compute_return_escape_caller_clamp_words(schedule, &semantic_plan, &FxHashMap::default());
+        compute_return_escape_caller_clamp_words(schedule, &semantic_plan);
     for (func, return_escape_caller_abs_words) in return_escape_caller_abs_words {
         if let Some(func_plan) = semantic_plan.funcs.get_mut(&func) {
             func_plan.return_escape_caller_abs_words = return_escape_caller_abs_words;
@@ -341,13 +341,12 @@ pub(crate) fn compute_semantic_memory_placement(
     }
     semantic_plan.set_arena_base(arena_base);
 
-    let mut malloc_bounds = heap_plan::compute_semantic_malloc_future_abs_words_with_extra(
+    let mut malloc_bounds = heap_plan::compute_semantic_malloc_future_abs_words(
         module,
         schedule,
         &semantic_plan,
         analyses,
         &backend.isa,
-        &FxHashMap::default(),
     );
     for (&func, &reserve) in backend_spill_reserves {
         if let Some(bounds) = malloc_bounds.get_mut(&func)

@@ -15,8 +15,8 @@ use sonatina_ir::{
 use super::{
     immediate_u32,
     memory_plan::{
-        BackendSpillReserve, FuncPreAnalysis, ObjLoc, ProgramMemoryPlan, SemanticFuncPlan,
-        WORD_BYTES, compute_abs_clobber_words_with_extra, expect_func_entry,
+        FuncPreAnalysis, ObjLoc, ProgramMemoryPlan, SemanticFuncPlan, WORD_BYTES,
+        compute_abs_clobber_words, expect_func_entry,
     },
     ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo, compute_value_provenance},
@@ -24,13 +24,12 @@ use super::{
 };
 use crate::{liveness::InstLiveness, module_analysis::CallGraphSchedule};
 
-pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
+pub(crate) fn compute_semantic_malloc_future_abs_words(
     module: &Module,
     schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     isa: &Evm,
-    extra_clobber_words: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, FxHashMap<InstId, u32>> {
     compute_malloc_future_abs_words_with_analysis(
         module,
@@ -38,7 +37,6 @@ pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
         plan,
         analyses,
         isa,
-        extra_clobber_words,
         |analysis| FutureBoundsAnalysis {
             cfg: &analysis.cfg,
             inst_liveness: &analysis.inst_liveness,
@@ -74,14 +72,12 @@ fn compute_malloc_future_abs_words_with_analysis<A>(
     plan: &ProgramMemoryPlan,
     analyses: &FxHashMap<FuncRef, A>,
     isa: &Evm,
-    extra_clobber_words: &FxHashMap<FuncRef, BackendSpillReserve>,
     analysis_view: impl Fn(&A) -> FutureBoundsAnalysis<'_> + Sync,
 ) -> FxHashMap<FuncRef, FxHashMap<InstId, u32>>
 where
     A: Sync,
 {
-    let abs_clobber_words =
-        compute_abs_clobber_words_with_extra(schedule, plan, extra_clobber_words);
+    let abs_clobber_words = compute_abs_clobber_words(schedule, plan);
     let mut results: Vec<_> = schedule
         .funcs()
         .par_iter()
@@ -581,7 +577,6 @@ block0:
             &plan,
             &analyses,
             &isa,
-            &FxHashMap::default(),
             |analysis| FutureBoundsAnalysis {
                 cfg: &analysis.cfg,
                 inst_liveness: &analysis.inst_liveness,
@@ -661,7 +656,6 @@ block0:
             &plan,
             &analyses,
             &isa,
-            &FxHashMap::default(),
             |analysis| FutureBoundsAnalysis {
                 cfg: &analysis.cfg,
                 inst_liveness: &analysis.inst_liveness,

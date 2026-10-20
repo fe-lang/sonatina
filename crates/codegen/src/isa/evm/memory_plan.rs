@@ -468,82 +468,6 @@ block0:
         assert_eq!(plan.scratch_peak_words, 5);
         assert_eq!(plan.global_dyn_base, abs_addr_for_word(STATIC_BASE, 5));
     }
-
-    #[test]
-    fn abs_clobber_extra_reserve_extends_scratch_end() {
-        let parsed = parse_module(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %entry() {
-block0:
-    return;
-}
-"#,
-        )
-        .expect("module parses");
-        let func = parsed.module.funcs()[0];
-        let plan = ProgramMemoryPlan {
-            arena_base: STATIC_BASE,
-            scratch_peak_words: 3,
-            stable_chain_peak_words: 0,
-            global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
-            funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
-        };
-        let reserve_words = FxHashMap::from_iter([(
-            func,
-            BackendSpillReserve {
-                scratch_words: 2,
-                stable_words: 0,
-            },
-        )]);
-        let clobber_words = compute_abs_clobber_words_with_extra(
-            &CallGraphSchedule::compute(&parsed.module, &[func]),
-            &plan,
-            &reserve_words,
-        );
-
-        assert_eq!(clobber_words[&func], 5);
-    }
-
-    #[test]
-    fn abs_clobber_extra_reserve_extends_static_stable_end() {
-        let parsed = parse_module(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %entry() {
-block0:
-    return;
-}
-"#,
-        )
-        .expect("module parses");
-        let func = parsed.module.funcs()[0];
-        let mut func_plan = empty_func_plan(1, StableMode::StableAbs { base_word: 4 });
-        func_plan.stable_words = 4;
-        let plan = ProgramMemoryPlan {
-            arena_base: STATIC_BASE,
-            scratch_peak_words: 1,
-            stable_chain_peak_words: 4,
-            global_dyn_base: abs_addr_for_word(STATIC_BASE, 5),
-            funcs: FxHashMap::from_iter([(func, func_plan)]),
-        };
-        let reserve_words = FxHashMap::from_iter([(
-            func,
-            BackendSpillReserve {
-                scratch_words: 0,
-                stable_words: 2,
-            },
-        )]);
-        let clobber_words = compute_abs_clobber_words_with_extra(
-            &CallGraphSchedule::compute(&parsed.module, &[func]),
-            &plan,
-            &reserve_words,
-        );
-
-        assert_eq!(clobber_words[&func], 10);
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -773,19 +697,15 @@ fn compute_program_memory_plan_from_stacks(
     }
 }
 
-pub(crate) fn compute_abs_clobber_words_with_extra(
+pub(crate) fn compute_abs_clobber_words(
     schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
-    extra_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, u32> {
     schedule.join_over_callees(
         |func| {
-            let extra_reserve = extra_reserves.get(&func).copied().unwrap_or_default();
             plan.funcs
                 .get(&func)
-                .map_or(extra_reserve.max_words(), |func_plan| {
-                    func_plan.abs_words_end_with_reserve(extra_reserve)
-                })
+                .map_or(0, SemanticFuncPlan::abs_words_end)
         },
         |acc, callee_end| *acc = (*acc).max(*callee_end),
     )
@@ -794,30 +714,6 @@ pub(crate) fn compute_abs_clobber_words_with_extra(
 impl SemanticFuncPlan {
     pub fn active_abs_words(&self) -> u32 {
         self.entry_abs_words.max(self.abs_words_end())
-    }
-
-    /// The absolute clobber end of this frame if `extra_reserve` more words
-    /// were appended to each region. Unlike [`Self::abs_words_end`], a
-    /// `StableMode::None` frame still accounts for a nonzero stable reserve
-    /// (the reserve would force a stable frame into existence).
-    pub(crate) fn abs_words_end_with_reserve(&self, extra_reserve: BackendSpillReserve) -> u32 {
-        let scratch_end = add_words(self.scratch_words, extra_reserve.scratch_words);
-        let stable_end = match self.stable_mode {
-            StableMode::None => extra_reserve.stable_words,
-            StableMode::StableAbs { base_word } => {
-                if self.stable_words == 0 && extra_reserve.stable_words == 0 {
-                    0
-                } else {
-                    base_word
-                        .checked_add(self.stable_words)
-                        .and_then(|end| end.checked_add(extra_reserve.stable_words))
-                        .expect("stable reserve overflow")
-                }
-            }
-            StableMode::DynamicFrame => 0,
-        };
-
-        scratch_end.max(stable_end)
     }
 }
 
