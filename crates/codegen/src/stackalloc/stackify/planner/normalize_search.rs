@@ -2200,6 +2200,13 @@ fn build_linear_operand_prep_upper_bound(
 
 const OPERAND_PREP_STAR_SWAP_SELECTIONS: usize = 64;
 
+/// State cap for pure last-use permutations: every operand copy is already usable, every operand
+/// is a last use and nothing needs preserving. The heuristic is zero, so the search explores
+/// every plan cheaper than the swap-routing incumbent, which is already optimal among swap-only
+/// plans. Only short DUP shortcuts lie within any budget, and they surface within a few hundred
+/// states.
+const OPERAND_PREP_PERMUTATION_MAX_STATES: usize = 2_000;
+
 /// Swap-only operand preparation for windows that already hold every operand and preserve
 /// copy. Chooses which copies feed the operand prefix, treats every other window slot as one
 /// interchangeable filler key, and routes each choice exactly with [`build_star_swap_plan`].
@@ -2884,18 +2891,28 @@ pub(super) fn solve_optimal_operand_prep_plan(
         );
     }
 
+    let load_mask = problem
+        .materializable_val
+        .iter()
+        .fold(0, |mask, &kid| mask | 1u64 << kid);
+    let permutation = problem.preserve_mask == 0
+        && problem.goal_mask & !problem.last_use_mask == 0
+        && heuristic_operand_prep(problem.start_state, &problem, load_mask, cfg, &prep_costs)
+            == Cost::default();
+    let max_states = ctx.search_profile.budgets().operand_prep_max_states;
     let search_problem = OperandPrepSearchProblem {
         problem: &problem,
         costs: &prep_costs,
         cfg,
-        load_mask: problem
-            .materializable_val
-            .iter()
-            .fold(0, |mask, &kid| mask | 1u64 << kid),
+        load_mask,
         surplus_last_use_penalty,
         push0_kid,
         push0_cost,
-        max_states: ctx.search_profile.budgets().operand_prep_max_states,
+        max_states: if permutation {
+            max_states.min(OPERAND_PREP_PERMUTATION_MAX_STATES)
+        } else {
+            max_states
+        },
     };
 
     let run = run_bounded_astar(
@@ -4214,7 +4231,7 @@ mod tests {
         domtree::DomTree,
         liveness::Liveness,
         stackalloc::stackify::{
-            builder::StackifyReachability,
+            builder::{StackifyReachability, StackifySearchProfile},
             planner::{MemPlan, MemState, Planner, test_utils::build_stackify_test_context},
             slots::{FreeSlotPools, SpillSlotPools},
             spill::SpillSet,
@@ -5951,6 +5968,41 @@ func public %f() {
             assert_eq!(
                 plan.cost, greedy_cost,
                 "zero-budget exact search should return the best incumbent"
+            );
+        });
+    }
+
+    #[test]
+    fn operand_prep_search_caps_pure_last_use_permutations() {
+        with_stackify_ctx!(16, |func, ctx| {
+            let args = make_undefs(func, 16);
+            let order = [14, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 15, 13];
+            let start_vals: Vec<ValueId> = order.iter().map(|&idx| args[idx]).collect();
+        } {
+            let mut stack = SymStack::entry_stack(func, false);
+            push_values(&mut stack, &start_vals);
+            let consume_last_use: BitSet<ValueId> = args.iter().copied().collect();
+
+            let mut scratch = NormalizeSearchScratch::default();
+            let plan = solve_optimal_operand_prep_plan(
+                &ctx,
+                &stack,
+                &args,
+                OperandPrepConstraints {
+                    consume_last_use: &consume_last_use,
+                    cache_preserve: &BitSet::default(),
+                },
+                &EstimatedCostModel::default(),
+                default_search_cfg(&ctx, StackifySearchProfile::Exact.budgets().operand_prep_exact_expansions),
+                &mut scratch,
+            )
+            .expect("expected operand-prep plan");
+
+            assert_eq!(plan.cost.gas, 63, "{:?}", plan.steps);
+            assert!(
+                scratch.prep.nodes.len() < 2 * OPERAND_PREP_PERMUTATION_MAX_STATES,
+                "searched {} states",
+                scratch.prep.nodes.len()
             );
         });
     }
