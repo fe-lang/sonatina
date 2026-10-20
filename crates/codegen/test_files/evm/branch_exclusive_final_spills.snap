@@ -6,12 +6,12 @@ input_file: test_files/evm/branch_exclusive_final_spills.sntn
 evm.config: stack_reach=4 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false mem_plan_detail=true
 
 object: Contract
-  section runtime: 194 bytes
-  total: 194 bytes
+  section runtime: 189 bytes
+  total: 189 bytes
 
 functions:
   mem: global_dyn_base=0x1c0 arena_base=0x40 scratch_peak_words=8 stable_chain_peak_words=4
-  entry: ir_blocks=3 ir_insts=37 vcode_ops=108 fixups=3 imm_bytes=32
+  entry: ir_blocks=3 ir_insts=37 vcode_ops=103 fixups=3 imm_bytes=32
     mem: scratch_words=0 stable_words=4 stable_mode=StableAbs(base=0x140) entry_abs_words=8 abs_words_end=12
   clobber: ir_blocks=1 ir_insts=10 vcode_ops=30 fixups=0 imm_bytes=10
     mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=12 abs_words_end=8
@@ -28,4 +28,4 @@ evm mem plan: clobber scratch_words=8 stable_words=0 stable_mode=None entry_abs_
 
 evm:
   case getter: calldata_len=32 success reason=Return gas_used=21194 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=66
-  case nonzero: calldata_len=256 success reason=Return gas_used=22616 gas_refunded=0 logs=0 output=call len=32 tx_gas=22120 runtime_gas=496
+  case nonzero: calldata_len=256 success reason=Return gas_used=22601 gas_refunded=0 logs=0 output=call len=32 tx_gas=22120 runtime_gas=481

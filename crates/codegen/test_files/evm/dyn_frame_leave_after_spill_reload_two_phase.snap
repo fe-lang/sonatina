@@ -6,20 +6,20 @@ input_file: test_files/evm/dyn_frame_leave_after_spill_reload_two_phase.sntn
 evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 262 bytes
-  total: 262 bytes
+  section runtime: 266 bytes
+  total: 266 bytes
 
 functions:
   mem: global_dyn_base=0xe0 arena_base=0xa0 scratch_peak_words=2 stable_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=4 vcode_ops=15 fixups=2 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
-  rec: ir_blocks=3 ir_insts=43 vcode_ops=188 fixups=6 imm_bytes=39
+  rec: ir_blocks=3 ir_insts=43 vcode_ops=192 fixups=6 imm_bytes=39
     mem: scratch_words=0 stable_words=3 stable_mode=DynamicFrame entry_abs_words=2 abs_words_end=0
   one: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=2
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=23026 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1886
+  case ok: calldata_len=32 success reason=Return gas_used=23062 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1922
 
 
 --------------- DEBUG ---------------
@@ -155,12 +155,14 @@ rec:
     XOR  // v23.i256 = xor v22 v14;
     XOR  // v24.i256 = xor v23 v12;
     SWAP1  // v25.i256 = xor v24 v10;
-    SWAP2
-    SWAP3
     SWAP4
     XOR
-    XOR  // v26.i256 = xor v25 v8;
-    XOR  // v27.i256 = xor v26 v6;
+    SWAP1  // v26.i256 = xor v25 v8;
+    SWAP3
+    XOR
+    SWAP1  // v27.i256 = xor v26 v6;
+    SWAP2
+    XOR
     XOR  // v28.i256 = xor v27 v4;
     PUSH1 0x1 (1)  // v29.i256 = add v28 v3;
     DUP2
@@ -225,12 +227,14 @@ rec:
     XOR  // v42.i256 = xor v41 v34;
     XOR  // v43.i256 = xor v42 v33;
     SWAP1  // v44.i256 = xor v43 v32;
-    SWAP2
-    SWAP3
     SWAP4
     XOR
-    XOR  // v45.i256 = xor v44 v31;
-    XOR  // v46.i256 = xor v45 v30;
+    SWAP1  // v45.i256 = xor v44 v31;
+    SWAP3
+    XOR
+    SWAP1  // v46.i256 = xor v45 v30;
+    SWAP2
+    XOR
     XOR  // v47.i256 = xor v46 v29;
     SWAP1  // return v47;
     JUMP
