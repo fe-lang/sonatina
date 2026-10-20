@@ -15,7 +15,11 @@ use sp1_sdk::{
 
 pub fn runtime() -> &'static Sp1Runtime {
     static RUNTIME: OnceLock<Sp1Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| Sp1Runtime::build(Sp1Toolchain::from_env().unwrap()).unwrap())
+    // Build from scratch on every run; the runtime keeps its own archive copy.
+    RUNTIME.get_or_init(|| {
+        let cache = tempfile::tempdir().unwrap();
+        Sp1Runtime::build(Sp1Toolchain::from_env().unwrap(), cache.path()).unwrap()
+    })
 }
 
 /// Each CPU prover is a local prover node holding several gigabytes, so tests

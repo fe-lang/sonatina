@@ -4314,6 +4314,7 @@ dependencies = [
  "sonatina-triple",
  "sonatina-verifier",
  "sp1-sdk",
+ "tempfile",
 ]
 
 [[package]]

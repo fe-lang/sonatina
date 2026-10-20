@@ -14,6 +14,7 @@ sonatina-sp1 = { path = "../../crates/sp1" }
 sonatina-triple = { path = "../../crates/triple" }
 sonatina-verifier = { path = "../../crates/verifier" }
 sp1-sdk = { version = "=6.8.0", default-features = false, features = ["blocking"] }
+tempfile = "3.23"
 
 [dev-dependencies]
 object = { version = "0.39.1", default-features = false, features = ["write", "std"] }
