@@ -7,19 +7,19 @@ use sonatina_ir::{BlockId, InstId, Module, ValueId, cfg::ControlFlowGraph, modul
 use crate::{
     bitset::BitSet,
     liveness::InstLiveness,
-    module_analysis::{CallGraphSccs, CallGraphSchedule, SccRef},
+    module_analysis::{CallGraphSchedule, SccRef},
     stackalloc::{StackifyAlloc, StackifyTrace},
 };
 
 #[cfg(debug_assertions)]
-use super::static_arena_alloc::{LiveRegion, StackObj, StackObjKind};
+use super::static_arena_alloc::{LiveRegion, StackObj};
 use super::{
     frame_layout::DynamicFrameLayout,
     malloc_plan::MallocEscapeKind,
     placement_search::{FuncPlacementEval, solve_func_placement},
     ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo},
-    static_arena_alloc::{FuncStackObjects, ObjFacts, StackObjId, StaticArenaAllocCtx},
+    static_arena_alloc::{FuncStackObjects, StackObjId, StaticArenaAllocCtx},
 };
 use sonatina_ir::isa::evm::Evm;
 
@@ -627,7 +627,7 @@ pub(crate) fn compute_semantic_program_memory_plan(
     let plan = compute_program_memory_plan_from_stacks(module, schedule, &stacks, cost_model);
 
     #[cfg(debug_assertions)]
-    verify_program_memory_plan(schedule.funcs(), &stacks, &schedule.sccs, &plan);
+    verify_program_memory_plan(schedule, &stacks, &plan);
 
     plan
 }
@@ -665,12 +665,10 @@ fn compute_program_memory_plan_from_stacks(
         .copied()
         .map(|func| {
             let stack = expect_func_entry(stacks, func, "object facts");
-            let scc_ref = schedule.sccs.scc_ref(func);
-            let is_recursive = schedule.sccs.scc_info(scc_ref).is_cycle;
-            let facts = build_planner_facts(stack, &schedule.sccs, scc_ref, is_recursive);
+            let is_recursive = schedule.is_recursive(func);
             (
                 func,
-                solve_func_placement(stack, &facts, is_recursive, cost_model),
+                solve_func_placement(stack, &stack.obj_facts, is_recursive, cost_model),
             )
         })
         .collect();
@@ -823,36 +821,6 @@ impl SemanticFuncPlan {
     }
 }
 
-fn build_planner_facts(
-    stack: &FuncStackObjects,
-    scc: &CallGraphSccs,
-    scc_ref: SccRef,
-    is_recursive_scc: bool,
-) -> FxHashMap<StackObjId, ObjFacts> {
-    let mut facts = stack.obj_facts.clone();
-    for call in &stack.call_sites {
-        let is_recursive_call = is_recursive_scc && scc.scc_ref(call.callee) == scc_ref;
-        if !is_recursive_call {
-            continue;
-        }
-        for &obj in &call.live_across_objs {
-            let fact = facts
-                .get_mut(&obj)
-                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
-            fact.live_across_recursive_call = true;
-        }
-        for &obj in &call.callee_visible_objs {
-            let fact = facts
-                .get_mut(&obj)
-                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
-            fact.live_across_recursive_call = true;
-            fact.must_stable = true;
-            fact.stable_reason = super::static_arena_alloc::StableReason::RecursiveVisibility;
-        }
-    }
-    facts
-}
-
 fn abs_addr_for_word(arena_base: u32, word: u32) -> u32 {
     arena_base
         .checked_add(
@@ -864,18 +832,16 @@ fn abs_addr_for_word(arena_base: u32, word: u32) -> u32 {
 
 #[cfg(debug_assertions)]
 fn verify_program_memory_plan(
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     stacks: &FxHashMap<FuncRef, FuncStackObjects>,
-    scc: &CallGraphSccs,
     plan: &ProgramMemoryPlan,
 ) {
-    for &func in funcs {
+    for &func in schedule.funcs() {
         let Some(func_plan) = plan.funcs.get(&func) else {
             continue;
         };
         let stack = stacks.get(&func).expect("missing stack objects");
-        let scc_ref = scc.scc_ref(func);
-        let is_recursive = scc.scc_info(scc_ref).is_cycle;
+        let is_recursive = schedule.is_recursive(func);
 
         let mut scratch_offsets: FxHashMap<StackObjId, u32> = FxHashMap::default();
         let mut stable_offsets: FxHashMap<StackObjId, u32> = FxHashMap::default();
@@ -903,7 +869,6 @@ fn verify_program_memory_plan(
             let size_words: u32 = call.runs.iter().map(|run| run.len_words).sum();
             stable_subset.push(StackObj {
                 id: call.shadow_obj,
-                kind: StackObjKind::Shadow(InstId::from_u32(0)),
                 size_words,
                 region: LiveRegion::sort_only(0),
                 access_weight: 0,
@@ -1055,10 +1020,10 @@ fn verify_subset_packing(
             let right_end = right_off + right.size_words;
             assert!(
                 left_end <= right_off || right_end <= left_off,
-                "packing overlap in func {}: {:?}@[{left_off},{left_end}) vs {:?}@[{right_off},{right_end})",
+                "packing overlap in func {}: obj{}@[{left_off},{left_end}) vs obj{}@[{right_off},{right_end})",
                 func_ref.as_u32(),
-                left.kind,
-                right.kind,
+                left.id.as_u32(),
+                right.id.as_u32(),
             );
         }
     }

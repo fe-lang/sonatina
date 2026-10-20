@@ -693,7 +693,6 @@ pub(super) fn compute_regions_and_calls(
             call_sites.push(CallSiteObjects {
                 inst,
                 call_rank: events.boundary_rank(block, events.inst_index_in_block[&inst]),
-                callee: *call.callee(),
                 result_count: u8::try_from(function.dfg.inst_results(inst).len())
                     .expect("call result count too large"),
                 live_across_objs,

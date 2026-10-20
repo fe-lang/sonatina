@@ -69,17 +69,9 @@ entity_impl!(LocalObjIdx);
 pub(crate) struct StableItemIdx(u32);
 entity_impl!(StableItemIdx);
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum StackObjKind {
-    Alloca(InstId),
-    Spill(ValueId),
-    Shadow(InstId),
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct StackObj {
     pub(crate) id: StackObjId,
-    pub(crate) kind: StackObjKind,
     pub(crate) size_words: u32,
     pub(crate) region: LiveRegion,
     pub(crate) access_weight: u64,
@@ -87,39 +79,19 @@ pub(crate) struct StackObj {
     pub(crate) store_count: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StableReason {
-    None,
-    VisibleToCallee,
-    RecursiveVisibility,
-    UnknownLocalPointerClosure,
-    #[allow(dead_code)]
-    ExplicitAddressEscapeBarrier,
-}
-
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct ObjFacts {
     pub(crate) id: StackObjId,
     pub(crate) size_words: u32,
-    pub(crate) region: LiveRegion,
-    pub(crate) is_alloca: bool,
-    pub(crate) is_spill: bool,
-    pub(crate) address_taken: bool,
     pub(crate) access_weight: u64,
-    pub(crate) load_count: u32,
-    pub(crate) store_count: u32,
     pub(crate) live_across_calls: SmallVec<[InstId; 4]>,
-    pub(crate) visible_to_callee_at: SmallVec<[InstId; 4]>,
-    pub(crate) live_across_recursive_call: bool,
+    /// Visible to a callee or reachable through an unknown local pointer.
     pub(crate) must_stable: bool,
-    pub(crate) stable_reason: StableReason,
 }
 
 pub(crate) struct CallSiteObjects {
     pub(crate) inst: InstId,
     pub(crate) call_rank: u32,
-    pub(crate) callee: FuncRef,
     pub(crate) result_count: u8,
     /// The objects live across the call that have storage: a zero-sized
     /// object has no location to keep.
@@ -135,6 +107,18 @@ pub(crate) struct FuncStackObjects {
     pub(crate) alloca_ids: FxHashMap<InstId, StackObjId>,
     pub(crate) call_sites: Vec<CallSiteObjects>,
     pub(crate) next_obj_id: u32,
+}
+
+#[cfg(test)]
+impl FuncStackObjects {
+    fn region(&self, id: StackObjId) -> &LiveRegion {
+        &self
+            .objects
+            .iter()
+            .find(|obj| obj.id == id)
+            .expect("stack object exists")
+            .region
+    }
 }
 
 pub(super) struct StackObjectInput<'a> {
@@ -358,7 +342,6 @@ fn compute_func_stack_objects_from_input(
         let id = spill_obj[v].expect("spilled value missing stack object id");
         objects.push(StackObj {
             id,
-            kind: StackObjKind::Spill(v),
             size_words: 1,
             region: LiveRegion::empty(),
             access_weight: 0,
@@ -395,7 +378,6 @@ fn compute_func_stack_objects_from_input(
 
         objects.push(StackObj {
             id,
-            kind: StackObjKind::Alloca(inst),
             size_words,
             region: LiveRegion::empty(),
             access_weight: 0,
@@ -469,22 +451,6 @@ fn compute_func_stack_objects_from_input(
             .saturating_add(u64::from(obj.store_count).saturating_mul(2));
     }
 
-    let mut address_taken_allocas: FxHashSet<InstId> = FxHashSet::default();
-    for (&base, stored) in &prov_info.local_mem {
-        address_taken_allocas.insert(base);
-        for child in stored.alloca_insts() {
-            address_taken_allocas.insert(child);
-        }
-    }
-    for edges in local_edges.values() {
-        for &child in edges {
-            address_taken_allocas.insert(child);
-        }
-    }
-    for &base in &local_unknown {
-        address_taken_allocas.insert(base);
-    }
-
     let mut unknown_barrier_objs: FxHashSet<StackObjId> = FxHashSet::default();
     let closure = AllocaClosureCtx {
         edges: &local_edges,
@@ -528,25 +494,14 @@ fn compute_func_stack_objects_from_input(
 
     let mut obj_facts: FxHashMap<StackObjId, ObjFacts> = FxHashMap::default();
     for obj in &objects {
-        let address_taken =
-            matches!(obj.kind, StackObjKind::Alloca(inst) if address_taken_allocas.contains(&inst));
         obj_facts.insert(
             obj.id,
             ObjFacts {
                 id: obj.id,
                 size_words: obj.size_words,
-                region: obj.region.clone(),
-                is_alloca: matches!(obj.kind, StackObjKind::Alloca(_)),
-                is_spill: matches!(obj.kind, StackObjKind::Spill(_)),
-                address_taken,
                 access_weight: obj.access_weight,
-                load_count: obj.load_count,
-                store_count: obj.store_count,
                 live_across_calls: SmallVec::new(),
-                visible_to_callee_at: SmallVec::new(),
-                live_across_recursive_call: false,
                 must_stable: false,
-                stable_reason: StableReason::None,
             },
         );
     }
@@ -563,21 +518,14 @@ fn compute_func_stack_objects_from_input(
             let facts = obj_facts
                 .get_mut(&obj)
                 .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
-            if !facts.visible_to_callee_at.contains(&call.inst) {
-                facts.visible_to_callee_at.push(call.inst);
-            }
             facts.must_stable = true;
-            facts.stable_reason = StableReason::VisibleToCallee;
         }
     }
     for obj in unknown_barrier_objs {
-        let facts = obj_facts
+        obj_facts
             .get_mut(&obj)
-            .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
-        facts.must_stable = true;
-        if matches!(facts.stable_reason, StableReason::None) {
-            facts.stable_reason = StableReason::UnknownLocalPointerClosure;
-        }
+            .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()))
+            .must_stable = true;
     }
 
     FuncStackObjects {
@@ -893,7 +841,7 @@ block0:
             let regions = ["v0", "v6"].map(|name| {
                 let value = parsed.debug.value(func_ref, name).unwrap();
                 let inst = function.dfg.value_inst(value).unwrap();
-                &stack.obj_facts[&stack.alloca_ids[&inst]].region
+                stack.region(stack.alloca_ids[&inst])
             });
             assert!(
                 !regions[0].overlaps(regions[1]),
@@ -925,7 +873,10 @@ block0:
             .call_sites
             .iter()
             .find(|call| {
-                parsed.module.ctx.func_sig(call.callee, |sig| {
+                let callee = parsed.module.func_store.view(func_ref, |function| {
+                    function.dfg.call_info(call.inst).unwrap().callee()
+                });
+                parsed.module.ctx.func_sig(callee, |sig| {
                     sig.name() == "lazyimtdata_hb575fd00dcf9c59f_levels_for_root"
                 })
             })
@@ -1008,7 +959,7 @@ block3:
             .alloc
             .spill_obj(spilled)
             .expect("loop-carried phi spill object exists");
-        let region = &stack.obj_facts[&spill_obj].region;
+        let region = stack.region(spill_obj);
         assert!(
             region
                 .segments
@@ -1066,7 +1017,7 @@ func private %loop_alloca_phi() -> i256 {
                 .expect("v4 is defined by alloca")
         });
         let obj_id = stack.alloca_ids[&alloca_inst];
-        let region = &stack.obj_facts[&obj_id].region;
+        let region = stack.region(obj_id);
         assert!(
             region
                 .segments
@@ -1135,8 +1086,8 @@ block3:
                     );
                 }
                 assert!(
-                    stack.obj_facts[&child_obj]
-                        .region
+                    stack
+                        .region(child_obj)
                         .segments
                         .iter()
                         .any(|segment| segment.block == BlockId::from_u32(1)),
@@ -1206,7 +1157,7 @@ block3:
                         .expect("branch value exists"),
                 );
                 let obj = analysis.alloc.spill_obj(value)?;
-                Some(&stack.obj_facts[&obj].region)
+                Some(stack.region(obj))
             })
             .expect("left branch should produce a spilled phi operand value");
         let right_region = (19..=36)
@@ -1219,7 +1170,7 @@ block3:
                         .expect("branch value exists"),
                 );
                 let obj = analysis.alloc.spill_obj(value)?;
-                Some(&stack.obj_facts[&obj].region)
+                Some(stack.region(obj))
             })
             .expect("right branch should produce a spilled phi operand value");
 
@@ -1296,10 +1247,13 @@ block0:
             .call_sites
             .iter()
             .find(|call| {
+                let callee = parsed.module.func_store.view(func_ref, |function| {
+                    function.dfg.call_info(call.inst).unwrap().callee()
+                });
                 parsed
                     .module
                     .ctx
-                    .func_sig(call.callee, |sig| sig.name() == "callee")
+                    .func_sig(callee, |sig| sig.name() == "callee")
             })
             .expect("callee call exists");
 
@@ -1462,7 +1416,7 @@ block0:
                         .value_inst(value)
                         .expect("alloca has a definition")
                 });
-                &stack.obj_facts[&stack.alloca_ids[&inst]].region
+                stack.region(stack.alloca_ids[&inst])
             })
             .collect();
         assert!(!regions[0].overlaps(regions[1]), "{regions:?}");
