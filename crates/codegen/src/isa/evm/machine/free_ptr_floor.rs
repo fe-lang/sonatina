@@ -1,17 +1,14 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, Function, InstId, InstSetExt, Module, ValueId,
+    BlockId, Function, InstId, InstSetExt, Module,
     inst::evm::inst_set::{EvmInstKind, EvmInstSet},
     module::{FuncRef, ModuleCtx},
 };
 use std::iter;
 
 use crate::{
-    isa::evm::{
-        FREE_PTR_SLOT, WORD_BYTES, memory_plan::FuncPreAnalysis, prepare::value_imm_u32,
-        ptr_provenance::Provenance,
-    },
+    isa::evm::{FREE_PTR_SLOT, WORD_BYTES, memory_plan::FuncPreAnalysis, prepare::value_imm_u32},
     module_analysis::CallGraphSchedule,
 };
 
@@ -228,7 +225,6 @@ struct FuncFreePtrFloorCtx<'a> {
 impl FuncFreePtrFloorCtx<'_> {
     fn compute(&self, function: &Function, entry_floor: FreePtrFloor) -> FuncFreePtrFloors {
         let cfg = &self.analysis.cfg;
-        let prov = &self.analysis.prov.value;
 
         let transfer_ctx = TransferCtx {
             function,
@@ -237,7 +233,6 @@ impl FuncFreePtrFloorCtx<'_> {
             malloc_placements: self.malloc_placements,
             free_ptr_write_summaries: self.free_ptr_write_summaries,
             exit_floor_summaries: self.exit_floor_summaries,
-            prov,
         };
         let transfer = |inst, floor| transfer_ctx.transfer_inst(inst, floor);
         let states = run_forward_heap_dataflow(
@@ -307,7 +302,6 @@ struct TransferCtx<'a> {
     malloc_placements: &'a FxHashMap<InstId, MallocPlacement>,
     free_ptr_write_summaries: &'a FxHashMap<FuncRef, bool>,
     exit_floor_summaries: &'a FxHashMap<FuncRef, Option<u32>>,
-    prov: &'a SecondaryMap<ValueId, Provenance>,
 }
 
 impl TransferCtx<'_> {
@@ -345,7 +339,7 @@ impl TransferCtx<'_> {
             _ => {
                 if let Some(stored_floor) = self.exact_free_ptr_store_floor(inst) {
                     floor = stored_floor.map_or(FreePtrFloor::Unknown, FreePtrFloor::Known);
-                } else if inst_writes_free_ptr_slot(self.function, inst, self.prov) {
+                } else if inst_writes_free_ptr_slot(self.function, inst) {
                     floor = FreePtrFloor::Unknown;
                 }
             }

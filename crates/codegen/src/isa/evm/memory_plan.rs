@@ -26,7 +26,15 @@ use sonatina_ir::isa::evm::Evm;
 pub use super::placement_search::ArenaCostModel;
 
 pub const WORD_BYTES: u32 = 32;
+/// The free-pointer slot. When the backend reserves it (any heap malloc), IR
+/// may access it only through immediate addresses. The one exception is the
+/// payload of a `return` or `revert`: a computed address may overwrite the
+/// slot if no allocation runs before the terminating instruction. The backend
+/// relies on this to keep a known free-pointer floor across stores through
+/// computed addresses.
 pub const FREE_PTR_SLOT: u8 = 0x40;
+/// The dynamic-frame stack-pointer slot. When the backend reserves it (any
+/// dynamic frame), IR may access it only through immediate addresses.
 pub const DYN_SP_SLOT: u8 = 0x80;
 pub const STATIC_BASE: u32 = 0xa0;
 
