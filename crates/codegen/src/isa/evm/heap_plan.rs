@@ -20,6 +20,7 @@ use super::{
     },
     ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo, compute_value_provenance},
+    static_arena_alloc::alloca_size_words,
 };
 use crate::{liveness::InstLiveness, module_analysis::CallGraphSchedule};
 
@@ -145,12 +146,7 @@ fn compute_future_bounds_for_func(
         let Some(base_word) = absolute_base_word_for_loc(ctx.func_plan, loc) else {
             continue;
         };
-        let size_bytes: u32 = ctx
-            .isa
-            .type_layout()
-            .size_of(*alloca.ty(), ctx.module)
-            .expect("alloca has invalid type") as u32;
-        let size_words = size_bytes.div_ceil(WORD_BYTES);
+        let size_words = alloca_size_words(ctx.isa, ctx.module, *alloca.ty());
         let end_words = base_word
             .checked_add(size_words)
             .expect("alloca end words overflow");

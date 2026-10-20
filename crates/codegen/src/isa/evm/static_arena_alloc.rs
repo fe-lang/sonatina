@@ -14,7 +14,7 @@ use cranelift_entity::{EntityRef, SecondaryMap, entity_impl};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, InstId, InstSetExt, ValueId,
+    BlockId, ControlFlowGraph, Function, InstId, InstSetExt, Type, ValueId,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
@@ -154,6 +154,18 @@ impl<'a> StackObjectInput<'a> {
     pub(super) fn canonicalize_value(&self, value: ValueId) -> ValueId {
         super::canonicalize_alias_value(self.value_aliases, value)
     }
+}
+
+/// The words an alloca of `ty` occupies. A silently truncated size would
+/// leave the object without storage, so an oversized type panics.
+pub(crate) fn alloca_size_words(isa: &Evm, module: &ModuleCtx, ty: Type) -> u32 {
+    let size_bytes = isa
+        .type_layout()
+        .size_of(ty, module)
+        .expect("alloca has invalid type");
+    u32::try_from(size_bytes)
+        .expect("alloca size overflow")
+        .div_ceil(WORD_BYTES)
 }
 
 pub(crate) struct StaticArenaAllocCtx<'a> {
@@ -365,12 +377,7 @@ fn compute_func_stack_objects_from_input(
             continue;
         };
 
-        let size_bytes: u32 = ctx
-            .isa
-            .type_layout()
-            .size_of(*alloca.ty(), ctx.module)
-            .expect("alloca has invalid type") as u32;
-        let size_words = size_bytes.div_ceil(WORD_BYTES);
+        let size_words = alloca_size_words(ctx.isa, ctx.module, *alloca.ty());
 
         let id = StackObjId::new(next_id as usize);
         next_id = next_id.checked_add(1).expect("stack object id overflow");
