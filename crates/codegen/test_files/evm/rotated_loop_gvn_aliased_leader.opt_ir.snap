@@ -1,0 +1,19 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/rotated_loop_gvn_aliased_leader.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        mstore 0.i256 3.i256 i256;
+        evm_return 0.i256 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

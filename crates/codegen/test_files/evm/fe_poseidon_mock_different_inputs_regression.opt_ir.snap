@@ -103,110 +103,98 @@ func private %mix(v0.objref<[i256; 3]>) -> objref<[i256; 3]> {
         evm_code_copy v5 v3 v4;
         v32.i256 = sym_addr $__fe_const_data_2;
         v33.i256 = sym_size $__fe_const_data_2;
-        jump block1;
-
-    block1:
-        v8.i256 = phi (0.i256 block0) (v16 block3);
-        v10.i1 = lt v8 3.i256;
-        br v10 block16 block4;
+        jump block16;
 
     block16:
-        v28.objref<i256> = obj.index v1 v8;
-        jump block5;
+        v55.i256 = phi (v16 block3) (0.i256 block0);
+        v28.objref<i256> = obj.index v1 v55;
+        jump block20;
 
     block3:
-        v16.i256 = add v8 1.i256;
-        jump block1;
+        v16.i256 = add v55 1.i256;
+        v57.i1 = lt v16 3.i256;
+        br v57 block16 block4;
 
     block4:
         return v1;
 
-    block5:
-        v18.i256 = phi (0.i256 block16) (v61 block10);
-        v20.i1 = lt v18 3.i256;
-        br v20 block10 block3;
-
-    block10:
+    block20:
+        v62.i256 = phi (v61 block20) (0.i256 block16);
         v29.i256 = obj.load v28;
         v30.objref<[[i256; 3]; 3]> = obj.alloc [[i256; 3]; 3];
         v31.*[[i256; 3]; 3] = obj.materialize.stack v30;
         v34.i256 = ptr_to_int v31 i256;
         evm_code_copy v34 v32 v33;
-        v38.objref<[i256; 3]> = obj.index v30 v8;
-        v42.objref<i256> = obj.index v38 v18;
+        v38.objref<[i256; 3]> = obj.index v30 v55;
+        v42.objref<i256> = obj.index v38 v62;
         v43.i256 = obj.load v42;
-        v48.objref<i256> = obj.index v0 v18;
+        v48.objref<i256> = obj.index v0 v62;
         v49.i256 = obj.load v48;
         v52.i256 = evm_mul_mod v43 v49 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v54.i256 = evm_add_mod v29 v52 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         obj.store v28 v54;
-        v61.i256 = add v18 1.i256;
-        jump block5;
+        v61.i256 = add v62 1.i256;
+        v63.i1 = lt v61 3.i256;
+        br v63 block20 block3;
 }
 
 func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
     block0:
-        v76.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v77.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v91.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v92.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v9.objref<[i256; 3]> = obj.alloc [i256; 3];
         v11.objref<i256> = obj.index v9 0.i256;
-        obj.store v11 v76;
+        obj.store v11 v91;
         v13.objref<i256> = obj.index v9 1.i256;
-        obj.store v13 v77;
+        obj.store v13 v92;
         v15.objref<i256> = obj.index v9 2.i256;
         obj.store v15 0.i256;
-        jump block1;
+        jump block17;
 
-    block1:
-        v63.i256 = phi (0.i256 block0) (v33 block3);
-        v60.objref<[i256; 3]> = phi (v9 block0) (v31 block3);
-        v22.i256 = phi (0.i256 block0) (v36 block3);
-        v24.i1 = lt v22 2.i256;
-        br v24 block16 block5;
-
-    block16:
-        v29.objref<[i256; 3]> = call %ark v60 v63;
-        v64.objref<i256> = obj.index v29 0.i256;
-        v65.i256 = obj.load v64;
-        v66.objref<i256> = obj.index v29 1.i256;
-        v67.i256 = obj.load v66;
-        v68.objref<i256> = obj.index v29 2.i256;
-        v69.i256 = obj.load v68;
-        v30.objref<[i256; 3]> = call %sigma_full v65 v67 v69;
+    block17:
+        v67.i256 = phi (0.i256 block0) (v33 block3);
+        v66.objref<[i256; 3]> = phi (v9 block0) (v31 block3);
+        v65.i256 = phi (0.i256 block0) (v36 block3);
+        v29.objref<[i256; 3]> = call %ark v66 v67;
+        v79.objref<i256> = obj.index v29 0.i256;
+        v80.i256 = obj.load v79;
+        v81.objref<i256> = obj.index v29 1.i256;
+        v82.i256 = obj.load v81;
+        v83.objref<i256> = obj.index v29 2.i256;
+        v84.i256 = obj.load v83;
+        v30.objref<[i256; 3]> = call %sigma_full v80 v82 v84;
         v31.objref<[i256; 3]> = call %mix v30;
-        (v33.i256, v34.i1) = uaddo v63 3.i256;
+        (v33.i256, v34.i1) = uaddo v67 3.i256;
         br v34 block9 block3;
 
     block3:
-        v36.i256 = add v22 1.i256;
-        jump block1;
+        v36.i256 = add v65 1.i256;
+        v69.i1 = lt v36 2.i256;
+        br v69 block17 block21;
 
-    block5:
-        v73.i256 = phi (v63 block1) (v52 block7);
-        v70.objref<[i256; 3]> = phi (v60 block1) (v51 block7);
-        v42.i256 = phi (0.i256 block1) (v55 block7);
-        v44.i1 = lt v42 2.i256;
-        br v44 block20 block8;
-
-    block20:
-        v49.objref<[i256; 3]> = call %ark v70 v73;
-        v78.objref<i256> = obj.index v49 0.i256;
-        v71.i256 = obj.load v78;
-        v72.objref<i256> = obj.index v49 1.i256;
-        v79.i256 = obj.load v72;
-        v74.objref<i256> = obj.index v49 2.i256;
-        v75.i256 = obj.load v74;
-        v50.objref<[i256; 3]> = call %sigma_full v71 v79 v75;
+    block21:
+        v61.i256 = phi (v33 block3) (v52 block7);
+        v60.objref<[i256; 3]> = phi (v31 block3) (v51 block7);
+        v59.i256 = phi (0.i256 block3) (v55 block7);
+        v49.objref<[i256; 3]> = call %ark v60 v61;
+        v85.objref<i256> = obj.index v49 0.i256;
+        v86.i256 = obj.load v85;
+        v87.objref<i256> = obj.index v49 1.i256;
+        v88.i256 = obj.load v87;
+        v89.objref<i256> = obj.index v49 2.i256;
+        v90.i256 = obj.load v89;
+        v50.objref<[i256; 3]> = call %sigma_full v86 v88 v90;
         v51.objref<[i256; 3]> = call %mix v50;
-        (v52.i256, v53.i1) = uaddo v73 3.i256;
+        (v52.i256, v53.i1) = uaddo v61 3.i256;
         br v53 block9 block7;
 
     block7:
-        v55.i256 = add v42 1.i256;
-        jump block5;
+        v55.i256 = add v59 1.i256;
+        v63.i1 = lt v55 2.i256;
+        br v63 block21 block8;
 
     block8:
-        v57.objref<i256> = obj.index v70 0.i256;
+        v57.objref<i256> = obj.index v51 0.i256;
         v58.i256 = obj.load v57;
         return v58;
 
