@@ -100,25 +100,29 @@ pub struct Sp1Runtime {
 }
 
 impl Sp1Runtime {
-    /// Build the embedded, locked guest package. Cargo may fetch its pinned
-    /// dependencies; installing the Succinct toolchain remains explicit.
-    pub fn build(toolchain: Sp1Toolchain) -> Result<Self, Sp1Error> {
-        let directory = tempfile::Builder::new()
-            .prefix("sonatina-sp1-runtime-")
-            .tempdir()?;
-        fs::create_dir(directory.path().join("src"))?;
-        fs::write(
-            directory.path().join("Cargo.toml"),
-            include_str!("../runtime/Cargo.toml.in"),
-        )?;
-        fs::write(
-            directory.path().join("Cargo.lock"),
-            include_str!("../runtime/Cargo.lock"),
-        )?;
-        fs::write(
-            directory.path().join("src/lib.rs"),
-            include_str!("../runtime/src/lib.rs"),
-        )?;
+    /// Build the embedded, locked guest package in `cache`, which may be
+    /// reused across runs and shared between processes. Cargo rebuilds only
+    /// what changed in the runtime, its flags, or the toolchain. Processes take
+    /// turns with the cache, and each runtime links its own copy of the archive,
+    /// so the cache can change or be deleted afterwards. Cargo may fetch the
+    /// pinned dependencies; installing the Succinct toolchain remains explicit.
+    pub fn build(toolchain: Sp1Toolchain, cache: impl AsRef<Path>) -> Result<Self, Sp1Error> {
+        fs::create_dir_all(cache.as_ref().join("src"))?;
+        // Cargo resolves the target directory from inside the cache.
+        let cache = cache.as_ref().canonicalize()?;
+        let lock = fs::File::create(cache.join(".lock"))?;
+        lock.lock()?;
+        for (path, contents) in [
+            ("Cargo.toml", include_str!("../runtime/Cargo.toml.in")),
+            ("Cargo.lock", include_str!("../runtime/Cargo.lock")),
+            ("src/lib.rs", include_str!("../runtime/src/lib.rs")),
+        ] {
+            let path = cache.join(path);
+            // Unchanged sources keep their timestamps, so Cargo reuses the build.
+            if fs::read(&path).ok().as_deref() != Some(contents.as_bytes()) {
+                fs::write(path, contents)?;
+            }
+        }
         let flags = [
             "-C",
             "passes=lower-atomic",
@@ -134,7 +138,7 @@ impl Sp1Runtime {
         .join("\x1f");
         let mut command = Command::new("cargo");
         command
-            .current_dir(directory.path())
+            .current_dir(&cache)
             .args([
                 "build",
                 "--locked",
@@ -144,7 +148,7 @@ impl Sp1Runtime {
                 TARGET,
             ])
             .env("RUSTC", &toolchain.rustc)
-            .env("CARGO_TARGET_DIR", directory.path().join("target"))
+            .env("CARGO_TARGET_DIR", cache.join("target"))
             .env("CARGO_ENCODED_RUSTFLAGS", flags)
             .env_remove("RUSTFLAGS")
             .env_remove("RUSTC_WRAPPER")
@@ -157,11 +161,17 @@ impl Sp1Runtime {
             }
         }
         run(&mut command, "runtime build")?;
-        let archive = directory
-            .path()
-            .join("target")
-            .join(TARGET)
-            .join("release/libsonatina_sp1_runtime.a");
+        let directory = tempfile::Builder::new()
+            .prefix("sonatina-sp1-runtime-")
+            .tempdir()?;
+        let archive = directory.path().join("libsonatina_sp1_runtime.a");
+        fs::copy(
+            cache
+                .join("target")
+                .join(TARGET)
+                .join("release/libsonatina_sp1_runtime.a"),
+            &archive,
+        )?;
         Ok(Self {
             toolchain,
             directory,

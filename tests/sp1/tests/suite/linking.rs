@@ -1,9 +1,11 @@
+use std::{env, fs};
+
 use object::{
     Architecture, BinaryFormat, Endianness, SymbolFlags, SymbolKind, SymbolScope,
     write::{Object, Symbol, SymbolSection},
 };
 use sonatina_codegen::compile::OptLevel;
-use sonatina_sp1::Sp1Error;
+use sonatina_sp1::{Sp1Error, Sp1Runtime, Sp1Toolchain, TARGET};
 use sonatina_sp1_integration::{compile, prover, runtime};
 use sp1_sdk::{
     Elf,
@@ -76,4 +78,40 @@ fn out_of_range_call_is_a_link_error() {
         }
     ));
     assert!(error.to_string().contains("out of range"));
+}
+
+#[test]
+fn runtime_cache_is_reused_and_repaired() {
+    // Build through a relative path, as callers configuring a cache may.
+    let cache = tempfile::tempdir_in(".").unwrap();
+    let relative = cache
+        .path()
+        .strip_prefix(env::current_dir().unwrap())
+        .unwrap();
+    let archive = relative
+        .join("target")
+        .join(TARGET)
+        .join("release/libsonatina_sp1_runtime.a");
+    let build = || Sp1Runtime::build(Sp1Toolchain::from_env().unwrap(), relative).unwrap();
+    let modified = || fs::metadata(&archive).unwrap().modified().unwrap();
+    build();
+    let built = modified();
+    build();
+    assert_eq!(modified(), built, "an unchanged cache must not rebuild");
+
+    fs::write(relative.join("src/lib.rs"), "compile_error!(\"stale\");").unwrap();
+    let runtime = build();
+    // A built runtime links from its own archive copy, not the cache.
+    drop(cache);
+    let elf = runtime
+        .link_objects(&[&compile(
+            "func public %main() -> i32 {\nblock0:\n    return 7.i32;\n}",
+            OptLevel::O0,
+        )])
+        .unwrap();
+    let (_, report) = prover()
+        .execute(Elf::from(elf), SP1Stdin::new())
+        .run()
+        .unwrap();
+    assert_eq!(report.exit_code, 7);
 }

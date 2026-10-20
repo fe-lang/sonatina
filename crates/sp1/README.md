@@ -30,15 +30,18 @@ Runtime compilation requires Cargo and may fetch the locked guest dependencies.
 use sonatina_sp1::{Sp1Runtime, Sp1Toolchain};
 
 fn link(object: &[u8]) -> Result<Vec<u8>, sonatina_sp1::Sp1Error> {
-    let runtime = Sp1Runtime::build(Sp1Toolchain::from_env()?)?;
+    let runtime = Sp1Runtime::build(Sp1Toolchain::from_env()?, "target/sp1-runtime")?;
     runtime.link_objects(&[object])
 }
 ```
 
-Build one `Sp1Runtime` and reuse it to link multiple programs. Temporary
-runtime build files are owned by that value. Each program must export exactly
-one `main() -> i32`. The upstream runtime supplies `_start`, initialization,
-public-value digest finalization, and halt. A zero return denotes success.
+Build one `Sp1Runtime` and reuse it to link multiple programs. Its build
+directory is a cache: later builds, including concurrent builds from other
+processes, reuse it and recompile only what changed in the runtime, its flags,
+or the toolchain. Each `Sp1Runtime` links from its own copy of the archive.
+Each program must export exactly one `main() -> i32`. The upstream runtime
+supplies `_start`, initialization, public-value digest finalization, and halt.
+A zero return denotes success.
 
 ## Guest ABI and input format
 
