@@ -1562,7 +1562,6 @@ struct OperandPrepSearchProblem<'a> {
     costs: &'a OperandPrepCostTable,
     cfg: SearchCfg,
     load_mask: u64,
-    dup_gas_lb: u32,
     surplus_last_use_penalty: Cost,
     push0_kid: Option<u8>,
     push0_cost: Option<Cost>,
@@ -1582,15 +1581,7 @@ impl BoundedAStarProblem for OperandPrepSearchProblem<'_> {
     }
 
     fn heuristic(&self, state: PrepState) -> Cost {
-        heuristic_operand_prep(
-            state,
-            &self.problem.goal_counts,
-            self.problem.goal_mask,
-            self.problem.preserve_mask,
-            self.load_mask,
-            self.dup_gas_lb,
-            self.costs,
-        )
+        heuristic_operand_prep(state, self.problem, self.load_mask, self.cfg, self.costs)
     }
 
     fn max_states(&self, _have_incumbent: bool) -> usize {
@@ -1602,12 +1593,6 @@ impl BoundedAStarProblem for OperandPrepSearchProblem<'_> {
         F: FnMut(PrepState, Cost, Step),
     {
         let cur_len = state.window.len();
-
-        let mut win_counts = [0u8; 64];
-        for pos in 0..cur_len {
-            let kid = state.window.get(pos) as usize;
-            win_counts[kid] = win_counts[kid].saturating_add(1);
-        }
 
         let mut dup_cost_for_kid = [UNAVAILABLE_COST; 64];
         let mut duplicable: u64 = 0;
@@ -1742,7 +1727,7 @@ impl BoundedAStarProblem for OperandPrepSearchProblem<'_> {
 
         for &kid in &self.problem.materializable_val {
             let bit = 1u64 << kid;
-            if !operand_prep_copy_can_help(self.problem, state, kid, win_counts[kid as usize]) {
+            if !operand_prep_copy_can_help(self.problem, state, kid, self.cfg) {
                 continue;
             }
             let set_mem = (self.problem.preserve_mask & bit) != 0;
@@ -2010,16 +1995,21 @@ fn prep_prefix_len(window: PackedState, goal: &[u8]) -> usize {
         .count()
 }
 
+/// Whether another copy of `kid` can move the window toward the goal. Only copies within SWAP or
+/// DUP reach count: operand prep never pops, so a deeper copy never becomes usable.
 fn operand_prep_copy_can_help(
     problem: &OperandPrepProblem,
     state: PrepState,
     kid: u8,
-    win: u8,
+    cfg: SearchCfg,
 ) -> bool {
     let bit = 1u64 << kid;
+    let reachable = (0..state.window.len().min(cfg.swap_max.max(cfg.dup_max)))
+        .filter(|&pos| state.window.get(pos) == kid)
+        .count() as u8;
     let prefix = prep_prefix_len(state.window, &problem.goal_keys);
-    win < problem.goal_counts[kid as usize]
-        || win.saturating_add(u8::from((state.tail & bit) != 0))
+    reachable < problem.goal_counts[kid as usize]
+        || reachable.saturating_add(u8::from((state.tail & bit) != 0))
             < prep_needed_copy_count(problem, state, kid)
         || problem.goal_keys.get(prefix) == Some(&kid)
 }
@@ -2911,7 +2901,6 @@ pub(super) fn solve_optimal_operand_prep_plan(
             .materializable_val
             .iter()
             .fold(0, |mask, &kid| mask | 1u64 << kid),
-        dup_gas_lb: prep_costs.min_dup_gas,
         surplus_last_use_penalty,
         push0_kid,
         push0_cost,
@@ -4126,41 +4115,58 @@ fn operand_prep_goal(
 
 fn heuristic_operand_prep(
     state: PrepState,
-    goal_counts: &[u8; 64],
-    goal_mask: u64,
-    preserve_mask: u64,
+    problem: &OperandPrepProblem,
     load_mask: u64,
-    dup_gas: u32,
+    cfg: SearchCfg,
     costs: &OperandPrepCostTable,
 ) -> Cost {
+    // Operand prep never pops, so a copy beyond SWAP and DUP reach never moves up: it becomes an
+    // operand only when pushes carry it down into a goal slot holding its key. Every copy still
+    // preserves its value.
+    let reach = cfg.swap_max.max(cfg.dup_max);
     let mut win_counts = [0u8; 64];
-    for i in 0..state.window.len() {
-        let kid = state.window.get(i);
-        if (goal_mask & (1u64 << kid)) != 0 {
-            win_counts[kid as usize] = win_counts[kid as usize].saturating_add(1);
+    let mut usable_counts = [0u8; 64];
+    let mut reachable_mask = 0u64;
+    for pos in 0..state.window.len() {
+        let kid = state.window.get(pos);
+        let bit = 1u64 << kid;
+        if (problem.goal_mask & bit) == 0 {
+            continue;
+        }
+        win_counts[kid as usize] = win_counts[kid as usize].saturating_add(1);
+        if pos < reach {
+            reachable_mask |= bit;
+        }
+        if pos < reach
+            || problem
+                .goal_keys
+                .get(pos..)
+                .is_some_and(|deeper| deeper.contains(&kid))
+        {
+            usable_counts[kid as usize] = usable_counts[kid as usize].saturating_add(1);
         }
     }
 
     let mut gas = 0u32;
-    let mut missing_mask = goal_mask;
+    let mut missing_mask = problem.goal_mask;
     while missing_mask != 0 {
         let kid = missing_mask.trailing_zeros() as u8;
         missing_mask &= missing_mask - 1;
-        let need_operands = goal_counts[kid as usize];
+        let need_operands = problem.goal_counts[kid as usize];
         let bit = 1u64 << kid;
-        let have_window = win_counts[kid as usize];
-        // Without a window copy, a loadable key's first copy is a load, and loading a preserved
-        // value already keeps it in memory.
+        // Without a reachable copy to duplicate, a loadable key's first new copy is a load, and
+        // loading a preserved value already keeps it in memory.
+        let reachable = (reachable_mask & bit) != 0;
         let preserve_extra = u8::from(
-            (preserve_mask & bit) != 0
+            (problem.preserve_mask & bit) != 0
                 && (state.mem & bit) == 0
-                && (have_window != 0 || (load_mask & bit) == 0),
+                && (reachable || (load_mask & bit) == 0),
         );
         let need_total = need_operands.saturating_add(preserve_extra);
 
-        let have_total = have_window.saturating_add(u8::from((state.tail & bit) != 0));
+        let have_total = win_counts[kid as usize].saturating_add(u8::from((state.tail & bit) != 0));
 
-        let missing_operands = need_operands.saturating_sub(have_window);
+        let missing_operands = need_operands.saturating_sub(usable_counts[kid as usize]);
         let missing_total = need_total.saturating_sub(have_total);
         let missing = missing_operands.max(missing_total) as u32;
 
@@ -4169,8 +4175,8 @@ fn heuristic_operand_prep(
         }
 
         let mat = costs.materialize_gas(kid);
-        let per_copy = mat.min(dup_gas);
-        if have_window == 0 {
+        let per_copy = mat.min(costs.min_dup_gas);
+        if !reachable {
             gas = gas.saturating_add(mat);
             if missing > 1 {
                 gas = gas.saturating_add(per_copy.saturating_mul(missing - 1));
@@ -4387,7 +4393,13 @@ func public %f() {
     }
 
     fn copy_can_help(problem: &OperandPrepProblem, state: PrepState, kid: u8) -> bool {
-        operand_prep_copy_can_help(problem, state, kid, prep_window_copy_count(state, kid))
+        let cfg = SearchCfg {
+            dup_max: 16,
+            swap_max: 17,
+            max_len: problem.max_len,
+            max_expansions: 0,
+        };
+        operand_prep_copy_can_help(problem, state, kid, cfg)
     }
 
     struct DriverProblem<'a> {
@@ -4583,16 +4595,166 @@ func public %f() {
             let cfg = default_search_cfg(&ctx, 0);
             let key_infos = [KeyInfo::Val { vid: x }, KeyInfo::Val { vid: y }];
             let costs = OperandPrepCostTable::new(&cost, &key_infos, cfg).unwrap();
-            let goal_counts = compute_goal_counts(&[0, 1]);
-            let heuristic = |state| {
-                heuristic_operand_prep(state, &goal_counts, 0b11, 0b11, 0b11, costs.min_dup_gas, &costs)
-            };
+            let problem = operand_prep_test_problem(&[0, 1], 0b11);
+            let heuristic = |state| heuristic_operand_prep(state, &problem, 0b11, cfg, &costs);
 
             // `LoadVal(y); LoadVal(x)` reaches the goal for 30 gas: each load also preserves
             // its value in memory, so no extra stack copy is owed.
             assert_eq!(heuristic(prep_state(&[], 0, 0)).gas, 30);
             // A window copy is reused by `DUP`, so the preserve copy is still owed.
             assert_eq!(heuristic(prep_state(&[0], 0, 0)).gas, 3 + 15);
+        });
+    }
+
+    #[test]
+    fn operand_prep_heuristic_is_admissible_beyond_reach() {
+        struct Dijkstra<'a, 'b>(&'b OperandPrepSearchProblem<'a>);
+        impl BoundedAStarProblem for Dijkstra<'_, '_> {
+            type State = PrepState;
+            fn is_goal(&self, state: PrepState) -> bool {
+                self.0.is_goal(state)
+            }
+            fn heuristic(&self, _state: PrepState) -> Cost {
+                Cost::default()
+            }
+            fn max_states(&self, have_incumbent: bool) -> usize {
+                self.0.max_states(have_incumbent)
+            }
+            fn expand_successors<F>(
+                &self,
+                state: PrepState,
+                g: Cost,
+                prev_step: Option<Step>,
+                emit: &mut F,
+            ) where
+                F: FnMut(PrepState, Cost, Step),
+            {
+                self.0.expand_successors(state, g, prev_step, emit);
+            }
+        }
+
+        // Reach 2 (DUP2, SWAP2) with a six-slot window leaves copies below reach.
+        with_stackify_ctx!(2, |func, ctx| {
+            let pool = make_undefs(func, 4);
+        } {
+            let cost = EstimatedCostModel::default();
+            let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+            let mut rand = |n: usize| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                (seed >> 32) as usize % n
+            };
+            let mut checked = 0;
+            for case in 0..600 {
+                let args: Vec<ValueId> =
+                    (0..1 + rand(6)).map(|_| pool[rand(pool.len())]).collect();
+                // Odd cases start from a goal suffix under a random top, so pushes can carry
+                // copies below reach into their goal slots.
+                let start: Vec<ValueId> = if case % 2 == 0 {
+                    (0..rand(7)).map(|_| pool[rand(pool.len())]).collect()
+                } else {
+                    let skip = rand(args.len() + 1);
+                    iter::once(pool[rand(pool.len())])
+                        .take(rand(2))
+                        .chain(args[skip..].iter().copied())
+                        .collect()
+                };
+                let last_use: BitSet<ValueId> =
+                    args.iter().copied().filter(|_| rand(2) == 0).collect();
+                let mut stack = SymStack::entry_stack(func, false);
+                push_values(&mut stack, &start);
+                let cfg = SearchCfg {
+                    max_len: 6,
+                    ..default_search_cfg(&ctx, usize::MAX)
+                };
+                let Some(problem) = build_operand_prep_problem(
+                    &ctx,
+                    &stack,
+                    &args,
+                    OperandPrepConstraints {
+                        consume_last_use: &last_use,
+                        cache_preserve: &BitSet::default(),
+                    },
+                    cfg,
+                ) else {
+                    continue;
+                };
+                let cfg = SearchCfg {
+                    max_len: problem.max_len,
+                    ..cfg
+                };
+                let costs = OperandPrepCostTable::new(&cost, &problem.key_infos, cfg).unwrap();
+                let push0_kid = problem.push0_kid();
+                let search = OperandPrepSearchProblem {
+                    problem: &problem,
+                    costs: &costs,
+                    cfg,
+                    load_mask: problem
+                        .materializable_val
+                        .iter()
+                        .fold(0, |mask, &kid| mask | 1u64 << kid),
+                    surplus_last_use_penalty: costs.surplus_last_use_penalty,
+                    push0_kid,
+                    push0_cost: push0_kid.map(|kid| costs.materialize_cost(kid)),
+                    max_states: usize::MAX,
+                };
+                let mut scratch = SearchScratch::default();
+                let Some((_, optimal)) = run_bounded_astar(
+                    &Dijkstra(&search),
+                    &mut scratch,
+                    problem.start_state,
+                    UNAVAILABLE_COST,
+                    false,
+                    usize::MAX,
+                    None,
+                ) else {
+                    continue;
+                };
+                let h = search.heuristic(problem.start_state);
+                assert!(
+                    h.gas <= optimal.gas,
+                    "heuristic {h:?} exceeds optimal {optimal:?}: start={start:?} args={args:?} last_use={last_use:?}"
+                );
+                checked += 1;
+            }
+            assert!(checked >= 300, "only {checked} problems checked");
+        });
+    }
+
+    #[test]
+    fn operand_prep_heuristic_requires_reachable_operand_copies() {
+        with_stackify_ctx!(16, |func, ctx| {
+            let x = func.dfg.make_undef_value(Type::I256);
+            let y = func.dfg.make_undef_value(Type::I256);
+        } {
+            let cost = EstimatedCostModel::default();
+            let key_infos = [KeyInfo::Val { vid: x }, KeyInfo::Val { vid: y }];
+            let problem = operand_prep_test_problem(&[0, 1], 0b11);
+            let heuristic = |state, cfg| {
+                let costs = OperandPrepCostTable::new(&cost, &key_infos, cfg).unwrap();
+                heuristic_operand_prep(state, &problem, 0b11, cfg, &costs).gas
+            };
+            let state = prep_state(&[1, 1, 0], 0, 0);
+
+            // In reach, x is duplicated for the operand and its window copy stays as the
+            // preserve copy.
+            assert_eq!(heuristic(state, default_search_cfg(&ctx, 0)), 3);
+            // With SWAP1/DUP1 only, x at depth 2 still preserves x but can never become the
+            // operand, so x must be loaded.
+            let short = SearchCfg {
+                dup_max: 1,
+                swap_max: 2,
+                ..default_search_cfg(&ctx, 0)
+            };
+            assert_eq!(heuristic(state, short), 15);
+            // A copy beyond reach that already sits in its goal slot is an operand.
+            let in_place = operand_prep_test_problem(&[1, 1, 0], 0);
+            let costs = OperandPrepCostTable::new(&cost, &key_infos, short).unwrap();
+            assert_eq!(
+                heuristic_operand_prep(state, &in_place, 0b11, short, &costs).gas,
+                0
+            );
         });
     }
 
@@ -4613,6 +4775,21 @@ func public %f() {
         let problem = operand_prep_test_problem(&[0], 1);
         assert!(copy_can_help(&problem, prep_state(&[0], 0, 0), 0));
         assert!(!copy_can_help(&problem, prep_state(&[0], 1, 0), 0));
+    }
+
+    #[test]
+    fn operand_prep_copy_help_ignores_copies_beyond_reach() {
+        let problem = operand_prep_test_problem(&[1, 0], 0);
+        let state = prep_state(&[2, 1, 0], 0, 0);
+        let cfg = |dup_max, swap_max| SearchCfg {
+            dup_max,
+            swap_max,
+            max_len: problem.max_len,
+            max_expansions: 0,
+        };
+        // With SWAP1/DUP1 only, the copy of 0 at depth 2 can never be used.
+        assert!(operand_prep_copy_can_help(&problem, state, 0, cfg(1, 2)));
+        assert!(!operand_prep_copy_can_help(&problem, state, 0, cfg(2, 3)));
     }
 
     fn consider_brute_succ(
