@@ -3,7 +3,7 @@ use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    AccessKind, BlockId, Function, InstId, InstSetExt, Module,
+    AccessKind, AccessLoc, BlockId, Function, InstId, InstSetExt, Module, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     isa::{
@@ -33,6 +33,7 @@ use super::{
             PrivateMallocUseAnalysis, malloc_private_uses_are_compatible_with_fixed_base,
         },
         ptr_escape::PtrEscapeSummaries,
+        ptr_provenance::Provenance,
         static_arena_alloc::{
             BlockLiveSegment, LiveRegion, PackedObject, StackObjId, compute_block_order,
             pack_objects_presorted,
@@ -510,13 +511,14 @@ fn compute_func_heap_facts(
         func_plan,
         !needs_dyn_sp_clamp,
     );
-    let terminal_private_mallocs = TerminalPrivateMallocAnalysis::new(
+    let terminal_private_mallocs = TerminalPrivateMallocAnalysis {
         function,
         module,
         isa,
-        &analysis.cfg,
-        &exact_heap_base_before_malloc,
-    )
+        cfg: &analysis.cfg,
+        prov: &analysis.prov.value,
+        exact_heap_base_before_malloc: &exact_heap_base_before_malloc,
+    }
     .compute();
     FuncHeapFacts {
         exact_heap_base_before_malloc,
@@ -888,47 +890,37 @@ fn private_static_malloc_live_region(
     })
 }
 
+/// Finds transient mallocs whose buffer only feeds the halting payload, so
+/// they can sit at their minimum base regardless of other live heap memory.
+/// Everything after such a malloc writes memory only through its buffer or
+/// through immediate addresses, then halts reading the same.
+///
+/// Immediate addresses stay clear of the buffer: a range is either reserved
+/// below the arena or is a terminal payload written after every buffer write.
+/// Any other address may reach a live heap object or frame the buffer
+/// overlaps.
 struct TerminalPrivateMallocAnalysis<'a> {
     function: &'a Function,
     module: &'a ModuleCtx,
     isa: &'a Evm,
     cfg: &'a ControlFlowGraph,
+    prov: &'a SecondaryMap<ValueId, Provenance>,
     exact_heap_base_before_malloc: &'a FxHashMap<InstId, bool>,
-    terminal_private_blocks: SecondaryMap<BlockId, bool>,
 }
 
-impl<'a> TerminalPrivateMallocAnalysis<'a> {
-    fn new(
-        function: &'a Function,
-        module: &'a ModuleCtx,
-        isa: &'a Evm,
-        cfg: &'a ControlFlowGraph,
-        exact_heap_base_before_malloc: &'a FxHashMap<InstId, bool>,
-    ) -> Self {
-        let mut terminal_private_blocks = SecondaryMap::new();
-        for block in function.layout.iter_block() {
-            let _ = &mut terminal_private_blocks[block];
-        }
-        Self {
-            function,
-            module,
-            isa,
-            cfg,
-            exact_heap_base_before_malloc,
-            terminal_private_blocks,
-        }
-    }
-
-    fn compute(mut self) -> FxHashSet<InstId> {
-        self.compute_terminal_private_blocks();
-
+impl TerminalPrivateMallocAnalysis<'_> {
+    fn compute(&self) -> FxHashSet<InstId> {
         let mut out = FxHashSet::default();
         for block in self.function.layout.iter_block() {
             for inst in self.function.layout.iter_inst(block) {
                 if matches!(self.resolve(inst), EvmInstKind::EvmMalloc(_))
-                    && self
-                        .suffix_is_terminal_private(block, self.function.layout.next_inst_of(inst))
                     && self.malloc_is_private(inst)
+                    && self.suffix_is_terminal_private(
+                        &self.terminal_private_blocks(inst),
+                        inst,
+                        block,
+                        self.function.layout.next_inst_of(inst),
+                    )
                 {
                     out.insert(inst);
                 }
@@ -938,75 +930,72 @@ impl<'a> TerminalPrivateMallocAnalysis<'a> {
         out
     }
 
-    fn compute_terminal_private_blocks(&mut self) {
+    fn terminal_private_blocks(&self, malloc: InstId) -> SecondaryMap<BlockId, bool> {
+        let mut blocks = SecondaryMap::new();
         let mut changed = true;
         while changed {
             changed = false;
             for block in self.function.layout.iter_block() {
-                let next = self.block_is_terminal_private(block);
-                changed |= self.terminal_private_blocks[block] != next;
-                self.terminal_private_blocks[block] = next;
+                let first = self.function.layout.first_inst_of(block);
+                let next = self.suffix_is_terminal_private(&blocks, malloc, block, first);
+                changed |= blocks[block] != next;
+                blocks[block] = next;
             }
         }
+        blocks
     }
 
-    fn block_is_terminal_private(&self, block: BlockId) -> bool {
-        for inst in self.function.layout.iter_inst(block) {
-            if self.inst_is_evm_terminal(inst) {
-                return true;
-            }
-            if self.function.dfg.inst(inst).is_terminator() {
-                return self.successors_are_terminal_private(block);
-            }
-            if !self.inst_allows_terminal_private_prefix(inst) {
-                return false;
-            }
+    fn suffix_is_terminal_private(
+        &self,
+        blocks: &SecondaryMap<BlockId, bool>,
+        malloc: InstId,
+        block: BlockId,
+        mut cursor: Option<InstId>,
+    ) -> bool {
+        while let Some(inst) = cursor {
+            let (addr, len) = match self.resolve(inst) {
+                EvmInstKind::EvmReturn(ret) => (*ret.addr(), *ret.len()),
+                EvmInstKind::EvmRevert(revert) => (*revert.addr(), *revert.len()),
+                _ if self.function.dfg.inst(inst).is_terminator() => {
+                    let mut succs = self.cfg.succs_of(block);
+                    return succs
+                        .next()
+                        .is_some_and(|first| blocks[*first] && succs.all(|succ| blocks[*succ]));
+                }
+                _ if self.inst_writes_privately(inst, malloc) => {
+                    cursor = self.function.layout.next_inst_of(inst);
+                    continue;
+                }
+                _ => return false,
+            };
+            return value_imm_u32(self.function, len) == Some(0)
+                || self.addr_is_private(addr, malloc);
         }
-
-        self.successors_are_terminal_private(block)
+        false
     }
 
-    fn successors_are_terminal_private(&self, block: BlockId) -> bool {
-        let mut succs = self.cfg.succs_of(block);
-        let Some(first) = succs.next() else {
-            return false;
-        };
-        self.terminal_private_blocks[*first]
-            && succs.all(|succ| self.terminal_private_blocks[*succ])
-    }
-
-    fn inst_is_evm_terminal(&self, inst: InstId) -> bool {
-        matches!(
-            self.resolve(inst),
-            EvmInstKind::EvmReturn(_) | EvmInstKind::EvmRevert(_)
-        )
-    }
-
-    fn inst_allows_terminal_private_prefix(&self, inst: InstId) -> bool {
+    fn inst_writes_privately(&self, inst: InstId, malloc: InstId) -> bool {
         let effects = self.function.dfg.effects(inst);
         self.function.dfg.call_info(inst).is_none()
             && effects.other.is_empty()
-            && effects
-                .accesses
-                .iter()
-                .all(|access| access.kind == AccessKind::Write && access.space == MEMORY)
+            && effects.accesses.iter().all(|access| {
+                access.kind == AccessKind::Write
+                    && access.space == MEMORY
+                    && match &access.loc {
+                        AccessLoc::LinearExact { addr, .. }
+                        | AccessLoc::LinearRange { addr, .. } => {
+                            self.addr_is_private(*addr, malloc)
+                        }
+                        AccessLoc::LinearExactImm { .. } => true,
+                        AccessLoc::WholeSpace
+                        | AccessLoc::Unknown
+                        | AccessLoc::KeyedExact { .. } => false,
+                    }
+            })
     }
 
-    fn suffix_is_terminal_private(&self, block: BlockId, mut cursor: Option<InstId>) -> bool {
-        while let Some(inst) = cursor {
-            if self.inst_is_evm_terminal(inst) {
-                return true;
-            }
-            if self.function.dfg.inst(inst).is_terminator() {
-                return self.successors_are_terminal_private(block);
-            }
-            if !self.inst_allows_terminal_private_prefix(inst) {
-                return false;
-            }
-            cursor = self.function.layout.next_inst_of(inst);
-        }
-
-        self.successors_are_terminal_private(block)
+    fn addr_is_private(&self, addr: ValueId, malloc: InstId) -> bool {
+        self.function.dfg.value_is_imm(addr) || self.prov[addr].is_within_malloc(malloc)
     }
 
     fn malloc_is_private(&self, inst: InstId) -> bool {
