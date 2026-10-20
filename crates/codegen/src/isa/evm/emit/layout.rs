@@ -584,13 +584,11 @@ fn lazy_frame_mentions_trampoline_site(
         return false;
     };
 
-    [
-        FrameSite::BlockEntry(block),
-        FrameSite::PreInst(term),
-        FrameSite::PostInst(term),
-    ]
-    .into_iter()
-    .any(|site| {
-        plan.enter_before_site(site) || plan.exit_before_site(site) || plan.exit_after_site(site)
-    })
+    [FrameSite::BlockEntry(block), FrameSite::PreInst(term)]
+        .into_iter()
+        .any(|site| {
+            plan.enter_before_site(site)
+                || plan.exit_before_site(site)
+                || plan.exit_after_site(site)
+        })
 }

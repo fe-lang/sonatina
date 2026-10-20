@@ -399,6 +399,15 @@ pub(crate) fn immediate_u32(imm: Immediate) -> Option<u32> {
     Some(u256.low_u32())
 }
 
+/// Splits a call's actions around its continuation push: the prefix runs
+/// before the return address is pushed, the suffix after.
+pub(crate) fn split_at_continuation(actions: &[Action]) -> Option<(&[Action], &[Action])> {
+    let cont_pos = actions
+        .iter()
+        .position(|action| matches!(action, Action::PushContinuationOffset))?;
+    Some((&actions[..cont_pos], &actions[cont_pos + 1..]))
+}
+
 pub(crate) fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {
     let mut out: SmallVec<[Action; 8]> = SmallVec::new();
     for &action in actions {

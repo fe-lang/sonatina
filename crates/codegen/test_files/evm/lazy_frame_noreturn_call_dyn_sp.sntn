@@ -1,0 +1,68 @@
+#! evm.config: { opt: 0 }
+#! evm.case: ok
+#!   calldata: u256(1)
+#!   expect: return u256(42)
+
+target = "evm-ethereum-osaka"
+
+# `%rec` passes a frame alloca to a call that never returns. The frame must
+# stay entered across the call, so `%fail`'s recursive callee allocates its
+# frames above the alloca instead of over it.
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = call %rec v0;
+        mstore 0.i256 v1 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func private %rec(v0.i256) -> i256 {
+    block0:
+        v1.i1 = eq v0 0.i256;
+        br v1 block1 block2;
+
+    block1:
+        v2.*i256 = alloca i256;
+        mstore v2 42.i256 i256;
+        call %fail v2;
+        unreachable;
+
+    block2:
+        v3.i256 = sub v0 1.i256;
+        v4.i256 = call %rec v3;
+        v5.i256 = add v4 1.i256;
+        return v5;
+}
+
+func private %fail(v0.*i256) {
+    block0:
+        v1.i256 = call %clob 2.i256;
+        v2.i256 = mload v0 i256;
+        mstore 0.i256 v2 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func private %clob(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        v2.i1 = eq v0 0.i256;
+        br v2 block1 block2;
+
+    block1:
+        return 0.i256;
+
+    block2:
+        v3.i256 = sub v0 1.i256;
+        v4.i256 = call %clob v3;
+        v5.i256 = mload v1 i256;
+        v6.i256 = add v4 v5;
+        return v6;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
