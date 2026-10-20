@@ -587,7 +587,6 @@ fn lazy_frame_mentions_trampoline_site(
     [
         FrameSite::BlockEntry(block),
         FrameSite::PreInst(term),
-        FrameSite::Inst(term),
         FrameSite::PostInst(term),
     ]
     .into_iter()

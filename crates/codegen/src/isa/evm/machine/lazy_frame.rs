@@ -21,7 +21,6 @@ pub(crate) enum FrameSite {
     BlockEntry(BlockId),
     EnterFunction,
     PreInst(InstId),
-    Inst(InstId),
     PostInst(InstId),
 }
 
@@ -385,11 +384,9 @@ fn compute_active_pre_insts(
             }
 
             apply_after_site_state(plan, FrameSite::PreInst(inst), &mut active);
-            apply_site_state(plan, FrameSite::Inst(inst), &mut active);
             if matches!(data, EvmMachineInstKind::Call(_)) && active {
                 active_pre_insts.insert(inst);
             }
-            apply_after_site_state(plan, FrameSite::Inst(inst), &mut active);
 
             apply_site_state(plan, FrameSite::PostInst(inst), &mut active);
             apply_actions_state(
@@ -464,11 +461,9 @@ fn validate_lazy_frame_activity(
             }
 
             apply_after_site_state(plan, FrameSite::PreInst(inst), &mut active);
-            apply_site_state(plan, FrameSite::Inst(inst), &mut active);
             if function.dfg.is_return(inst) && active {
                 return None;
             }
-            apply_after_site_state(plan, FrameSite::Inst(inst), &mut active);
 
             apply_site_state(plan, FrameSite::PostInst(inst), &mut active);
             covered &= apply_actions_state(
@@ -964,8 +959,7 @@ impl PointOrderTable {
                 site_base
             }
             FrameSite::PreInst(inst) => self.inst_site_rank(inst, site_base, 0),
-            FrameSite::Inst(inst) => self.inst_site_rank(inst, site_base, 1),
-            FrameSite::PostInst(inst) => self.inst_site_rank(inst, site_base, 2),
+            FrameSite::PostInst(inst) => self.inst_site_rank(inst, site_base, 1),
         }
     }
 
@@ -978,7 +972,7 @@ impl PointOrderTable {
         site_base
             .checked_add(1)
             .and_then(|rank| {
-                rank.checked_add(inst_rank.checked_mul(3).expect("site rank overflow"))
+                rank.checked_add(inst_rank.checked_mul(2).expect("site rank overflow"))
             })
             .and_then(|rank| rank.checked_add(offset))
             .expect("site rank overflow")

@@ -772,7 +772,6 @@ fn verify_program_memory_plan(
                 store_count: 0,
             });
         }
-        let _ = &stable_subset;
 
         if !is_recursive {
             for fact in stack.obj_facts.values() {
