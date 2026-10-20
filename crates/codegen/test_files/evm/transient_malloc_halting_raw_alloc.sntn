@@ -1,0 +1,37 @@
+#! evm.config: { opt: 0 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(111)
+
+target = "evm-ethereum-osaka"
+
+# `%emit` raw-allocates and then reads the caller's buffer on a path that
+# halts. The caller's malloc is live across the call, so it must advance the
+# free pointer even though `%emit` never returns.
+
+func public %entry() {
+    block0:
+        mstore 64.i32 4096.i256 i256;
+        v0.*i256 = evm_malloc 32.i256;
+        mstore v0 111.i256 i256;
+        call %emit v0;
+        evm_return 0.i8 0.i8;
+}
+
+func private %emit(v0.*i256) {
+    block0:
+        v1.i256 = mload 64.i32 i256;
+        v2.i256 = add v1 32.i256;
+        mstore 64.i32 v2 i256;
+        v3.*i256 = int_to_ptr v1 *i256;
+        mstore v3 222.i256 i256;
+        v4.i256 = mload v0 i256;
+        mstore v3 v4 i256;
+        evm_return v1 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

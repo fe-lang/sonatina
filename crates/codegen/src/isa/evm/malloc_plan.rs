@@ -24,6 +24,7 @@ use super::{
         for_each_escape_event_at_inst,
     },
     memory_plan::SemanticFuncPlan,
+    prepare::memory_access_may_touch_free_ptr_slot,
     private_malloc::PrivateMallocUseAnalysis,
     ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo},
@@ -56,7 +57,10 @@ impl MallocEscapeKind {
 
 pub(crate) type TransientMallocCallBarriers = FxHashMap<FuncRef, bool>;
 
-/// Computes whether calls to each function can invalidate transient mallocs.
+/// Computes whether calls to each function can invalidate transient mallocs:
+/// calls that allocate, through `evm_malloc`, a dynamic frame, or a raw read of
+/// the free pointer. Raw writes alone allocate nothing; whatever allocates from
+/// the frontier they set is a barrier itself.
 pub(crate) fn compute_transient_malloc_call_barriers(
     module: &Module,
     schedule: &CallGraphSchedule,
@@ -71,10 +75,10 @@ pub(crate) fn compute_transient_malloc_call_barriers(
             let uses_dynamic_frame = semantic_plans
                 .get(&func)
                 .is_some_and(|plan| plan.dynamic_frame_layout().is_some());
-            let uses_malloc = module
+            let allocates = module
                 .func_store
-                .view(func, |function| func_uses_malloc(function, isa));
-            (func, uses_dynamic_frame || uses_malloc)
+                .view(func, |function| func_allocates(function, isa));
+            (func, uses_dynamic_frame || allocates)
         })
         .collect();
     local_results.sort_unstable_by_key(|(func, _)| func.as_u32());
@@ -240,7 +244,8 @@ pub(crate) fn compute_transient_mallocs(
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
 
-            if matches!(data, EvmInstKind::EvmMalloc(_)) {
+            let is_malloc = matches!(data, EvmInstKind::EvmMalloc(_));
+            if is_malloc || inst_reads_free_ptr_slot(function, isa, inst) {
                 let mut live = inst_liveness.live_out(inst).clone();
                 for def in function.dfg.inst_results(inst) {
                     live.remove(*def);
@@ -256,7 +261,9 @@ pub(crate) fn compute_transient_mallocs(
                         .as_ref()
                         .is_none_or(|barriers| barriers.contains(inst)),
                 );
-                seen_mallocs.insert(inst);
+                if is_malloc {
+                    seen_mallocs.insert(inst);
+                }
                 continue;
             }
 
@@ -305,15 +312,33 @@ pub(crate) fn compute_transient_mallocs(
     mallocs
 }
 
-fn func_uses_malloc(function: &Function, isa: &Evm) -> bool {
+/// Whether `function` allocates from the free pointer itself, through
+/// `evm_malloc` or a raw read of the slot.
+fn func_allocates(function: &Function, isa: &Evm) -> bool {
     function.layout.iter_block().any(|block| {
         function.layout.iter_inst(block).any(|inst| {
             matches!(
                 isa.inst_set().resolve_inst(function.dfg.inst(inst)),
                 EvmInstKind::EvmMalloc(_)
-            )
+            ) || inst_reads_free_ptr_slot(function, isa, inst)
         })
     })
+}
+
+/// Whether `inst`, other than a call or a malloc, reads the free-pointer slot
+/// for code that runs after it. Such a raw read allocates behind the malloc
+/// lowering's back, from the frontier a transient malloc left.
+fn inst_reads_free_ptr_slot(function: &Function, isa: &Evm, inst: InstId) -> bool {
+    !function.dfg.is_terminator(inst)
+        && function.dfg.call_info(inst).is_none()
+        && !matches!(
+            isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+            EvmInstKind::EvmMalloc(_)
+        )
+        && function.dfg.effects(inst).accesses.iter().any(|access| {
+            access.kind == AccessKind::Read
+                && memory_access_may_touch_free_ptr_slot(function, access)
+        })
 }
 
 pub(crate) fn compute_malloc_escape_kinds_for_function(
