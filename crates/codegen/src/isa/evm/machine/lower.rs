@@ -574,14 +574,19 @@ impl FuncLowerCtx<'_> {
                 min_base,
                 needs_dyn_sp_clamp,
                 update_free_ptr,
+                exact_base,
             } => {
-                let known_free_ptr_floor = self
-                    .placement
-                    .free_ptr_floor_before_malloc
-                    .get(&source_inst)
-                    .copied()
-                    .flatten();
-                let base = self.emit_heap_base(min_base, needs_dyn_sp_clamp, known_free_ptr_floor);
+                let base = if let Some(base) = exact_base {
+                    self.i256_imm(base)
+                } else {
+                    let known_free_ptr_floor = self
+                        .placement
+                        .free_ptr_floor_before_malloc
+                        .get(&source_inst)
+                        .copied()
+                        .flatten();
+                    self.emit_heap_base(min_base, needs_dyn_sp_clamp, known_free_ptr_floor)
+                };
                 if update_free_ptr {
                     let size = self.lower_malloc_aligned_size(source_inst)?;
                     let new_free =

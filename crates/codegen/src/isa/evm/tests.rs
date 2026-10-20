@@ -40,7 +40,8 @@ use self::{
         final_spills::compute_malloc_spill_bounds,
         module::FuncMachineMap,
         placement::{
-            EvmMemoryPlacementPlan, MemoryPlacementSection, compute_semantic_memory_placement,
+            EvmMemoryPlacementPlan, MallocPlacement, MemoryPlacementSection,
+            compute_semantic_memory_placement,
         },
     },
     memory_plan::{
@@ -1338,13 +1339,15 @@ block3:
 
 #[test]
 fn private_memzero_uses_fixed_buffer_only_with_bounded_accesses() {
+    // The parameter keeps the entry's free pointer from being known fresh, so
+    // only the fixed-buffer rule can turn the heap base into a constant.
     for (offset, len, fixed) in [(0, 64, true), (32, 32, true), (32, 64, false)] {
         let dumped = prepared_func_dump(
             &format!(
                 r#"
 target = "evm-ethereum-osaka"
 
-func public %entry() -> i256 {{
+func public %entry(v9.i256) -> i256 {{
 block0:
     v0.*i8 = evm_malloc 64.i256;
     v1.i256 = ptr_to_int v0 i256;
@@ -1487,11 +1490,12 @@ block4:
 
 #[test]
 fn terminal_private_malloc_keeps_heap_base_when_pointer_value_escapes_in_payload() {
+    // The parameter keeps the entry's free pointer from being known fresh.
     let dumped = prepared_func_dump(
         r#"
 target = "evm-ethereum-osaka"
 
-func public %entry() {
+func public %entry(v9.i256) {
 block0:
     v0.*i8 = evm_malloc 32.i256;
     v1.i256 = ptr_to_int v0 i256;
@@ -2371,6 +2375,80 @@ block0:
         );
         // The probe's malloc needs no clamp exactly when the entry stores the floor.
         assert_eq!(floors, [placement.section_entry_free_ptr], "{name}");
+    }
+}
+
+#[test]
+fn section_entry_malloc_base_is_constant_only_when_entered_once() {
+    for (name, access, caller, included, exact) in [
+        ("plain", "", "", false, true),
+        // The slot read keeps the entry from storing a free pointer, so the
+        // base is the zero memory starts with, clamped to the minimum.
+        (
+            "slot_read",
+            "v3.i256 = mload 64.i256 i256;\n    evm_sstore 0.i256 v3;",
+            "",
+            false,
+            true,
+        ),
+        (
+            "called",
+            "",
+            "func public %alt() {\nblock0:\n    call %entry;\n    evm_stop;\n}",
+            false,
+            false,
+        ),
+        ("included", "", "", true, false),
+        (
+            "loop_header",
+            "v3.i256 = evm_sload 0.i256;\n    evm_sstore 0.i256 1.i256;\n    v4.i1 = eq v3 0.i256;\n    br v4 block0 block1;\nblock1:",
+            "",
+            false,
+            false,
+        ),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %probe() -> i256 {{
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}}
+func public %entry() {{
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = call %probe;
+    {access}
+    evm_mstore 0.i256 v1;
+    evm_mstore 32.i256 v2;
+    evm_return 0.i256 64.i256;
+}}
+{caller}
+"#
+        );
+        let module = parse_module(&source).expect("module parses").module;
+        let backend = osaka_backend();
+        let entry = find_func(&module, "entry");
+        let includes = if included { vec![entry] } else { Vec::new() };
+        let placement = compute_test_memory_placement(&module, &backend, entry, &includes);
+        let [
+            &MallocPlacement::Heap {
+                min_base,
+                exact_base,
+                ..
+            },
+        ] = placement.funcs[&entry]
+            .malloc_placements
+            .values()
+            .collect::<Vec<_>>()[..]
+        else {
+            panic!("{name}: expected one heap malloc in the entry");
+        };
+        let expected = exact.then(|| placement.section_entry_free_ptr.unwrap_or(min_base));
+        assert_eq!(exact_base, expected, "{name}");
     }
 }
 

@@ -1,15 +1,15 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 1937
+assertion_line: 2136
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_deposit_contract_unoptimized.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 2460 bytes
-  section runtime: 2384 bytes
-  total: 4844 bytes
+  section init: 2438 bytes
+  section runtime: 2362 bytes
+  total: 4800 bytes
 
 functions:
   mem: global_dyn_base=0x1c0 arena_base=0x60 scratch_peak_words=5 stable_chain_peak_words=6
@@ -21,12 +21,12 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=1268920 gas_refunded=0 logs=0 output=create len=2384 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=1264150 gas_refunded=0 logs=0 output=create len=2362 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case supports_interface_erc165: calldata_len=36 success reason=Return gas_used=21478 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=238
   case supports_interface_deposit: calldata_len=36 success reason=Return gas_used=21506 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=266
   case supports_interface_unknown: calldata_len=36 success reason=Return gas_used=21493 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=253
   case get_deposit_root_empty: calldata_len=4 success reason=Return gas_used=102652 gas_refunded=0 logs=0 output=call len=32 tx_gas=21064 runtime_gas=81588
-  case get_deposit_count_empty: calldata_len=4 success reason=Return gas_used=23576 gas_refunded=0 logs=0 output=call len=96 tx_gas=21064 runtime_gas=2512
+  case get_deposit_count_empty: calldata_len=4 success reason=Return gas_used=23526 gas_refunded=0 logs=0 output=call len=96 tx_gas=21064 runtime_gas=2462
   case deposit_rejects_zero_value: calldata_len=420 revert gas_used=26827 output_len=132 tx_gas=25296 runtime_gas=1531
 
 

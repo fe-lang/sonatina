@@ -1,23 +1,24 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2136
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/array_iter_reverse.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 190 bytes
-  total: 190 bytes
+  section runtime: 170 bytes
+  total: 170 bytes
 
 functions:
   mem: global_dyn_base=0x60 arena_base=0x60 scratch_peak_words=0 stable_chain_peak_words=0
-  test_view_param_local_ref_take_reverse: ir_blocks=11 ir_insts=56 vcode_ops=149 fixups=8 imm_bytes=35
+  test_view_param_local_ref_take_reverse: ir_blocks=11 ir_insts=47 vcode_ops=122 fixups=8 imm_bytes=39
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=3 vcode_ops=8 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21863 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=863
+  case ok: calldata_len=0 success reason=Return gas_used=21783 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=783
 
 
 --------------- DEBUG ---------------
@@ -28,66 +29,41 @@ test_view_param_local_ref_take_reverse:
     PUSH1 0x60 (96)
     PUSH1 0x40 (64)
     MSTORE
-    PUSH1 0x40 (64)  // v9.i256 = evm_mload v8;
+    PUSH2 0x160 (352)  // evm_mstore v12 352.i256;
+    PUSH1 0x40 (64)
+    MSTORE
+    PUSH1 0x1 (1)  // evm_mstore v8 v14;
+    PUSH1 0x60 (96)
+    MSTORE
+    PUSH1 0x2 (2)  // evm_mstore v26 v18;
+    PUSH1 0x80 (128)
+    MSTORE
+    PUSH1 0x3 (3)  // evm_mstore v30 v21;
+    PUSH1 0xa0 (160)
+    MSTORE
+    PUSH1 0x4 (4)  // evm_mstore v34 v24;
+    PUSH1 0xc0 (192)
+    MSTORE
+    PUSH1 0x5 (5)  // evm_mstore 224.i256 v28;
+    PUSH1 0xe0 (224)
+    MSTORE
+    PUSH1 0x6 (6)  // evm_mstore v9 v32;
+    PUSH2 0x100 (256)
+    MSTORE
+    PUSH1 0x7 (7)  // evm_mstore 288.i256 7.i256;
+    PUSH2 0x120 (288)
+    MSTORE
+    PUSH1 0x8 (8)  // evm_mstore 320.i256 8.i256;
+    PUSH2 0x140 (320)
+    MSTORE
+    PUSH1 0x40 (64)  // v59.i256 = evm_mload v12;
     MLOAD
-    PUSH2 0x100 (256)  // v12.i256 = add v9 v11;
+    PUSH1 0x4 (4)  // evm_mstore v59 v24;
     DUP2
+    MSTORE
+    PUSH1 0x20 (32)  // v29.i256 = add v59 v15;
     ADD
-    PUSH1 0x40 (64)  // evm_mstore v8 v12;
-    MSTORE
-    PUSH1 0x1 (1)  // evm_mstore v9 v14;
-    DUP2
-    MSTORE
-    PUSH1 0x20 (32)  // v17.i256 = add v9 v15;
-    DUP2
-    ADD
-    PUSH1 0x2 (2)  // evm_mstore v17 v18;
-    SWAP1
-    MSTORE
-    PUSH1 0x40 (64)  // v20.i256 = add v9 v8;
-    DUP2
-    ADD
-    PUSH1 0x3 (3)  // evm_mstore v20 v21;
-    SWAP1
-    MSTORE
-    PUSH1 0x60 (96)  // v24.i256 = add v9 v23;
-    DUP2
-    ADD
-    PUSH1 0x4 (4)  // evm_mstore v24 v26;
-    SWAP1
-    MSTORE
-    PUSH1 0x80 (128)  // v28.i256 = add v9 v27;
-    DUP2
-    ADD
-    PUSH1 0x5 (5)  // evm_mstore v28 v30;
-    SWAP1
-    MSTORE
-    PUSH1 0xa0 (160)  // v32.i256 = add v9 v31;
-    DUP2
-    ADD
-    PUSH1 0x6 (6)  // evm_mstore v32 v34;
-    SWAP1
-    MSTORE
-    PUSH1 0xc0 (192)  // v57.i256 = add v9 v35;
-    DUP2
-    ADD
-    PUSH1 0x7 (7)  // evm_mstore v57 7.i256;
-    SWAP1
-    MSTORE
-    PUSH1 0xe0 (224)  // v58.i256 = add v9 224.i256;
-    DUP2
-    ADD
-    PUSH1 0x8 (8)  // evm_mstore v58 8.i256;
-    SWAP1
-    MSTORE
-    PUSH1 0x40 (64)  // v29.i256 = evm_mload v8;
-    MLOAD
-    PUSH1 0x4 (4)  // evm_mstore v29 v26;
-    DUP2
-    MSTORE
-    PUSH1 0x20 (32)  // v59.i256 = add v29 v15;
-    ADD
-    DUP2  // evm_mstore v59 v9;
+    PUSH1 0x60 (96)  // evm_mstore v29 v8;
     SWAP1
     MSTORE
     PUSH0  // jump block2;
@@ -97,25 +73,25 @@ test_view_param_local_ref_take_reverse:
     DUP2  // v60.i256 = sub 7.i256 v3;
     PUSH1 0x7 (7)
     SUB
-    PUSH1 0x5 (5)  // v61.i256 = shl v30 v60;
+    PUSH1 0x5 (5)  // v31.i256 = shl v28 v60;
     SHL
-    DUP4  // v33.i256 = add v9 v61;
+    PUSH1 0x60 (96)  // v61.i256 = add v8 v31;
     ADD
-    MLOAD  // v62.i256 = evm_mload v33;
-    ADD  // v63.i256 = add v2 v62;
-    SWAP1  // v36.i256 = add v3 v14;
+    MLOAD  // v33.i256 = evm_mload v61;
+    ADD  // v62.i256 = add v2 v33;
+    SWAP1  // v35.i256 = add v3 v14;
     PUSH1 0x1 (1)
     ADD
-    PUSH1 0x4 (4)  // v37.i256 = lt v36 v26;
+    PUSH1 0x4 (4)  // v36.i256 = lt v35 v24;
     DUP2
     LT
-    PUSH1 block1  // br v37 block1 block3;
+    PUSH1 block1  // br v36 block1 block3;
     JUMPI
   block3:
-    POP  // v40.i256 = eq v63 26.i256;
+    POP  // v39.i256 = eq v62 26.i256;
     PUSH1 0x1a (26)
     EQ
-    PUSH1 block5  // br v40 block5 block4;
+    PUSH1 block5  // br v39 block5 block4;
     JUMPI
     PUSH1 __evm_shared_tail_0
     JUMP
@@ -126,42 +102,40 @@ test_view_param_local_ref_take_reverse:
     JUMP
   block5:
     JUMPDEST
-    PUSH1 0x40 (64)  // v44.i256 = evm_mload v8;
+    PUSH1 0x40 (64)  // v43.i256 = evm_mload v12;
     MLOAD
-    PUSH1 0x4 (4)  // evm_mstore v44 v26;
+    PUSH1 0x4 (4)  // evm_mstore v43 v24;
     DUP2
     MSTORE
-    PUSH1 0x20 (32)  // v45.i256 = add v44 v15;
+    PUSH1 0x20 (32)  // v44.i256 = add v43 v15;
     ADD
-    DUP2  // evm_mstore v45 v9;
+    PUSH1 0x60 (96)  // evm_mstore v44 v8;
     SWAP1
     MSTORE
     PUSH0  // jump block7;
     PUSH0
   block7:
     JUMPDEST
-    DUP2  // v46.i256 = shl v30 v6;
+    DUP2  // v45.i256 = shl v28 v6;
     PUSH1 0x5 (5)
     SHL
-    DUP4  // v47.i256 = add v9 v46;
+    PUSH1 0x60 (96)  // v46.i256 = add v8 v45;
     ADD
-    MLOAD  // v48.i256 = evm_mload v47;
-    ADD  // v49.i256 = add v5 v48;
-    SWAP1  // v50.i256 = add v6 v14;
+    MLOAD  // v47.i256 = evm_mload v46;
+    ADD  // v48.i256 = add v5 v47;
+    SWAP1  // v49.i256 = add v6 v14;
     PUSH1 0x1 (1)
     ADD
-    PUSH1 0x4 (4)  // v51.i256 = lt v50 v26;
+    PUSH1 0x4 (4)  // v50.i256 = lt v49 v24;
     DUP2
     LT
-    PUSH1 block6  // br v51 block6 block8;
+    PUSH1 block6  // br v50 block6 block8;
     JUMPI
   block8:
-    POP  // v54.i256 = eq v49 10.i256;
-    SWAP1
-    POP
+    POP  // v53.i256 = eq v48 10.i256;
     PUSH1 0xa (10)
     EQ
-    PUSH1 block10  // br v54 block10 block9;
+    PUSH1 block10  // br v53 block10 block9;
     JUMPI
     PUSH1 __evm_shared_tail_0
     JUMP

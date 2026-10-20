@@ -75,6 +75,10 @@ pub(crate) enum MallocPlacement {
         min_base: u32,
         needs_dyn_sp_clamp: bool,
         update_free_ptr: bool,
+        /// The free-pointer slot still holds what the section entry started
+        /// with (zero, or the entry's initial free pointer), so the base is
+        /// this constant.
+        exact_base: Option<u32>,
     },
 }
 
@@ -281,10 +285,25 @@ pub(crate) fn compute_semantic_memory_placement(
         }
     }
 
+    // The section entry finds the free-pointer slot as the invocation began
+    // (zero, or what `section_entry_free_ptr` stores) only when it runs once
+    // per invocation: an entry the section can enter again, as an include
+    // root, through a call, or along a branch back to its entry block, may
+    // find a live heap.
+    let entry_cfg = &expect_func_entry(analyses, section.entry, "pre-analysis").cfg;
+    let entry_reentered = section.includes.contains(&section.entry)
+        || entry_cfg
+            .entry()
+            .is_some_and(|block| entry_cfg.pred_num_of(block) != 0)
+        || schedule
+            .funcs()
+            .iter()
+            .any(|&func| schedule.call_graph.callee_of(func).contains(&section.entry));
     let placement_rules = MallocPlacementRules {
         isa: &backend.isa,
         module: &module.ctx,
         section_entry: section.entry,
+        entry_runs_once: !entry_reentered,
         has_persistent_mallocs,
         free_ptr_slot_may_be_touched,
         private_static_mallocs: &private_static_mallocs,
@@ -351,6 +370,36 @@ pub(crate) fn compute_semantic_memory_placement(
         }
     }
 
+    let min_base = |func: FuncRef, inst: InstId| {
+        malloc_min_base(
+            expect_func_entry(&semantic_plan.funcs, func, "semantic plan"),
+            semantic_plan.global_dyn_base,
+            backend_spill_scratch_reserve_peak,
+            inst,
+        )
+    };
+    // Starting the heap above every heap malloc's minimum base once, at the
+    // section entry, replaces a clamp at each malloc. Dynamic frames share
+    // the region above the global base, so sections with them keep clamping.
+    // The store must run once, before any allocation, so a re-entered entry
+    // keeps clamping. Code that accesses the slot (MSIZE counts) could
+    // observe the store on a path that allocates nothing, so such sections
+    // keep clamping too.
+    let section_entry_free_ptr = (has_heap_mallocs
+        && !has_dynamic_frames
+        && !entry_reentered
+        && !free_ptr_slot_may_be_touched)
+        .then(|| {
+            malloc_rules
+                .iter()
+                .flat_map(|(&func, rules)| {
+                    rules
+                        .iter()
+                        .filter(|(_, rule)| matches!(rule, MallocPlacementRule::Heap { .. }))
+                        .map(move |(&inst, _)| min_base(func, inst))
+                })
+                .fold(semantic_plan.global_dyn_base, u32::max)
+        });
     let malloc_placements: FxHashMap<_, _> = funcs
         .iter()
         .copied()
@@ -360,21 +409,22 @@ pub(crate) fn compute_semantic_memory_placement(
             let malloc_placements = malloc_rules[&func]
                 .iter()
                 .map(|(&inst, &rule)| {
-                    let min_base = malloc_min_base(
-                        func_plan,
-                        semantic_plan.global_dyn_base,
-                        backend_spill_scratch_reserve_peak,
-                        inst,
-                    );
+                    let min_base = min_base(func, inst);
                     let placement = match rule {
                         MallocPlacementRule::MinBase => MallocPlacement::Fixed { base: min_base },
                         MallocPlacementRule::PrivateStatic { word } => MallocPlacement::Fixed {
                             base: func_plan.abs_addr_for_word(word),
                         },
-                        MallocPlacementRule::Heap { update_free_ptr } => MallocPlacement::Heap {
+                        MallocPlacementRule::Heap {
+                            update_free_ptr,
+                            fresh_free_ptr,
+                        } => MallocPlacement::Heap {
                             min_base,
                             needs_dyn_sp_clamp,
                             update_free_ptr,
+                            exact_base: fresh_free_ptr.then(|| {
+                                section_entry_free_ptr.map_or(min_base, |free| free.max(min_base))
+                            }),
                         },
                     };
                     (inst, placement)
@@ -383,37 +433,6 @@ pub(crate) fn compute_semantic_memory_placement(
             (func, malloc_placements)
         })
         .collect();
-    // Starting the heap above every heap malloc's minimum base once, at the
-    // section entry, replaces a clamp at each malloc. Dynamic frames share
-    // the region above the global base, so sections with them keep clamping.
-    // The store must run once, before any allocation, so an entry the section
-    // can enter again, as an include root, through a call, or along a branch
-    // back to the entry block that holds the store, keeps clamping.
-    // Code that accesses the slot (MSIZE counts) could observe the store on a
-    // path that allocates nothing, so such sections keep clamping too.
-    let entry_cfg = &expect_func_entry(analyses, section.entry, "pre-analysis").cfg;
-    let entry_reentered = section.includes.contains(&section.entry)
-        || entry_cfg
-            .entry()
-            .is_some_and(|block| entry_cfg.pred_num_of(block) != 0)
-        || schedule
-            .funcs()
-            .iter()
-            .any(|&func| schedule.call_graph.callee_of(func).contains(&section.entry));
-    let section_entry_free_ptr = (has_heap_mallocs
-        && !has_dynamic_frames
-        && !entry_reentered
-        && !free_ptr_slot_may_be_touched)
-        .then(|| {
-            malloc_placements
-                .values()
-                .flat_map(FxHashMap::values)
-                .filter_map(|placement| match placement {
-                    MallocPlacement::Heap { min_base, .. } => Some(*min_base),
-                    MallocPlacement::Fixed { .. } => None,
-                })
-                .fold(semantic_plan.global_dyn_base, u32::max)
-        });
     let free_ptr_floor_before_malloc =
         compute_program_free_ptr_floor_before_malloc(ProgramFreePtrFloorInput {
             module,
@@ -516,13 +535,19 @@ enum MallocPlacementRule {
     /// Fixed in the function's private static malloc words.
     PrivateStatic { word: u32 },
     /// Allocated from the free pointer.
-    Heap { update_free_ptr: bool },
+    Heap {
+        update_free_ptr: bool,
+        fresh_free_ptr: bool,
+    },
 }
 
 struct MallocPlacementRules<'a> {
     isa: &'a Evm,
     module: &'a ModuleCtx,
     section_entry: FuncRef,
+    /// The section entry runs once per invocation, before anything writes
+    /// the free-pointer slot.
+    entry_runs_once: bool,
     has_persistent_mallocs: bool,
     free_ptr_slot_may_be_touched: bool,
     private_static_mallocs: &'a PrivateStaticMallocProgramPlan,
@@ -566,11 +591,15 @@ impl MallocPlacementRules<'_> {
                                 inst,
                                 exact_heap_base,
                             )));
+                // An entry that runs once has not written the free-pointer
+                // slot since it started, so the heap base is a known constant.
+                let fresh_free_ptr = exact_heap_base
+                    && self.entry_runs_once
+                    && self.section_entry == func
+                    && function.arg_values.is_empty();
                 let fixed_by_exact_entry_rule = !fixed_by_terminal_or_program_rule
                     && transient
-                    && exact_heap_base
-                    && self.section_entry == func
-                    && function.arg_values.is_empty()
+                    && fresh_free_ptr
                     && malloc_private_uses_are_compatible_with_fixed_base(
                         function,
                         self.module,
@@ -593,6 +622,7 @@ impl MallocPlacementRules<'_> {
                 } else {
                     MallocPlacementRule::Heap {
                         update_free_ptr: !transient,
+                        fresh_free_ptr,
                     }
                 };
                 out.insert(inst, rule);
