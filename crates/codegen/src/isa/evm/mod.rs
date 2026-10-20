@@ -10,6 +10,7 @@ mod high_alias;
 mod immediate;
 mod late_block_merge;
 mod late_section_merge;
+mod local_malloc;
 mod machine;
 mod malloc_plan;
 mod memory_plan;
@@ -40,6 +41,7 @@ pub(crate) use immediate::{
     ImmediateMaterializationPlan, immediate_materialization_code_len,
     immediate_materialization_cost_i256, immediate_materialization_plan, u32_to_be, u256_to_be,
 };
+pub(crate) use local_malloc::promote_local_mallocs;
 pub(crate) use memory_plan::{
     DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan, ObjLoc, STATIC_BASE, WORD_BYTES,
 };

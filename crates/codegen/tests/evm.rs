@@ -761,6 +761,64 @@ object @Contract { section runtime { entry %entry; } }
 }
 
 #[test]
+fn frame_buffers_stay_live_across_heap_allocating_calls() {
+    // `%entry`'s buffer moves into the frame and stays live across the second
+    // allocating call. The heap objects the calls return keep their contents,
+    // and comparing their addresses observes the allocator advancing past the
+    // first one. Only the comparison is stored: storing a heap address marks
+    // untracked memory as holding pointers, which keeps the buffer on the heap.
+    let source = r#"
+target = "evm-ethereum-osaka"
+func inline(never) private %allocate(v0.i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v2;
+}
+func public %entry() {
+block0:
+    v0.i256 = call %allocate 11.i256;
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 7.i256 i256;
+    v3.i256 = call %allocate 13.i256;
+    v4.i256 = mload v2 i256;
+    v5.i256 = mload v0 i256;
+    v6.i256 = mload v3 i256;
+    v7.i256 = add v0 32.i256;
+    v8.i1 = lt v3 v7;
+    v9.i256 = zext v8 i256;
+    mstore 512.i256 v4 i256;
+    mstore 544.i256 v5 i256;
+    mstore 576.i256 v6 i256;
+    mstore 608.i256 v9 i256;
+    evm_return 512.i256 128.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let expected: Vec<_> = [7, 11, 13, 0]
+        .into_iter()
+        .flat_map(|word| IrU256::from(word).to_big_endian())
+        .collect();
+    for profile in [
+        LateCleanupProfile::Off,
+        LateCleanupProfile::Speed,
+        LateCleanupProfile::Size,
+    ] {
+        let result = EvmHarness::runtime_with_profile(source, profile).call(&[]);
+        let ExecutionResult::Success {
+            output: Output::Call(actual),
+            ..
+        } = result
+        else {
+            panic!("{profile:?}: {result:?}");
+        };
+        assert_eq!(actual.as_ref(), expected, "{profile:?}");
+    }
+}
+
+#[test]
 fn terminal_payload_bases_preserve_overlaps_values_and_halts() {
     let bases = [
         IrU256::from(64),

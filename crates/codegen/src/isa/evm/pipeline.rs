@@ -27,7 +27,8 @@ use sonatina_ir::{Module, module::FuncRef};
 
 use super::{
     EvmBackend, LateCleanupProfile, PtrEscapeSummaries, collect_unsupported_evm_calls,
-    compute_ptr_escape_summaries, prepare_free_ptr_restore, validate_supported_lowering_ir,
+    compute_ptr_escape_summaries, prepare_free_ptr_restore, promote_local_mallocs,
+    validate_supported_lowering_ir,
 };
 
 pub(crate) struct EvmPipelineArtifacts {
@@ -424,14 +425,19 @@ impl EvmPipelineContext<'_> {
                 changed |= module.func_store.modify(func, lower_keccak256_words);
             }
         }
-        if changed {
+        let summaries = match self.ptr_escape.take() {
+            Some(summaries) if !changed => summaries,
+            _ => compute_ptr_escape_summaries(self.module(), &self.funcs, &self.backend.isa),
+        };
+        let promoted = promote_local_mallocs(self.module(), &self.funcs, self.backend, &summaries);
+        if changed || promoted {
             self.func_behavior_dirty = true;
-            self.ptr_escape = Some(compute_ptr_escape_summaries(
-                self.module(),
-                &self.funcs,
-                &self.backend.isa,
-            ));
         }
+        self.ptr_escape = Some(if promoted {
+            compute_ptr_escape_summaries(self.module(), &self.funcs, &self.backend.isa)
+        } else {
+            summaries
+        });
         Ok(())
     }
 }

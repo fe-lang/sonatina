@@ -37,6 +37,10 @@ impl MallocEscapeKind {
     pub(crate) const STORED_NON_LOCAL: Self = Self(1 << 1);
     pub(crate) const UNKNOWN: Self = Self(1 << 2);
 
+    pub(crate) fn escapes(self) -> bool {
+        self.0 != 0
+    }
+
     pub(crate) fn has_global_or_unknown(self) -> bool {
         self.contains(Self::STORED_NON_LOCAL) || self.contains(Self::UNKNOWN)
     }
