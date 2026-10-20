@@ -18,7 +18,8 @@ use super::{
         BackendSpillReserve, FuncPreAnalysis, ObjLoc, ProgramMemoryPlan, SemanticFuncPlan,
         WORD_BYTES, compute_abs_clobber_words_with_extra, expect_func_entry,
     },
-    ptr_provenance::Provenance,
+    ptr_escape::PtrEscapeSummaries,
+    ptr_provenance::{Provenance, ProvenanceInfo, compute_value_provenance},
 };
 use crate::{liveness::InstLiveness, module_analysis::CallGraphSchedule};
 
@@ -41,9 +42,29 @@ pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
             cfg: &analysis.cfg,
             inst_liveness: &analysis.inst_liveness,
             canonicalize: &analysis.value_aliases,
-            prov_conservative: &analysis.prov_conservative_value,
+            prov: &analysis.heap_bound_prov,
         },
     )
+}
+
+/// Value provenance for heap bounds: the origins found with all-conservative
+/// callee summaries, which hold regardless of callee escape behavior, plus
+/// those the real summaries find. The conservative model alone loses
+/// addresses that flow through integer-typed call results, such as a callee
+/// returning an `i256` argument, which would let a malloc overlap the
+/// allocation it still points at.
+pub(crate) fn compute_heap_bound_provenance(
+    function: &Function,
+    module: &ModuleCtx,
+    isa: &Evm,
+    prov: &ProvenanceInfo,
+) -> SecondaryMap<ValueId, Provenance> {
+    let mut heap_bound_prov =
+        compute_value_provenance(function, module, isa, &PtrEscapeSummaries::conservative());
+    for value in function.dfg.value_ids() {
+        heap_bound_prov[value].union_with(&prov.value[value]);
+    }
+    heap_bound_prov
 }
 
 fn compute_malloc_future_abs_words_with_analysis<A>(
@@ -95,9 +116,7 @@ struct FutureBoundsAnalysis<'a> {
     cfg: &'a ControlFlowGraph,
     inst_liveness: &'a InstLiveness,
     canonicalize: &'a SecondaryMap<ValueId, Option<ValueId>>,
-    /// Deliberately computed with all-conservative callee summaries: heap
-    /// bounds must hold regardless of callee escape behavior.
-    prov_conservative: &'a SecondaryMap<ValueId, Provenance>,
+    prov: &'a SecondaryMap<ValueId, Provenance>,
 }
 
 struct FutureBoundsCtx<'a> {
@@ -114,7 +133,7 @@ fn compute_future_bounds_for_func(
     ctx: &FutureBoundsCtx<'_>,
 ) -> FxHashMap<InstId, u32> {
     let cfg = ctx.analysis.cfg;
-    let prov = ctx.analysis.prov_conservative;
+    let prov = ctx.analysis.prov;
 
     let mut alloca_end_words: FxHashMap<InstId, u32> = FxHashMap::default();
     for (&inst, &loc) in &ctx.func_plan.alloca_loc {
@@ -571,7 +590,7 @@ block0:
                 cfg: &analysis.cfg,
                 inst_liveness: &analysis.inst_liveness,
                 canonicalize: &analysis.value_aliases,
-                prov_conservative: &analysis.prov_conservative,
+                prov: &analysis.prov_conservative,
             },
         );
 
@@ -651,7 +670,7 @@ block0:
                 cfg: &analysis.cfg,
                 inst_liveness: &analysis.inst_liveness,
                 canonicalize: &analysis.value_aliases,
-                prov_conservative: &analysis.prov_conservative,
+                prov: &analysis.prov_conservative,
             },
         );
 

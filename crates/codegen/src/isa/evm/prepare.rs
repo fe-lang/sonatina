@@ -39,6 +39,7 @@ use super::{
         compute_late_block_alias_plan, immediate_u32, rewrite_evm_local_fallthrough_layout,
     },
     fixed_slots,
+    heap_plan::compute_heap_bound_provenance,
     machine::{
         final_spills::{
             FinalSpillAllocationInput, FinalSpillChoiceCtx, FinalSpillObjects,
@@ -60,7 +61,7 @@ use super::{
     },
     pipeline::EvmPipeline,
     ptr_escape::PtrEscapeSummaries,
-    ptr_provenance::{Provenance, compute_provenance, compute_value_provenance},
+    ptr_provenance::{Provenance, compute_provenance},
 };
 
 const FREE_PTR_SLOT_START: u32 = FREE_PTR_SLOT as u32;
@@ -1618,16 +1619,11 @@ fn prepare_high_evm_pre_analysis(
         backend.compute_high_evm_value_aliases(function, module)
     };
 
-    let (prov, prov_conservative_value) = {
+    let (prov, heap_bound_prov) = {
         let _span = trace_span!("sonatina.codegen.evm.pre_analysis.compute_provenance").entered();
         let prov = compute_provenance(function, module, &backend.isa, ptr_escape);
-        let conservative = compute_value_provenance(
-            function,
-            module,
-            &backend.isa,
-            &PtrEscapeSummaries::conservative(),
-        );
-        (prov, conservative)
+        let heap_bound_prov = compute_heap_bound_provenance(function, module, &backend.isa, &prov);
+        (prov, heap_bound_prov)
     };
 
     memory_plan::FuncPreAnalysis {
@@ -1636,7 +1632,7 @@ fn prepare_high_evm_pre_analysis(
         block_order,
         value_aliases,
         prov,
-        prov_conservative_value,
+        heap_bound_prov,
     }
 }
 

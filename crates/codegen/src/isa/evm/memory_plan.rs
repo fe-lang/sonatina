@@ -584,10 +584,9 @@ pub(crate) struct FuncPreAnalysis {
     pub(crate) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
     /// Pointer provenance computed with the section's escape summaries.
     pub(crate) prov: ProvenanceInfo,
-    /// Value provenance computed with all-conservative callee summaries.
-    /// Heap bounds deliberately use this weaker variant: they must hold even
-    /// where the real summaries would allow more reuse (see heap_plan).
-    pub(crate) prov_conservative_value: SecondaryMap<ValueId, Provenance>,
+    /// Value provenance for heap bounds (see
+    /// [`super::heap_plan::compute_heap_bound_provenance`]).
+    pub(crate) heap_bound_prov: SecondaryMap<ValueId, Provenance>,
 }
 
 pub(crate) struct MachineStackifyAnalysis {

@@ -139,19 +139,15 @@ fn compute_test_pre_analysis(
         &backend.isa,
         ptr_escape,
     );
-    let prov_conservative_value = crate::isa::evm::ptr_provenance::compute_value_provenance(
-        function,
-        module,
-        &backend.isa,
-        &PtrEscapeSummaries::conservative(),
-    );
+    let heap_bound_prov =
+        super::heap_plan::compute_heap_bound_provenance(function, module, &backend.isa, &prov);
     memory_plan::FuncPreAnalysis {
         block_order: dom.rpo().to_owned(),
         value_aliases: backend.compute_high_evm_value_aliases(function, module),
         cfg,
         inst_liveness,
         prov,
-        prov_conservative_value,
+        heap_bound_prov,
     }
 }
 
