@@ -152,7 +152,7 @@ fn minimum_positive_operand_prep_cost(cost: &impl CostModel, cfg: SearchCfg) -> 
     for pos in 0..cfg.dup_max.min(usize::from(u8::MAX) + 1) {
         best = best.min(cost.cost_dup(pos as u8));
     }
-    for depth in 1..=cfg.swap_max.min(usize::from(u8::MAX)) {
+    for depth in 1..cfg.swap_max.min(usize::from(u8::MAX) + 1) {
         best = best.min(cost.cost_swap(depth as u8));
     }
     best
@@ -1023,6 +1023,47 @@ mod tests {
         ));
         assert!(!commutative_plan_is_unbeatable(&penalized_pop, &cost, cfg));
         assert!(!commutative_plan_is_unbeatable(&swap, &cost, cfg));
+    }
+
+    #[test]
+    fn minimum_operand_prep_cost_ignores_unreachable_swap_depth() {
+        struct CheapDeepSwap;
+        impl CostModel for CheapDeepSwap {
+            fn cost_pop(&self) -> Cost {
+                Cost { gas: 9, bytes: 1 }
+            }
+            fn cost_dup(&self, _pos: u8) -> Cost {
+                Cost { gas: 9, bytes: 1 }
+            }
+            fn cost_swap(&self, depth: u8) -> Cost {
+                Cost {
+                    gas: if depth == 4 { 1 } else { 9 },
+                    bytes: 1,
+                }
+            }
+            fn cost_push_imm(&self, _imm: I256) -> Cost {
+                Cost { gas: 9, bytes: 1 }
+            }
+            fn cost_load(&self, _v: ValueId) -> Cost {
+                Cost { gas: 9, bytes: 1 }
+            }
+        }
+
+        // `swap_max` is an exclusive window length: SWAP4 needs a five-slot window.
+        let cfg = |swap_max| SearchCfg {
+            dup_max: 4,
+            swap_max,
+            max_len: 8,
+            max_expansions: 0,
+        };
+        assert_eq!(
+            minimum_positive_operand_prep_cost(&CheapDeepSwap, cfg(4)).gas,
+            9
+        );
+        assert_eq!(
+            minimum_positive_operand_prep_cost(&CheapDeepSwap, cfg(5)).gas,
+            1
+        );
     }
 
     #[test]
