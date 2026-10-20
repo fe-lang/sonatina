@@ -14,7 +14,7 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    AccessKind, BlockId, Function, InstId, InstSetExt, ValueId,
+    AccessKind, BlockId, Function, InstId, InstSetExt,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
@@ -22,7 +22,6 @@ use sonatina_ir::{
 
 use crate::isa::evm::{
     memory_plan::SemanticFuncPlan, prepare::memory_access_may_touch_free_ptr_slot,
-    ptr_provenance::Provenance,
 };
 
 /// Per-block fixpoint states of a forward heap dataflow.
@@ -89,15 +88,10 @@ impl<S: Copy + Default> HeapDataflowStates<S> {
 }
 
 /// Whether `inst` may write the free-pointer slot (`memory[0x40]`), judged
-/// from its declared memory effects and pointer provenance.
-pub(crate) fn inst_writes_free_ptr_slot(
-    function: &Function,
-    inst: InstId,
-    prov: &SecondaryMap<ValueId, Provenance>,
-) -> bool {
+/// from its declared memory effects.
+pub(crate) fn inst_writes_free_ptr_slot(function: &Function, inst: InstId) -> bool {
     function.dfg.effects(inst).accesses.iter().any(|access| {
-        access.kind == AccessKind::Write
-            && memory_access_may_touch_free_ptr_slot(function, access, prov)
+        access.kind == AccessKind::Write && memory_access_may_touch_free_ptr_slot(function, access)
     })
 }
 
@@ -114,14 +108,13 @@ pub(crate) fn compute_exact_heap_base_before_malloc(
     isa: &Evm,
     cfg: &ControlFlowGraph,
     func_plan: &SemanticFuncPlan,
-    prov: &SecondaryMap<ValueId, Provenance>,
     entry_heap_base_is_exact: bool,
 ) -> FxHashMap<InstId, bool> {
     let transfer =
         |inst: InstId, exact: bool| match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
             EvmInstKind::EvmMalloc(_) => exact && func_plan.transient_mallocs.contains(&inst),
             EvmInstKind::Call(_) => false,
-            _ => exact && !inst_writes_free_ptr_slot(function, inst, prov),
+            _ => exact && !inst_writes_free_ptr_slot(function, inst),
         };
 
     let states = run_forward_heap_dataflow(

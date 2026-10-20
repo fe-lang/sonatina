@@ -14,7 +14,7 @@ use crate::{
     stackalloc::{Action, Allocator, StackifyAlloc},
 };
 use sonatina_ir::{
-    AccessKind, AccessLoc, Function, GlobalVariableRef, InstDowncast, InstId, InstSetExt,
+    AccessKind, AccessLoc, BlockId, Function, GlobalVariableRef, InstDowncast, InstId, InstSetExt,
     MemoryAccess, Module, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::{
@@ -171,78 +171,47 @@ fn addr_is_allocator_managed(prov: &Provenance) -> bool {
     !prov.is_empty() && !prov.is_unknown_ptr() && !prov.has_any_arg()
 }
 
-fn memory_access_may_touch_range(
+/// Whether an access of `len` bytes at `addr` may touch the free-pointer slot.
+/// The backend owns the slot and IR reaches it only through immediate
+/// addresses (see [`FREE_PTR_SLOT`]), so a computed address never touches it.
+fn memory_access_may_touch_free_ptr_range(
     function: &Function,
     addr: ValueId,
     len: MemoryAccessLen,
-    range_start: u32,
-    range_end: u32,
-    prov: &SecondaryMap<ValueId, Provenance>,
 ) -> bool {
-    if len.is_zero(function) {
+    if len.is_zero(function) || !function.dfg.value_is_imm(addr) {
         return false;
     }
-
-    if function.dfg.value_is_imm(addr) {
-        let Some(addr) = value_imm_u32(function, addr) else {
-            return false;
-        };
-        return len.as_u32(function).map_or(addr < range_end, |len| {
-            addr_len_overlaps_range(addr, len, range_start, range_end)
-        });
-    }
-
-    let prov = &prov[addr];
-    !addr_is_allocator_managed(prov)
+    let Some(addr) = value_imm_u32(function, addr) else {
+        return false;
+    };
+    len.as_u32(function)
+        .map_or(addr < FREE_PTR_SLOT_END, |len| {
+            addr_len_overlaps_range(addr, len, FREE_PTR_SLOT_START, FREE_PTR_SLOT_END)
+        })
 }
 
-fn memory_access_may_touch_range_from_effect(
+pub(crate) fn memory_access_may_touch_free_ptr_slot(
     function: &Function,
     access: &sonatina_ir::MemoryAccess,
-    range_start: u32,
-    range_end: u32,
-    prov: &SecondaryMap<ValueId, Provenance>,
 ) -> bool {
     if access.space != MEMORY {
         return false;
     }
 
     match &access.loc {
-        AccessLoc::LinearExact { addr, bytes, .. } => memory_access_may_touch_range(
-            function,
-            *addr,
-            MemoryAccessLen::Known(*bytes),
-            range_start,
-            range_end,
-            prov,
-        ),
-        AccessLoc::LinearExactImm { addr, bytes, .. } => immediate_u32(*addr)
-            .is_some_and(|addr| addr_len_overlaps_range(addr, *bytes, range_start, range_end)),
-        AccessLoc::LinearRange { addr, len } => memory_access_may_touch_range(
-            function,
-            *addr,
-            MemoryAccessLen::Value(*len),
-            range_start,
-            range_end,
-            prov,
-        ),
+        AccessLoc::LinearExact { addr, bytes, .. } => {
+            memory_access_may_touch_free_ptr_range(function, *addr, MemoryAccessLen::Known(*bytes))
+        }
+        AccessLoc::LinearExactImm { addr, bytes, .. } => immediate_u32(*addr).is_some_and(|addr| {
+            addr_len_overlaps_range(addr, *bytes, FREE_PTR_SLOT_START, FREE_PTR_SLOT_END)
+        }),
+        AccessLoc::LinearRange { addr, len } => {
+            memory_access_may_touch_free_ptr_range(function, *addr, MemoryAccessLen::Value(*len))
+        }
         AccessLoc::WholeSpace | AccessLoc::Unknown => true,
         AccessLoc::KeyedExact { .. } => false,
     }
-}
-
-pub(crate) fn memory_access_may_touch_free_ptr_slot(
-    function: &Function,
-    access: &sonatina_ir::MemoryAccess,
-    prov: &SecondaryMap<ValueId, Provenance>,
-) -> bool {
-    memory_access_may_touch_range_from_effect(
-        function,
-        access,
-        FREE_PTR_SLOT_START,
-        FREE_PTR_SLOT_END,
-        prov,
-    )
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -254,15 +223,20 @@ pub(crate) struct FreePtrSlotFacts {
 pub(crate) fn function_free_ptr_slot_facts(
     function: &Function,
     backend: &EvmBackend,
-    prov: &SecondaryMap<ValueId, Provenance>,
 ) -> FreePtrSlotFacts {
     // Only its own terminal reads a terminal payload, so no malloc can observe it.
     let terminal_payload_scratch = terminal_payload_scratch_insts(function, backend);
+    // A write on a path that never returns cannot change the free pointer the
+    // caller continues with, so only writes that reach a return count.
+    let returning = blocks_reaching_return(function, backend);
     let mut facts = FreePtrSlotFacts::default();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             // Section callees are scanned directly; call summaries only expose whole-space writes.
+            // Restoring the entry free pointer before a return hands the caller
+            // back the free pointer it called with.
             if terminal_payload_scratch.contains(&inst)
+                || is_entry_free_ptr_restore(function, backend, inst)
                 || matches!(
                     backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
                     EvmInstKind::Call(_) | EvmInstKind::EvmMalloc(_)
@@ -272,9 +246,9 @@ pub(crate) fn function_free_ptr_slot_facts(
             }
 
             for access in &function.dfg.effects(inst).accesses {
-                if memory_access_may_touch_free_ptr_slot(function, access, prov) {
+                if memory_access_may_touch_free_ptr_slot(function, access) {
                     facts.touches = true;
-                    facts.writes |= access.kind == AccessKind::Write;
+                    facts.writes |= access.kind == AccessKind::Write && returning.contains(&block);
                     if facts.writes {
                         return facts;
                     }
@@ -283,6 +257,60 @@ pub(crate) fn function_free_ptr_slot_facts(
         }
     }
     facts
+}
+
+/// Whether `inst` stores to the free-pointer slot the value the entry block's
+/// first instruction loaded from it, as the internal-return restore does.
+fn is_entry_free_ptr_restore(function: &Function, backend: &EvmBackend, inst: InstId) -> bool {
+    let is_slot = |addr: ValueId| value_imm_u32(function, addr) == Some(FREE_PTR_SLOT as u32);
+    let EvmInstKind::Mstore(store) = backend.isa.inst_set().resolve_inst(function.dfg.inst(inst))
+    else {
+        return false;
+    };
+    if !is_slot(*store.addr()) {
+        return false;
+    }
+    let Some(load) = function.dfg.value_inst(*store.value()) else {
+        return false;
+    };
+    let first = function.layout.entry_block().and_then(|entry| {
+        function
+            .layout
+            .iter_inst(entry)
+            .find(|&inst| !function.dfg.is_phi(inst))
+    });
+    first == Some(load)
+        && matches!(
+            backend.isa.inst_set().resolve_inst(function.dfg.inst(load)),
+            EvmInstKind::Mload(mload) if is_slot(*mload.addr())
+        )
+}
+
+/// The blocks from which a return to the caller is reachable.
+fn blocks_reaching_return(function: &Function, backend: &EvmBackend) -> FxHashSet<BlockId> {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+    let mut reaching: FxHashSet<BlockId> = function
+        .layout
+        .iter_block()
+        .filter(|&block| {
+            function.layout.last_inst_of(block).is_some_and(|inst| {
+                matches!(
+                    backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::Return(_)
+                )
+            })
+        })
+        .collect();
+    let mut pending: Vec<_> = reaching.iter().copied().collect();
+    while let Some(block) = pending.pop() {
+        for &pred in cfg.preds_of(block) {
+            if reaching.insert(pred) {
+                pending.push(pred);
+            }
+        }
+    }
+    reaching
 }
 
 #[derive(Clone, Copy)]

@@ -233,7 +233,7 @@ pub(crate) fn compute_semantic_memory_placement(
     });
     let entry_may_have_live_frame = compute_entry_may_have_live_frame(schedule, &semantic_plan);
     let (free_ptr_slot_may_be_touched, free_ptr_write_summaries) =
-        compute_program_free_ptr_slot_facts(module, schedule, backend, analyses);
+        compute_program_free_ptr_slot_facts(module, schedule, backend);
     let mut heap_facts_results: Vec<_> = funcs
         .par_iter()
         .copied()
@@ -453,7 +453,6 @@ fn compute_func_heap_facts(
         isa,
         &analysis.cfg,
         func_plan,
-        &analysis.prov.value,
         !needs_dyn_sp_clamp,
     );
     let terminal_private_mallocs = TerminalPrivateMallocAnalysis::new(
@@ -968,16 +967,14 @@ fn compute_program_free_ptr_slot_facts(
     module: &Module,
     schedule: &CallGraphSchedule,
     backend: &EvmBackend,
-    analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
 ) -> (bool, FxHashMap<FuncRef, bool>) {
     let local_facts: FxHashMap<_, _> = schedule
         .funcs()
         .iter()
         .copied()
         .map(|func| {
-            let analysis = expect_func_entry(analyses, func, "pre-analysis");
             let facts = module.func_store.view(func, |function| {
-                function_free_ptr_slot_facts(function, backend, &analysis.prov.value)
+                function_free_ptr_slot_facts(function, backend)
             });
             (func, facts)
         })
