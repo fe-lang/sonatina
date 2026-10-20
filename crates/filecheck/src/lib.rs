@@ -11,6 +11,7 @@ pub mod jump_thread;
 pub mod known_bits_simplify;
 pub mod licm;
 pub mod load_store;
+pub mod loop_rotate;
 pub mod loop_strength_reduce;
 pub mod range_branch_simplify;
 pub mod sccp;
