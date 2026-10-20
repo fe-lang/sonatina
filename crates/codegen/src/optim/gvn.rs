@@ -2566,9 +2566,9 @@ impl<'a> RedundantCodeRemover<'a> {
             if self.resolved_value_phis.contains_key(value_phi) || !seen.insert(phi_insn.block) {
                 continue;
             }
-            if phi_insn.args.iter().any(
-                |(arg, _)| matches!(arg, ValuePhi::Value(value) if func.dfg.value_is_imm(*value)),
-            ) {
+            if phi_insn.args.iter().any(|(arg, _)| {
+                matches!(arg, ValuePhi::Value(value) if func.dfg.value_is_imm(self.resolve_alias(*value)))
+            }) {
                 needs_check.push(phi_insn.block);
             }
             for (arg, pred) in &phi_insn.args {
@@ -2625,8 +2625,9 @@ impl<'a> RedundantCodeRemover<'a> {
 
         match value_phi {
             ValuePhi::Value(value) => {
+                // An earlier resolution may have replaced the class's leader.
                 let class = self.solver.value_class(*value);
-                self.lookup_avail_from(Some(block), class).unwrap()
+                self.resolve_alias(self.lookup_avail_from(Some(block), class).unwrap())
             }
 
             ValuePhi::PhiInsn(phi_insn) => {
