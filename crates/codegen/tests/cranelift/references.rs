@@ -494,3 +494,174 @@ block5:
         }
     }
 }
+
+#[test]
+fn references_held_in_local_aggregates_and_allocations_stay_on_the_stack() {
+    // A reference into `v1` rests in an SSA pair, a local pair allocation and
+    // a local enum allocation; each copy is read back and written through.
+    let source = r#"
+type @cell = { i64 };
+type @pair = { i64, objref<i64> };
+type @slot = enum { #Empty, #Full(objref<i64>) };
+func public %exercise(v0.i64) -> i64 {
+block0:
+    v1.objref<@cell> = obj.alloc @cell;
+    v2.objref<@pair> = obj.alloc @pair;
+    v3.objref<@slot> = obj.alloc @slot;
+    v4.objref<i64> = obj.proj v1 0.i64;
+    obj.store v4 v0;
+    v5.@pair = insert_value undef.@pair 0.i64 7.i64;
+    v6.@pair = insert_value v5 1.i64 v4;
+    obj.store v2 v6;
+    v7.@slot = enum.make @slot #Full (v4);
+    obj.store v3 v7;
+    v8.objref<i64> = extract_value v6 1.i64;
+    v9.i64 = obj.load v8;
+    v10.i64 = add v9 1.i64;
+    obj.store v8 v10;
+    v11.objref<objref<i64>> = obj.proj v2 1.i64;
+    v12.objref<i64> = obj.load v11;
+    v13.i64 = obj.load v12;
+    v14.i64 = mul v13 10.i64;
+    obj.store v12 v14;
+    v15.objref<@slot> = enum.assert_variant_ref v3 #Full;
+    v16.objref<objref<i64>> = enum.proj v15 #Full 0.i8;
+    v17.objref<i64> = obj.load v16;
+    v18.i64 = obj.load v17;
+    v19.i64 = add v18 2.i64;
+    obj.store v17 v19;
+    v20.i64 = obj.load v4;
+    return v20;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let exercise: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("exercise").unwrap()) };
+        for input in [0, 4, -9] {
+            assert_eq!(
+                unsafe { exercise(input) },
+                (input + 1) * 10 + 2,
+                "{level:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn references_held_beyond_the_frame_are_rejected() {
+    // Each case lets a reference into the local `v1` outlive the frame or the
+    // iteration that allocated it, through a holder or an SSA pair.
+    for (name, body) in [
+        (
+            "returned_pair",
+            "v2.@pair = insert_value undef.@pair 1.i64 v1;\n    return v2;",
+        ),
+        (
+            "stored_in_argument",
+            "v2.@pair = insert_value undef.@pair 1.i64 v1;\n    obj.store v0 v2;\n    return undef.@pair;",
+        ),
+        (
+            "holder_passed_on",
+            "v2.objref<@holder> = obj.alloc @holder;\n    v3.objref<objref<i64>> = obj.proj v2 0.i64;\n    obj.store v3 v1;\n    call %keep v2 v0;\n    return undef.@pair;",
+        ),
+        (
+            "recovered_from_holder",
+            "v2.objref<@holder> = obj.alloc @holder;\n    v3.objref<objref<i64>> = obj.proj v2 0.i64;\n    obj.store v3 v1;\n    v4.objref<i64> = obj.load v3;\n    v5.@pair = insert_value undef.@pair 1.i64 v4;\n    obj.store v0 v5;\n    return undef.@pair;",
+        ),
+    ] {
+        let source = format!(
+            r#"
+type @pair = {{ i64, objref<i64> }};
+type @holder = {{ objref<i64> }};
+func inline(never) private %keep(v0.objref<@holder>, v1.objref<@pair>) {{
+block0:
+    v2.objref<objref<i64>> = obj.proj v0 0.i64;
+    v3.objref<i64> = obj.load v2;
+    v4.objref<objref<i64>> = obj.proj v1 1.i64;
+    obj.store v4 v3;
+    return;
+}}
+func inline(never) private %{name}(v0.objref<@pair>) -> @pair {{
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v1 5.i64;
+    {body}
+}}
+func public %entry() -> i64 {{
+block0:
+    v0.objref<@pair> = obj.alloc @pair;
+    v1.@pair = call %{name} v0;
+    v2.i64 = extract_value v1 0.i64;
+    return v2;
+}}
+"#
+        );
+        let errors = match Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(OptLevel::O0)
+        .compile()
+        {
+            Ok(_) => panic!("{name}: an escaping stack reference was accepted"),
+            Err(errors) => errors,
+        };
+        assert!(
+            errors.iter().any(|error| {
+                let error = error.to_string();
+                error.contains(&format!("native reference lifetime in {name}: unproven"))
+            }),
+            "{name}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn loop_allocations_cannot_rest_in_outer_holders() {
+    // The holder outlives the iteration whose allocation it references; the
+    // next iteration reuses that allocation's slot.
+    let source = r#"
+type @holder = { objref<i64> };
+func public %exercise(v0.i64) -> i64 {
+block0:
+    v1.objref<@holder> = obj.alloc @holder;
+    v2.objref<objref<i64>> = obj.proj v1 0.i64;
+    jump block1;
+block1:
+    v3.i64 = phi (0.i64 block0) (v5 block1);
+    v4.objref<i64> = obj.alloc i64;
+    obj.store v4 v3;
+    obj.store v2 v4;
+    v5.i64 = add v3 1.i64;
+    v6.i1 = lt v5 v0;
+    br v6 block1 block2;
+block2:
+    v7.objref<i64> = obj.load v2;
+    v8.i64 = obj.load v7;
+    return v8;
+}
+"#;
+    let errors = match Compile::new(
+        parse_verified_native_module(source),
+        CraneliftJitBackend::new(),
+    )
+    .with_opt_level(OptLevel::O0)
+    .compile()
+    {
+        Ok(_) => panic!("a loop allocation held by an outer holder was accepted"),
+        Err(errors) => errors,
+    };
+    assert!(
+        errors.iter().any(|error| error
+            .to_string()
+            .contains("native reference lifetime in exercise: unproven escape of local object")),
+        "{errors:?}"
+    );
+}

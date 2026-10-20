@@ -1049,6 +1049,7 @@ fn analyze_returns(
                     summaries,
                     |_| true,
                     true,
+                    false,
                 )
             }) =>
         {

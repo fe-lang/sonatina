@@ -310,6 +310,9 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
     }
     // Also reject roots captured through an argument or reference aggregate;
     // checking only the syntactic return operands misses those escape paths.
+    // A reference may rest in an SSA aggregate or another local allocation
+    // only when its object lives as long as the frame: a slot reused by a
+    // later iteration would leave the held reference naming the new object.
     for &root in facts.root_slices().keys() {
         if !matches!(function.dfg.value(root), Value::Arg { .. })
             && !heap_roots.contains(&root)
@@ -319,6 +322,10 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
                 effects,
                 |_| true,
                 false,
+                function.dfg.value_inst(root).is_none_or(|inst| {
+                    sccs.scc_of(function.layout.inst_block(inst))
+                        .is_none_or(|scc| !sccs.scc_data(scc).is_cycle)
+                }),
             )
         {
             return Err(format!(
@@ -802,5 +809,34 @@ block0:
                 .iter()
                 .all(|&func| module.ctx.get_sig(func).unwrap().args().len() == 3)
         );
+    }
+
+    #[test]
+    fn heap_exported_holders_put_what_they_reference_on_the_heap() {
+        // `v0` rests in `v2`'s memory, through an SSA pair; exporting `v2` to
+        // the heap exports `v0` with it.
+        let module = verified_module(
+            r#"
+type @pair = { i64, objref<i64> };
+func private %export(v0.i64) -> *@pair {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v1 v0;
+    v2.@pair = insert_value undef.@pair 1.i64 v1;
+    v3.objref<@pair> = obj.alloc @pair;
+    obj.store v3 v2;
+    v4.*@pair = obj.materialize.heap v3;
+    return v4;
+}
+"#,
+        );
+        let effects = compute_object_effect_summaries(&module);
+        let func = module.funcs()[0];
+        module.func_store.view(func, |function| {
+            let roots = native_heap_object_roots(function, &effects);
+            assert!(roots.contains(&ValueId::from_u32(1)), "{roots:?}");
+            assert!(roots.contains(&ValueId::from_u32(3)), "{roots:?}");
+            check_lifetimes(function, &effects).unwrap();
+        });
     }
 }
