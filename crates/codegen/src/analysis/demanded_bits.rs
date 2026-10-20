@@ -6,7 +6,7 @@ use sonatina_ir::{
     inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind},
 };
 
-use super::known_bits::{low_mask, supports_known_bits, type_bits, type_mask};
+use super::known_bits::{bswap_bits, low_mask, supports_known_bits, type_bits, type_mask};
 
 pub struct DemandedBitsQuery<'a> {
     func: &'a Function,
@@ -132,6 +132,10 @@ impl<'a> DemandedBitsQuery<'a> {
 
         match kind {
             UnaryInstKind::Not => self.add_demand(*arg, demand, worklist, queued),
+            UnaryInstKind::Bswap => {
+                let demand = bswap_bits(self.func.dfg.value_ty(*arg), demand);
+                self.add_demand(*arg, demand, worklist, queued);
+            }
             UnaryInstKind::IsZero
             | UnaryInstKind::Neg
             | UnaryInstKind::Snego

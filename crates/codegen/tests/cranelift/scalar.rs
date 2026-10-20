@@ -24,7 +24,7 @@ fn check_scalar_cases(op: &str, ty: Type, cases: &[(Immediate, Immediate, Immedi
     let expression = match op {
         "snego" => format!("(v5.{ty_name}, v6.i1) = snego v3;"),
         _ if overflow_op => format!("(v5.{ty_name}, v6.i1) = {op} v3 v4;"),
-        "not" | "neg" | "is_zero" => format!("v5.{result_name} = {op} v3;"),
+        "not" | "neg" | "bswap" | "is_zero" => format!("v5.{result_name} = {op} v3;"),
         "shl" | "shr" | "sar" => format!("v5.{ty_name} = {op} v4 v3;"),
         _ => format!("v5.{result_name} = {op} v3 v4;"),
     };
@@ -113,9 +113,9 @@ fn integer_operations_match_ir_at_every_width() {
             "add", "sub", "mul", "neg", "not", "and", "or", "xor", "udiv", "sdiv", "umod", "smod",
             "eq", "ne", "lt", "gt", "le", "ge", "slt", "sgt", "sle", "sge", "is_zero", "uaddo",
             "saddo", "usubo", "ssubo", "umulo", "smulo", "snego", "uaddsat", "saddsat", "usubsat",
-            "ssubsat", "umulsat", "smulsat",
+            "ssubsat", "umulsat", "smulsat", "bswap",
         ] {
-            if ty == Type::I1 && op.ends_with("sat") {
+            if ty == Type::I1 && (op.ends_with("sat") || op == "bswap") {
                 continue;
             }
             let mut cases = Vec::new();
@@ -139,6 +139,7 @@ fn integer_operations_match_ir_at_every_width() {
                                 "mul" => lhs * rhs,
                                 "neg" => -lhs,
                                 "not" => !lhs,
+                                "bswap" => lhs.bswap(),
                                 "and" => lhs & rhs,
                                 "or" => lhs | rhs,
                                 "xor" => lhs ^ rhs,

@@ -90,6 +90,7 @@ pub struct EvmInstSet(
     logic::And,
     logic::Or,
     logic::Xor,
+    logic::Bswap,
     evm::EvmSdiv,
     evm::EvmUdiv,
     evm::EvmSdivo,

@@ -502,6 +502,7 @@ fn fold_unary_with_facts(
             }
         }
         UnaryInstKind::Not => SimplifiedInst::one(SimplifiedResult::Const(!arg)),
+        UnaryInstKind::Bswap => SimplifiedInst::one(SimplifiedResult::Const(arg.bswap())),
         UnaryInstKind::IsZero => SimplifiedInst::one(SimplifiedResult::Const(fold_result_imm(
             arg.is_zero().into(),
             result_ty,
@@ -1073,7 +1074,7 @@ pub(crate) fn simplify_unary_with_same_inner(
     same_inner_arg: impl Fn(ValueId, UnaryInstKind) -> Option<ValueId>,
 ) -> SimplifiedResult {
     match kind {
-        UnaryInstKind::Not | UnaryInstKind::Neg => same_inner_arg(arg, kind)
+        UnaryInstKind::Not | UnaryInstKind::Neg | UnaryInstKind::Bswap => same_inner_arg(arg, kind)
             .map(SimplifiedResult::Copy)
             .unwrap_or(SimplifiedResult::NoChange),
         UnaryInstKind::Snego | UnaryInstKind::IsZero | UnaryInstKind::EvmClz => {

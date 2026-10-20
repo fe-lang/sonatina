@@ -1,0 +1,55 @@
+target = "evm-ethereum-osaka"
+
+# sameln: func public %bswap_fold_i8() -> i8 {
+# nextln:     block0:
+# nextln:         return 42.i8;
+func public %bswap_fold_i8() -> i8 {
+    block0:
+        v0.i8 = bswap 42.i8;
+        return v0;
+}
+
+# sameln: func public %bswap_fold_i16() -> i16 {
+# nextln:     block0:
+# nextln:         return -256.i16;
+func public %bswap_fold_i16() -> i16 {
+    block0:
+        v0.i16 = bswap 255.i16;
+        return v0;
+}
+
+# sameln: func public %bswap_fold_i32() -> i32 {
+# nextln:     block0:
+# nextln:         return 67305985.i32;
+func public %bswap_fold_i32() -> i32 {
+    block0:
+        v0.i32 = bswap 16909060.i32;
+        return v0;
+}
+
+# sameln: func public %bswap_fold_i64() -> i64 {
+# nextln:     block0:
+# nextln:         return 578437695752307201.i64;
+func public %bswap_fold_i64() -> i64 {
+    block0:
+        v0.i64 = bswap 72623859790382856.i64;
+        return v0;
+}
+
+# sameln: func public %bswap_fold_i128() -> i128 {
+# nextln:     block0:
+# nextln:         return -1329227995784915872903807060280344576.i128;
+func public %bswap_fold_i128() -> i128 {
+    block0:
+        v0.i128 = bswap 255.i128;
+        return v0;
+}
+
+# sameln: func public %bswap_fold_i256() -> i256 {
+# nextln:     block0:
+# nextln:         return 452312848583266388373324160190187140051835877600158453279131187530910662656.i256;
+func public %bswap_fold_i256() -> i256 {
+    block0:
+        v0.i256 = bswap 1.i256;
+        return v0;
+}

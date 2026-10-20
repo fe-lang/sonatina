@@ -1,5 +1,5 @@
 use super::{Action, EvalValue, Interpret, State, single_result};
-use crate::inst::logic::*;
+use crate::{Immediate, inst::logic::*};
 
 impl Interpret for Not {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
@@ -37,5 +37,14 @@ impl Interpret for Xor {
         state.set_action(Action::Continue);
 
         single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| lhs ^ rhs))
+    }
+}
+
+impl Interpret for Bswap {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        let arg = state.lookup_val(*self.arg());
+        state.set_action(Action::Continue);
+
+        single_result(arg.with_imm(Immediate::bswap))
     }
 }

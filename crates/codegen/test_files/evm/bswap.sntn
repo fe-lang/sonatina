@@ -1,0 +1,35 @@
+#! evm.config: { vcode: true, opt: s }
+#! evm.case: bswap_i256
+#!   calldata: u256(0) u256(0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20)
+#!   expect: return u256(0x201f1e1d1c1b1a191817161514131211100f0e0d0c0b0a090807060504030201)
+#! evm.case: bswap_i32_truncates
+#!   calldata: u256(1) u256(0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20)
+#!   expect: return u256(0x201f1e1d)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i1 = eq v0 0.i256;
+        br v2 block1 block2;
+
+    block1:
+        v3.i256 = bswap v1;
+        mstore 0.i256 v3 i256;
+        evm_return 0.i256 32.i256;
+
+    block2:
+        v4.i32 = trunc v1 i32;
+        v5.i32 = bswap v4;
+        v6.i256 = zext v5 i256;
+        mstore 0.i256 v6 i256;
+        evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

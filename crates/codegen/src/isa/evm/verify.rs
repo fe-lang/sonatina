@@ -200,6 +200,12 @@ pub(crate) fn validate_supported_lowering_ir(
                         func.dfg.inst(inst).as_text()
                     ));
                 }
+                EvmInstKind::Bswap(_) => {
+                    return Err(format!(
+                        "bswap must be legalized before EVM lowering: {}",
+                        func.dfg.inst(inst).as_text()
+                    ));
+                }
                 EvmInstKind::Not(not) if func.dfg.value_ty(*not.arg()) == Type::I1 => {
                     return Err("not on i1 must be legalized before EVM lowering".to_string());
                 }

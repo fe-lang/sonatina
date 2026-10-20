@@ -60,6 +60,7 @@ pub trait Interpret {
         inst::logic::And,
         inst::logic::Or,
         inst::logic::Xor,
+        inst::logic::Bswap,
         inst::cast::Sext,
         inst::cast::Zext,
         inst::cast::Trunc,

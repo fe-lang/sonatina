@@ -1,0 +1,13 @@
+target = "evm-ethereum-osaka"
+
+# check: block1:
+# nextln:  v1.i256 = bswap v0;
+# nextln:  v3.i256 = add v1 v1;
+# nextln:  return v3;
+func public %bswap_cse(v0.i256) -> i256 {
+    block1:
+        v1.i256 = bswap v0;
+        v2.i256 = bswap v0;
+        v3.i256 = add v1 v2;
+        return v3;
+}

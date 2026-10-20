@@ -1,0 +1,119 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/bswap.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=s
+
+object: Contract
+  section runtime: 348 bytes
+  total: 348 bytes
+
+functions:
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
+  entry: ir_blocks=3 ir_insts=40 vcode_ops=91 fixups=1 imm_bytes=29
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case bswap_i256: calldata_len=64 success reason=Return gas_used=21833 gas_refunded=0 logs=0 output=call len=32 tx_gas=21640 runtime_gas=193
+  case bswap_i32_truncates: calldata_len=64 success reason=Return gas_used=21759 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=107
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    PUSH1 0x20 (32)  // v4.i256 = evm_calldata_load v3;
+    CALLDATALOAD
+    SWAP1  // br v1 block2 block1;
+    PUSH1 block2
+    JUMPI
+  block1:
+    DUP1  // v6.i256 = shr v5 v4;
+    PUSH1 0x80 (128)
+    SHR
+    SWAP1  // v7.i256 = shl v5 v4;
+    PUSH1 0x80 (128)
+    SHL
+    OR  // v8.i256 = or v6 v7;
+    DUP1  // v10.i256 = shr 64.i256 v8;
+    PUSH1 0x40 (64)
+    SHR
+    PUSH24 0xffffffffffffffff0000000000000000ffffffffffffffff (6277101735386680763495507056286727952657427581105975853055)  // v12.i256 = and v10 6277101735386680763495507056286727952657427581105975853055.i256;
+    AND
+    SWAP1  // v13.i256 = and v8 6277101735386680763495507056286727952657427581105975853055.i256;
+    PUSH24 0xffffffffffffffff0000000000000000ffffffffffffffff (6277101735386680763495507056286727952657427581105975853055)
+    AND
+    PUSH1 0x40 (64)  // v14.i256 = shl 64.i256 v13;
+    SHL
+    OR  // v15.i256 = or v12 v14;
+    DUP1  // v16.i256 = shr v3 v15;
+    PUSH1 0x20 (32)
+    SHR
+    PUSH28 0xffffffff00000000ffffffff00000000ffffffff00000000ffffffff (26959946660873538060741835960174461801791452538186943042387869433855)  // v18.i256 = and v16 26959946660873538060741835960174461801791452538186943042387869433855.i256;
+    AND
+    SWAP1  // v19.i256 = and v15 26959946660873538060741835960174461801791452538186943042387869433855.i256;
+    PUSH28 0xffffffff00000000ffffffff00000000ffffffff00000000ffffffff (26959946660873538060741835960174461801791452538186943042387869433855)
+    AND
+    PUSH1 0x20 (32)  // v20.i256 = shl v3 v19;
+    SHL
+    OR  // v21.i256 = or v18 v20;
+    DUP1  // v23.i256 = shr 16.i256 v21;
+    PUSH1 0x10 (16)
+    SHR
+    PUSH30 0xffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff (1766820105243087041267848467410591083712559083657179364930612997358944255)  // v25.i256 = and v23 1766820105243087041267848467410591083712559083657179364930612997358944255.i256;
+    AND
+    SWAP1  // v26.i256 = and v21 1766820105243087041267848467410591083712559083657179364930612997358944255.i256;
+    PUSH30 0xffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff (1766820105243087041267848467410591083712559083657179364930612997358944255)
+    AND
+    PUSH1 0x10 (16)  // v27.i256 = shl 16.i256 v26;
+    SHL
+    OR  // v28.i256 = or v25 v27;
+    DUP1  // v30.i256 = shr 8.i256 v28;
+    PUSH1 0x8 (8)
+    SHR
+    PUSH31 0xff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff (450552876409790643671482431940419874915447411150352389258589821042463539455)  // v32.i256 = and v30 450552876409790643671482431940419874915447411150352389258589821042463539455.i256;
+    AND
+    SWAP1  // v33.i256 = and v28 450552876409790643671482431940419874915447411150352389258589821042463539455.i256;
+    PUSH31 0xff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff (450552876409790643671482431940419874915447411150352389258589821042463539455)
+    AND
+    PUSH1 0x8 (8)  // v34.i256 = shl 8.i256 v33;
+    SHL
+    OR  // v35.i256 = or v32 v34;
+    PUSH0  // evm_mstore v0 v35;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v0 v3;
+    PUSH0
+    RETURN
+  block2:
+    JUMPDEST
+    PUSH4 0xffffffff (4294967295)  // v37.i256 = and v4 4294967295.i256;
+    AND
+    DUP1  // v38.i256 = shr 16.i256 v37;
+    PUSH1 0x10 (16)
+    SHR
+    SWAP1  // v40.i256 = and v37 65535.i256;
+    PUSH2 0xffff (65535)
+    AND
+    PUSH1 0x10 (16)  // v41.i256 = shl 16.i256 v40;
+    SHL
+    OR  // v42.i256 = or v38 v41;
+    DUP1  // v43.i256 = shr 8.i256 v42;
+    PUSH1 0x8 (8)
+    SHR
+    PUSH3 0xff00ff (16711935)  // v45.i256 = and v43 16711935.i256;
+    AND
+    SWAP1  // v46.i256 = and v42 16711935.i256;
+    PUSH3 0xff00ff (16711935)
+    AND
+    PUSH1 0x8 (8)  // v47.i256 = shl 8.i256 v46;
+    SHL
+    OR  // v48.i256 = or v45 v47;
+    PUSH0  // evm_mstore v0 v48;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v0 v3;
+    PUSH0
+    RETURN

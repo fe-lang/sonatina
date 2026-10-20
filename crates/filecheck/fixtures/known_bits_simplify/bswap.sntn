@@ -1,0 +1,35 @@
+target = "evm-ethereum-osaka"
+
+# sameln: func public %folds_double_bswap(v0.i64) -> i64 {
+# check:       return v0;
+func public %folds_double_bswap(v0.i64) -> i64 {
+block0:
+    v1.i64 = bswap v0;
+    v2.i64 = bswap v1;
+    return v2;
+}
+
+# The low byte moves to the top, so masking the top byte keeps everything.
+# sameln: func public %bswap_moves_known_bytes(v0.i32) -> i32 {
+# check:       v2.i32 = bswap v1;
+# not:         and v2
+# check:       return v2;
+func public %bswap_moves_known_bytes(v0.i32) -> i32 {
+block0:
+    v1.i32 = and v0 255.i32;
+    v2.i32 = bswap v1;
+    v3.i32 = and v2 -16777216.i32;
+    return v3;
+}
+
+# Only the high bytes of v1 reach the low half of the swap.
+# sameln: func public %bswap_demands_the_swapped_bytes(v0.i32) -> i16 {
+# not:         and
+# check:       v2.i32 = bswap v0;
+func public %bswap_demands_the_swapped_bytes(v0.i32) -> i16 {
+block0:
+    v1.i32 = and v0 -256.i32;
+    v2.i32 = bswap v1;
+    v3.i16 = trunc v2 i16;
+    return v3;
+}

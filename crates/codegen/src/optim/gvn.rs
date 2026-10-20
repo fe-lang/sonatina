@@ -72,9 +72,11 @@ fn make_gvn_unary_key(
         UnaryInstKind::IsZero => {
             Some(cmp::IsZero::new(is.has_is_zero()?, arg).owned_key(&[result_ty]))
         }
-        UnaryInstKind::Neg | UnaryInstKind::Not | UnaryInstKind::Snego | UnaryInstKind::EvmClz => {
-            None
-        }
+        UnaryInstKind::Neg
+        | UnaryInstKind::Not
+        | UnaryInstKind::Bswap
+        | UnaryInstKind::Snego
+        | UnaryInstKind::EvmClz => None,
     }
 }
 

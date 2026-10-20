@@ -1582,6 +1582,92 @@ object @Contract {{
     }
 }
 
+#[test]
+fn bswap_reverses_the_bytes_of_each_width() {
+    let counting = IrU256::from_big_endian(&std::array::from_fn::<u8, 32, _>(|i| i as u8 + 1));
+    for bits in [8, 16, 32, 64, 128, 256] {
+        let operation = if bits == 256 {
+            "v3.i256 = bswap v0;".to_string()
+        } else {
+            format!(
+                "v1.i{bits} = trunc v0 i{bits};
+                 v2.i{bits} = bswap v1;
+                 v3.i256 = zext v2 i256;"
+            )
+        };
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {{
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        {operation}
+        mstore 0.i256 v3 i256;
+        evm_return 0.i256 32.i256;
+}}
+
+object @Contract {{
+    section runtime {{
+        entry %entry;
+    }}
+}}
+"#
+        );
+        let mask = IrU256::MAX >> (256 - bits);
+        let inputs = [
+            IrU256::zero(),
+            IrU256::one(),
+            0x80.into(),
+            counting,
+            IrU256::one() << 255,
+            IrU256::MAX,
+        ];
+        for optimized in [false, true] {
+            let mut parsed = parse_sona(&source);
+            if optimized {
+                Pipeline::speed().run(&mut parsed.module);
+            }
+            let backend = EvmBackend::new(Evm::new(parsed.module.ctx.triple))
+                .with_late_cleanup_profile(if optimized {
+                    LateCleanupProfile::Speed
+                } else {
+                    LateCleanupProfile::Off
+                });
+            let artifact = compile_object(
+                &parsed.module,
+                &backend,
+                "Contract",
+                &CompileOptions::default(),
+            )
+            .expect("byte swap should compile");
+            let runtime = artifact
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .expect("missing runtime section");
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for input in inputs {
+                let mut expected = (input & mask).to_big_endian();
+                expected[32 - bits / 8..].reverse();
+                let result = harness.call(&input.to_big_endian());
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("i{bits}, optimized={optimized}: {result:?}");
+                };
+                assert_eq!(
+                    actual.as_ref(),
+                    expected,
+                    "i{bits}, optimized={optimized}, input={input:#x}"
+                );
+            }
+        }
+    }
+}
+
 fn run_opt_pipeline(module: &mut Module, opt_pipeline: EvmOptPipeline) {
     match opt_pipeline {
         EvmOptPipeline::O0 => {}

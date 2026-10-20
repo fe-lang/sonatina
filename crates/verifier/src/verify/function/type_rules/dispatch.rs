@@ -46,6 +46,20 @@ impl_unary_integral_same_rule!(
     data::BlackBox => "black_box",
 );
 
+impl VerifyInst for logic::Bswap {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        verifier.verify_unary_integral_same(inst_id, *self.arg(), "bswap");
+        if verifier.value_ty(*self.arg()) == Some(Type::I1) {
+            let location = verifier.inst_location(inst_id);
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "bswap does not support i1 operands",
+                location,
+            ));
+        }
+    }
+}
+
 macro_rules! impl_binary_integral_same_rule {
     ($($ty:ty => $opname:literal),+ $(,)?) => {
         $(

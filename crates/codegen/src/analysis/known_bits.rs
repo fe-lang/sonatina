@@ -347,6 +347,17 @@ impl KnownBitsQuery {
 
                 KnownBits::normalized(ty, arg_known.known_one, arg_known.known_zero)
             }
+            UnaryInstKind::Bswap => {
+                if !supports_known_bits(ty) {
+                    return KnownBits::unknown(ty);
+                }
+
+                KnownBits::normalized(
+                    ty,
+                    bswap_bits(ty, arg_known.known_zero),
+                    bswap_bits(ty, arg_known.known_one),
+                )
+            }
             UnaryInstKind::Neg | UnaryInstKind::Snego | UnaryInstKind::EvmClz => {
                 KnownBits::unknown(ty)
             }
@@ -666,6 +677,15 @@ pub(crate) fn type_bits(ty: Type) -> u16 {
 
 pub(crate) fn type_mask(ty: Type) -> U256 {
     low_mask(type_bits(ty))
+}
+
+/// Reverses the order of the bytes in the low `ty` bits of `bits`.
+pub(crate) fn bswap_bits(ty: Type, bits: U256) -> U256 {
+    Immediate::from_i256(bits.into(), ty)
+        .bswap()
+        .as_i256()
+        .to_u256()
+        & type_mask(ty)
 }
 
 pub(crate) fn low_mask(bits: u16) -> U256 {
