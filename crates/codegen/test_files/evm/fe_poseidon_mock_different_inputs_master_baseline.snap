@@ -1,14 +1,13 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 2136
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_poseidon_mock_different_inputs_master_baseline.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1945 bytes
-  total: 1945 bytes
+  section runtime: 1943 bytes
+  total: 1943 bytes
 
 functions:
   mem: global_dyn_base=0xc0 arena_base=0xa0 scratch_peak_words=1 stable_chain_peak_words=0
@@ -427,6 +426,12 @@ poseidon_mock:
     SWAP1
     SWAP2
     PUSH0
+    PUSH1 block2
+    JUMP
+  block17:
+    JUMPDEST
+    SWAP2  // jump block2;
+    SWAP1
   block2:
     JUMPDEST
     SWAP1  // v56.i256 = call %ark v4 v3;
@@ -470,6 +475,12 @@ poseidon_mock:
     MSTORE
     PUSH0  // jump block6;
     SWAP2
+    SWAP1
+    PUSH1 block6
+    JUMP
+  block19:
+    JUMPDEST
+    SWAP2  // jump block6;
     SWAP1
   block6:
     JUMPDEST
@@ -515,18 +526,6 @@ poseidon_mock:
     PUSH1 0x40 (64)
     MSTORE
     SWAP1  // return v42;
-    JUMP
-  block19:
-    JUMPDEST
-    SWAP2  // jump block6;
-    SWAP1
-    PUSH1 block6
-    JUMP
-  block17:
-    JUMPDEST
-    SWAP2  // jump block2;
-    SWAP1
-    PUSH1 block2
     JUMP
 
 // func public %entry()

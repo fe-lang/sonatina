@@ -1,0 +1,26 @@
+#! evm.config: { vcode: true, opt: 2 }
+#! evm.case: exit
+#!   calldata: u256(0)
+#!   expect: return u256(0)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i1 = ne v0 0.i256;
+        br v1 block1 block2;
+
+    block1:
+        jump block1;
+
+    block2:
+        mstore 0.i256 0.i256 i256;
+        evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

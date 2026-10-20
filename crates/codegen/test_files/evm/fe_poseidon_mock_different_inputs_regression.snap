@@ -1,14 +1,13 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 2136
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1940 bytes
-  total: 1940 bytes
+  section runtime: 1938 bytes
+  total: 1938 bytes
 
 functions:
   mem: global_dyn_base=0x100 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=3
@@ -18,13 +17,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   mix: ir_blocks=13 ir_insts=47 vcode_ops=96 fixups=8 imm_bytes=22
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
-  poseidon_mock: ir_blocks=15 ir_insts=56 vcode_ops=162 fixups=19 imm_bytes=29
+  poseidon_mock: ir_blocks=15 ir_insts=56 vcode_ops=161 fixups=19 imm_bytes=29
     mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
   entry: ir_blocks=3 ir_insts=7 vcode_ops=28 fixups=5 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=42364 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=21364
+  case ok: calldata_len=0 success reason=Return gas_used=42352 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=21352
 
 
 --------------- DEBUG ---------------
@@ -378,6 +377,12 @@ poseidon_mock:
     SWAP1
     SWAP2
     PUSH0
+    PUSH1 block2
+    JUMP
+  block17:
+    JUMPDEST
+    SWAP2  // jump block2;
+    SWAP1
   block2:
     JUMPDEST
     DUP1  // call %ark v51 v4 v3;
@@ -424,19 +429,18 @@ poseidon_mock:
     PUSH1 0x2 (2)  // v18.i256 = lt v15 v17;
     DUP2
     LT
-    ISZERO  // br v18 block17 block18;
-    PUSH1 block18
+    PUSH1 block17  // br v18 block17 block18;
     JUMPI
-  block17:
-    SWAP2  // jump block2;
-    SWAP1
-    PUSH1 block2
-    JUMP
   block18:
-    JUMPDEST
     POP  // jump block6;
     PUSH0
     SWAP2
+    SWAP1
+    PUSH1 block6
+    JUMP
+  block20:
+    JUMPDEST
+    SWAP2  // jump block6;
     SWAP1
   block6:
     JUMPDEST
@@ -494,12 +498,6 @@ poseidon_mock:
     PUSH1 0x40 (64)
     MSTORE
     SWAP1  // return v48;
-    JUMP
-  block20:
-    JUMPDEST
-    SWAP2  // jump block6;
-    SWAP1
-    PUSH1 block6
     JUMP
 
 // func public %entry()

@@ -6,21 +6,21 @@ input_file: test_files/evm/zk.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 2160 bytes
-  section runtime: 2149 bytes
-  total: 4309 bytes
+  section init: 2158 bytes
+  section runtime: 2147 bytes
+  total: 4305 bytes
 
 functions:
   mem: global_dyn_base=0x480 arena_base=0x440 scratch_peak_words=2 stable_chain_peak_words=0
   smt_store_zero_table: ir_blocks=1 ir_insts=33 vcode_ops=99 fixups=0 imm_bytes=63
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
-  leanimt_root_from_calldata: ir_blocks=12 ir_insts=32 vcode_ops=88 fixups=7 imm_bytes=10
+  leanimt_root_from_calldata: ir_blocks=12 ir_insts=32 vcode_ops=87 fixups=7 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   smt_root_from_calldata: ir_blocks=18 ir_insts=65 vcode_ops=165 fixups=13 imm_bytes=26
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   init__StorPtr_Evm___207f35a85ac4062e: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
-  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=54 ir_insts=190 vcode_ops=501 fixups=41 imm_bytes=91
+  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=54 ir_insts=190 vcode_ops=500 fixups=41 imm_bytes=91
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   hash2_at: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
@@ -28,19 +28,19 @@ functions:
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=2
 
 evm:
-  deploy: success reason=Return gas_used=517860 gas_refunded=0 logs=0 output=create len=2149 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case bench_lean_typical_root: calldata_len=1124 success reason=Return gas_used=30056 gas_refunded=0 logs=0 output=call len=32 tx_gas=28616 runtime_gas=1440
-  case bench_lean_typical_verify: calldata_len=1156 success reason=Return gas_used=30623 gas_refunded=0 logs=0 output=call len=32 tx_gas=29128 runtime_gas=1495
-  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31505 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=1865
-  case bench_lean_32_root: calldata_len=1124 success reason=Return gas_used=44201 gas_refunded=0 logs=0 output=call len=32 tx_gas=38216 runtime_gas=5985
-  case bench_lean_32_verify: calldata_len=1156 success reason=Return gas_used=44768 gas_refunded=0 logs=0 output=call len=32 tx_gas=38728 runtime_gas=6040
-  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=46960 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=7720
-  case bench_smt_typical_root: calldata_len=1124 success reason=Return gas_used=36255 gas_refunded=0 logs=0 output=call len=32 tx_gas=27932 runtime_gas=8323
-  case bench_smt_typical_verify: calldata_len=1156 success reason=Return gas_used=36822 gas_refunded=0 logs=0 output=call len=32 tx_gas=28444 runtime_gas=8378
-  case bench_smt_typical_update: calldata_len=1188 success reason=Return gas_used=39406 gas_refunded=0 logs=0 output=call len=32 tx_gas=28956 runtime_gas=10450
-  case bench_smt_all_enabled_root: calldata_len=1124 success reason=Return gas_used=44254 gas_refunded=0 logs=0 output=call len=32 tx_gas=38300 runtime_gas=5954
-  case bench_smt_all_enabled_verify: calldata_len=1156 success reason=Return gas_used=44821 gas_refunded=0 logs=0 output=call len=32 tx_gas=38812 runtime_gas=6009
-  case bench_smt_all_enabled_update: calldata_len=1188 success reason=Return gas_used=47219 gas_refunded=0 logs=0 output=call len=32 tx_gas=39324 runtime_gas=7895
+  deploy: success reason=Return gas_used=517428 gas_refunded=0 logs=0 output=create len=2147 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case bench_lean_typical_root: calldata_len=1124 success reason=Return gas_used=29985 gas_refunded=0 logs=0 output=call len=32 tx_gas=28616 runtime_gas=1369
+  case bench_lean_typical_verify: calldata_len=1156 success reason=Return gas_used=30552 gas_refunded=0 logs=0 output=call len=32 tx_gas=29128 runtime_gas=1424
+  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31434 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=1794
+  case bench_lean_32_root: calldata_len=1124 success reason=Return gas_used=43805 gas_refunded=0 logs=0 output=call len=32 tx_gas=38216 runtime_gas=5589
+  case bench_lean_32_verify: calldata_len=1156 success reason=Return gas_used=44372 gas_refunded=0 logs=0 output=call len=32 tx_gas=38728 runtime_gas=5644
+  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=46564 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=7324
+  case bench_smt_typical_root: calldata_len=1124 success reason=Return gas_used=35925 gas_refunded=0 logs=0 output=call len=32 tx_gas=27932 runtime_gas=7993
+  case bench_smt_typical_verify: calldata_len=1156 success reason=Return gas_used=36492 gas_refunded=0 logs=0 output=call len=32 tx_gas=28444 runtime_gas=8048
+  case bench_smt_typical_update: calldata_len=1188 success reason=Return gas_used=39076 gas_refunded=0 logs=0 output=call len=32 tx_gas=28956 runtime_gas=10120
+  case bench_smt_all_enabled_root: calldata_len=1124 success reason=Return gas_used=43924 gas_refunded=0 logs=0 output=call len=32 tx_gas=38300 runtime_gas=5624
+  case bench_smt_all_enabled_verify: calldata_len=1156 success reason=Return gas_used=44491 gas_refunded=0 logs=0 output=call len=32 tx_gas=38812 runtime_gas=5679
+  case bench_smt_all_enabled_update: calldata_len=1188 success reason=Return gas_used=46889 gas_refunded=0 logs=0 output=call len=32 tx_gas=39324 runtime_gas=7565
 
 
 --------------- DEBUG ---------------
@@ -1432,6 +1432,14 @@ leanimt_root_from_calldata:
     SWAP4
     SWAP2
     SWAP1
+    PUSH1 block5
+    JUMP
+  block14:
+    JUMPDEST
+    SWAP3  // jump block5;
+    SWAP2
+    SWAP1
+    SWAP2
   block5:
     JUMPDEST
     DUP3  // v25.i256 = evm_calldata_load v41;
@@ -1479,18 +1487,9 @@ leanimt_root_from_calldata:
     PUSH1 0x20 (32)
     ADD
     SWAP2  // br v22 block14 block15;
-    ISZERO
-    PUSH1 block15
+    PUSH1 block14
     JUMPI
-  block14:
-    SWAP3  // jump block5;
-    SWAP2
-    SWAP1
-    SWAP2
-    PUSH1 block5
-    JUMP
   block15:
-    JUMPDEST
     POP  // jump block8;
     POP
     POP
@@ -1526,6 +1525,15 @@ smt_root_from_calldata:
     PUSH0  // jump block10;
     SWAP4
     PUSH1 0x40 (64)
+    SWAP3
+    PUSH1 block10
+    JUMP
+  block21:
+    JUMPDEST
+    SWAP5  // jump block10;
+    SWAP2
+    SWAP1
+    SWAP4
     SWAP3
   block10:
     JUMPDEST
@@ -1616,21 +1624,20 @@ smt_root_from_calldata:
     POP
     SWAP1
     JUMP
-  block21:
-    JUMPDEST
-    SWAP5  // jump block10;
-    SWAP2
-    SWAP1
-    SWAP4
-    SWAP3
-    PUSH1 block10
-    JUMP
   block18:
     JUMPDEST
     PUSH0  // jump block4;
     SWAP4
     SWAP3
     POP
+    PUSH1 block4
+    JUMP
+  block19:
+    JUMPDEST
+    SWAP3  // jump block4;
+    SWAP2
+    SWAP1
+    SWAP2
   block4:
     JUMPDEST
     DUP3  // v129.i256 = evm_calldata_load v77;
@@ -1685,14 +1692,6 @@ smt_root_from_calldata:
     POP
     POP
     SWAP1
-    JUMP
-  block19:
-    JUMPDEST
-    SWAP3  // jump block4;
-    SWAP2
-    SWAP1
-    SWAP2
-    PUSH1 block4
     JUMP
 
 // func private %init__StorPtr_Evm___207f35a85ac4062e()
@@ -1814,6 +1813,11 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     SWAP3
     SWAP1
     SWAP2
+    PUSH1 block11
+    JUMP
+  block57:
+    JUMPDEST
+    SWAP3  // jump block11;
   block11:
     JUMPDEST
     DUP4  // v139.i256 = shl 5.i256 v7;
@@ -1876,15 +1880,9 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 0x1 (1)
     SHR
     SWAP3  // br v75 block57 block58;
-    ISZERO
-    PUSH1 block58
+    PUSH1 block57
     JUMPI
-  block57:
-    SWAP3  // jump block11;
-    PUSH1 block11
-    JUMP
   block58:
-    JUMPDEST
     POP  // jump block14;
     SWAP1
     POP
@@ -2022,6 +2020,17 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     SWAP7
     SWAP5
     SWAP7
+    PUSH1 block36
+    JUMP
+  block65:
+    JUMPDEST
+    SWAP6  // jump block36;
+    SWAP4
+    SWAP1
+    SWAP3
+    SWAP2
+    SWAP5
+    SWAP4
   block36:
     JUMPDEST
     DUP6  // v102.i256 = and 1.i256 v29;
@@ -2134,17 +2143,6 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH0  // evm_revert v60 v60;
     PUSH0
     REVERT
-  block65:
-    JUMPDEST
-    SWAP6  // jump block36;
-    SWAP4
-    SWAP1
-    SWAP3
-    SWAP2
-    SWAP5
-    SWAP4
-    PUSH1 block36
-    JUMP
   block60:
     JUMPDEST
     SWAP4  // jump block29;
@@ -2156,6 +2154,14 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     SWAP1
     SWAP3
     SWAP5
+    PUSH1 block29
+    JUMP
+  block62:
+    JUMPDEST
+    SWAP4  // jump block29;
+    SWAP3
+    SWAP2
+    SWAP3
   block29:
     JUMPDEST
     DUP4  // v119.i256 = evm_calldata_load v19;
@@ -2237,14 +2243,6 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 0x20 (32)  // evm_return v60 v64;
     PUSH0
     RETURN
-  block62:
-    JUMPDEST
-    SWAP4  // jump block29;
-    SWAP3
-    SWAP2
-    SWAP3
-    PUSH1 block29
-    JUMP
 
 // func public %hash2_at(v0.i256, v1.i256, v2.i256) -> i256
 hash2_at:

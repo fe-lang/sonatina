@@ -1,3 +1,5 @@
+use std::iter;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, Module,
@@ -281,7 +283,103 @@ pub(crate) fn rewrite_evm_local_fallthrough_layout(
         }
     }
 
+    if prefer_speed {
+        place_loop_back_edge_trampolines(function, &loops, aliases, &mut emitted_block_order);
+    }
     emitted_block_order
+}
+
+/// Moves a loop's back-edge trampoline to just before the loop header.
+///
+/// A bottom-tested loop's back edge is critical, so it is split into a block
+/// that only jumps to the header. When the latch's stack needs reordering
+/// for the header, the trampoline keeps that shuffle and is not aliased
+/// away, and every iteration pays its `PUSH`/`JUMP`. Placed before the
+/// header, it falls through instead. The header's old layout predecessor
+/// then jumps to the header, which costs a jump once per loop entry rather
+/// than once per iteration, so this is a speed-only rewrite.
+fn place_loop_back_edge_trampolines(
+    function: &Function,
+    loops: &LoopTree,
+    aliases: &FxHashMap<BlockId, BlockId>,
+    emitted_block_order: &mut Vec<BlockId>,
+) {
+    let trampolines: Vec<_> = emitted_block_order
+        .iter()
+        .filter_map(|&block| {
+            block_trampoline_jump_inst(function, block)?;
+            let header = canonical_block_alias_target(aliases, block_jump_dest(function, block)?);
+            let lp = loops.loop_of_block(header)?;
+            // A block jumping to itself is an infinite loop, not a back edge
+            // into another block.
+            (header != block && loops.loop_header(lp) == header && loops.is_in_loop(block, lp))
+                .then_some((block, header, lp))
+        })
+        .collect();
+
+    // Link the order, so that each lookup and move takes constant time.
+    let mut prev: SecondaryMap<BlockId, Option<BlockId>> = SecondaryMap::new();
+    let mut next: SecondaryMap<BlockId, Option<BlockId>> = SecondaryMap::new();
+    for pair in emitted_block_order.windows(2) {
+        next[pair[0]] = Some(pair[1]);
+        prev[pair[1]] = Some(pair[0]);
+    }
+    // A header can be fallen into from one trampoline only, and the function's
+    // first block cannot be fallen into at all.
+    let mut placed_headers: FxHashSet<_> = trampolines
+        .iter()
+        .filter(|&&(trampoline, header, _)| prev[header].is_none_or(|block| block == trampoline))
+        .map(|&(_, header, _)| header)
+        .collect();
+    for (trampoline, header, lp) in trampolines {
+        // The first block stays first.
+        let Some(before) = prev[trampoline] else {
+            continue;
+        };
+        let after = next[trampoline];
+        // Moving a trampoline its layout predecessor falls into along the
+        // trampoline's own edge gains nothing, since the predecessor then
+        // jumps to it instead: a jump, a default `br_table` edge, or a
+        // branch's zero edge, unless the branch's nonzero target becomes its
+        // fallthrough. A trampoline on a branch's nonzero edge moves when the
+        // zero edge leaves the loop: the branch jumps to the trampoline every
+        // iteration either way, and only the exit may gain a jump. A zero
+        // edge that stays in the loop would gain a jump every iteration, so
+        // then the trampoline stays unless the zero target becomes the
+        // fallthrough.
+        let canonical = |block| canonical_block_alias_target(aliases, block);
+        let breaks_fallthrough = function
+            .layout
+            .last_inst_of(before)
+            .and_then(|term| function.dfg.branch_info(term))
+            .is_some_and(|branch| match branch.branch_kind() {
+                BranchKind::Jump(jump) => canonical(*jump.dest()) == trampoline,
+                BranchKind::Br(br) => {
+                    let (nz_dest, z_dest) = (canonical(*br.nz_dest()), canonical(*br.z_dest()));
+                    (z_dest == trampoline && Some(nz_dest) != after)
+                        || (nz_dest == trampoline
+                            && Some(z_dest) != after
+                            && loops.is_in_loop(z_dest, lp))
+                }
+                BranchKind::BrTable(table) => table
+                    .default()
+                    .is_some_and(|dest| canonical(dest) == trampoline),
+            });
+        if breaks_fallthrough || !placed_headers.insert(header) {
+            continue;
+        }
+        next[before] = after;
+        if let Some(after) = after {
+            prev[after] = Some(before);
+        }
+        let header_prev = prev[header].expect("header is not the first block");
+        next[header_prev] = Some(trampoline);
+        prev[trampoline] = Some(header_prev);
+        next[trampoline] = Some(header);
+        prev[header] = Some(trampoline);
+    }
+    *emitted_block_order =
+        iter::successors(Some(emitted_block_order[0]), |&block| next[block]).collect();
 }
 
 fn is_local_diamond_no_invert_candidate(
