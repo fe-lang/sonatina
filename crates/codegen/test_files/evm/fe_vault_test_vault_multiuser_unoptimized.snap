@@ -6,22 +6,22 @@ input_file: test_files/evm/fe_vault_test_vault_multiuser_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 3146 bytes
-  total: 3146 bytes
+  section runtime: 3013 bytes
+  total: 3013 bytes
 
 object: Vault
-  section init: 776 bytes
-  section runtime: 758 bytes
-  total: 1534 bytes
+  section init: 699 bytes
+  section runtime: 681 bytes
+  total: 1380 bytes
 
 object: VaultUser
-  section init: 788 bytes
-  section runtime: 777 bytes
-  total: 1565 bytes
+  section init: 739 bytes
+  section runtime: 728 bytes
+  total: 1467 bytes
 
 functions:
   mem: global_dyn_base=0x2a0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=16
-  __Vault_init: ir_blocks=1 ir_insts=6 vcode_ops=14 fixups=2 imm_bytes=3
+  __Vault_init: ir_blocks=1 ir_insts=6 vcode_ops=17 fixups=2 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Vault_runtime: ir_blocks=70 ir_insts=179 vcode_ops=453 fixups=48 imm_bytes=44
     mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
@@ -53,7 +53,7 @@ functions:
     mem: scratch_words=0 stable_words=13 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=13
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=432489 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=411489
+  case ok: calldata_len=0 success reason=Return gas_used=406325 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=385325
 
 
 --------------- DEBUG ---------------
@@ -61,6 +61,9 @@ evm:
 // func private %__Vault_init()
 __Vault_init:
   block0:
+    PUSH2 0x2a0 (672)
+    PUSH1 0x40 (64)
+    MSTORE
     PUSH0 0x0 (0)  // v1.i256 = sym_addr &__Vault_runtime;
     PUSH0 0x0 (0)  // v2.i256 = sym_size &__Vault_runtime;
     PUSH0  // evm_sstore v3 v3;

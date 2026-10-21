@@ -6,12 +6,12 @@ input_file: test_files/evm/malloc_return_escape_unrelated_dyn_base.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 50 bytes
-  total: 50 bytes
+  section runtime: 44 bytes
+  total: 44 bytes
 
 functions:
   mem: global_dyn_base=0x1a0 arena_base=0xa0 scratch_peak_words=8 stable_chain_peak_words=0
-  big: ir_blocks=1 ir_insts=3 vcode_ops=7 fixups=0 imm_bytes=3
+  big: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=0 imm_bytes=5
     mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=8
   mk: ir_blocks=4 ir_insts=10 vcode_ops=21 fixups=1 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
@@ -21,7 +21,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21199 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=143
+  case ok: calldata_len=8 success reason=Return gas_used=21180 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=124
 
 
 --------------- DEBUG ---------------
@@ -29,6 +29,9 @@ evm:
 // func public %big() -> i256
 big:
   block0:
+    PUSH2 0x1a0 (416)
+    PUSH1 0x40 (64)
+    MSTORE
     PUSH2 0x3e7 (999)  // evm_mstore v0 v1;
     PUSH1 0xa0 (160)
     MSTORE

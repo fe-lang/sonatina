@@ -6,8 +6,8 @@ input_file: test_files/evm/malloc_mcopy_nonlocal_escape_bug.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 84 bytes
-  total: 84 bytes
+  section runtime: 77 bytes
+  total: 77 bytes
 
 functions:
   mem: global_dyn_base=0x1a0 arena_base=0xa0 scratch_peak_words=8 stable_chain_peak_words=0
@@ -21,4 +21,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
 
 evm:
-  case bug_demo: calldata_len=8 success reason=Return gas_used=21296 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=240
+  case bug_demo: calldata_len=8 success reason=Return gas_used=21277 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=221

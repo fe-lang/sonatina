@@ -125,6 +125,9 @@ pub(crate) struct EvmFunctionPlan {
     pub(crate) mem_plan: MachineFuncPlan,
     pub(crate) frame_summary: FrameSummary,
     pub(crate) dyn_sp_plan: FuncDynSpPlan,
+    /// The free pointer this function stores on entry (the section entry
+    /// only), which lets heap mallocs skip their minimum-base clamps.
+    pub(crate) entry_free_ptr: Option<u32>,
     pub(crate) function_entry_jumpdest: bool,
     pub(crate) stackify_trace: Option<String>,
 }
@@ -233,8 +236,12 @@ pub(crate) fn function_free_ptr_slot_facts(
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             // Section callees are scanned directly; call summaries only expose whole-space writes.
-            // Restoring the entry free pointer before a return hands the caller
-            // back the free pointer it called with.
+            // Storing the entry free pointer back, as the internal-return
+            // restore does, hands the caller the free pointer it called with,
+            // and the load it stores observes nothing else. Wherever the store
+            // sits, it only lets later allocations reuse what this call
+            // allocated, which programs cannot rely on while those allocations
+            // live: distinct allocations never alias, as the optimizer assumes.
             if terminal_payload_scratch.contains(&inst)
                 || is_entry_free_ptr_restore(function, backend, inst)
                 || matches!(
@@ -259,31 +266,36 @@ pub(crate) fn function_free_ptr_slot_facts(
     facts
 }
 
-/// Whether `inst` stores to the free-pointer slot the value the entry block's
-/// first instruction loaded from it, as the internal-return restore does.
+/// Whether `inst` has the shape of the internal-return restore: a store into
+/// the free-pointer slot of the value the entry block's first instruction
+/// loaded from it, or that load when such stores are all that use it. User
+/// code of this shape is exempt too, wherever its stores sit.
 fn is_entry_free_ptr_restore(function: &Function, backend: &EvmBackend, inst: InstId) -> bool {
+    let resolve = |inst: InstId| backend.isa.inst_set().resolve_inst(function.dfg.inst(inst));
     let is_slot = |addr: ValueId| value_imm_u32(function, addr) == Some(FREE_PTR_SLOT as u32);
-    let EvmInstKind::Mstore(store) = backend.isa.inst_set().resolve_inst(function.dfg.inst(inst))
-    else {
-        return false;
+    let is_entry_load = |load: InstId| {
+        function.layout.entry_block().and_then(|entry| {
+            function
+                .layout
+                .iter_inst(entry)
+                .find(|&inst| !function.dfg.is_phi(inst))
+        }) == Some(load)
+            && matches!(resolve(load), EvmInstKind::Mload(mload) if is_slot(*mload.addr()))
     };
-    if !is_slot(*store.addr()) {
-        return false;
-    }
-    let Some(load) = function.dfg.value_inst(*store.value()) else {
-        return false;
+    let is_restore_store = |inst: InstId| {
+        matches!(resolve(inst), EvmInstKind::Mstore(store)
+            if is_slot(*store.addr())
+                && function.dfg.value_inst(*store.value()).is_some_and(is_entry_load))
     };
-    let first = function.layout.entry_block().and_then(|entry| {
-        function
-            .layout
-            .iter_inst(entry)
-            .find(|&inst| !function.dfg.is_phi(inst))
-    });
-    first == Some(load)
-        && matches!(
-            backend.isa.inst_set().resolve_inst(function.dfg.inst(load)),
-            EvmInstKind::Mload(mload) if is_slot(*mload.addr())
-        )
+    is_restore_store(inst)
+        || is_entry_load(inst)
+            && function.dfg.inst_result(inst).is_some_and(|value| {
+                function
+                    .dfg
+                    .users(value)
+                    .filter(|&&user| function.layout.is_inst_inserted(user))
+                    .all(|&user| is_restore_store(user))
+            })
 }
 
 /// The blocks from which a return to the caller is reachable.
@@ -1124,6 +1136,7 @@ fn prepare_machine_section_after_pipeline(
                         mem_plan: final_spills.mem_plan,
                         frame_summary,
                         dyn_sp_plan: FuncDynSpPlan::default(),
+                        entry_free_ptr: None,
                         function_entry_jumpdest: function_entry_jump_targets.contains(&func),
                         stackify_trace,
                     },
@@ -1166,6 +1179,12 @@ fn prepare_machine_section_after_pipeline(
                 .get_mut(&func)
                 .unwrap_or_else(|| panic!("missing function plan for {}", func.as_u32()))
                 .dyn_sp_plan = dyn_sp_plan;
+        }
+        if let Some(free_ptr) = placement.section_entry_free_ptr {
+            function_plans
+                .get_mut(&machine.work.entry())
+                .expect("missing section entry function plan")
+                .entry_free_ptr = Some(free_ptr);
         }
 
         let reserve_peak = backend_spills

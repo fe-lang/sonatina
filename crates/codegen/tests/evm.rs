@@ -2138,6 +2138,27 @@ impl EvmHarness {
         Self { db, contract }
     }
 
+    /// The `Contract` runtime of `source`, compiled under `profile` without
+    /// the IR optimization pipeline.
+    fn runtime_with_profile(source: &str, profile: LateCleanupProfile) -> Self {
+        let parsed = parse_sona(source);
+        let backend =
+            EvmBackend::new(Evm::new(parsed.module.ctx.triple)).with_late_cleanup_profile(profile);
+        let artifact = compile_object(
+            &parsed.module,
+            &backend,
+            "Contract",
+            &CompileOptions::default(),
+        )
+        .expect("contract compiles");
+        let runtime = artifact
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .expect("missing runtime section");
+        Self::from_runtime(&runtime.1.bytes)
+    }
+
     fn deploy(init_code: &[u8]) -> (ExecutionResult, Self) {
         let mut env = Env::default();
         env.tx.clear();
@@ -2606,6 +2627,55 @@ object @Contract { section runtime { entry %entry; } }
                 }
             }
         }
+    }
+}
+
+#[test]
+fn section_entry_loop_header_keeps_earlier_heap_allocations() {
+    // The section entry's first block is a loop header. The first pass keeps
+    // its allocation alive through address 0, so a free-pointer store at the
+    // top of that block would give the second pass's allocation its address.
+    let source = r#"
+target = "evm-ethereum-osaka"
+func public %entry() {
+block0:
+    v0.i256 = evm_sload 0.i256;
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    v3.i1 = eq v0 0.i256;
+    br v3 block1 block2;
+block1:
+    mstore v2 7.i256 i256;
+    mstore 0.i256 v2 i256;
+    evm_sstore 0.i256 1.i256;
+    jump block0;
+block2:
+    mstore v2 99.i256 i256;
+    v4.i256 = mload 0.i256 i256;
+    v5.i256 = mload v4 i256;
+    mstore 0.i256 v5 i256;
+    evm_return 0.i256 32.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    for profile in [
+        LateCleanupProfile::Off,
+        LateCleanupProfile::Speed,
+        LateCleanupProfile::Size,
+    ] {
+        let result = EvmHarness::runtime_with_profile(source, profile).call(&[]);
+        let ExecutionResult::Success {
+            output: Output::Call(actual),
+            ..
+        } = result
+        else {
+            panic!("{profile:?}: {result:?}");
+        };
+        assert_eq!(
+            actual.as_ref(),
+            IrU256::from(7).to_big_endian(),
+            "{profile:?}"
+        );
     }
 }
 

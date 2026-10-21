@@ -7,13 +7,13 @@ input_file: test_files/evm/fe_deposit_contract_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 2456 bytes
-  section runtime: 2375 bytes
-  total: 4831 bytes
+  section init: 2436 bytes
+  section runtime: 2355 bytes
+  total: 4791 bytes
 
 functions:
   mem: global_dyn_base=0x100 arena_base=0xa0 scratch_peak_words=3 stable_chain_peak_words=0
-  contract_init_root_DepositContract: ir_blocks=10 ir_insts=28 vcode_ops=73 fixups=7 imm_bytes=14
+  contract_init_root_DepositContract: ir_blocks=10 ir_insts=28 vcode_ops=76 fixups=7 imm_bytes=16
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=2
   contract_runtime_root_DepositContract: ir_blocks=135 ir_insts=480 vcode_ops=1506 fixups=88 imm_bytes=387
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
@@ -21,13 +21,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=1267529 gas_refunded=0 logs=0 output=create len=2375 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case supports_interface_erc165: calldata_len=36 success reason=Return gas_used=21469 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=229
-  case supports_interface_deposit: calldata_len=36 success reason=Return gas_used=21497 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=257
-  case supports_interface_unknown: calldata_len=36 success reason=Return gas_used=21484 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=244
-  case get_deposit_root_empty: calldata_len=4 success reason=Return gas_used=102752 gas_refunded=0 logs=0 output=call len=32 tx_gas=21064 runtime_gas=81688
-  case get_deposit_count_empty: calldata_len=4 success reason=Return gas_used=23577 gas_refunded=0 logs=0 output=call len=96 tx_gas=21064 runtime_gas=2513
-  case deposit_rejects_zero_value: calldata_len=420 revert gas_used=26873 output_len=132 tx_gas=25296 runtime_gas=1577
+  deploy: success reason=Return gas_used=1263215 gas_refunded=0 logs=0 output=create len=2355 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case supports_interface_erc165: calldata_len=36 success reason=Return gas_used=21478 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=238
+  case supports_interface_deposit: calldata_len=36 success reason=Return gas_used=21506 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=266
+  case supports_interface_unknown: calldata_len=36 success reason=Return gas_used=21493 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=253
+  case get_deposit_root_empty: calldata_len=4 success reason=Return gas_used=102761 gas_refunded=0 logs=0 output=call len=32 tx_gas=21064 runtime_gas=81697
+  case get_deposit_count_empty: calldata_len=4 success reason=Return gas_used=23558 gas_refunded=0 logs=0 output=call len=96 tx_gas=21064 runtime_gas=2494
+  case deposit_rejects_zero_value: calldata_len=420 revert gas_used=26808 output_len=132 tx_gas=25296 runtime_gas=1512
 
 
 --------------- DEBUG ---------------
@@ -35,6 +35,9 @@ evm:
 // func private %contract_init_root_DepositContract()
 contract_init_root_DepositContract:
   block0:
+    PUSH2 0x100 (256)
+    PUSH1 0x40 (64)
+    MSTORE
     CALLVALUE  // v3.i256 = evm_call_value;
     PUSH1 __evm_shared_tail_0  // br v3 block1 block10;
     JUMPI

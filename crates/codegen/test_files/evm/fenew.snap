@@ -6,8 +6,8 @@ input_file: test_files/evm/fenew.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 306 bytes
-  total: 306 bytes
+  section runtime: 267 bytes
+  total: 267 bytes
 
 object: Counter
   section init: 92 bytes
@@ -16,7 +16,7 @@ object: Counter
 
 functions:
   mem: global_dyn_base=0x60 arena_base=0x60 scratch_peak_words=0 stable_chain_peak_words=0
-  __Counter_init: ir_blocks=3 ir_insts=7 vcode_ops=16 fixups=3 imm_bytes=2
+  __Counter_init: ir_blocks=3 ir_insts=7 vcode_ops=19 fixups=3 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Counter_runtime: ir_blocks=12 ir_insts=24 vcode_ops=71 fixups=6 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -26,7 +26,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case test_counter: calldata_len=0 success reason=Return gas_used=91285 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=70285
+  case test_counter: calldata_len=0 success reason=Return gas_used=91126 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=70126
 
 
 --------------- DEBUG ---------------
@@ -34,6 +34,9 @@ evm:
 // func private %__Counter_init()
 __Counter_init:
   block0:
+    PUSH1 0x60 (96)
+    PUSH1 0x40 (64)
+    MSTORE
     CALLVALUE  // v0.i256 = evm_call_value;
     PUSH1 __evm_shared_tail_0  // br v0 block1 block2;
     JUMPI

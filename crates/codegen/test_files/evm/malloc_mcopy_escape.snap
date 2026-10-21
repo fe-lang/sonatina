@@ -6,8 +6,8 @@ input_file: test_files/evm/malloc_mcopy_escape.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 81 bytes
-  total: 81 bytes
+  section runtime: 75 bytes
+  total: 75 bytes
 
 functions:
   mem: global_dyn_base=0xe0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=2
@@ -19,4 +19,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21275 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=219
+  case ok: calldata_len=8 success reason=Return gas_used=21256 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=200

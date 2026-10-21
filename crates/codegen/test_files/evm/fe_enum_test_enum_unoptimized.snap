@@ -6,17 +6,17 @@ input_file: test_files/evm/fe_enum_test_enum_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 804 bytes
-  total: 804 bytes
+  section runtime: 790 bytes
+  total: 790 bytes
 
 object: EnumContract
-  section init: 298 bytes
-  section runtime: 287 bytes
-  total: 585 bytes
+  section init: 291 bytes
+  section runtime: 280 bytes
+  total: 571 bytes
 
 functions:
   mem: global_dyn_base=0x1c0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=9
-  __EnumContract_init: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
+  __EnumContract_init: ir_blocks=1 ir_insts=4 vcode_ops=11 fixups=2 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __EnumContract_runtime: ir_blocks=7 ir_insts=18 vcode_ops=66 fixups=11 imm_bytes=11
     mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
@@ -30,7 +30,7 @@ functions:
     mem: scratch_words=0 stable_words=9 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=9
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=114188 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=93188
+  case ok: calldata_len=0 success reason=Return gas_used=112712 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=91712
 
 
 --------------- DEBUG ---------------
@@ -38,6 +38,9 @@ evm:
 // func private %__EnumContract_init()
 __EnumContract_init:
   block0:
+    PUSH2 0x1c0 (448)
+    PUSH1 0x40 (64)
+    MSTORE
     PUSH0 0x0 (0)  // v0.i256 = sym_addr &__EnumContract_runtime;
     PUSH0 0x0 (0)  // v1.i256 = sym_size &__EnumContract_runtime;
     DUP1  // evm_code_copy 0.i256 v0 v1;
