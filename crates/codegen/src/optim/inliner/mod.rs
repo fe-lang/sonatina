@@ -65,7 +65,10 @@ pub struct InlinerConfig {
 
     pub max_inlinee_blocks: usize,
     pub max_inlinee_insts: usize,
+    /// Net instructions one inliner run may add to a caller; zero is no limit.
     pub max_growth_per_caller: usize,
+    /// Net instructions one inliner run may add to the module; zero is no
+    /// limit. A pipeline that runs the inliner repeatedly allows this per run.
     pub max_total_growth: usize,
     pub max_inline_depth: usize,
     pub allow_inline_recursive: bool,
