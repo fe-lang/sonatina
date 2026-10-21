@@ -1,0 +1,41 @@
+target = "evm-ethereum-osaka"
+
+# `evm_stop` commits like `return`, so a continuation ending in it is the
+# normal path past a reverting guard, and work stays before the guard.
+# sameln: func public %do_not_sink_stop_continuation_past_cold_guard(v0.i1, v1.i256, v2.i256) {
+# check:       block0:
+# nextln:          v3.i256 = add v1 v2;
+# nextln:          br v0 block1 block2;
+func public %do_not_sink_stop_continuation_past_cold_guard(v0.i1, v1.i256, v2.i256) {
+    block0:
+        v3.i256 = add v1 v2;
+        br v0 block1 block2;
+
+    block1:
+        v4.i256 = mul v3 2.i256;
+        mstore 0.i256 v4 i256;
+        evm_stop;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+}
+
+# A branch that ends in `evm_stop` is not a cold exit, so the guard does not
+# keep work that only the other branch uses.
+# sameln: func public %sink_past_guard_with_stop_branch(v0.i1, v1.i256, v2.i256) -> i256 {
+# check:       block0:
+# nextln:          br v0 block1 block2;
+# check:       block1:
+# nextln:          v3.i256 = add v1 v2;
+func public %sink_past_guard_with_stop_branch(v0.i1, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.i256 = add v1 v2;
+        br v0 block1 block2;
+
+    block1:
+        v4.i256 = mul v3 2.i256;
+        return v4;
+
+    block2:
+        evm_stop;
+}

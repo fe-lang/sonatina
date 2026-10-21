@@ -144,6 +144,7 @@ fn is_normal_exit_block(func: &Function, block: BlockId) -> bool {
     let inst = func.dfg.inst(term);
     func.dfg.is_return(term)
         || downcast::<&evm::EvmReturn>(func.inst_set(), inst).is_some()
+        || downcast::<&evm::EvmStop>(func.inst_set(), inst).is_some()
         || downcast::<&evm::EvmSelfDestruct>(func.inst_set(), inst).is_some()
 }
 
