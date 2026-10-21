@@ -1,0 +1,19 @@
+target = "evm-ethereum-osaka"
+
+# A value phi resolved to a class whose leader an earlier resolution in
+# the same block already replaced must use the replacement.
+# check:  block2:
+# nextln:     v2.i256 = phi (1.i256 block0) (0.i256 block1);
+# nextln:     return 3.i256;
+func public %f(v0.i256) -> i256 {
+    block0:
+        v1.i1 = eq v0 3.i256;
+        br v1 block1 block2;
+    block1:
+        jump block2;
+    block2:
+        v2.i256 = phi (1.i256 block0) (0.i256 block1);
+        v3.i256 = or v2 3.i256;
+        v4.i256 = or v2 v3;
+        return v4;
+}
