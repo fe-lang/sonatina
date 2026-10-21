@@ -839,4 +839,282 @@ block0:
             check_lifetimes(function, &effects).unwrap();
         });
     }
+
+    /// The lifetime check and heap roots of `%f`, among `source`'s functions.
+    fn check_f(source: &str) -> (Result<(), String>, FxHashSet<ValueId>) {
+        let module = verified_module(source);
+        let effects = compute_object_effect_summaries(&module);
+        let f = module
+            .funcs()
+            .into_iter()
+            .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == "f"))
+            .expect("f exists");
+        module.func_store.view(f, |function| {
+            (
+                check_lifetimes(function, &effects),
+                native_heap_object_roots(function, &effects),
+            )
+        })
+    }
+
+    #[test]
+    fn local_references_stay_local_through_fields_nested_holders_and_calls() {
+        for (name, source) in [
+            // Only field 0 carries `v2`; field 1 carries the argument `v0`,
+            // which may rest in the caller's `v1`.
+            (
+                "field",
+                r#"
+type @refs = { objref<i64>, objref<i64> };
+func private %f(v0.objref<i64>, v1.objref<objref<i64>>) -> i64 {
+block0:
+    v2.objref<i64> = obj.alloc i64;
+    obj.store v2 1.i64;
+    v3.@refs = insert_value undef.@refs 0.i64 v2;
+    v4.@refs = insert_value v3 1.i64 v0;
+    v5.objref<i64> = extract_value v4 1.i64;
+    obj.store v1 v5;
+    v6.objref<i64> = extract_value v4 0.i64;
+    v7.i64 = obj.load v6;
+    return v7;
+}
+"#,
+            ),
+            // `%read` only reads through the holder it borrows.
+            (
+                "holder_call",
+                r#"
+type @holder = { objref<i64> };
+func private %read(v0.objref<@holder>) -> i64 {
+block0:
+    v1.objref<objref<i64>> = obj.proj v0 0.i64;
+    v2.objref<i64> = obj.load v1;
+    v3.i64 = obj.load v2;
+    return v3;
+}
+func private %f() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 5.i64;
+    v1.objref<@holder> = obj.alloc @holder;
+    v2.objref<objref<i64>> = obj.proj v1 0.i64;
+    obj.store v2 v0;
+    v3.i64 = call %read v1;
+    return v3;
+}
+"#,
+            ),
+            // `%slot` returns a projection of the holder it borrows.
+            (
+                "borrowed_holder_projection",
+                r#"
+type @holder = { objref<i64> };
+func private %slot(v0.objref<@holder>) -> objref<objref<i64>> {
+block0:
+    v1.objref<objref<i64>> = obj.proj v0 0.i64;
+    return v1;
+}
+func private %f() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 5.i64;
+    v1.objref<@holder> = obj.alloc @holder;
+    v2.objref<objref<i64>> = obj.proj v1 0.i64;
+    obj.store v2 v0;
+    v3.objref<objref<i64>> = call %slot v1;
+    v4.objref<i64> = obj.load v3;
+    v5.i64 = obj.load v4;
+    return v5;
+}
+"#,
+            ),
+            // `v0` rests in `v1`, which rests in `v3`.
+            (
+                "nested_holders",
+                r#"
+type @holder = { objref<i64> };
+type @outer = { i64, objref<@holder> };
+func private %f() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 5.i64;
+    v1.objref<@holder> = obj.alloc @holder;
+    v2.objref<objref<i64>> = obj.proj v1 0.i64;
+    obj.store v2 v0;
+    v3.objref<@outer> = obj.alloc @outer;
+    v4.objref<objref<@holder>> = obj.proj v3 1.i64;
+    obj.store v4 v1;
+    v5.objref<@holder> = obj.load v4;
+    v6.objref<objref<i64>> = obj.proj v5 0.i64;
+    v7.objref<i64> = obj.load v6;
+    v8.i64 = obj.load v7;
+    return v8;
+}
+"#,
+            ),
+        ] {
+            let (lifetimes, heap_roots) = check_f(source);
+            assert_eq!(lifetimes, Ok(()), "{name}");
+            assert!(heap_roots.is_empty(), "{name}: {heap_roots:?}");
+        }
+    }
+
+    #[test]
+    fn heap_exports_reach_references_through_holder_calls_and_nested_holders() {
+        for (name, source, roots) in [
+            // `%export` exports the holder `v1`, and with it `v0`.
+            (
+                "holder_call",
+                r#"
+type @holder = { objref<i64> };
+func private %export(v0.objref<@holder>) -> *@holder {
+block0:
+    v1.*@holder = obj.materialize.heap v0;
+    return v1;
+}
+func private %f() -> *@holder {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 5.i64;
+    v1.objref<@holder> = obj.alloc @holder;
+    v2.objref<objref<i64>> = obj.proj v1 0.i64;
+    obj.store v2 v0;
+    v3.*@holder = call %export v1;
+    return v3;
+}
+"#,
+                [0, 1].as_slice(),
+            ),
+            // Exporting `v3` exports `v1`, which holds `v0`.
+            (
+                "nested_holders",
+                r#"
+type @holder = { objref<i64> };
+type @outer = { objref<@holder> };
+func private %f() -> *@outer {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 5.i64;
+    v1.objref<@holder> = obj.alloc @holder;
+    v2.objref<objref<i64>> = obj.proj v1 0.i64;
+    obj.store v2 v0;
+    v3.objref<@outer> = obj.alloc @outer;
+    v4.objref<objref<@holder>> = obj.proj v3 0.i64;
+    obj.store v4 v1;
+    v5.*@outer = obj.materialize.heap v3;
+    return v5;
+}
+"#,
+                [0, 1, 3].as_slice(),
+            ),
+        ] {
+            let (lifetimes, heap_roots) = check_f(source);
+            assert_eq!(lifetimes, Ok(()), "{name}");
+            let expected = roots.iter().copied().map(ValueId::from_u32).collect();
+            assert_eq!(heap_roots, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn local_references_recovered_from_fields_holders_and_calls_cannot_escape() {
+        let types = "type @refs = { objref<i64>, objref<i64> };\n\
+             type @holder = { objref<i64> };\n\
+             type @outer = { i64, objref<@holder> };\n\
+             type @slot = enum { #Empty, #Full(objref<i64>) };";
+        for (name, helper, body) in [
+            // The carrying field of a pair that also holds an argument.
+            (
+                "field",
+                "",
+                "v3.@refs = insert_value undef.@refs 0.i64 v1;\n\
+                 v4.@refs = insert_value v3 1.i64 v2;\n\
+                 v5.objref<i64> = extract_value v4 0.i64;\n\
+                 obj.store v0 v5;",
+            ),
+            // The payload of an enum value.
+            (
+                "variant",
+                "",
+                "v3.@slot = enum.make @slot #Full (v1);\n\
+                 v4.objref<i64> = enum.extract v3 #Full 0.i8;\n\
+                 obj.store v0 v4;",
+            ),
+            // A holder inside a holder, unpacked again.
+            (
+                "nested_holders",
+                "",
+                "v3.objref<@holder> = obj.alloc @holder;\n\
+                 v4.objref<objref<i64>> = obj.proj v3 0.i64;\n\
+                 obj.store v4 v1;\n\
+                 v5.objref<@outer> = obj.alloc @outer;\n\
+                 v6.objref<objref<@holder>> = obj.proj v5 1.i64;\n\
+                 obj.store v6 v3;\n\
+                 v7.objref<@holder> = obj.load v6;\n\
+                 v8.objref<objref<i64>> = obj.proj v7 0.i64;\n\
+                 v9.objref<i64> = obj.load v8;\n\
+                 obj.store v0 v9;",
+            ),
+            // A callee that moves the held reference into another argument.
+            (
+                "holder_call_capture",
+                "func private %move(v0.objref<@holder>, v1.objref<objref<i64>>) {\n\
+                 block0:\n\
+                     v2.objref<objref<i64>> = obj.proj v0 0.i64;\n\
+                     v3.objref<i64> = obj.load v2;\n\
+                     obj.store v1 v3;\n\
+                     return;\n\
+                 }",
+                "v3.objref<@holder> = obj.alloc @holder;\n\
+                 v4.objref<objref<i64>> = obj.proj v3 0.i64;\n\
+                 obj.store v4 v1;\n\
+                 call %move v3 v0;",
+            ),
+            // A projection a callee borrows from the holder.
+            (
+                "borrowed_holder_projection",
+                "func private %slot(v0.objref<@holder>) -> objref<objref<i64>> {\n\
+                 block0:\n\
+                     v1.objref<objref<i64>> = obj.proj v0 0.i64;\n\
+                     return v1;\n\
+                 }",
+                "v3.objref<@holder> = obj.alloc @holder;\n\
+                 v4.objref<objref<i64>> = obj.proj v3 0.i64;\n\
+                 obj.store v4 v1;\n\
+                 v5.objref<objref<i64>> = call %slot v3;\n\
+                 v6.objref<i64> = obj.load v5;\n\
+                 obj.store v0 v6;",
+            ),
+            // A callee that returns the held reference.
+            (
+                "holder_call_return",
+                "func private %unwrap(v0.objref<@holder>) -> objref<i64> {\n\
+                 block0:\n\
+                     v1.objref<objref<i64>> = obj.proj v0 0.i64;\n\
+                     v2.objref<i64> = obj.load v1;\n\
+                     return v2;\n\
+                 }",
+                "v3.objref<@holder> = obj.alloc @holder;\n\
+                 v4.objref<objref<i64>> = obj.proj v3 0.i64;\n\
+                 obj.store v4 v1;\n\
+                 v5.objref<i64> = call %unwrap v3;\n\
+                 obj.store v0 v5;",
+            ),
+        ] {
+            let (lifetimes, _) = check_f(&format!(
+                "{types}\n{helper}\nfunc private %f(v0.objref<objref<i64>>, v2.objref<i64>) {{\n\
+                 block0:\n\
+                     v1.objref<i64> = obj.alloc i64;\n\
+                     obj.store v1 1.i64;\n\
+                     {body}\n\
+                     return;\n\
+                 }}"
+            ));
+            assert!(
+                lifetimes
+                    .as_ref()
+                    .is_err_and(|error| error.starts_with("unproven escape of local object")),
+                "{name}: {lifetimes:?}"
+            );
+        }
+    }
 }

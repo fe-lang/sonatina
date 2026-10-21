@@ -555,6 +555,59 @@ block0:
 }
 
 #[test]
+fn references_in_holders_passed_to_calls_and_nested_holders_stay_on_the_stack() {
+    // A reference into `v1` rests in the holder `v2`, which `%bump` borrows,
+    // and then in `v4`, which holds `v2`; each path writes through it.
+    let source = r#"
+type @holder = { objref<i64> };
+type @outer = { i64, objref<@holder> };
+func inline(never) private %bump(v0.objref<@holder>) {
+block0:
+    v1.objref<objref<i64>> = obj.proj v0 0.i64;
+    v2.objref<i64> = obj.load v1;
+    v3.i64 = obj.load v2;
+    v4.i64 = add v3 1.i64;
+    obj.store v2 v4;
+    return;
+}
+func public %exercise(v0.i64) -> i64 {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v1 v0;
+    v2.objref<@holder> = obj.alloc @holder;
+    v3.objref<objref<i64>> = obj.proj v2 0.i64;
+    obj.store v3 v1;
+    call %bump v2;
+    v4.objref<@outer> = obj.alloc @outer;
+    v5.objref<objref<@holder>> = obj.proj v4 1.i64;
+    obj.store v5 v2;
+    v6.objref<@holder> = obj.load v5;
+    v7.objref<objref<i64>> = obj.proj v6 0.i64;
+    v8.objref<i64> = obj.load v7;
+    v9.i64 = obj.load v8;
+    v10.i64 = mul v9 10.i64;
+    obj.store v8 v10;
+    v11.i64 = obj.load v1;
+    return v11;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let exercise: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("exercise").unwrap()) };
+        for input in [0, 4, -9] {
+            assert_eq!(unsafe { exercise(input) }, (input + 1) * 10, "{level:?}");
+        }
+    }
+}
+
+#[test]
 fn references_held_beyond_the_frame_are_rejected() {
     // Each case lets a reference into the local `v1` outlive the frame or the
     // iteration that allocated it, through a holder or an SSA pair.
