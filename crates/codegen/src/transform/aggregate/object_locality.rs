@@ -285,7 +285,9 @@ pub(crate) fn object_root_stays_local_with_effects(
     allow_carry: bool,
 ) -> bool {
     walk_object_root_uses_with_effects(function, root, object_effects, |special| match special {
-        SpecialObjectUse::MaterializeStack(Some(ptr)) if raw_pointer_stays_local(function, ptr) => {
+        SpecialObjectUse::MaterializeStack(Some(ptr))
+            if raw_pointer_stays_local(function, ptr, true) =>
+        {
             ControlFlow::Continue(())
         }
         SpecialObjectUse::Carry if allow_carry => ControlFlow::Continue(()),
@@ -323,7 +325,9 @@ pub(crate) fn object_root_stays_local_with(
     allow_return_root: bool,
 ) -> bool {
     walk_object_root_uses(function, root, |special| match special {
-        SpecialObjectUse::MaterializeStack(Some(ptr)) if raw_pointer_stays_local(function, ptr) => {
+        SpecialObjectUse::MaterializeStack(Some(ptr))
+            if raw_pointer_stays_local(function, ptr, true) =>
+        {
             ControlFlow::Continue(())
         }
         SpecialObjectUse::Return { value, ret }
@@ -351,7 +355,14 @@ pub(crate) fn object_root_stays_local_with(
     .is_none()
 }
 
-pub(crate) fn raw_pointer_stays_local(function: &Function, root: ValueId) -> bool {
+/// Whether a raw pointer to an object, `root`, and the pointers derived from
+/// it only address the object. Without `allow_reads` it must not be read
+/// through either, as when the object holds a reference the caller tracks.
+pub(crate) fn raw_pointer_stays_local(
+    function: &Function,
+    root: ValueId,
+    allow_reads: bool,
+) -> bool {
     let mut worklist = vec![root];
     let mut seen = FxHashSet::default();
 
@@ -398,7 +409,10 @@ pub(crate) fn raw_pointer_stays_local(function: &Function, root: ValueId) -> boo
                 downcast::<&data::Mload>(function.inst_set(), function.dfg.inst(user))
                 && *load.addr() == value
             {
-                continue;
+                if allow_reads {
+                    continue;
+                }
+                return false;
             }
 
             if let Some(store) =
@@ -425,7 +439,10 @@ pub(crate) fn raw_pointer_stays_local(function: &Function, root: ValueId) -> boo
             if let Some(copy) =
                 downcast::<&evm::EvmMcopy>(function.inst_set(), function.dfg.inst(user))
             {
-                if (*copy.dest() == value || *copy.addr() == value) && *copy.len() != value {
+                if (*copy.dest() == value || *copy.addr() == value)
+                    && (allow_reads || *copy.addr() != value)
+                    && *copy.len() != value
+                {
                     continue;
                 }
                 return false;
@@ -726,6 +743,17 @@ impl Walk<'_> {
             .is_some_and(|mat_heap| *mat_heap.object() == value)
         {
             return on_special(SpecialObjectUse::MaterializeHeap);
+        }
+        // A raw pointer into the memory can carry the object out only through
+        // a read, which would recover the held reference as untracked bits.
+        if downcast::<&data::ObjMaterializeStack>(inst_set, inst)
+            .is_some_and(|mat_stack| *mat_stack.object() == value)
+            && function
+                .dfg
+                .inst_result(self.user)
+                .is_none_or(|ptr| raw_pointer_stays_local(function, ptr, false))
+        {
+            return ControlFlow::Continue(());
         }
         if let Some(call) = downcast::<&control_flow::Call>(inst_set, inst)
             && call.args().contains(&value)

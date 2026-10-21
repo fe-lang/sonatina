@@ -928,6 +928,24 @@ block0:
 }
 "#,
             ),
+            // The holder's raw pointer is never read through.
+            (
+                "materialized_holder",
+                r#"
+type @holder = { objref<i64> };
+func private %f() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 5.i64;
+    v1.objref<@holder> = obj.alloc @holder;
+    v2.objref<objref<i64>> = obj.proj v1 0.i64;
+    obj.store v2 v0;
+    v3.*@holder = obj.materialize.stack v1;
+    v4.i64 = obj.load v0;
+    return v4;
+}
+"#,
+            ),
             // `v0` rests in `v1`, which rests in `v3`.
             (
                 "nested_holders",
@@ -1053,6 +1071,17 @@ block0:
                  v8.objref<objref<i64>> = obj.proj v7 0.i64;\n\
                  v9.objref<i64> = obj.load v8;\n\
                  obj.store v0 v9;",
+            ),
+            // A read through the holder's raw pointer, which recovers the
+            // reference as bits the walk cannot follow.
+            (
+                "materialized_holder_read",
+                "",
+                "v3.objref<@holder> = obj.alloc @holder;\n\
+                 v4.objref<objref<i64>> = obj.proj v3 0.i64;\n\
+                 obj.store v4 v1;\n\
+                 v5.*@holder = obj.materialize.stack v3;\n\
+                 v6.i64 = mload v5 i64;",
             ),
             // A callee that moves the held reference into another argument.
             (
