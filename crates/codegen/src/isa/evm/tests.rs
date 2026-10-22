@@ -2375,6 +2375,55 @@ block0:
 }
 
 #[test]
+fn buffers_beside_exposed_callee_heap_objects_move_into_the_frame() {
+    // `%entry` stores a heap object's address and contents where other frames
+    // can read them. Neither can name `%entry`'s own buffer, which therefore
+    // moves into the frame.
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+func private %allocate() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+func public %entry() {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    mstore v1 7.i256 i256;
+    v2.i256 = call %allocate;
+    v3.i256 = mload v2 i256;
+    v4.i256 = mload v1 i256;
+    mstore 512.i256 v2 i256;
+    mstore 544.i256 v3 i256;
+    mstore 576.i256 v4 i256;
+    evm_return 512.i256 96.i256;
+}
+"#,
+    )
+    .expect("module parses");
+    let funcs = parsed.module.funcs();
+    let entry = find_func(&parsed.module, "entry");
+    for profile in [
+        LateCleanupProfile::Off,
+        LateCleanupProfile::Speed,
+        LateCleanupProfile::Size,
+    ] {
+        let prepared = osaka_backend()
+            .with_late_cleanup_profile(profile)
+            .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+            .expect("prepare should succeed");
+        let plan = &prepared.function_plan(entry).expect("entry plan").mem_plan;
+        assert_eq!(
+            plan.stable_words, 1,
+            "{profile:?}: buffer stays on the heap"
+        );
+    }
+}
+
+#[test]
 fn noreturn_call_skips_continuation_marker_and_preserve() {
     let parsed = parse_module(
         r#"

@@ -138,7 +138,7 @@ impl PtrEscapeSummary {
         // An unknown body can allocate and publish memory even without args,
         // and pass any pointer it can reach to another call frame.
         out.may_publish_heap = true;
-        out.exposure.pointer = true;
+        out.exposure.pointers = UntrackedMemory::MayHoldPointers;
         module.func_sig(func, |sig| {
             for (ret_idx, &ret_ty) in sig.ret_tys().iter().enumerate() {
                 if ret_ty.is_pointer(module) {
@@ -341,18 +341,21 @@ pub(crate) fn compute_ptr_escape_summaries(
     isa: &Evm,
 ) -> PtrEscapeSummaries {
     // Untracked memory, such as another call frame or a callee's heap object,
-    // can hold a pointer to this frame's memory only after a function exposes
-    // one there. Until then it holds none; if no function exposes a pointer
-    // under that assumption, none ever does.
-    let summaries = compute_summaries(module, funcs, isa, UntrackedMemory::PointerFree);
-    if summaries
-        .funcs
-        .values()
-        .any(|summary| summary.exposure.pointer)
-    {
-        compute_summaries(module, funcs, isa, UntrackedMemory::MayHoldPointers)
-    } else {
-        summaries
+    // can hold a pointer only after a function exposes one there. Until then it
+    // holds none. Widen the assumption to what the functions expose under it
+    // until it covers every exposure.
+    let mut summaries = compute_summaries(module, funcs, isa, UntrackedMemory::PointerFree);
+    loop {
+        let exposed = summaries
+            .funcs
+            .values()
+            .map(|summary| summary.exposure.pointers)
+            .max()
+            .unwrap_or_default();
+        if exposed <= summaries.untracked_memory {
+            return summaries;
+        }
+        summaries = compute_summaries(module, funcs, isa, exposed);
     }
 }
 

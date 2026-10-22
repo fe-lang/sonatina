@@ -228,6 +228,30 @@ func public %run() {{
     }
 
     #[test]
+    fn only_escaping_unknown_local_pointers_keep_buffers() {
+        let allocate = "func private %allocate() -> i256 {\nblock0:\n    v0.*i8 = evm_malloc 32.i256;\n    v1.i256 = ptr_to_int v0 i256;\n    return v1;\n}";
+        // A callee's heap object is not the buffer, so storing its address
+        // anywhere leaves the buffer private. An address made from an integer
+        // could name the buffer.
+        for (escaping, left) in [
+            ("v5.i256 = call %allocate;", 0),
+            (
+                "v4.i256 = evm_calldata_load 0.i256;\n    v6.*i8 = int_to_ptr v4 *i8;\n    v5.i256 = ptr_to_int v6 i256;",
+                1,
+            ),
+        ] {
+            let run = format!(
+                "block0:\n    {BUFFER}\n    {escaping}\n    mstore 512.i256 v5 i256;\n    evm_stop;"
+            );
+            assert_eq!(
+                mallocs_left_after_promotion(&run, allocate),
+                left,
+                "{escaping}"
+            );
+        }
+    }
+
+    #[test]
     fn keeps_buffers_in_cycles() {
         let natural = format!(
             "block0:\n    jump block1;\nblock1:\n    {BUFFER}\n    v4.i256 = evm_sload 1.i256;\n    v5.i1 = ne v4 0.i256;\n    br v5 block1 block2;\nblock2:\n    evm_stop;"

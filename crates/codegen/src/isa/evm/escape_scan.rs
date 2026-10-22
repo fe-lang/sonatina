@@ -121,9 +121,10 @@ impl<'a> EscapeScanCtx<'a> {
         }
         let reachable = prov_info.reachable_memory(&roots);
         ctx.escaping_mallocs.extend(reachable.malloc_insts());
-        if reachable.is_unknown_ptr() {
+        if reachable.may_reference_unknown_local() {
             // An unknown escaped address can name any allocation in this
             // function, including a container holding an argument pointer.
+            // A callee's heap object names none of them.
             ctx.escaping_mallocs
                 .extend(function.layout.iter_all_insts().filter(|&inst| {
                     matches!(

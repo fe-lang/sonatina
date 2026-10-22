@@ -347,7 +347,7 @@ fn remove_live_mallocs(
     for base in reachable.malloc_insts() {
         mallocs.remove(&base);
     }
-    if reachable.is_unknown_ptr() {
+    if reachable.may_reference_unknown_local() {
         mallocs.retain(|malloc| {
             !seen_mallocs.contains(*malloc)
                 || (!unknown_address_is_reachable && private_mallocs.contains(malloc))
@@ -595,7 +595,7 @@ fn record_escaping_provenance(
     direct_kind: MallocEscapeKind,
 ) {
     let reachable = prov_info.reachable_memory(provenance);
-    if reachable.is_unknown_ptr() {
+    if reachable.may_reference_unknown_local() {
         for malloc in seen_mallocs.iter() {
             record_escape_kind(escape_kinds, malloc, MallocEscapeKind::UNKNOWN);
         }
