@@ -69,6 +69,8 @@ pub(crate) struct PtrArgEscape {
     pub(crate) source_imprecise: bool,
     pub(crate) stored_heap_pointer: bool,
     pub(crate) stored_unknown_pointer: bool,
+    /// The callee may store an integer that addresses no allocation.
+    pub(crate) stored_raw: bool,
 }
 
 impl PtrArgEscape {
@@ -82,6 +84,8 @@ pub(crate) struct PtrReturnEscape {
     pub(crate) origins: SmallVec<[ArgumentOrigin; 4]>,
     pub(crate) heap_pointer: bool,
     pub(crate) unknown_pointer: bool,
+    /// The function may return an integer that addresses no allocation.
+    pub(crate) raw: bool,
 }
 
 impl PtrReturnEscape {
@@ -418,6 +422,7 @@ fn compute_summary_for_func(
             let effect = summary.arg_effect_mut(origin);
             effect.stored_heap_pointer |= stored.may_reference_heap();
             effect.stored_unknown_pointer |= stored.may_reference_unknown_local();
+            effect.stored_raw |= stored.may_be_raw();
         }
         let scan_ctx = EscapeScanCtx::new(function, &module.ctx, isa, summaries, &prov_info);
         summary.exposure = compute_exposure(
@@ -502,6 +507,7 @@ impl<'a> SummaryComputer<'a> {
         let ret_prov = &self.scan_ctx.prov_info.value[value];
         if let Some(ret) = self.summary.returns.get_mut(ret_idx) {
             ret.heap_pointer |= ret_prov.may_reference_heap();
+            ret.raw |= ret_prov.may_be_raw();
             ret.unknown_pointer |= ret_prov.may_reference_unknown_local()
                 || (self
                     .function

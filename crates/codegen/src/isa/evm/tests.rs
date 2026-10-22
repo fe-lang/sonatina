@@ -2424,6 +2424,99 @@ block0:
 }
 
 #[test]
+fn heap_addresses_keep_the_arena_floor_only_with_integer_alternatives() {
+    // Each `%entry` stores through `v9`, which names a heap object on some
+    // path. The store may reach low memory the arena would otherwise use
+    // exactly when another path makes `v9` an integer such as 96, whether
+    // through a callee's returns, an SSA join or a memory join.
+    let local_join = |join: &str| {
+        format!(
+            "br v1 block1 block2;\nblock1:\n    v2.*i8 = evm_malloc 32.i256;\n    v3.i256 = ptr_to_int v2 i256;\n    jump block3;\nblock2:\n    jump block3;\nblock3:\n    {join}.i256 = phi (v3 block1) (96.i256 block2);"
+        )
+    };
+    for (name, body, floor) in [
+        ("callee_heap", "v9.i256 = call %heap;".to_string(), false),
+        (
+            "callee_heap_offset",
+            "v8.i256 = call %heap;\n    v9.i256 = add v8 32.i256;".to_string(),
+            false,
+        ),
+        ("callee_split_returns", "v9.i256 = call %split v1;".to_string(), true),
+        ("callee_joined_return", "v9.i256 = call %joined v1;".to_string(), true),
+        ("local_join", local_join("v9"), true),
+        (
+            "local_join_offset",
+            format!("{}\n    v9.i256 = add v8 32.i256;", local_join("v8")),
+            true,
+        ),
+        (
+            "memory_join",
+            "v2.*i256 = alloca i256;\n    br v1 block1 block2;\nblock1:\n    v3.*i8 = evm_malloc 32.i256;\n    v4.i256 = ptr_to_int v3 i256;\n    mstore v2 v4 i256;\n    jump block3;\nblock2:\n    mstore v2 96.i256 i256;\n    jump block3;\nblock3:\n    v9.i256 = mload v2 i256;".to_string(),
+            true,
+        ),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %heap() -> i256 {{
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}}
+func private %split(v0.i1) -> i256 {{
+block0:
+    br v0 block1 block2;
+block1:
+    v1.i256 = call %heap;
+    return v1;
+block2:
+    return 96.i256;
+}}
+func private %joined(v0.i1) -> i256 {{
+block0:
+    br v0 block1 block2;
+block1:
+    v1.i256 = call %heap;
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v2.i256 = phi (v1 block1) (96.i256 block2);
+    return v2;
+}}
+func public %entry() {{
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i1 = trunc v0 i1;
+    {body}
+    mstore v9 99.i256 i256;
+    evm_return 0.i256 32.i256;
+}}
+"#
+        );
+        let module = parse_module(&source).expect("module parses").module;
+        let funcs = module.funcs();
+        let entry = find_func(&module, "entry");
+        for profile in [
+            LateCleanupProfile::Off,
+            LateCleanupProfile::Speed,
+            LateCleanupProfile::Size,
+        ] {
+            let prepared = osaka_backend()
+                .with_late_cleanup_profile(profile)
+                .prepare_section(work_module_with_entry(&module, &funcs, entry))
+                .expect("prepare should succeed");
+            assert_eq!(
+                prepared.section_plan().arena_base >= STATIC_BASE,
+                floor,
+                "{name}, {profile:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn noreturn_call_skips_continuation_marker_and_preserve() {
     let parsed = parse_module(
         r#"

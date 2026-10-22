@@ -171,7 +171,13 @@ fn addr_len_overlaps_range(lhs_start: u32, lhs_len: u32, rhs_start: u32, rhs_end
 }
 
 fn addr_is_allocator_managed(prov: &Provenance) -> bool {
-    !prov.is_empty() && !prov.is_unknown_ptr() && !prov.has_any_arg()
+    // The address must name an allocation on every path: a raw alternative,
+    // such as a literal joined with a heap pointer, may reach low memory. A
+    // heap object a callee allocated lies above the heap floor like a local one.
+    !prov.is_empty()
+        && !prov.may_be_raw()
+        && !prov.may_reference_unknown_local()
+        && !prov.has_any_arg()
 }
 
 /// Whether an access of `len` bytes at `addr` may touch the free-pointer slot.

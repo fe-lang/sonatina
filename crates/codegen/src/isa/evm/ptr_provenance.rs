@@ -159,6 +159,10 @@ pub(crate) struct Provenance {
     /// callee's object is none of them, and they reach its contents only
     /// through stores the escape scan already sees.
     unknown_heap: bool,
+    /// The value may also be an integer that addresses no allocation, such as
+    /// a literal or a word from calldata or untracked memory. Origins alone are
+    /// a may-fact; this marks the paths on which none of them applies.
+    raw: bool,
 }
 
 impl Provenance {
@@ -180,6 +184,10 @@ impl Provenance {
 
     pub(crate) fn may_reference_heap(&self) -> bool {
         self.unknown_heap || self.malloc_insts().next().is_some()
+    }
+
+    pub(crate) fn may_be_raw(&self) -> bool {
+        self.raw
     }
 
     fn insert_arg_index(indices: &mut SmallVec<[u32; 4]>, idx: u32) -> bool {
@@ -264,6 +272,8 @@ impl Provenance {
         }
         changed |= other.unknown_heap && !self.unknown_heap;
         self.unknown_heap |= other.unknown_heap;
+        changed |= other.raw && !self.raw;
+        self.raw |= other.raw;
         changed
     }
 
@@ -344,12 +354,14 @@ fn store_allocation_mem(
     changed
 }
 
-/// The pointers a callee may store into memory its argument reaches: heap
-/// objects it allocated, or pointers it cannot name.
+/// What a callee may store into memory its argument reaches beyond the
+/// argument-relative values: heap objects it allocated, pointers it cannot
+/// name, or integers.
 fn stored_by_callee(effect: &PtrArgEscape) -> Provenance {
     Provenance {
         unknown_heap: effect.stored_heap_pointer,
         unknown_non_arg: effect.stored_unknown_pointer,
+        raw: effect.stored_raw,
         ..Provenance::default()
     }
 }
@@ -417,16 +429,19 @@ enum UnmodeledWrite {
     PointerFree(ValueId),
 }
 
-/// A pointer that bytes from untracked memory may form, if any.
+/// A pointer that bytes from untracked memory may form, if any. They may also
+/// form a plain integer.
 fn untracked_pointer(untracked: UntrackedMemory) -> Option<Provenance> {
     match untracked {
         UntrackedMemory::PointerFree => None,
         UntrackedMemory::MayHoldHeapPointers => Some(Provenance {
             unknown_heap: true,
+            raw: true,
             ..Provenance::default()
         }),
         UntrackedMemory::MayHoldPointers => Some(Provenance {
             unknown_non_arg: true,
+            raw: true,
             ..Provenance::default()
         }),
     }
@@ -602,6 +617,8 @@ impl ProvenanceInfo {
         {
             out.union_with(&pointer);
         }
+        // Words read through an integer or unknown address may be integers.
+        out.raw |= addr.raw || addr.is_unknown_ptr();
         if bytes.is_some_and(|bytes| bytes != 32) {
             out.imprecise = true;
         }
@@ -715,6 +732,7 @@ impl ProvenanceInfo {
                 next.union_with(&self.resolve_argument(args, origin));
             }
             next.unknown_heap |= ret.heap_pointer;
+            next.raw |= ret.raw;
             if ret.unknown_pointer {
                 next.mark_unknown_non_arg();
             }
@@ -776,7 +794,7 @@ pub(crate) fn compute_provenance(
     let non_code_uses = non_code_address_uses(function, isa);
     let mut prov: SecondaryMap<ValueId, Provenance> = SecondaryMap::new();
     for value in function.dfg.value_ids() {
-        let _ = &mut prov[value];
+        prov[value].raw = function.dfg.value_is_imm(value);
     }
 
     for (idx, &arg) in function.arg_values.iter().enumerate() {
@@ -880,6 +898,7 @@ pub(crate) fn compute_provenance(
                         let dest = info.value[dst].clone();
                         let offset_unknown = Provenance {
                             imprecise: true,
+                            raw: true,
                             ..Provenance::default()
                         };
                         changed |= info.store_memory(&dest, &offset_unknown);
@@ -897,7 +916,7 @@ pub(crate) fn compute_provenance(
                     });
                     for (origin, effect) in summary.argument_effects() {
                         let stored = stored_by_callee(effect);
-                        if !stored.is_empty() {
+                        if stored != Provenance::default() {
                             let dest = info.resolve_argument(args, origin);
                             changed |= info.store_memory(&dest, &stored);
                         }
@@ -925,7 +944,10 @@ pub(crate) fn compute_provenance(
                 let mut next = Provenance::default();
 
                 match data {
-                    EvmInstKind::SymAddr(_) => next.has_code_address = true,
+                    EvmInstKind::SymAddr(_) => {
+                        next.has_code_address = true;
+                        next.raw = true;
+                    }
                     EvmInstKind::Alloca(_) => next.bases.push(PtrBase::Alloca(inst)),
                     EvmInstKind::EvmMalloc(_) => next.bases.push(PtrBase::Malloc(inst)),
                     EvmInstKind::Mload(_) | EvmInstKind::EvmMload(_) => {
@@ -999,12 +1021,18 @@ pub(crate) fn compute_provenance(
                     | EvmInstKind::EvmSignExtend(_)
                     | EvmInstKind::EvmByte(_)
                     | EvmInstKind::EvmClz(_) => {
+                        // Arithmetic on a pointer stays within its object, so
+                        // the result is raw only where every operand may be.
+                        let mut raw = true;
                         function.dfg.inst(inst).for_each_value(&mut |v| {
                             let _ = next.union_with(&info.value[v]);
+                            raw &= info.value[v].raw;
                         });
                         next.imprecise = true;
+                        next.raw = raw;
                     }
-                    _ => {}
+                    // Other results are words no allocation names.
+                    _ => next.raw = true,
                 }
 
                 if !type_can_carry_pointer_provenance(module, function.dfg.value_ty(*def)) {

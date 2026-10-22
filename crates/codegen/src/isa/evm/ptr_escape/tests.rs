@@ -1272,6 +1272,56 @@ block0:
 }
 
 #[test]
+fn summaries_report_integers_that_may_stand_in_for_pointers() {
+    // `%overwrite` replaces the caller's stored heap pointer with an integer,
+    // so the caller's reloaded word names the heap object or no allocation.
+    let src = r#"
+target = "evm-ethereum-osaka"
+func private %heap() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+func private %joined(v0.i1) -> i256 {
+block0:
+    br v0 block1 block2;
+block1:
+    v1.i256 = call %heap;
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v2.i256 = phi (v1 block1) (96.i256 block2);
+    return v2;
+}
+func private %overwrite(v0.*i256) {
+block0:
+    mstore v0 96.i256 i256;
+    return;
+}
+func public %caller() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = call %heap;
+    mstore v0 v1 i256;
+    call %overwrite v0;
+    v2.i256 = mload v0 i256;
+    return v2;
+}
+"#;
+    let (summaries, _) = compute(src);
+    assert!(!summaries["heap"].returns[0].raw);
+    assert!(summaries["joined"].returns[0].raw);
+    assert!(summaries["overwrite"].args[0].stored_raw);
+    let reloaded = ret_provenance_from_src(src, "caller");
+    assert!(
+        reloaded.may_reference_heap() && reloaded.may_be_raw(),
+        "{reloaded:?}"
+    );
+}
+
+#[test]
 fn private_hash_buffers_do_not_publish_unknown_heap_contents() {
     let (summaries, _) = compute(
         r#"
