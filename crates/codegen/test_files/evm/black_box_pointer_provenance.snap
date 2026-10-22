@@ -6,8 +6,8 @@ input_file: test_files/evm/black_box_pointer_provenance.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 191 bytes
-  total: 191 bytes
+  section runtime: 185 bytes
+  total: 185 bytes
 
 functions:
   mem: global_dyn_base=0xe0 arena_base=0x60 scratch_peak_words=2 stable_chain_peak_words=2
@@ -25,7 +25,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
 
 evm:
-  case boxed_mallocs: calldata_len=32 success reason=Return gas_used=21324 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=196
-  case boxed_allocas: calldata_len=32 success reason=Return gas_used=21282 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=142
-  case boxed_alloca: calldata_len=32 success reason=Return gas_used=21301 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=161
-  case forwarded_allocas: calldata_len=32 success reason=Return gas_used=21381 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=241
+  case boxed_mallocs: calldata_len=32 success reason=Return gas_used=21305 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=177
+  case boxed_allocas: calldata_len=32 success reason=Return gas_used=21291 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=151
+  case boxed_alloca: calldata_len=32 success reason=Return gas_used=21310 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=170
+  case forwarded_allocas: calldata_len=32 success reason=Return gas_used=21390 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=250

@@ -69,6 +69,8 @@ pub(crate) struct PtrArgEscape {
     pub(crate) source_imprecise: bool,
     pub(crate) stored_heap_pointer: bool,
     pub(crate) stored_unknown_pointer: bool,
+    /// The callee may store an integer that addresses no allocation.
+    pub(crate) stored_raw: bool,
 }
 
 impl PtrArgEscape {
@@ -82,6 +84,8 @@ pub(crate) struct PtrReturnEscape {
     pub(crate) origins: SmallVec<[ArgumentOrigin; 4]>,
     pub(crate) heap_pointer: bool,
     pub(crate) unknown_pointer: bool,
+    /// The function may return an integer that addresses no allocation.
+    pub(crate) raw: bool,
 }
 
 impl PtrReturnEscape {
@@ -138,7 +142,7 @@ impl PtrEscapeSummary {
         // An unknown body can allocate and publish memory even without args,
         // and pass any pointer it can reach to another call frame.
         out.may_publish_heap = true;
-        out.exposure.pointer = true;
+        out.exposure.pointers = UntrackedMemory::MayHoldPointers;
         module.func_sig(func, |sig| {
             for (ret_idx, &ret_ty) in sig.ret_tys().iter().enumerate() {
                 if ret_ty.is_pointer(module) {
@@ -341,18 +345,21 @@ pub(crate) fn compute_ptr_escape_summaries(
     isa: &Evm,
 ) -> PtrEscapeSummaries {
     // Untracked memory, such as another call frame or a callee's heap object,
-    // can hold a pointer to this frame's memory only after a function exposes
-    // one there. Until then it holds none; if no function exposes a pointer
-    // under that assumption, none ever does.
-    let summaries = compute_summaries(module, funcs, isa, UntrackedMemory::PointerFree);
-    if summaries
-        .funcs
-        .values()
-        .any(|summary| summary.exposure.pointer)
-    {
-        compute_summaries(module, funcs, isa, UntrackedMemory::MayHoldPointers)
-    } else {
-        summaries
+    // can hold a pointer only after a function exposes one there. Until then it
+    // holds none. Widen the assumption to what the functions expose under it
+    // until it covers every exposure.
+    let mut summaries = compute_summaries(module, funcs, isa, UntrackedMemory::PointerFree);
+    loop {
+        let exposed = summaries
+            .funcs
+            .values()
+            .map(|summary| summary.exposure.pointers)
+            .max()
+            .unwrap_or_default();
+        if exposed <= summaries.untracked_memory {
+            return summaries;
+        }
+        summaries = compute_summaries(module, funcs, isa, exposed);
     }
 }
 
@@ -415,6 +422,7 @@ fn compute_summary_for_func(
             let effect = summary.arg_effect_mut(origin);
             effect.stored_heap_pointer |= stored.may_reference_heap();
             effect.stored_unknown_pointer |= stored.may_reference_unknown_local();
+            effect.stored_raw |= stored.may_be_raw();
         }
         let scan_ctx = EscapeScanCtx::new(function, &module.ctx, isa, summaries, &prov_info);
         summary.exposure = compute_exposure(
@@ -499,6 +507,7 @@ impl<'a> SummaryComputer<'a> {
         let ret_prov = &self.scan_ctx.prov_info.value[value];
         if let Some(ret) = self.summary.returns.get_mut(ret_idx) {
             ret.heap_pointer |= ret_prov.may_reference_heap();
+            ret.raw |= ret_prov.may_be_raw();
             ret.unknown_pointer |= ret_prov.may_reference_unknown_local()
                 || (self
                     .function

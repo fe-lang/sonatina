@@ -761,6 +761,119 @@ object @Contract { section runtime { entry %entry; } }
 }
 
 #[test]
+fn stores_through_heap_or_integer_addresses_keep_frame_memory() {
+    // `v4` is a heap address or an integer where the arena would put the
+    // entry's frame slot if it started low: 96, above the free-pointer slot,
+    // when the section has heap mallocs, and 0 otherwise. The arena must stay
+    // above that integer, or the store clobbers the slot. `black_box` keeps
+    // cleanup from forwarding the slot's value to its load.
+    let make = "func inline(never) private %make(v0.i256) -> i256 {\nblock0:\n    v1.i1 = ne v0 0.i256;\n    br v1 block1 block2;\nblock1:\n    v2.*i8 = evm_malloc 32.i256;\n    v3.i256 = ptr_to_int v2 i256;\n    return v3;\nblock2:\n    return 96.i256;\n}";
+    let local = "v6.i1 = ne v3 0.i256;\n    br v6 block1 block2;\nblock1:\n    v7.*i8 = evm_malloc 32.i256;\n    v8.i256 = ptr_to_int v7 i256;\n    jump block3;\nblock2:\n    jump block3;\nblock3:\n    v4.i256 = phi (v8 block1) (0.i256 block2);";
+    for (name, functions, address) in [
+        ("callee", make, "v4.i256 = call %make v3;"),
+        ("local", "", local),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+{functions}
+func public %entry() {{
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = black_box v1;
+    mstore v2 7.i256 i256;
+    v3.i256 = evm_calldata_load 0.i256;
+    {address}
+    mstore v4 99.i256 i256;
+    v5.i256 = mload v2 i256;
+    mstore 0.i256 v5 i256;
+    evm_return 0.i256 32.i256;
+}}
+object @Contract {{ section runtime {{ entry %entry; }} }}
+"#
+        );
+        for profile in [
+            LateCleanupProfile::Off,
+            LateCleanupProfile::Speed,
+            LateCleanupProfile::Size,
+        ] {
+            let mut harness = EvmHarness::runtime_with_profile(&source, profile);
+            for heap in [0u8, 1] {
+                let result = harness.call(&IrU256::from(heap).to_big_endian());
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("{name}, {profile:?}, heap={heap}: {result:?}");
+                };
+                assert_eq!(
+                    actual.as_ref(),
+                    IrU256::from(7).to_big_endian(),
+                    "{name}, {profile:?}, heap={heap}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn frame_buffers_stay_live_across_heap_allocating_calls() {
+    // `%entry`'s buffer moves into the frame and stays live across the second
+    // allocating call. The heap objects the calls return keep their contents,
+    // and their encoded addresses show the allocator advancing past the first.
+    let source = r#"
+target = "evm-ethereum-osaka"
+func inline(never) private %allocate(v0.i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v2;
+}
+func public %entry() {
+block0:
+    v0.i256 = call %allocate 11.i256;
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 7.i256 i256;
+    v3.i256 = call %allocate 13.i256;
+    v4.i256 = mload v2 i256;
+    v5.i256 = mload v0 i256;
+    v6.i256 = mload v3 i256;
+    mstore 512.i256 v4 i256;
+    mstore 544.i256 v5 i256;
+    mstore 576.i256 v6 i256;
+    mstore 608.i256 v0 i256;
+    mstore 640.i256 v3 i256;
+    evm_return 512.i256 160.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    for profile in [
+        LateCleanupProfile::Off,
+        LateCleanupProfile::Speed,
+        LateCleanupProfile::Size,
+    ] {
+        let result = EvmHarness::runtime_with_profile(source, profile).call(&[]);
+        let ExecutionResult::Success {
+            output: Output::Call(actual),
+            ..
+        } = result
+        else {
+            panic!("{profile:?}: {result:?}");
+        };
+        let words: Vec<_> = actual.chunks(32).map(IrU256::from_big_endian).collect();
+        assert_eq!(words[..3], [7, 11, 13].map(IrU256::from), "{profile:?}");
+        assert!(
+            words[4] >= words[3] + IrU256::from(32),
+            "{profile:?}: {words:?}"
+        );
+    }
+}
+
+#[test]
 fn terminal_payload_bases_preserve_overlaps_values_and_halts() {
     let bases = [
         IrU256::from(64),
@@ -2138,6 +2251,27 @@ impl EvmHarness {
         Self { db, contract }
     }
 
+    /// The `Contract` runtime of `source`, compiled under `profile` without
+    /// the IR optimization pipeline.
+    fn runtime_with_profile(source: &str, profile: LateCleanupProfile) -> Self {
+        let parsed = parse_sona(source);
+        let backend =
+            EvmBackend::new(Evm::new(parsed.module.ctx.triple)).with_late_cleanup_profile(profile);
+        let artifact = compile_object(
+            &parsed.module,
+            &backend,
+            "Contract",
+            &CompileOptions::default(),
+        )
+        .expect("contract compiles");
+        let runtime = artifact
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .expect("missing runtime section");
+        Self::from_runtime(&runtime.1.bytes)
+    }
+
     fn deploy(init_code: &[u8]) -> (ExecutionResult, Self) {
         let mut env = Env::default();
         env.tx.clear();
@@ -2606,6 +2740,55 @@ object @Contract { section runtime { entry %entry; } }
                 }
             }
         }
+    }
+}
+
+#[test]
+fn section_entry_loop_header_keeps_earlier_heap_allocations() {
+    // The section entry's first block is a loop header. The first pass keeps
+    // its allocation alive through address 0, so a free-pointer store at the
+    // top of that block would give the second pass's allocation its address.
+    let source = r#"
+target = "evm-ethereum-osaka"
+func public %entry() {
+block0:
+    v0.i256 = evm_sload 0.i256;
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    v3.i1 = eq v0 0.i256;
+    br v3 block1 block2;
+block1:
+    mstore v2 7.i256 i256;
+    mstore 0.i256 v2 i256;
+    evm_sstore 0.i256 1.i256;
+    jump block0;
+block2:
+    mstore v2 99.i256 i256;
+    v4.i256 = mload 0.i256 i256;
+    v5.i256 = mload v4 i256;
+    mstore 0.i256 v5 i256;
+    evm_return 0.i256 32.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    for profile in [
+        LateCleanupProfile::Off,
+        LateCleanupProfile::Speed,
+        LateCleanupProfile::Size,
+    ] {
+        let result = EvmHarness::runtime_with_profile(source, profile).call(&[]);
+        let ExecutionResult::Success {
+            output: Output::Call(actual),
+            ..
+        } = result
+        else {
+            panic!("{profile:?}: {result:?}");
+        };
+        assert_eq!(
+            actual.as_ref(),
+            IrU256::from(7).to_big_endian(),
+            "{profile:?}"
+        );
     }
 }
 

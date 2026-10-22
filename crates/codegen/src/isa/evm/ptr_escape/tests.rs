@@ -1272,6 +1272,56 @@ block0:
 }
 
 #[test]
+fn summaries_report_integers_that_may_stand_in_for_pointers() {
+    // `%overwrite` replaces the caller's stored heap pointer with an integer,
+    // so the caller's reloaded word names the heap object or no allocation.
+    let src = r#"
+target = "evm-ethereum-osaka"
+func private %heap() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+func private %joined(v0.i1) -> i256 {
+block0:
+    br v0 block1 block2;
+block1:
+    v1.i256 = call %heap;
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v2.i256 = phi (v1 block1) (96.i256 block2);
+    return v2;
+}
+func private %overwrite(v0.*i256) {
+block0:
+    mstore v0 96.i256 i256;
+    return;
+}
+func public %caller() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = call %heap;
+    mstore v0 v1 i256;
+    call %overwrite v0;
+    v2.i256 = mload v0 i256;
+    return v2;
+}
+"#;
+    let (summaries, _) = compute(src);
+    assert!(!summaries["heap"].returns[0].raw);
+    assert!(summaries["joined"].returns[0].raw);
+    assert!(summaries["overwrite"].args[0].stored_raw);
+    let reloaded = ret_provenance_from_src(src, "caller");
+    assert!(
+        reloaded.may_reference_heap() && reloaded.may_be_raw(),
+        "{reloaded:?}"
+    );
+}
+
+#[test]
 fn private_hash_buffers_do_not_publish_unknown_heap_contents() {
     let (summaries, _) = compute(
         r#"
@@ -1435,6 +1485,54 @@ block0:
 }
 
 #[test]
+fn exposed_callee_heap_objects_hold_only_heap_pointers() {
+    // `%f` exposes a heap object `%make` allocated, which belongs to no running
+    // frame, so a word loaded from such an object is at most a heap pointer.
+    // Exposing `%f`'s own allocation lets untracked memory hold any pointer.
+    for (expose, untracked) in [
+        (
+            "evm_sstore 0.i256 v0;",
+            UntrackedMemory::MayHoldHeapPointers,
+        ),
+        (
+            "mstore 512.i256 v0 i256;",
+            UntrackedMemory::MayHoldHeapPointers,
+        ),
+        (
+            "v1.*i256 = evm_malloc 32.i256;\n    v2.i256 = ptr_to_int v1 i256;\n    evm_sstore 0.i256 v2;",
+            UntrackedMemory::MayHoldPointers,
+        ),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %make() -> i256 {{
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}}
+func public %f() -> i256 {{
+block0:
+    v0.i256 = call %make;
+    {expose}
+    v3.i256 = mload v0 i256;
+    return v3;
+}}
+"#
+        );
+        assert_eq!(untracked_memory(&source), untracked, "{expose}");
+        let loaded = ret_provenance_from_src(&source, "f");
+        assert!(loaded.is_unknown_ptr(), "{expose}: {loaded:?}");
+        assert_eq!(
+            loaded.may_reference_unknown_local(),
+            untracked == UntrackedMemory::MayHoldPointers,
+            "{expose}: {loaded:?}"
+        );
+    }
+}
+
+#[test]
 fn callers_resolve_values_their_callees_expose() {
     for (value, exposed) in [
         ("v0.i256 = evm_calldata_load 0.i256;", false),
@@ -1463,8 +1561,16 @@ block0:
         );
         let (summaries, _) = compute(&source);
         assert_eq!(summaries["send"].exposure.origins.len(), 1, "{value}");
-        assert!(!summaries["send"].exposure.pointer, "{value}");
-        assert_eq!(summaries["f"].exposure.pointer, exposed, "{value}");
+        assert_eq!(
+            summaries["send"].exposure.pointers,
+            UntrackedMemory::PointerFree,
+            "{value}"
+        );
+        assert_eq!(
+            summaries["f"].exposure.pointers == UntrackedMemory::MayHoldPointers,
+            exposed,
+            "{value}"
+        );
         assert_eq!(
             untracked_memory(&source) == UntrackedMemory::MayHoldPointers,
             exposed,

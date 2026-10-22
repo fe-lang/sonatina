@@ -6,16 +6,16 @@ input_file: test_files/evm/gvn_cross_block_tuple_call_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=s
 
 object: Contract
-  section runtime: 59 bytes
-  total: 59 bytes
+  section runtime: 60 bytes
+  total: 60 bytes
 
 functions:
-  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
-  entry: ir_blocks=8 ir_insts=18 vcode_ops=46 fixups=3 imm_bytes=10
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  mem: global_dyn_base=0x20 arena_base=0x0 scratch_peak_words=1 stable_chain_peak_words=0
+  entry: ir_blocks=8 ir_insts=18 vcode_ops=46 fixups=3 imm_bytes=11
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21264 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=124
+  case ok: calldata_len=32 success reason=Return gas_used=21268 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=128
 
 
 --------------- DEBUG ---------------
@@ -60,14 +60,14 @@ evm:
     - stack=[v9]
       br [v9] -> [block3, block9]
   block3 P=[] T=[]
-    // evm_mstore 0.i256 1.i256;
+    // evm_mstore 32.i256 1.i256;
     - stack=[]
-      pre: [PUSH(1), PUSH(0)]
-      evm_mstore [0, 1]
-    // evm_mstore 32.i256 42.i256;
+      pre: [PUSH(1), PUSH(32)]
+      evm_mstore [32, 1]
+    // evm_mstore 64.i256 42.i256;
     - stack=[]
-      pre: [PUSH(42), PUSH(32)]
-      evm_mstore [32, 42]
+      pre: [PUSH(42), PUSH(64)]
+      evm_mstore [64, 42]
     // evm_mstore 0.i256 42.i256;
     - stack=[]
       pre: [PUSH(42), PUSH(0)]
@@ -128,11 +128,11 @@ entry:
     PUSH1 block6
     JUMPI
   block3:
-    PUSH1 0x1 (1)  // evm_mstore v0 v3;
-    PUSH0
-    MSTORE
-    PUSH1 0x2a (42)  // evm_mstore v10 v12;
+    PUSH1 0x1 (1)  // evm_mstore v10 v3;
     PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x2a (42)  // evm_mstore v13 v12;
+    PUSH1 0x40 (64)
     MSTORE
     PUSH1 0x2a (42)  // evm_mstore v0 v12;
     PUSH0

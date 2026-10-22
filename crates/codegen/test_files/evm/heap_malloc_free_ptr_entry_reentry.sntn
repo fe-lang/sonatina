@@ -1,0 +1,47 @@
+#! evm.case: reentry
+#!   calldata: u256(0)
+#!   expect: return u256(7)
+
+# The section entry re-enters itself while its first allocation is live,
+# reachable only through a fixed address. Initializing the free pointer on
+# each entry would hand the inner allocation the same address.
+
+target = "evm-ethereum-osaka"
+
+func private %keep(v0.i256) {
+    block0:
+        evm_sstore 2.i256 v0;
+        return;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_sload 0.i256;
+        v1.i1 = eq v0 0.i256;
+        br v1 block1 block2;
+    block1:
+        evm_sstore 0.i256 1.i256;
+        v2.*i8 = evm_malloc 32.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        mstore v3 7.i256 i256;
+        mstore 256.i256 v3 i256;
+        call %entry;
+        v4.i256 = mload 256.i256 i256;
+        v5.i256 = mload v4 i256;
+        evm_mstore 0.i256 v5;
+        evm_return 0.i256 32.i256;
+    block2:
+        v6.*i8 = evm_malloc 32.i256;
+        v7.i256 = ptr_to_int v6 i256;
+        mstore v7 99.i256 i256;
+        call %keep v7;
+        v8.i256 = mload v7 i256;
+        evm_sstore 1.i256 v8;
+        return;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

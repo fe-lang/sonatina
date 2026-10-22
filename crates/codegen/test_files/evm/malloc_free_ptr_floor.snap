@@ -6,8 +6,8 @@ input_file: test_files/evm/malloc_free_ptr_floor.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 47 bytes
-  total: 47 bytes
+  section runtime: 41 bytes
+  total: 41 bytes
 
 functions:
   mem: global_dyn_base=0x60 arena_base=0x60 scratch_peak_words=0 stable_chain_peak_words=0
@@ -27,7 +27,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21119 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=119
+  case ok: calldata_len=0 success reason=Return gas_used=21100 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=100
 
 
 --------------- DEBUG ---------------

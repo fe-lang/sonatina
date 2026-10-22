@@ -64,6 +64,8 @@ pub(crate) struct ProgramFreePtrFloorInput<'a> {
     pub(crate) module: &'a Module,
     pub(crate) funcs: &'a [FuncRef],
     pub(crate) section_entry: FuncRef,
+    /// The free pointer the section entry stores before anything else runs.
+    pub(crate) section_entry_free_ptr: Option<u32>,
     pub(crate) section_includes: &'a [FuncRef],
     pub(crate) analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
     pub(crate) source_is: &'a EvmInstSet,
@@ -78,6 +80,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
         module,
         funcs,
         section_entry,
+        section_entry_free_ptr,
         section_includes,
         analyses,
         source_is,
@@ -99,6 +102,11 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
         if funcs_set.contains(&root) {
             entry_floors.insert(root, Some(FreePtrFloor::Unknown));
         }
+    }
+    if let Some(floor) = section_entry_free_ptr
+        && funcs_set.contains(&section_entry)
+    {
+        entry_floors.insert(section_entry, Some(FreePtrFloor::Known(floor)));
     }
 
     let mut changed = true;

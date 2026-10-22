@@ -273,6 +273,9 @@ impl<'a> EvmMachineFunctionLowering<'a> {
             Some(DynSpInitKind::Always) => stack::init_dyn_sp(ctx, self.dyn_base()),
             Some(DynSpInitKind::Checked) => stack::ensure_dyn_sp_init(ctx, self.dyn_base()),
         }
+        if let Some(free_ptr) = self.function_plan.entry_free_ptr {
+            stack::init_free_ptr(ctx, free_ptr);
+        }
 
         if self.has_lazy_frame_lowering() {
             self.emit_actions_for_site(ctx, &actions, frame_layout, FrameSite::EnterFunction);

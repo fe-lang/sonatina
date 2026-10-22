@@ -2,9 +2,9 @@ use sonatina_ir::{
     Function, I256, Immediate, Type,
     inst::{
         cast::PtrToInt,
-        data::Mstore,
+        data::{Alloca, Mstore},
         downcast,
-        evm::{EvmKeccak256, EvmKeccak256Words, EvmMalloc},
+        evm::{EvmKeccak256, EvmKeccak256Words},
     },
     isa::{Isa, evm::Evm},
 };
@@ -12,9 +12,9 @@ use sonatina_ir::{
 use super::const_data::{add_i256, imm_i256, insert_before_no_result, insert_before_one};
 
 /// Lowers each `evm_keccak256_words` to the memory hash the EVM executes: the
-/// words are stored in order into a fresh allocation that only those stores
-/// and the hash beside them use, so memory planning gives it transient
-/// scratch. Hashing no words folds to the empty digest.
+/// words are stored in order into a frame slot that only those stores and the
+/// hash beside them use, so memory planning gives it scratch in the static
+/// arena instead of heap memory. Hashing no words folds to the empty digest.
 pub(crate) fn lower_keccak256_words(function: &mut Function) -> bool {
     let is = Evm::new(function.ctx().triple).inst_set();
     let hashes: Vec<_> = function
@@ -40,8 +40,11 @@ pub(crate) fn lower_keccak256_words(function: &mut Function) -> bool {
                 function,
                 u32::try_from(32 * words.len()).expect("too many hashed words"),
             );
-            let ptr_ty = Type::I8.to_ptr(function.ctx());
-            let ptr = insert_before_one(function, *inst, EvmMalloc::new(is, len), ptr_ty);
+            let words_ty = function
+                .ctx()
+                .with_ty_store_mut(|s| s.make_array(Type::I256, words.len()));
+            let ptr_ty = words_ty.to_ptr(function.ctx());
+            let ptr = insert_before_one(function, *inst, Alloca::new(is, words_ty), ptr_ty);
             let base = insert_before_one(
                 function,
                 *inst,

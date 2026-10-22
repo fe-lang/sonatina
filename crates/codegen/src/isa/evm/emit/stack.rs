@@ -692,6 +692,12 @@ pub(crate) fn init_dyn_sp(ctx: &mut Lower<OpCode>, dyn_base: u32) {
     ctx.push(OpCode::MSTORE);
 }
 
+pub(crate) fn init_free_ptr(ctx: &mut Lower<OpCode>, free_ptr: u32) {
+    push_bytes(ctx, &u32_to_be(free_ptr));
+    push_bytes(ctx, &[FREE_PTR_SLOT]);
+    ctx.push(OpCode::MSTORE);
+}
+
 pub(crate) fn ensure_dyn_sp_init(ctx: &mut Lower<OpCode>, dyn_base: u32) {
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);

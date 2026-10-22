@@ -1229,7 +1229,7 @@ block3:
                 })
                 .unwrap()
         });
-        let placement = compute_test_memory_placement(&parsed.module, &backend, entry);
+        let placement = compute_test_memory_placement(&parsed.module, &backend, entry, &[]);
         assert_eq!(
             placement.funcs[&entry]
                 .mem_plan
@@ -1324,7 +1324,7 @@ block3:
                 })
                 .unwrap()
         });
-        let placement = compute_test_memory_placement(&parsed.module, &backend, entry);
+        let placement = compute_test_memory_placement(&parsed.module, &backend, entry, &[]);
         assert_eq!(
             placement.funcs[&entry]
                 .mem_plan
@@ -2051,6 +2051,7 @@ fn compute_test_memory_placement(
     module: &Module,
     backend: &EvmBackend,
     entry: FuncRef,
+    includes: &[FuncRef],
 ) -> EvmMemoryPlacementPlan {
     let funcs = module.funcs();
     let ptr_escape = compute_ptr_escape_summaries(module, &funcs, &backend.isa);
@@ -2073,7 +2074,7 @@ fn compute_test_memory_placement(
             fixed_reservations: &fixed_reservations,
             funcs: &funcs,
             entry,
-            includes: &[],
+            includes,
         },
         &analyses,
         &ptr_escape,
@@ -2121,7 +2122,7 @@ block0:
     let backend = osaka_backend();
     let clobber = find_func(&parsed.module, "clobber_then_read");
     let entry = find_func(&parsed.module, "entry");
-    let placement = compute_test_memory_placement(&parsed.module, &backend, entry);
+    let placement = compute_test_memory_placement(&parsed.module, &backend, entry, &[]);
     let malloc = parsed.module.func_store.view(clobber, |function| {
         function
             .layout
@@ -2176,7 +2177,7 @@ block0:
     let backend = osaka_backend();
     let scratch = find_func(&parsed.module, "scratch");
     let entry = find_func(&parsed.module, "entry");
-    let placement = compute_test_memory_placement(&parsed.module, &backend, entry);
+    let placement = compute_test_memory_placement(&parsed.module, &backend, entry, &[]);
     let malloc = parsed.module.func_store.view(scratch, |function| {
         function
             .layout
@@ -2284,13 +2285,234 @@ block0:
         let backend = osaka_backend();
         let entry = find_func(&module, "entry");
         let probe = find_func(&module, "probe");
-        let placement = compute_test_memory_placement(&module, &backend, entry);
+        let placement = compute_test_memory_placement(&module, &backend, entry, &[]);
         let floors: Vec<_> = placement.funcs[&probe]
             .free_ptr_floor_before_malloc
             .values()
             .copied()
             .collect();
         assert_eq!(floors, [expected], "{body}");
+    }
+}
+
+#[test]
+fn section_entry_initializes_free_ptr_only_when_unobserved_and_entered_once() {
+    for (name, access, caller, included, initialized) in [
+        ("plain", "", "", false, true),
+        (
+            "slot_read",
+            "v1.i256 = mload 64.i256 i256;\n    evm_sstore 0.i256 v1;",
+            "",
+            false,
+            false,
+        ),
+        (
+            "msize",
+            "v1.i256 = evm_msize;\n    evm_sstore 0.i256 v1;",
+            "",
+            false,
+            false,
+        ),
+        // `%alt` calls the entry without forming a cycle, so the section has
+        // no dynamic frame, yet the entry can run after an allocation.
+        (
+            "called",
+            "",
+            "func public %alt() {\nblock0:\n    call %entry;\n    evm_stop;\n}",
+            false,
+            false,
+        ),
+        // As an include root, the entry can be entered with a live heap.
+        ("included", "", "", true, false),
+        // A branch back to the entry block reruns the store after the first
+        // pass has allocated.
+        (
+            "loop_header",
+            "v1.i256 = evm_sload 0.i256;\n    evm_sstore 0.i256 1.i256;\n    v2.i1 = eq v1 0.i256;\n    br v2 block0 block1;\nblock1:",
+            "",
+            false,
+            false,
+        ),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %probe() -> i256 {{
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}}
+func public %entry() {{
+block0:
+    v0.i256 = call %probe;
+    {access}
+    evm_mstore 0.i256 v0;
+    evm_return 0.i256 32.i256;
+}}
+{caller}
+"#
+        );
+        let module = parse_module(&source).expect("module parses").module;
+        let backend = osaka_backend();
+        let entry = find_func(&module, "entry");
+        let probe = find_func(&module, "probe");
+        let includes = if included { vec![entry] } else { Vec::new() };
+        let placement = compute_test_memory_placement(&module, &backend, entry, &includes);
+        let floors: Vec<_> = placement.funcs[&probe]
+            .free_ptr_floor_before_malloc
+            .values()
+            .copied()
+            .collect();
+        assert_eq!(
+            placement.section_entry_free_ptr.is_some(),
+            initialized,
+            "{name}"
+        );
+        // The probe's malloc needs no clamp exactly when the entry stores the floor.
+        assert_eq!(floors, [placement.section_entry_free_ptr], "{name}");
+    }
+}
+
+#[test]
+fn buffers_beside_exposed_callee_heap_objects_move_into_the_frame() {
+    // `%entry` stores a heap object's address and contents where other frames
+    // can read them. Neither can name `%entry`'s own buffer, which therefore
+    // moves into the frame.
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+func private %allocate() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+func public %entry() {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    mstore v1 7.i256 i256;
+    v2.i256 = call %allocate;
+    v3.i256 = mload v2 i256;
+    v4.i256 = mload v1 i256;
+    mstore 512.i256 v2 i256;
+    mstore 544.i256 v3 i256;
+    mstore 576.i256 v4 i256;
+    evm_return 512.i256 96.i256;
+}
+"#,
+    )
+    .expect("module parses");
+    let funcs = parsed.module.funcs();
+    let entry = find_func(&parsed.module, "entry");
+    for profile in [
+        LateCleanupProfile::Off,
+        LateCleanupProfile::Speed,
+        LateCleanupProfile::Size,
+    ] {
+        let prepared = osaka_backend()
+            .with_late_cleanup_profile(profile)
+            .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+            .expect("prepare should succeed");
+        let plan = &prepared.function_plan(entry).expect("entry plan").mem_plan;
+        assert_eq!(
+            plan.stable_words, 1,
+            "{profile:?}: buffer stays on the heap"
+        );
+    }
+}
+
+#[test]
+fn heap_addresses_keep_the_arena_floor_only_with_integer_alternatives() {
+    // Each `%entry` stores through `v9`, which names a heap object on some
+    // path. The store may reach low memory the arena would otherwise use
+    // exactly when another path makes `v9` an integer such as 96, whether
+    // through a callee's returns, an SSA join or a memory join.
+    let local_join = |join: &str| {
+        format!(
+            "br v1 block1 block2;\nblock1:\n    v2.*i8 = evm_malloc 32.i256;\n    v3.i256 = ptr_to_int v2 i256;\n    jump block3;\nblock2:\n    jump block3;\nblock3:\n    {join}.i256 = phi (v3 block1) (96.i256 block2);"
+        )
+    };
+    for (name, body, floor) in [
+        ("callee_heap", "v9.i256 = call %heap;".to_string(), false),
+        (
+            "callee_heap_offset",
+            "v8.i256 = call %heap;\n    v9.i256 = add v8 32.i256;".to_string(),
+            false,
+        ),
+        ("callee_split_returns", "v9.i256 = call %split v1;".to_string(), true),
+        ("callee_joined_return", "v9.i256 = call %joined v1;".to_string(), true),
+        ("local_join", local_join("v9"), true),
+        (
+            "local_join_offset",
+            format!("{}\n    v9.i256 = add v8 32.i256;", local_join("v8")),
+            true,
+        ),
+        (
+            "memory_join",
+            "v2.*i256 = alloca i256;\n    br v1 block1 block2;\nblock1:\n    v3.*i8 = evm_malloc 32.i256;\n    v4.i256 = ptr_to_int v3 i256;\n    mstore v2 v4 i256;\n    jump block3;\nblock2:\n    mstore v2 96.i256 i256;\n    jump block3;\nblock3:\n    v9.i256 = mload v2 i256;".to_string(),
+            true,
+        ),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %heap() -> i256 {{
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}}
+func private %split(v0.i1) -> i256 {{
+block0:
+    br v0 block1 block2;
+block1:
+    v1.i256 = call %heap;
+    return v1;
+block2:
+    return 96.i256;
+}}
+func private %joined(v0.i1) -> i256 {{
+block0:
+    br v0 block1 block2;
+block1:
+    v1.i256 = call %heap;
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v2.i256 = phi (v1 block1) (96.i256 block2);
+    return v2;
+}}
+func public %entry() {{
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i1 = trunc v0 i1;
+    {body}
+    mstore v9 99.i256 i256;
+    evm_return 0.i256 32.i256;
+}}
+"#
+        );
+        let module = parse_module(&source).expect("module parses").module;
+        let funcs = module.funcs();
+        let entry = find_func(&module, "entry");
+        for profile in [
+            LateCleanupProfile::Off,
+            LateCleanupProfile::Speed,
+            LateCleanupProfile::Size,
+        ] {
+            let prepared = osaka_backend()
+                .with_late_cleanup_profile(profile)
+                .prepare_section(work_module_with_entry(&module, &funcs, entry))
+                .expect("prepare should succeed");
+            assert_eq!(
+                prepared.section_plan().arena_base >= STATIC_BASE,
+                floor,
+                "{name}, {profile:?}"
+            );
+        }
     }
 }
 
