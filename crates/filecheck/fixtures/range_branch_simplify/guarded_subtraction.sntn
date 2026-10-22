@@ -1,0 +1,106 @@
+#! A subtraction a dominating unsigned comparison guards cannot wrap, so its
+#! difference is bounded by its minuend.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %guarded_difference_within_the_byte_length_bound() -> i256 {
+# not:         br v4
+# check:       jump block4;
+func public %guarded_difference_within_the_byte_length_bound() -> i256 {
+block0:
+    v0.i256 = evm_code_size;
+    v1.i256 = evm_call_value;
+    v2.i1 = lt v0 v1;
+    br v2 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v3.i256 = sub v0 v1;
+    v4.i1 = gt v3 4611686018427387903.i256;
+    br v4 block3 block4;
+
+block3:
+    return 1.i256;
+
+block4:
+    return v3;
+}
+
+# sameln: func public %guarded_checked_difference_within_the_byte_length_bound() -> i256 {
+# not:         br v5
+# check:       jump block4;
+func public %guarded_checked_difference_within_the_byte_length_bound() -> i256 {
+block0:
+    v0.i256 = evm_calldata_size;
+    v1.i256 = evm_call_value;
+    v2.i1 = ge v0 v1;
+    br v2 block2 block1;
+
+block1:
+    return 0.i256;
+
+block2:
+    (v3.i256, v4.i1) = usubo v0 v1;
+    v5.i1 = gt v3 4611686018427387903.i256;
+    br v5 block3 block4;
+
+block3:
+    return 1.i256;
+
+block4:
+    return v3;
+}
+
+# sameln: func public %reversed_guard_keeps_the_bound_check() -> i256 {
+# check:       br v4 block3 block4;
+func public %reversed_guard_keeps_the_bound_check() -> i256 {
+block0:
+    v0.i256 = evm_code_size;
+    v1.i256 = evm_call_value;
+    v2.i1 = lt v1 v0;
+    br v2 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v3.i256 = sub v0 v1;
+    v4.i1 = gt v3 4611686018427387903.i256;
+    br v4 block3 block4;
+
+block3:
+    return 1.i256;
+
+block4:
+    return v3;
+}
+
+# A merge of a guarded and an unguarded path proves nothing.
+# sameln: func public %merged_paths_keep_the_bound_check() -> i256 {
+# check:       br v5 block4 block5;
+func public %merged_paths_keep_the_bound_check() -> i256 {
+block0:
+    v0.i256 = evm_code_size;
+    v1.i256 = evm_call_value;
+    v2.i1 = lt v0 v1;
+    br v2 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v4.i256 = sub v0 v1;
+    v5.i1 = gt v4 4611686018427387903.i256;
+    br v5 block4 block5;
+
+block4:
+    return 1.i256;
+
+block5:
+    return v4;
+}
