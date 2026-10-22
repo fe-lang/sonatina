@@ -869,7 +869,7 @@ fn run_pass(
                 {
                     let _span = trace_span!("sonatina.optim.pipeline.range_branch_simplify.solve")
                         .entered();
-                    RangeBranchSimplify::new().run(func, &ctx.cfg, &ctx.lpt)
+                    RangeBranchSimplify::new().run(func, &ctx.cfg, &ctx.domtree, &ctx.lpt)
                 }
             }
         }

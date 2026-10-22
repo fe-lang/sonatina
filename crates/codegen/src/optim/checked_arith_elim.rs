@@ -1,24 +1,20 @@
-use rustc_hash::FxHashMap;
-use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
+    ControlFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
     inst::{
         BinaryInstKind, InstClassKind, UnaryInstKind,
         arith::{Add, Mul, Sub},
-        control_flow::BranchKind,
         evm::{EvmSdiv, EvmSmod, EvmUdiv, EvmUmod},
     },
 };
 
 use crate::{
-    analysis::definedness::{requires_definedness_evidence, value_may_be_undef},
-    domtree::{DomTree, DominatorTreeTraversable},
+    domtree::DomTree,
     loop_analysis::LoopTree,
-    range_analysis::{RangeAnalysis, checked_value_fact, transfer_inst},
+    range_analysis::{RangeAnalysis, RangeEnv, checked_value_fact},
 };
 
 pub struct CheckedArithElim {
-    plans: FxHashMap<InstId, PlainOpKind>,
+    plans: Vec<RewritePlan>,
 }
 
 #[derive(Clone, Copy)]
@@ -41,9 +37,7 @@ struct RewritePlan {
 
 impl CheckedArithElim {
     pub fn new() -> Self {
-        Self {
-            plans: FxHashMap::default(),
-        }
+        Self { plans: Vec::new() }
     }
 
     pub fn run(
@@ -58,48 +52,26 @@ impl CheckedArithElim {
         }
 
         self.plans.clear();
-        let mut definedness = FxHashMap::default();
+
         let mut analysis = RangeAnalysis::default();
-        analysis.compute(func, cfg, lpt);
-        let mut tree = DominatorTreeTraversable::default();
-        tree.compute(dom);
-        let mut guards = FxHashMap::<(ValueId, ValueId), usize>::default();
-        let mut pending = Vec::new();
-        if let Some(entry) = func.layout.entry_block() {
-            pending.push((entry, None));
-        }
-        // Enter and leave each dominator subtree once. Reference counts retain
-        // repeated facts established by both an ancestor and a nested branch.
-        while let Some((block, exiting)) = pending.pop() {
-            if let Some(relations) = exiting {
-                for relation in relations {
-                    let count = guards.get_mut(&relation).unwrap();
-                    *count -= 1;
-                    if *count == 0 {
-                        guards.remove(&relation);
-                    }
-                }
-                continue;
-            }
+        analysis.compute(func, cfg, dom, lpt);
+
+        for block in func.layout.iter_block() {
             if !analysis.is_reachable(block) {
                 continue;
             }
-            let relations = edge_guard_relations(func, cfg, dom, block, &mut definedness);
-            for &relation in &relations {
-                *guards.entry(relation).or_default() += 1;
-            }
-            pending.push((block, Some(relations)));
-            pending.extend(tree.children_of(block).iter().map(|&child| (child, None)));
 
             let mut env = analysis.entry_env(block).clone();
             for inst in func.layout.iter_inst(block) {
                 if func.dfg.is_phi(inst) {
                     continue;
                 }
-                if let Some(plan) = self.plan_inst(func, &env, &guards, inst) {
-                    self.plans.insert(plan.inst, plan.kind);
+
+                if let Some(plan) = plan_inst(func, &analysis, &env, inst) {
+                    self.plans.push(plan);
                 }
-                transfer_inst(func, &mut env, inst);
+
+                analysis.transfer_inst(func, &mut env, inst);
             }
         }
 
@@ -107,126 +79,38 @@ impl CheckedArithElim {
             return false;
         }
 
-        // Preserve layout-order rewriting and stable value numbering even
-        // though proofs are collected in dominator-tree order.
-        let plans: Vec<_> = func
-            .layout
-            .iter_block()
-            .flat_map(|block| func.layout.iter_inst(block))
-            .filter_map(|inst| {
-                self.plans
-                    .remove(&inst)
-                    .map(|kind| RewritePlan { inst, kind })
-            })
-            .collect();
-        for plan in plans {
+        for plan in self.plans.drain(..) {
             apply_plan(func, plan);
         }
 
         true
     }
-
-    fn plan_inst(
-        &self,
-        func: &Function,
-        env: &crate::range_analysis::RangeEnv,
-        guards: &FxHashMap<(ValueId, ValueId), usize>,
-        inst: InstId,
-    ) -> Option<RewritePlan> {
-        let kind = match func.dfg.inst(inst).kind() {
-            InstClassKind::Unary(UnaryInstKind::Snego) => PlainOpKind::SnegAsSubZero,
-            InstClassKind::Binary(kind) => match kind {
-                BinaryInstKind::Uaddo | BinaryInstKind::Saddo => PlainOpKind::Add,
-                BinaryInstKind::Usubo | BinaryInstKind::Ssubo => PlainOpKind::Sub,
-                BinaryInstKind::Umulo | BinaryInstKind::Smulo => PlainOpKind::Mul,
-                BinaryInstKind::EvmUdivo => PlainOpKind::EvmUdiv,
-                BinaryInstKind::EvmUmodo => PlainOpKind::EvmUmod,
-                BinaryInstKind::EvmSdivo => PlainOpKind::EvmSdiv,
-                BinaryInstKind::EvmSmodo => PlainOpKind::EvmSmod,
-                _ => return None,
-            },
-            _ => return None,
-        };
-        if checked_value_fact(func, env, inst).is_none() {
-            if func.dfg.inst(inst).kind() != InstClassKind::Binary(BinaryInstKind::Usubo) {
-                return None;
-            }
-            let args = func.dfg.inst(inst).collect_values();
-            let [lhs, rhs] = args.as_slice() else {
-                return None;
-            };
-            if !guards.contains_key(&(*lhs, *rhs)) {
-                return None;
-            }
-        }
-
-        Some(RewritePlan { inst, kind })
-    }
 }
 
-/// A single-predecessor dominator child certifies the selected branch edge.
-/// Ordinary merges and loop headers with backedges do not create facts.
-fn edge_guard_relations(
+/// A checked operation the range facts prove cannot overflow, or an unsigned
+/// subtraction a dominating comparison guards.
+fn plan_inst(
     func: &Function,
-    cfg: &ControlFlowGraph,
-    dom: &DomTree,
-    child: BlockId,
-    definedness: &mut FxHashMap<ValueId, bool>,
-) -> SmallVec<[(ValueId, ValueId); 2]> {
-    let Some(parent) = dom.idom_of(child) else {
-        return SmallVec::new();
+    analysis: &RangeAnalysis,
+    env: &RangeEnv,
+    inst: InstId,
+) -> Option<RewritePlan> {
+    let kind = match func.dfg.inst(inst).kind() {
+        InstClassKind::Unary(UnaryInstKind::Snego) => PlainOpKind::SnegAsSubZero,
+        InstClassKind::Binary(kind) => match kind {
+            BinaryInstKind::Uaddo | BinaryInstKind::Saddo => PlainOpKind::Add,
+            BinaryInstKind::Usubo | BinaryInstKind::Ssubo => PlainOpKind::Sub,
+            BinaryInstKind::Umulo | BinaryInstKind::Smulo => PlainOpKind::Mul,
+            BinaryInstKind::EvmUdivo => PlainOpKind::EvmUdiv,
+            BinaryInstKind::EvmUmodo => PlainOpKind::EvmUmod,
+            BinaryInstKind::EvmSdivo => PlainOpKind::EvmSdiv,
+            BinaryInstKind::EvmSmodo => PlainOpKind::EvmSmod,
+            _ => return None,
+        },
+        _ => return None,
     };
-    let mut predecessors = cfg.preds_of(child).copied();
-    if predecessors.next() != Some(parent) || predecessors.next().is_some() {
-        return SmallVec::new();
-    }
-    let Some(branch) = func
-        .layout
-        .last_inst_of(parent)
-        .and_then(|term| func.dfg.branch_info(term))
-    else {
-        return SmallVec::new();
-    };
-    let BranchKind::Br(br) = branch.branch_kind() else {
-        return SmallVec::new();
-    };
-    if br.nz_dest() == br.z_dest() {
-        return SmallVec::new();
-    }
-    let condition = *br.cond();
-    let Some(inst) = func.dfg.value_inst(condition) else {
-        return SmallVec::new();
-    };
-    let InstClassKind::Binary(kind) = func.dfg.inst(inst).kind() else {
-        return SmallVec::new();
-    };
-    let args = func.dfg.inst(inst).collect_values();
-    let [a, b] = args.as_slice() else {
-        return SmallVec::new();
-    };
-    // An undef choice cannot establish a reusable relation. Include intrinsic
-    // undef producers (such as generic division by a possibly zero divisor),
-    // transitive dependencies, and cyclic phis via the shared definedness analysis.
-    // Parameters, calls, and reads need evidence this edge-local proof does not have.
-    if value_may_be_undef(func, condition, definedness, |value| {
-        match func.dfg.value(value) {
-            Value::Arg { .. } => Some(true),
-            Value::Inst { inst, .. } => requires_definedness_evidence(func, *inst).then_some(true),
-            _ => None,
-        }
-    }) {
-        return SmallVec::new();
-    }
-    // Deliberately unsigned and pairwise, with exact SSA operand identity.
-    // No transitivity, signed reinterpretation or changed loop operands.
-    match (kind, *br.nz_dest() == child) {
-        (BinaryInstKind::Lt | BinaryInstKind::Le, true)
-        | (BinaryInstKind::Gt | BinaryInstKind::Ge, false) => smallvec![(*b, *a)],
-        (BinaryInstKind::Lt | BinaryInstKind::Le, false)
-        | (BinaryInstKind::Gt | BinaryInstKind::Ge, true) => smallvec![(*a, *b)],
-        (BinaryInstKind::Eq, true) | (BinaryInstKind::Ne, false) => smallvec![(*a, *b), (*b, *a)],
-        _ => SmallVec::new(),
-    }
+    (analysis.is_guarded_sub(inst) || checked_value_fact(func, env, inst).is_some())
+        .then_some(RewritePlan { inst, kind })
 }
 
 impl Default for CheckedArithElim {

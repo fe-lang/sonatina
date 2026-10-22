@@ -14,7 +14,7 @@ use crate::{
     },
     domtree::DomTree,
     loop_analysis::LoopTree,
-    range_analysis::{RangeAnalysis, RangeEnv, RangeFact, transfer_inst},
+    range_analysis::{RangeAnalysis, RangeEnv, RangeFact},
 };
 
 use super::simplify_expr::{
@@ -100,7 +100,7 @@ impl KnownBitsSimplify {
             lpt.compute(&cfg, &dom);
 
             let mut analysis = RangeAnalysis::default();
-            analysis.compute(func, &cfg, &lpt);
+            analysis.compute(func, &cfg, &dom, &lpt);
             range_analysis = Some(analysis);
         }
 
@@ -123,10 +123,11 @@ impl KnownBitsSimplify {
                     self.plans.push(plan);
                 }
 
-                if let Some(range_env) = range_env.as_mut()
+                if let Some(analysis) = &range_analysis
+                    && let Some(range_env) = range_env.as_mut()
                     && !func.dfg.is_phi(inst)
                 {
-                    transfer_inst(func, range_env, inst);
+                    analysis.transfer_inst(func, range_env, inst);
                 }
             }
         }

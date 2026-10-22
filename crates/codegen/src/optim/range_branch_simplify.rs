@@ -2,8 +2,9 @@ use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId, inst::control_flo
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
+    domtree::DomTree,
     loop_analysis::LoopTree,
-    range_analysis::{RangeAnalysis, RangeEnv, condition_truth_in_env, transfer_inst},
+    range_analysis::{RangeAnalysis, RangeEnv, condition_truth_in_env},
 };
 
 #[derive(Default)]
@@ -23,7 +24,13 @@ impl RangeBranchSimplify {
         Self { plans: Vec::new() }
     }
 
-    pub fn run(&mut self, func: &mut Function, cfg: &ControlFlowGraph, lpt: &LoopTree) -> bool {
+    pub fn run(
+        &mut self,
+        func: &mut Function,
+        cfg: &ControlFlowGraph,
+        dom: &DomTree,
+        lpt: &LoopTree,
+    ) -> bool {
         if !has_conditional_branch(func) {
             return false;
         }
@@ -31,7 +38,7 @@ impl RangeBranchSimplify {
         self.plans.clear();
 
         let mut analysis = RangeAnalysis::default();
-        analysis.compute(func, cfg, lpt);
+        analysis.compute(func, cfg, dom, lpt);
 
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
@@ -50,7 +57,7 @@ impl RangeBranchSimplify {
                     self.plans.push(plan);
                 }
 
-                transfer_inst(func, &mut env, inst);
+                analysis.transfer_inst(func, &mut env, inst);
             }
         }
 

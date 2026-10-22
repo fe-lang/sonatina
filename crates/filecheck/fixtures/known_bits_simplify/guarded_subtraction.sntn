@@ -1,0 +1,42 @@
+#! A subtraction a dominating unsigned comparison guards cannot wrap, so a
+#! mask wider than its minuend's range is redundant.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %guarded_code_size_difference_fits_a_u64_mask() -> i256 {
+# check:       v3.i256 = sub v0 v1;
+# not:         and
+# check:       return v3;
+func public %guarded_code_size_difference_fits_a_u64_mask() -> i256 {
+block0:
+    v0.i256 = evm_code_size;
+    v1.i256 = evm_call_value;
+    v2.i1 = lt v0 v1;
+    br v2 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v3.i256 = sub v0 v1;
+    v4.i256 = and v3 18446744073709551615.i256;
+    return v4;
+}
+
+# sameln: func public %reversed_guard_keeps_the_mask() -> i256 {
+# check:       and v3 18446744073709551615.i256;
+func public %reversed_guard_keeps_the_mask() -> i256 {
+block0:
+    v0.i256 = evm_code_size;
+    v1.i256 = evm_call_value;
+    v2.i1 = lt v1 v0;
+    br v2 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v3.i256 = sub v0 v1;
+    v4.i256 = and v3 18446744073709551615.i256;
+    return v4;
+}

@@ -19,7 +19,7 @@ impl FuncTransform for RangeBranchSimplifyTransform {
         self.cfg.compute(func);
         self.domtree.compute(&self.cfg);
         self.lpt.compute(&self.cfg, &self.domtree);
-        RangeBranchSimplify::new().run(func, &self.cfg, &self.lpt);
+        RangeBranchSimplify::new().run(func, &self.cfg, &self.domtree, &self.lpt);
     }
 
     fn test_root(&self) -> PathBuf {
