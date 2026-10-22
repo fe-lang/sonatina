@@ -1997,6 +1997,17 @@ fn find_func(module: &sonatina_ir::Module, name: &str) -> sonatina_ir::module::F
         .unwrap_or_else(|| panic!("function %{name} not found"))
 }
 
+/// The size profile with thresholds at which `%read` inlines only when the
+/// loaded-reconstruction discount applies, independent of pipeline tuning.
+fn discount_bound_size_config() -> InlinerConfig {
+    InlinerConfig {
+        enable_single_block_splice: false,
+        inline_threshold: 10,
+        inline_threshold_cold: 5,
+        ..Pipeline::size().inliner_config
+    }
+}
+
 fn loaded_triple_module() -> String {
     let mut source = String::from(
         r#"
@@ -2038,13 +2049,7 @@ func private %caller{index}(v0.objref<@triple>, v1.i256) -> i256 {{
 
 #[test]
 fn loaded_aggregate_reconstruction_inlines_in_trivial_and_full_modes() {
-    for config in [
-        InlinerConfig::default(),
-        InlinerConfig {
-            enable_single_block_splice: false,
-            ..Pipeline::size().inliner_config
-        },
-    ] {
+    for config in [InlinerConfig::default(), discount_bound_size_config()] {
         let mut parsed = sonatina_parser::parse_module(&loaded_triple_module()).unwrap();
         assert_module_verified(&parsed.module);
         func_behavior::analyze_module(&parsed.module);
@@ -2184,13 +2189,7 @@ fn loaded_reconstruction_discounts_require_scalarizable_callsite_uses() {
             "func private %read",
             "declare external %consume(@triple) -> i256;\nfunc private %read",
         );
-        for config in [
-            InlinerConfig::default(),
-            InlinerConfig {
-                enable_single_block_splice: false,
-                ..Pipeline::size().inliner_config
-            },
-        ] {
+        for config in [InlinerConfig::default(), discount_bound_size_config()] {
             let mut parsed = sonatina_parser::parse_module(&source).unwrap();
             assert_module_verified(&parsed.module);
             func_behavior::analyze_module(&parsed.module);
