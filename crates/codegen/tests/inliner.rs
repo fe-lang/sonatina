@@ -157,6 +157,54 @@ func public %caller(v0.i32) -> i32 {
 }
 
 #[test]
+fn terminating_splice_skips_deleted_callsites() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %abort() {
+    block0:
+        evm_revert 0.i256 0.i256;
+}
+
+func public %main() {
+    block0:
+        call %abort;
+        call %abort;
+        return;
+}
+"#;
+
+    for enable_full_inliner in [false, true] {
+        let mut module = sonatina_parser::parse_module(source).unwrap().module;
+        let verifier_cfg = VerifierConfig::for_level(VerificationLevel::Full);
+        let report = verify_module(&module, &verifier_cfg);
+        assert!(!report.has_errors(), "{report}");
+
+        let mut inliner = Inliner::new(InlinerConfig {
+            enable_full_inliner,
+            ..Default::default()
+        });
+        let stats = inliner.run(&mut module);
+
+        assert_eq!(stats.calls_spliced, 1);
+        let report = verify_module(&module, &verifier_cfg);
+        assert!(!report.has_errors(), "{report}");
+
+        let caller_ref = find_func(&module, "main");
+        module.func_store.view(caller_ref, |caller| {
+            let inst_count = caller
+                .layout
+                .iter_block()
+                .map(|block| caller.layout.iter_inst(block).count())
+                .sum::<usize>();
+            assert_eq!(inst_count, 1);
+            let dumped = FuncWriter::new(caller_ref, caller).dump_string();
+            assert!(dumped.contains("evm_revert 0.i256 0.i256;"), "{dumped}");
+        });
+    }
+}
+
+#[test]
 fn noinline_blocks_trivial_inlining() {
     let source = r#"
 target = "evm-ethereum-london"
