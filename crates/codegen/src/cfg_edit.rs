@@ -19,9 +19,14 @@ pub enum CleanupMode {
 ///
 /// Passes that mutate terminators directly without repairing successor phis should run a
 /// cleanup pass (e.g. `CfgCleanup`) before relying on CFG/phi invariants.
+///
+/// Edits update the CFG for only the blocks they change. Its predecessor and successor sets stay
+/// current, but its edge ids and the order of predecessor edges and exits drift from a fresh
+/// computation until [`Self::recompute_cfg`] or [`Self::into_cfg`].
 pub struct CfgEditor<'f> {
     func: &'f mut Function,
     cfg: ControlFlowGraph,
+    cfg_is_fresh: bool,
     mode: CleanupMode,
 }
 
@@ -29,7 +34,12 @@ impl<'f> CfgEditor<'f> {
     pub fn new(func: &'f mut Function, mode: CleanupMode) -> Self {
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
-        Self { func, cfg, mode }
+        Self {
+            func,
+            cfg,
+            cfg_is_fresh: true,
+            mode,
+        }
     }
 
     pub fn func(&self) -> &Function {
@@ -46,6 +56,25 @@ impl<'f> CfgEditor<'f> {
 
     pub fn recompute_cfg(&mut self) {
         self.cfg.compute(self.func);
+        self.cfg_is_fresh = true;
+    }
+
+    /// The CFG as [`ControlFlowGraph::compute`] builds it for the edited function.
+    pub fn into_cfg(mut self) -> ControlFlowGraph {
+        if !self.cfg_is_fresh {
+            self.cfg.compute(self.func);
+        }
+        self.cfg
+    }
+
+    /// Updates the CFG after an edit that changed the terminators of `blocks` or removed them.
+    fn recompute_blocks(&mut self, blocks: &[BlockId]) {
+        for &block in blocks {
+            self.cfg.recompute_block(self.func, block);
+        }
+        self.cfg_is_fresh = false;
+        #[cfg(test)]
+        tests::assert_cfg_matches_function(self.func, &self.cfg);
     }
 
     fn value_is_defined_in_block(&self, block: BlockId, value: ValueId) -> bool {
@@ -161,7 +190,7 @@ impl<'f> CfgEditor<'f> {
     pub fn remove_succ(&mut self, from: BlockId, to: BlockId) -> bool {
         let changed = remove_succ_and_repair_phis(self.func, self.mode, from, to);
         if changed {
-            self.recompute_cfg();
+            self.recompute_blocks(&[from]);
         }
         changed
     }
@@ -208,7 +237,7 @@ impl<'f> CfgEditor<'f> {
             simplify_trivial_phis_in_block(self.func, dest);
         }
 
-        self.recompute_cfg();
+        self.recompute_blocks(&[from]);
         true
     }
 
@@ -264,7 +293,7 @@ impl<'f> CfgEditor<'f> {
             append_phi_inputs_for_new_pred(self.func, new_to, from, phi_inputs);
         }
 
-        self.recompute_cfg();
+        self.recompute_blocks(&[from]);
         true
     }
 
@@ -331,7 +360,7 @@ impl<'f> CfgEditor<'f> {
             simplify_trivial_phis_in_block(self.func, succ);
         }
 
-        self.recompute_cfg();
+        self.recompute_blocks(&[from, new_block]);
         (from, new_block)
     }
 
@@ -383,7 +412,7 @@ impl<'f> CfgEditor<'f> {
             replace_phi_incoming_block(self.func, to, from, mid);
         }
 
-        self.recompute_cfg();
+        self.recompute_blocks(&[from, mid]);
         mid
     }
 
@@ -448,7 +477,12 @@ impl<'f> CfgEditor<'f> {
         }
 
         self.rewrite_loop_header_phis_for_preheader(lp_header, outside_preds, new_preheader);
-        self.recompute_cfg();
+        let edited: Vec<_> = outside_preds
+            .iter()
+            .copied()
+            .chain([new_preheader])
+            .collect();
+        self.recompute_blocks(&edited);
         Some(new_preheader)
     }
 
@@ -512,7 +546,7 @@ impl<'f> CfgEditor<'f> {
         replace_phi_incoming_block(self.func, succ, block, pred);
         simplify_trivial_phis_in_block(self.func, succ);
         InstInserter::at_location(CursorLocation::BlockTop(block)).remove_block(self.func);
-        self.recompute_cfg();
+        self.recompute_blocks(&[pred, block]);
         true
     }
 
@@ -692,7 +726,7 @@ impl<'f> CfgEditor<'f> {
         }
 
         InstInserter::at_location(CursorLocation::BlockTop(succ)).remove_block(self.func);
-        self.recompute_cfg();
+        self.recompute_blocks(&[block, succ]);
         true
     }
 
@@ -718,7 +752,7 @@ impl<'f> CfgEditor<'f> {
         }
 
         InstInserter::at_location(CursorLocation::BlockTop(b)).remove_block(self.func);
-        self.recompute_cfg();
+        self.recompute_blocks(&[b]);
         true
     }
 
@@ -738,6 +772,7 @@ impl<'f> CfgEditor<'f> {
             return false;
         }
 
+        let mut edited_preds = Vec::new();
         {
             let cfg = &self.cfg;
             let func = &mut self.func;
@@ -749,6 +784,7 @@ impl<'f> CfgEditor<'f> {
 
                     let removed = remove_succ_and_repair_phis(func, self.mode, pred, block);
                     assert!(removed, "edge {pred:?} -> {block:?} does not exist");
+                    edited_preds.push(pred);
                 }
             }
 
@@ -791,7 +827,8 @@ impl<'f> CfgEditor<'f> {
             }
         }
 
-        self.recompute_cfg();
+        edited_preds.extend(to_delete);
+        self.recompute_blocks(&edited_preds);
         true
     }
 
@@ -864,7 +901,7 @@ impl<'f> CfgEditor<'f> {
             append_phi_inputs_for_new_pred(self.func, new_to, from, phi_inputs);
         }
 
-        self.recompute_cfg();
+        self.recompute_blocks(&[from]);
         true
     }
 
@@ -1225,6 +1262,41 @@ mod tests {
     };
 
     use super::{CfgEditor, CleanupMode, simplify_trivial_phis_in_block};
+    use sonatina_ir::{BlockId, ControlFlowGraph, Function, cfg::CfgEdge};
+
+    /// Checks the CFG that [`CfgEditor`]'s edits maintain against one computed from `func`.
+    pub(super) fn assert_cfg_matches_function(func: &Function, cfg: &ControlFlowGraph) {
+        let mut fresh = ControlFlowGraph::default();
+        fresh.compute(func);
+        let edges = |cfg: &ControlFlowGraph, edges: &[CfgEdge]| -> Vec<(BlockId, BlockId, usize)> {
+            edges
+                .iter()
+                .map(|&edge| {
+                    let data = cfg.edge_data(edge);
+                    (data.from, data.to, data.branch_slot)
+                })
+                .collect()
+        };
+        fn sorted<T: Ord>(mut items: Vec<T>) -> Vec<T> {
+            items.sort_unstable();
+            items
+        }
+
+        assert_eq!(cfg.entry(), fresh.entry());
+        assert_eq!(sorted(cfg.exits.to_vec()), sorted(fresh.exits.to_vec()));
+        for block in func.layout.iter_block() {
+            assert_eq!(cfg.preds_as_slice(block), fresh.preds_as_slice(block));
+            assert_eq!(cfg.succs_as_slice(block), fresh.succs_as_slice(block));
+            assert_eq!(
+                edges(cfg, cfg.succ_edges_as_slice(block)),
+                edges(&fresh, fresh.succ_edges_as_slice(block))
+            );
+            assert_eq!(
+                sorted(edges(cfg, cfg.pred_edges_as_slice(block))),
+                sorted(edges(&fresh, fresh.pred_edges_as_slice(block)))
+            );
+        }
+    }
 
     #[test]
     fn replace_succ_allow_existing_pred_does_not_duplicate_phi_inputs() {

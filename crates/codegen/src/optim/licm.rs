@@ -153,7 +153,7 @@ impl LicmSolver {
             .collect();
         let mut editor = CfgEditor::new(func, CleanupMode::Strict);
         let preheader = editor.create_or_reuse_loop_preheader(lp_header, &original_preheaders)?;
-        *cfg = editor.cfg().clone();
+        *cfg = editor.into_cfg();
 
         if !original_preheaders.contains(&preheader)
             && let Some(parent_lp) = lpt.parent_loop(lp)

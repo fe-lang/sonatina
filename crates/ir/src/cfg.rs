@@ -166,6 +166,27 @@ impl ControlFlowGraph {
         self.blocks[to].remove_pred(from);
     }
 
+    /// Rebuilds the edges out of `block` and whether it is an exit from its
+    /// current terminator, after an edit that changed that terminator or
+    /// removed the block, and rereads the entry block from the layout. The
+    /// predecessor and successor sets then match [`Self::compute`]'s, but edge
+    /// ids and the order of predecessor edges and of `exits` can differ.
+    pub fn recompute_block(&mut self, func: &Function, block: BlockId) {
+        self.entry = func.layout.entry_block().into();
+        for edge in std::mem::take(&mut self.blocks[block].out_edges) {
+            let to = self.edges[edge].to;
+            self.blocks[to].retain_pred_edges(|pred_edge| *pred_edge != edge);
+            self.blocks[to].remove_pred(block);
+        }
+        self.blocks[block].succs.retain(|_| false);
+        self.remove_exit(block);
+        if func.layout.is_block_inserted(block)
+            && let Some(last_inst) = func.layout.last_inst_of(block)
+        {
+            self.analyze_inst(func, last_inst);
+        }
+    }
+
     pub fn add_succ_block(&mut self, from: BlockId, to: BlockId) {
         let branch_slot = self.blocks[from].succ_edges_slice().len();
         self.append_edge(from, to, branch_slot);
