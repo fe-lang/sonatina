@@ -1,4 +1,6 @@
-use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
+use cranelift_entity::{
+    EntityRef, PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption,
+};
 use smallvec::SmallVec;
 use vec_collections::VecSet;
 
@@ -21,7 +23,8 @@ pub struct CfgEdgeData {
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ControlFlowGraph {
     entry: PackedOption<BlockId>,
-    blocks: SecondaryMap<BlockId, BlockNode>,
+    /// Indexed by block. Blocks past the end have no edges.
+    blocks: Vec<BlockNode>,
     edges: PrimaryMap<CfgEdge, CfgEdgeData>,
     pub exits: smallvec::SmallVec<[BlockId; 8]>,
 }
@@ -33,8 +36,12 @@ impl ControlFlowGraph {
 
     pub fn compute(&mut self, func: &Function) {
         // CFG edits recompute the whole graph, so keep each block's storage.
-        for node in self.blocks.values_mut() {
+        for node in &mut self.blocks {
             node.clear();
+        }
+        let num_blocks = func.dfg.num_blocks();
+        if self.blocks.len() < num_blocks {
+            self.blocks.resize_with(num_blocks, BlockNode::default);
         }
         self.edges.clear();
         self.exits.clear();
@@ -49,43 +56,55 @@ impl ControlFlowGraph {
     }
 
     pub fn preds_of(&self, block: BlockId) -> impl Iterator<Item = &BlockId> {
-        self.blocks[block].preds()
+        self.preds_as_slice(block).iter()
     }
 
     pub fn pred_edges_of(&self, block: BlockId) -> impl Iterator<Item = &CfgEdge> {
-        self.blocks[block].pred_edges()
+        self.pred_edges_as_slice(block).iter()
     }
 
     pub fn pred_edges_as_slice(&self, block: BlockId) -> &[CfgEdge] {
-        self.blocks[block].pred_edges_slice()
+        self.node(block).map_or(&[], BlockNode::pred_edges_slice)
     }
 
     pub fn preds_as_slice(&self, block: BlockId) -> &[BlockId] {
-        self.blocks[block].preds_slice()
+        self.node(block).map_or(&[], BlockNode::preds_slice)
     }
 
     pub fn succs_of(&self, block: BlockId) -> impl Iterator<Item = &BlockId> {
-        self.blocks[block].succs()
+        self.succs_as_slice(block).iter()
     }
 
     pub fn succ_edges_of(&self, block: BlockId) -> impl Iterator<Item = &CfgEdge> {
-        self.blocks[block].succ_edges()
+        self.succ_edges_as_slice(block).iter()
     }
 
     pub fn succ_edges_as_slice(&self, block: BlockId) -> &[CfgEdge] {
-        self.blocks[block].succ_edges_slice()
+        self.node(block).map_or(&[], BlockNode::succ_edges_slice)
     }
 
     pub fn succs_as_slice(&self, block: BlockId) -> &[BlockId] {
-        self.blocks[block].succs_slice()
+        self.node(block).map_or(&[], BlockNode::succs_slice)
     }
 
     pub fn pred_num_of(&self, block: BlockId) -> usize {
-        self.blocks[block].pred_num()
+        self.preds_as_slice(block).len()
     }
 
     pub fn succ_num_of(&self, block: BlockId) -> usize {
-        self.blocks[block].succ_num()
+        self.succs_as_slice(block).len()
+    }
+
+    fn node(&self, block: BlockId) -> Option<&BlockNode> {
+        self.blocks.get(block.index())
+    }
+
+    fn node_mut(&mut self, block: BlockId) -> &mut BlockNode {
+        let index = block.index();
+        if index >= self.blocks.len() {
+            self.blocks.resize_with(index + 1, BlockNode::default);
+        }
+        &mut self.blocks[index]
     }
 
     pub fn entry(&self) -> Option<BlockId> {
@@ -129,8 +148,8 @@ impl ControlFlowGraph {
             return;
         }
 
-        let moved_edges: Vec<_> = self.blocks[from]
-            .succ_edges()
+        let moved_edges: Vec<_> = self
+            .succ_edges_of(from)
             .copied()
             .filter(|edge| self.edges[*edge].to == old_to)
             .collect();
@@ -141,18 +160,19 @@ impl ControlFlowGraph {
         for edge in &moved_edges {
             self.edges[*edge].to = new_to;
         }
-        self.blocks[old_to].retain_pred_edges(|edge| !moved_edges.contains(edge));
-        self.blocks[new_to].append_pred_edges(&moved_edges);
+        self.node_mut(old_to)
+            .retain_pred_edges(|edge| !moved_edges.contains(edge));
+        self.node_mut(new_to).append_pred_edges(&moved_edges);
 
-        self.blocks[from].remove_succ(old_to);
-        self.blocks[from].push_succ(new_to);
-        self.blocks[old_to].remove_pred(from);
-        self.blocks[new_to].push_pred(from);
+        self.node_mut(from).remove_succ(old_to);
+        self.node_mut(from).push_succ(new_to);
+        self.node_mut(old_to).remove_pred(from);
+        self.node_mut(new_to).push_pred(from);
     }
 
     pub fn remove_succ_block(&mut self, from: BlockId, to: BlockId) {
-        let removed_edges: Vec<_> = self.blocks[from]
-            .succ_edges()
+        let removed_edges: Vec<_> = self
+            .succ_edges_of(from)
             .copied()
             .filter(|edge| self.edges[*edge].to == to)
             .collect();
@@ -160,10 +180,12 @@ impl ControlFlowGraph {
             return;
         }
 
-        self.blocks[from].retain_succ_edges(|edge| !removed_edges.contains(edge));
-        self.blocks[to].retain_pred_edges(|edge| !removed_edges.contains(edge));
-        self.blocks[from].remove_succ(to);
-        self.blocks[to].remove_pred(from);
+        self.node_mut(from)
+            .retain_succ_edges(|edge| !removed_edges.contains(edge));
+        self.node_mut(to)
+            .retain_pred_edges(|edge| !removed_edges.contains(edge));
+        self.node_mut(from).remove_succ(to);
+        self.node_mut(to).remove_pred(from);
     }
 
     /// Rebuilds the edges out of `block` and whether it is an exit from its
@@ -173,12 +195,13 @@ impl ControlFlowGraph {
     /// ids and the order of predecessor edges and of `exits` can differ.
     pub fn recompute_block(&mut self, func: &Function, block: BlockId) {
         self.entry = func.layout.entry_block().into();
-        for edge in std::mem::take(&mut self.blocks[block].out_edges) {
+        for edge in std::mem::take(&mut self.node_mut(block).out_edges) {
             let to = self.edges[edge].to;
-            self.blocks[to].retain_pred_edges(|pred_edge| *pred_edge != edge);
-            self.blocks[to].remove_pred(block);
+            let to = self.node_mut(to);
+            to.retain_pred_edges(|pred_edge| *pred_edge != edge);
+            to.remove_pred(block);
         }
-        self.blocks[block].succs.retain(|_| false);
+        self.node_mut(block).succs.retain(|_| false);
         self.remove_exit(block);
         if func.layout.is_block_inserted(block)
             && let Some(last_inst) = func.layout.last_inst_of(block)
@@ -188,7 +211,7 @@ impl ControlFlowGraph {
     }
 
     pub fn add_succ_block(&mut self, from: BlockId, to: BlockId) {
-        let branch_slot = self.blocks[from].succ_edges_slice().len();
+        let branch_slot = self.succ_edges_as_slice(from).len();
         self.append_edge(from, to, branch_slot);
     }
 
@@ -211,7 +234,7 @@ impl ControlFlowGraph {
         for edge in self.edges.values_mut() {
             std::mem::swap(&mut edge.from, &mut edge.to);
         }
-        for node in self.blocks.values_mut() {
+        for node in &mut self.blocks {
             node.reverse_edge();
         }
         self.entry = new_entry.into();
@@ -226,18 +249,15 @@ impl ControlFlowGraph {
     }
 
     fn analyze_inst(&mut self, func: &Function, inst: crate::InstId) {
-        if func.dfg.is_exit(inst) {
-            let exit = func.layout.inst_block(inst);
-            self.exits.push(exit);
-        }
-
-        let Some(branch_info) = func.dfg.branch_info(inst) else {
-            return;
-        };
-
-        for (branch_slot, dest) in branch_info.dests().into_iter().enumerate() {
-            let block = func.layout.inst_block(inst);
-            self.append_edge(block, dest, branch_slot);
+        let block = func.layout.inst_block(inst);
+        match func.dfg.branch_info(inst) {
+            Some(branch_info) => {
+                for (branch_slot, dest) in branch_info.dests().into_iter().enumerate() {
+                    self.append_edge(block, dest, branch_slot);
+                }
+            }
+            None if func.dfg.is_terminator(inst) => self.exits.push(block),
+            None => {}
         }
     }
 
@@ -247,10 +267,12 @@ impl ControlFlowGraph {
             to,
             branch_slot,
         });
-        self.blocks[from].push_succ_edge(edge);
-        self.blocks[to].push_pred_edge(edge);
-        self.blocks[from].push_succ(to);
-        self.blocks[to].push_pred(from);
+        let from_node = self.node_mut(from);
+        from_node.push_succ_edge(edge);
+        from_node.push_succ(to);
+        let to_node = self.node_mut(to);
+        to_node.push_pred_edge(edge);
+        to_node.push_pred(from);
     }
 }
 
@@ -305,14 +327,6 @@ impl BlockNode {
         self.succs.remove(&succ);
     }
 
-    fn preds(&self) -> impl Iterator<Item = &BlockId> {
-        self.preds.iter()
-    }
-
-    fn pred_edges(&self) -> impl Iterator<Item = &CfgEdge> {
-        self.in_edges.iter()
-    }
-
     fn pred_edges_slice(&self) -> &[CfgEdge] {
         self.in_edges.as_slice()
     }
@@ -321,28 +335,12 @@ impl BlockNode {
         self.preds.as_ref()
     }
 
-    fn succs(&self) -> impl Iterator<Item = &BlockId> {
-        self.succs.iter()
-    }
-
-    fn succ_edges(&self) -> impl Iterator<Item = &CfgEdge> {
-        self.out_edges.iter()
-    }
-
     fn succ_edges_slice(&self) -> &[CfgEdge] {
         self.out_edges.as_slice()
     }
 
     fn succs_slice(&self) -> &[BlockId] {
         self.succs.as_ref()
-    }
-
-    fn pred_num(&self) -> usize {
-        self.preds.len()
-    }
-
-    fn succ_num(&self) -> usize {
-        self.succs.len()
     }
 
     fn reverse_edge(&mut self) {
