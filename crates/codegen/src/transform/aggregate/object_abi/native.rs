@@ -4,7 +4,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     ControlFlowGraph, Function, Module, Signature, Value, ValueId,
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
 };
 
 use super::{
@@ -101,9 +101,7 @@ fn collect_plan(
     let mut allowed = FxHashSet::default();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
-            let Some(ret) =
-                downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
-            else {
+            let Some(ret) = function.dfg.downcast::<&control_flow::Return>(inst) else {
                 continue;
             };
             let value = *ret.arg()?;
@@ -179,9 +177,7 @@ pub(crate) fn native_heap_object_roots(
     function
         .layout
         .iter_all_insts()
-        .filter(|&inst| {
-            downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(inst)).is_some()
-        })
+        .filter(|&inst| function.dfg.downcast::<&data::ObjAlloc>(inst).is_some())
         .filter_map(|inst| function.dfg.inst_result(inst))
         .filter(|&root| {
             object_locality::walk_object_root_uses_with_effects(function, root, effects, |usage| {
@@ -220,8 +216,7 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
     let mut loop_roots = FxHashMap::default();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
-            if downcast::<&control_flow::Phi>(function.inst_set(), function.dfg.inst(inst))
-                .is_some()
+            if function.dfg.downcast::<&control_flow::Phi>(inst).is_some()
                 && let Some(result) = function.dfg.inst_result(inst)
                 && let Some(scc) = sccs
                     .scc_of(block)
@@ -236,9 +231,7 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
                     }
                 }
             }
-            let Some(ret) =
-                downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
-            else {
+            let Some(ret) = function.dfg.downcast::<&control_flow::Return>(inst) else {
                 continue;
             };
             for &value in ret.args().iter() {

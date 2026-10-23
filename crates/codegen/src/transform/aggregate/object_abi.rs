@@ -4,7 +4,7 @@ use sonatina_ir::{
     BlockId, Function, InstId, Module, Type, Value, ValueId,
     cfg::ControlFlowGraph,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
     module::{FuncRef, ModuleCtx},
 };
 
@@ -285,9 +285,7 @@ impl ObjectReturnOutParam {
 
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
-                let Some(ret) =
-                    downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
-                else {
+                let Some(ret) = function.dfg.downcast::<&control_flow::Return>(inst) else {
                     continue;
                 };
                 saw_return = true;
@@ -509,14 +507,12 @@ impl ObjectReturnOutParam {
             return None;
         }
 
-        if let Some(obj_alloc) =
-            downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(inst))
-        {
+        if let Some(obj_alloc) = function.dfg.downcast::<&data::ObjAlloc>(inst) {
             return (*obj_alloc.ty() == out_elem_ty)
                 .then_some(RewriteRoot::LocalAlloc { inst, value: root });
         }
 
-        let call = downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))?;
+        let call = function.dfg.downcast::<&control_flow::Call>(inst)?;
         let [result] = function.dfg.inst_results(inst) else {
             return None;
         };
@@ -555,9 +551,7 @@ impl ObjectReturnOutParam {
         // The final returned-root producers are resolved later through provenance.
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
-                if let Some(obj_alloc) =
-                    downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(inst))
-                {
+                if let Some(obj_alloc) = function.dfg.downcast::<&data::ObjAlloc>(inst) {
                     if let Some(result) = function.dfg.inst_result(inst)
                         && *obj_alloc.ty() == out_elem_ty
                     {
@@ -566,9 +560,7 @@ impl ObjectReturnOutParam {
                     continue;
                 }
 
-                let Some(call) =
-                    downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
-                else {
+                let Some(call) = function.dfg.downcast::<&control_flow::Call>(inst) else {
                     continue;
                 };
                 let [result] = function.dfg.inst_results(inst) else {
@@ -610,7 +602,9 @@ impl ObjectReturnOutParam {
         for block in blocks {
             let insts: Vec<_> = function.layout.iter_inst(block).collect();
             for inst in insts {
-                if downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
+                if function
+                    .dfg
+                    .downcast::<&control_flow::Return>(inst)
                     .is_none()
                 {
                     continue;
@@ -642,10 +636,7 @@ impl ObjectReturnOutParam {
                 if !function.layout.is_inst_inserted(inst) {
                     continue;
                 }
-                let Some(call) =
-                    downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
-                        .cloned()
-                else {
+                let Some(call) = function.dfg.downcast::<&control_flow::Call>(inst).cloned() else {
                     continue;
                 };
                 let Some(plan) = plans.get(call.callee()) else {
@@ -886,7 +877,9 @@ block0:
         let mut count = 0;
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                if func
+                    .dfg
+                    .downcast::<&data::ObjAlloc>(inst)
                     .is_some_and(|obj_alloc| *obj_alloc.ty() == ty)
                 {
                     count += 1;
@@ -900,7 +893,9 @@ block0:
         let mut calls = Vec::new();
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                if func
+                    .dfg
+                    .downcast::<&control_flow::Call>(inst)
                     .is_some_and(|call| *call.callee() == callee)
                 {
                     calls.push(inst);
@@ -972,7 +967,9 @@ block3:
                 "expected one rewritten nested call:\n{dumped}"
             );
 
-            let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(calls[0]))
+            let call = func
+                .dfg
+                .downcast::<&control_flow::Call>(calls[0])
                 .expect("call should remain present");
             assert_eq!(
                 call.args()[0],
@@ -1057,7 +1054,9 @@ block3:
             let [call_inst] = calls.as_slice() else {
                 panic!("expected one rewritten nested call:\n{dumped}");
             };
-            let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(*call_inst))
+            let call = func
+                .dfg
+                .downcast::<&control_flow::Call>(*call_inst)
                 .expect("call should remain present");
             assert_eq!(
                 call.args()[0],
@@ -1136,7 +1135,9 @@ block0:
 
             let mut temp_outs = FxHashSet::default();
             for inst in calls {
-                let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                let call = func
+                    .dfg
+                    .downcast::<&control_flow::Call>(inst)
                     .expect("call should remain present");
                 let temp_out = call.args()[0];
                 assert_ne!(
@@ -1148,7 +1149,8 @@ block0:
                     .value_inst(temp_out)
                     .expect("helper out arg should come from an instruction");
                 assert!(
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(temp_inst))
+                    func.dfg
+                        .downcast::<&data::ObjAlloc>(temp_inst)
                         .is_some_and(|obj_alloc| *obj_alloc.ty() == pair),
                     "helper call should receive a fresh local out allocation:\n{dumped}"
                 );
@@ -1200,7 +1202,9 @@ block0:
             let [call_inst] = calls.as_slice() else {
                 panic!("expected exactly one helper call:\n{dumped}");
             };
-            let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(*call_inst))
+            let call = func
+                .dfg
+                .downcast::<&control_flow::Call>(*call_inst)
                 .expect("call should remain present");
             let temp_out = call.args()[0];
             assert_ne!(
@@ -1213,7 +1217,7 @@ block0:
                 .value_inst(temp_out)
                 .expect("helper out arg should come from an instruction");
             assert!(
-                downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(alloc_inst)).is_some(),
+                func.dfg.downcast::<&data::ObjAlloc>(alloc_inst).is_some(),
                 "helper out arg should come from an obj.alloc:\n{dumped}"
             );
 
@@ -1288,7 +1292,9 @@ block3:
             let mut saw_temporary_call = false;
             let mut saw_forwarded_call = false;
             for inst in calls {
-                let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                let call = func
+                    .dfg
+                    .downcast::<&control_flow::Call>(inst)
                     .expect("call should remain present");
                 let out_arg = call.args()[0];
                 let payload_arg = call.args()[1];
@@ -1432,7 +1438,9 @@ block3:
             let [call_inst] = calls.as_slice() else {
                 panic!("wrapper should still contain the original call:\n{dumped}");
             };
-            let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(*call_inst))
+            let call = func
+                .dfg
+                .downcast::<&control_flow::Call>(*call_inst)
                 .expect("call should remain present");
             assert_eq!(
                 call.args()[0],

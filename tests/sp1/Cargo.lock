@@ -4228,7 +4228,6 @@ dependencies = [
  "cranelift-object",
  "dashmap",
  "indexmap 2.14.2",
- "rayon",
  "rpds",
  "rustc-hash",
  "smallvec",
@@ -4329,7 +4328,6 @@ name = "sonatina-verifier"
 version = "0.0.3-alpha"
 dependencies = [
  "cranelift-entity 0.136.1",
- "rayon",
  "rpds",
  "rustc-hash",
  "smallvec",

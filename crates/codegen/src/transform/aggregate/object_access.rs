@@ -7,7 +7,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, InstId, ValueId,
     effects::AccessKind,
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
     types::EnumVariantRef,
 };
 
@@ -388,27 +388,26 @@ impl ObjectAccessFacts {
     ) -> ObjectInstEffects {
         let mut effects = ObjectInstEffects::default();
         let data = func.dfg.inst(inst);
-        let is = func.inst_set();
         let tag = |object| {
             self.facts
                 .complete()
                 .exact_projection(object)
                 .and_then(|p| shape::enum_tag_slice(func.ctx(), p.slice.ty))
         };
-        if let Some(load) = downcast::<&data::ObjLoad>(is, data) {
+        if let Some(load) = func.dfg.downcast::<&data::ObjLoad>(inst) {
             effects.reads = self.access(*load.object(), None);
-        } else if let Some(load) = downcast::<&data::EnumGetTag>(is, data) {
+        } else if let Some(load) = func.dfg.downcast::<&data::EnumGetTag>(inst) {
             effects.reads = self.access(*load.object(), tag(*load.object()));
-        } else if let Some(assert) = downcast::<&data::EnumAssertVariantRef>(is, data) {
+        } else if let Some(assert) = func.dfg.downcast::<&data::EnumAssertVariantRef>(inst) {
             effects.reads = self.access(*assert.object(), tag(*assert.object()));
             effects
                 .variant_assumptions
                 .push((*assert.object(), *assert.variant()));
-        } else if let Some(assert) = downcast::<&data::EnumAssertVariant>(is, data) {
+        } else if let Some(assert) = func.dfg.downcast::<&data::EnumAssertVariant>(inst) {
             effects
                 .variant_assumptions
                 .push((*assert.value(), *assert.variant()));
-        } else if let Some(store) = downcast::<&data::ObjStore>(is, data) {
+        } else if let Some(store) = func.dfg.downcast::<&data::ObjStore>(inst) {
             self.typed_write(
                 &mut effects,
                 *store.object(),
@@ -421,14 +420,14 @@ impl ObjectAccessFacts {
                     self.reachable_access(*store.value()),
                 ));
             }
-        } else if let Some(init) = downcast::<&data::ObjInitConst>(is, data) {
+        } else if let Some(init) = func.dfg.downcast::<&data::ObjInitConst>(inst) {
             self.typed_write(
                 &mut effects,
                 *init.object(),
                 None,
                 ObjectInitializationSource::Intrinsic,
             );
-        } else if let Some(store) = downcast::<&data::EnumSetTag>(is, data) {
+        } else if let Some(store) = func.dfg.downcast::<&data::EnumSetTag>(inst) {
             effects
                 .unreadable
                 .extend(self.access(*store.object(), None));
@@ -438,7 +437,7 @@ impl ObjectAccessFacts {
                 tag(*store.object()),
                 ObjectInitializationSource::Intrinsic,
             );
-        } else if let Some(store) = downcast::<&data::EnumWriteVariant>(is, data) {
+        } else if let Some(store) = func.dfg.downcast::<&data::EnumWriteVariant>(inst) {
             effects
                 .unreadable
                 .extend(self.access(*store.object(), None));
@@ -475,7 +474,7 @@ impl ObjectAccessFacts {
                     }
                 }
             }
-        } else if let Some(call) = downcast::<&control_flow::Call>(is, data) {
+        } else if let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) {
             let unknown;
             let summary = match summaries.and_then(|summaries| summaries.get(call.callee())) {
                 Some(summary) => summary,
@@ -530,11 +529,11 @@ impl ObjectAccessFacts {
                     effects.writes.push(location);
                 }
             }
-        } else if let Some(mat) = downcast::<&data::ObjMaterializeStack>(is, data) {
+        } else if let Some(mat) = func.dfg.downcast::<&data::ObjMaterializeStack>(inst) {
             effects.reads.extend(self.reachable_access(*mat.object()));
-        } else if let Some(mat) = downcast::<&data::ObjMaterializeHeap>(is, data) {
+        } else if let Some(mat) = func.dfg.downcast::<&data::ObjMaterializeHeap>(inst) {
             effects.reads.extend(self.reachable_access(*mat.object()));
-        } else if downcast::<&control_flow::Return>(is, data).is_some() {
+        } else if func.dfg.downcast::<&control_flow::Return>(inst).is_some() {
             for value in data.collect_values() {
                 effects.reads.extend(self.reachable_access(value));
             }
@@ -554,10 +553,13 @@ impl ObjectAccessFacts {
                 }
             }
         }
-        let selection = downcast::<&data::EnumSetTag>(is, data)
+        let selection = func
+            .dfg
+            .downcast::<&data::EnumSetTag>(inst)
             .map(|tag| (*tag.object(), *tag.variant()))
             .or_else(|| {
-                downcast::<&data::EnumWriteVariant>(is, data)
+                func.dfg
+                    .downcast::<&data::EnumWriteVariant>(inst)
                     .map(|write| (*write.object(), *write.variant()))
             });
         if let Some((object, variant)) = selection
@@ -647,10 +649,7 @@ block0:
                 let call = func
                     .layout
                     .iter_inst(func.layout.entry_block().unwrap())
-                    .find(|&inst| {
-                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-                            .is_some()
-                    })
+                    .find(|&inst| func.dfg.downcast::<&control_flow::Call>(inst).is_some())
                     .unwrap();
                 let effects = accesses.effects(func, call, Some(summaries));
                 assert!(
@@ -750,7 +749,8 @@ block0:
                     .layout
                     .iter_all_insts()
                     .find(|&inst| {
-                        downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
+                        func.dfg
+                            .downcast::<&data::ObjStore>(inst)
                             .is_some_and(|store| *store.object() == ValueId::from_u32(3))
                     })
                     .unwrap();

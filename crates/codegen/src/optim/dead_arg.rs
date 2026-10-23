@@ -2,7 +2,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
     Function, InstId, Type, Value, ValueId,
-    inst::{control_flow, control_flow::BranchKind, downcast},
+    inst::{control_flow, control_flow::BranchKind},
     module::{FuncRef, Module},
 };
 
@@ -309,9 +309,7 @@ fn collect_inst_inputs(
         }
     }
 
-    if let Some(ret) =
-        downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
-    {
+    if let Some(ret) = function.dfg.downcast::<&control_flow::Return>(inst) {
         value_worklist.extend(ret.args().iter().copied());
         return;
     }

@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 use sonatina_ir::{
     Function, InstId, Module, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
     module::FuncRef,
 };
 
@@ -220,7 +220,7 @@ fn collect_reads(
             if !func.layout.is_inst_inserted(inst) {
                 continue;
             }
-            if let Some(load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+            if let Some(load) = func.dfg.downcast::<&data::ObjLoad>(inst)
                 && *load.object() == object
             {
                 let result = func.dfg.inst_result(inst)?;
@@ -259,13 +259,11 @@ fn collect_reads(
                 loads.push(Load { inst, ty, paths });
                 continue;
             }
-            let indices = if let Some(projection) =
-                downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst))
+            let indices = if let Some(projection) = func.dfg.downcast::<&data::ObjProj>(inst)
                 && projection.values().first() == Some(&object)
             {
                 &projection.values()[1..]
-            } else if let Some(index) =
-                downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst))
+            } else if let Some(index) = func.dfg.downcast::<&data::ObjIndex>(inst)
                 && *index.object() == object
             {
                 slice::from_ref(index.index())

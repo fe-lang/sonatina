@@ -2,7 +2,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
     Function, Signature, Type, Value, ValueId,
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
     module::{FuncRef, Module, ModuleCtx},
     types::{CompoundType, CompoundTypeRef},
 };
@@ -27,14 +27,15 @@ pub(crate) fn retain_function_returns(function: &mut Function, keep_rets: &[bool
     for block in blocks {
         let insts = function.layout.iter_inst(block).collect::<Vec<_>>();
         for inst in insts {
-            let Some(args) =
-                downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
-                    .map(|ret| {
-                        ret.args()
-                            .iter()
-                            .copied()
-                            .collect::<SmallVec<[ValueId; 2]>>()
-                    })
+            let Some(args) = function
+                .dfg
+                .downcast::<&control_flow::Return>(inst)
+                .map(|ret| {
+                    ret.args()
+                        .iter()
+                        .copied()
+                        .collect::<SmallVec<[ValueId; 2]>>()
+                })
             else {
                 continue;
             };
@@ -413,10 +414,7 @@ pub(crate) fn collect_live_get_function_ptr_funcs(module: &Module) -> FxHashSet<
         module.func_store.view(func, |function| {
             for block in function.layout.iter_block() {
                 for inst in function.layout.iter_inst(block) {
-                    let Some(get_fn) = downcast::<&data::GetFunctionPtr>(
-                        function.inst_set(),
-                        function.dfg.inst(inst),
-                    ) else {
+                    let Some(get_fn) = function.dfg.downcast::<&data::GetFunctionPtr>(inst) else {
                         continue;
                     };
                     let Some(result) = function.dfg.inst_result(inst) else {
@@ -535,7 +533,7 @@ fn direct_get_function_ptr_ty(
     let Value::Inst { inst, .. } = function.dfg.value(value) else {
         return None;
     };
-    let get_fn = downcast::<&data::GetFunctionPtr>(function.inst_set(), function.dfg.inst(*inst))?;
+    let get_fn = function.dfg.downcast::<&data::GetFunctionPtr>(*inst)?;
     old_sigs.contains_key(get_fn.func()).then(|| {
         function
             .ctx()

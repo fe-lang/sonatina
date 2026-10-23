@@ -1,5 +1,4 @@
 use cranelift_entity::SecondaryMap;
-use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Mutex;
 use tracing::{debug, debug_span, info_span, trace_span};
@@ -951,9 +950,10 @@ fn prepare_machine_section_after_pipeline(
         let function_entry_jump_targets =
             compute_function_entry_jump_targets(machine.work.module(), &funcs);
 
-        let mut machine_final_spill_inputs: Vec<_> = machine_analyses
-            .into_par_iter()
-            .map(|(func, analysis)| {
+        let mut machine_final_spill_inputs: Vec<_> = sonatina_ir::parallel::map_owned(
+            &machine.work.module().func_store,
+            machine_analyses.into_iter().collect::<Vec<_>>(),
+            |(func, analysis)| {
                 let func_placement = expect_func_entry(&placement.funcs, func, "placement");
                 let func_map =
                     expect_func_entry(&machine.source_to_machine.funcs, func, "source map");
@@ -989,8 +989,8 @@ fn prepare_machine_section_after_pipeline(
                     fixed_writes,
                     spills,
                 }
-            })
-            .collect();
+            },
+        );
         machine_final_spill_inputs.sort_unstable_by_key(|input| input.func.as_u32());
 
         let optional_final_spill_placements = FinalSpillChoiceCtx {
@@ -1022,9 +1022,10 @@ fn prepare_machine_section_after_pipeline(
         let mut actual_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> =
             FxHashMap::default();
         let mut function_plans = FxHashMap::default();
-        let results: Vec<_> = machine_final_spill_inputs
-            .into_par_iter()
-            .map(|input| {
+        let results: Vec<_> = sonatina_ir::parallel::map_owned(
+            &machine.work.module().func_store,
+            machine_final_spill_inputs,
+            |input| {
                 let MachineFinalSpillInput {
                     func,
                     analysis,
@@ -1146,8 +1147,8 @@ fn prepare_machine_section_after_pipeline(
                         stackify_trace,
                     },
                 ))
-            })
-            .collect();
+            },
+        );
         let mut results = results.into_iter().collect::<Result<Vec<_>, _>>()?;
         results.sort_unstable_by_key(|(func, ..)| func.as_u32());
         let mut final_spill_fallback_funcs = Vec::new();
@@ -1588,16 +1589,12 @@ fn compute_high_evm_pre_analyses(
     ptr_escape: &PtrEscapeSummaries,
 ) -> FxHashMap<FuncRef, memory_plan::FuncPreAnalysis> {
     let _span = debug_span!("sonatina.codegen.evm.compute_high_evm_pre_analyses").entered();
-    let mut results: Vec<_> = funcs
-        .par_iter()
-        .copied()
-        .map(|func| {
-            let analysis = module.func_store.modify(func, |function| {
-                prepare_high_evm_pre_analysis(function, &module.ctx, backend, ptr_escape)
-            });
-            (func, analysis)
-        })
-        .collect();
+    let mut results: Vec<_> = sonatina_ir::parallel::map(&module.func_store, funcs, |&func| {
+        let analysis = module.func_store.modify(func, |function| {
+            prepare_high_evm_pre_analysis(function, &module.ctx, backend, ptr_escape)
+        });
+        (func, analysis)
+    });
     results.sort_unstable_by_key(|(func, _)| func.as_u32());
 
     let mut analyses = FxHashMap::default();

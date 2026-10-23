@@ -1,4 +1,3 @@
-use rayon::prelude::*;
 use sonatina_ir::{
     Function, Module,
     module::{FuncRef, ModuleCtx},
@@ -18,11 +17,10 @@ pub fn verify_module(module: &Module, cfg: &VerifierConfig) -> VerificationRepor
     let mut report = verify_module_invariants(module, cfg);
     let declared_embed_symbols = module_invariants::collect_declared_embed_symbols(module);
 
-    let mut func_reports: Vec<_> = module
-        .func_store
-        .funcs()
-        .into_par_iter()
-        .map(|func_ref| {
+    let mut func_reports: Vec<_> = sonatina_ir::parallel::map_owned(
+        &module.func_store,
+        module.func_store.funcs(),
+        |func_ref| {
             let Some(func_report) = module.func_store.try_view(func_ref, |func| {
                 function::verify_function_with_symbols(
                     &module.ctx,
@@ -45,8 +43,8 @@ pub fn verify_module(module: &Module, cfg: &VerifierConfig) -> VerificationRepor
             };
 
             (func_ref, func_report)
-        })
-        .collect();
+        },
+    );
 
     func_reports.sort_by_key(|(func_ref, _)| func_ref.as_u32());
     for (_, func_report) in func_reports {

@@ -11,7 +11,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use sonatina_ir::{
     ControlFlowGraph, Function,
     module::{FuncRef, Module},
@@ -727,7 +726,7 @@ fn run_module_pass(
         }
     };
     match funcs {
-        Some(funcs) => funcs.par_iter().copied().for_each(|func_ref| {
+        Some(funcs) => sonatina_ir::parallel::for_each(&module.func_store, funcs, |&func_ref| {
             module
                 .func_store
                 .modify(func_ref, |func| run_on(func_ref, func));
@@ -1043,7 +1042,6 @@ mod tests {
         inst::{
             arith::Add,
             control_flow::{Call, Return},
-            downcast,
         },
         ir_writer::FuncWriter,
         module::{FuncHints, InlineHint},
@@ -1137,9 +1135,7 @@ block0:
                     let inst = func
                         .layout
                         .iter_inst(func.layout.entry_block().unwrap())
-                        .find(|&inst| {
-                            downcast::<&Call>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                        })
+                        .find(|&inst| func.dfg.downcast::<&Call>(inst).is_some())
                         .unwrap();
                     let call =
                         Call::new_unchecked(func.inst_set(), writer, smallvec![func.arg_values[0]]);

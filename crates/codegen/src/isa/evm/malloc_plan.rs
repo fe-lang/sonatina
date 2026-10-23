@@ -1,5 +1,4 @@
 use cranelift_entity::SecondaryMap;
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     AccessKind, AccessLoc, BlockId, Function, InstId, InstSetExt, Module, Value, ValueId,
@@ -63,11 +62,8 @@ pub(crate) fn compute_transient_malloc_call_barriers(
     semantic_plans: &FxHashMap<FuncRef, SemanticFuncPlan>,
     isa: &Evm,
 ) -> TransientMallocCallBarriers {
-    let mut local_results: Vec<_> = schedule
-        .funcs()
-        .par_iter()
-        .copied()
-        .map(|func| {
+    let mut local_results: Vec<_> =
+        sonatina_ir::parallel::map(&module.func_store, schedule.funcs(), |&func| {
             let has_dynamic_frame = semantic_plans
                 .get(&func)
                 .is_some_and(SemanticFuncPlan::has_dynamic_frame);
@@ -75,8 +71,7 @@ pub(crate) fn compute_transient_malloc_call_barriers(
                 .func_store
                 .view(func, |function| func_allocates(function, isa));
             (func, has_dynamic_frame || allocates)
-        })
-        .collect();
+        });
     local_results.sort_unstable_by_key(|(func, _)| func.as_u32());
     let local_barriers: TransientMallocCallBarriers = local_results.into_iter().collect();
 

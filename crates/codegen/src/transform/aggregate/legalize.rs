@@ -7,7 +7,7 @@ use sonatina_ir::{
     BlockId, Function, Inst, InstId, Type, Value, ValueId,
     cfg::ControlFlowGraph,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{cast, control_flow, data, downcast},
+    inst::{cast, control_flow, data},
     module::ModuleCtx,
     types::CompoundType,
 };
@@ -387,18 +387,18 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn rewrite_inst(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) -> bool {
-        if downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        if func.dfg.downcast::<&cast::Bitcast>(inst).is_some() {
             return self.rewrite_bitcast(func, module, inst);
         }
-        if downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        if func.dfg.downcast::<&data::InsertValue>(inst).is_some() {
             self.rewrite_insert_value(func, module, inst);
             return true;
         }
-        if downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        if func.dfg.downcast::<&data::ExtractValue>(inst).is_some() {
             self.rewrite_extract_value(func, module, inst);
             return true;
         }
-        if downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_some()
+        if func.dfg.downcast::<&control_flow::Phi>(inst).is_some()
             && func
                 .dfg
                 .inst_result(inst)
@@ -407,13 +407,13 @@ impl AggregateLowerToMemoryLegalize {
             self.rewrite_aggregate_phi(func, module, inst);
             return true;
         }
-        if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+        if let Some(mload) = func.dfg.downcast::<&data::Mload>(inst)
             && shape::is_supported_aggregate_ty(module, *mload.ty())
         {
             self.rewrite_aggregate_mload(func, module, inst);
             return true;
         }
-        if let Some(mstore) = downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
+        if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(inst)
             && shape::is_supported_aggregate_ty(module, *mstore.ty())
         {
             self.rewrite_aggregate_mstore(func, module, inst);
@@ -423,7 +423,9 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn rewrite_bitcast(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) -> bool {
-        let bitcast = *downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst))
+        let bitcast = *func
+            .dfg
+            .downcast::<&cast::Bitcast>(inst)
             .expect("expected bitcast");
         let Some(result) = func.dfg.inst_result(inst) else {
             return false;
@@ -569,7 +571,9 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn rewrite_insert_value(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
-        let insert = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst))
+        let insert = func
+            .dfg
+            .downcast::<&data::InsertValue>(inst)
             .expect("expected insert_value")
             .clone();
         let result = func
@@ -664,7 +668,9 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn rewrite_extract_value(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
-        let extract = downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))
+        let extract = func
+            .dfg
+            .downcast::<&data::ExtractValue>(inst)
             .expect("expected extract_value")
             .clone();
         let result = func
@@ -857,7 +863,9 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn rewrite_aggregate_phi(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
-        let phi = downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+        let phi = func
+            .dfg
+            .downcast::<&control_flow::Phi>(inst)
             .expect("expected phi")
             .clone();
         let result = func.dfg.inst_result(inst).expect("phi must have result");
@@ -884,7 +892,9 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn rewrite_aggregate_mload(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
-        let mload = *downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+        let mload = *func
+            .dfg
+            .downcast::<&data::Mload>(inst)
             .expect("expected mload");
         let result = func
             .dfg
@@ -999,9 +1009,7 @@ impl AggregateLowerToMemoryLegalize {
                 if !func.layout.is_inst_inserted(user) {
                     continue;
                 }
-                let Some(extract) =
-                    downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(user)).cloned()
-                else {
+                let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(user).cloned() else {
                     continue;
                 };
                 if *extract.dest() != value {
@@ -1061,9 +1069,7 @@ impl AggregateLowerToMemoryLegalize {
                 if !func.layout.is_inst_inserted(user) {
                     continue;
                 }
-                let Some(bitcast) =
-                    downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user)).cloned()
-                else {
+                let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(user).cloned() else {
                     continue;
                 };
                 if *bitcast.from() != value {
@@ -1090,9 +1096,13 @@ impl AggregateLowerToMemoryLegalize {
                 if !func.layout.is_inst_inserted(user) {
                     continue;
                 }
-                if downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(user))
+                if func
+                    .dfg
+                    .downcast::<&data::ExtractValue>(user)
                     .is_some_and(|extract| *extract.dest() == value)
-                    || downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
+                    || func
+                        .dfg
+                        .downcast::<&cast::Bitcast>(user)
                         .is_some_and(|bitcast| *bitcast.from() == value)
                 {
                     continue;
@@ -1173,7 +1183,9 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn rewrite_aggregate_mstore(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
-        let mstore = *downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
+        let mstore = *func
+            .dfg
+            .downcast::<&data::Mstore>(inst)
             .expect("expected mstore");
         let agg_ty = *mstore.ty();
         let mut builder = BeforeCursor::new_before_inst(func, inst);
@@ -1371,18 +1383,28 @@ impl AggregateLowerToMemoryLegalize {
             if !func.layout.is_inst_inserted(user) {
                 continue;
             }
-            if downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(user)).is_some_and(
-                |extract| {
+            if func
+                .dfg
+                .downcast::<&data::ExtractValue>(user)
+                .is_some_and(|extract| {
                     *extract.dest() == value
                         && shape::const_u32(&func.dfg, *extract.idx()).is_some()
-                },
-            ) || downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
-                .is_some_and(|bitcast| *bitcast.from() == value)
-                || downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
+                })
+                || func
+                    .dfg
+                    .downcast::<&cast::Bitcast>(user)
+                    .is_some_and(|bitcast| *bitcast.from() == value)
+                || func
+                    .dfg
+                    .downcast::<&data::Mstore>(user)
                     .is_some_and(|mstore| *mstore.value() == value)
-                || downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(user))
+                || func
+                    .dfg
+                    .downcast::<&data::InsertValue>(user)
                     .is_some_and(|insert| *insert.dest() == value)
-                || downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(user))
+                || func
+                    .dfg
+                    .downcast::<&control_flow::Phi>(user)
                     .is_some_and(|phi| phi.args().iter().any(|&(incoming, _)| incoming == value))
             {
                 continue;
@@ -1457,8 +1479,7 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         if let Some(def_inst) = func.dfg.value_inst(value)
-            && let Some(insert) =
-                downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(def_inst)).cloned()
+            && let Some(insert) = func.dfg.downcast::<&data::InsertValue>(def_inst).cloned()
             && func.dfg.value_ty(value) == agg_ty
             && let Some(idx) = shape::const_u32(&func.dfg, *insert.idx())
             && let Some(slice) = shape::aggregate_slice_for_index(module, agg_ty, idx)
@@ -1798,8 +1819,7 @@ impl AggregateLowerToMemoryLegalize {
         self.materialized_slots.clear();
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                let Some(alloca) = downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst))
-                else {
+                let Some(alloca) = func.dfg.downcast::<&data::Alloca>(inst) else {
                     continue;
                 };
                 if !shape::is_supported_aggregate_ty(module, *alloca.ty()) {
@@ -1833,7 +1853,7 @@ impl AggregateLowerToMemoryLegalize {
                     continue;
                 }
 
-                if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(user))
+                if let Some(gep) = func.dfg.downcast::<&data::Gep>(user)
                     && gep.values().first().copied() == Some(value)
                 {
                     self.slot_tree_insts.push(user);
@@ -1843,8 +1863,7 @@ impl AggregateLowerToMemoryLegalize {
                     continue;
                 }
 
-                if let Some(bitcast) =
-                    downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
+                if let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(user)
                     && *bitcast.from() == value
                 {
                     self.slot_tree_insts.push(user);
@@ -1854,15 +1873,14 @@ impl AggregateLowerToMemoryLegalize {
                     continue;
                 }
 
-                if let Some(mstore) =
-                    downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
+                if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(user)
                     && *mstore.addr() == value
                 {
                     self.slot_tree_insts.push(user);
                     continue;
                 }
 
-                if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(user))
+                if let Some(mload) = func.dfg.downcast::<&data::Mload>(user)
                     && *mload.addr() == value
                 {
                     let Some(result) = func.dfg.inst_result(user) else {
@@ -1978,9 +1996,7 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
 
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
-            if let Some(call) =
-                downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-            {
+            if let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) {
                 if call
                     .args()
                     .iter()
@@ -1995,8 +2011,7 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                 }
             }
 
-            if let Some(ret) =
-                downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst))
+            if let Some(ret) = func.dfg.downcast::<&control_flow::Return>(inst)
                 && ret
                     .args()
                     .iter()
@@ -2006,8 +2021,7 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                 panic!("aggregate return values are unsupported by aggregate legalization");
             }
 
-            if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst))
-            {
+            if let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(inst) {
                 let from_ty = func.dfg.value_ty(*bitcast.from());
                 let to_ty = func
                     .dfg
@@ -2023,7 +2037,7 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                 continue;
             }
 
-            if downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+            if func.dfg.downcast::<&data::InsertValue>(inst).is_some() {
                 if func.dfg.inst_result(inst).is_some_and(|value| {
                     shape::is_supported_aggregate_ty(module, func.dfg.value_ty(value))
                 }) {
@@ -2033,9 +2047,7 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                 continue;
             }
 
-            if let Some(extract) =
-                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))
-            {
+            if let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(inst) {
                 if shape::is_supported_aggregate_ty(module, func.dfg.value_ty(*extract.dest())) {
                     scan.has_work = true;
                     scan.candidates[block].push(inst);
@@ -2043,7 +2055,7 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                 continue;
             }
 
-            if downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+            if func.dfg.downcast::<&control_flow::Phi>(inst).is_some() {
                 let has_agg_phi = func.dfg.inst_result(inst).is_some_and(|value| {
                     shape::is_supported_aggregate_ty(module, func.dfg.value_ty(value))
                 });
@@ -2055,7 +2067,7 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                 continue;
             }
 
-            if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst)) {
+            if let Some(mload) = func.dfg.downcast::<&data::Mload>(inst) {
                 if shape::is_supported_aggregate_ty(module, *mload.ty()) {
                     scan.has_work = true;
                     scan.candidates[block].push(inst);
@@ -2063,7 +2075,7 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                 continue;
             }
 
-            if let Some(mstore) = downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
+            if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(inst)
                 && shape::is_supported_aggregate_ty(module, *mstore.ty())
             {
                 scan.has_work = true;
@@ -2133,9 +2145,7 @@ fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
 pub fn assert_aggregate_legalized(function: &Function, module: &ModuleCtx) {
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
-            if let Some(bitcast) =
-                downcast::<&cast::Bitcast>(function.inst_set(), function.dfg.inst(inst))
-            {
+            if let Some(bitcast) = function.dfg.downcast::<&cast::Bitcast>(inst) {
                 let from_ty = function.dfg.value_ty(*bitcast.from());
                 let to_ty = function
                     .dfg
@@ -2151,24 +2161,19 @@ pub fn assert_aggregate_legalized(function: &Function, module: &ModuleCtx) {
                     );
                 }
             }
-            if downcast::<&data::InsertValue>(function.inst_set(), function.dfg.inst(inst))
-                .is_some()
-            {
+            if function.dfg.downcast::<&data::InsertValue>(inst).is_some() {
                 panic!(
                     "aggregate legalization invariant violated: insert_value remains (inst {})",
                     inst.as_u32()
                 );
             }
-            if downcast::<&data::ExtractValue>(function.inst_set(), function.dfg.inst(inst))
-                .is_some()
-            {
+            if function.dfg.downcast::<&data::ExtractValue>(inst).is_some() {
                 panic!(
                     "aggregate legalization invariant violated: extract_value remains (inst {})",
                     inst.as_u32()
                 );
             }
-            if downcast::<&control_flow::Phi>(function.inst_set(), function.dfg.inst(inst))
-                .is_some()
+            if function.dfg.downcast::<&control_flow::Phi>(inst).is_some()
                 && function.dfg.inst_result(inst).is_some_and(|v| {
                     shape::is_supported_aggregate_ty(module, function.dfg.value_ty(v))
                 })
@@ -2178,8 +2183,7 @@ pub fn assert_aggregate_legalized(function: &Function, module: &ModuleCtx) {
                     inst.as_u32()
                 );
             }
-            if let Some(mload) =
-                downcast::<&data::Mload>(function.inst_set(), function.dfg.inst(inst))
+            if let Some(mload) = function.dfg.downcast::<&data::Mload>(inst)
                 && shape::is_supported_aggregate_ty(module, *mload.ty())
             {
                 panic!(
@@ -2187,8 +2191,7 @@ pub fn assert_aggregate_legalized(function: &Function, module: &ModuleCtx) {
                     inst.as_u32()
                 );
             }
-            if let Some(mstore) =
-                downcast::<&data::Mstore>(function.inst_set(), function.dfg.inst(inst))
+            if let Some(mstore) = function.dfg.downcast::<&data::Mstore>(inst)
                 && shape::is_supported_aggregate_ty(module, *mstore.ty())
             {
                 panic!(
@@ -2239,8 +2242,7 @@ mod tests {
         let mut count = 0;
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if let Some(alloca) =
-                    downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst))
+                if let Some(alloca) = func.dfg.downcast::<&data::Alloca>(inst)
                     && shape::is_supported_aggregate_ty(ctx, *alloca.ty())
                 {
                     count += 1;
@@ -2253,13 +2255,10 @@ mod tests {
     fn assert_no_unit_memory_ops(func: &Function, dumped: &str) {
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
-                {
+                if let Some(mload) = func.dfg.downcast::<&data::Mload>(inst) {
                     assert_ne!(*mload.ty(), Type::Unit, "unit load remains:\n{dumped}");
                 }
-                if let Some(mstore) =
-                    downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
-                {
+                if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(inst) {
                     assert_ne!(*mstore.ty(), Type::Unit, "unit store remains:\n{dumped}");
                 }
             }
@@ -2269,8 +2268,7 @@ mod tests {
     fn assert_no_mloads(func: &Function, dumped: &str) {
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
-                {
+                if let Some(mload) = func.dfg.downcast::<&data::Mload>(inst) {
                     panic!(
                         "zero-sized projection extract should not demand a snapshot load, found {:?}:\n{dumped}",
                         mload.ty()
@@ -2422,17 +2420,13 @@ func private %f(v0.i1, v1.i256, v2.i256) -> i256 {
             assert_aggregate_legalized(func, &ctx);
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(mload) =
-                        downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(mload) = func.dfg.downcast::<&data::Mload>(inst) {
                         assert!(
                             !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
                             "aggregate mload should be gone"
                         );
                     }
-                    if let Some(mstore) =
-                        downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(inst) {
                         assert!(
                             !shape::is_supported_aggregate_ty(&ctx, *mstore.ty()),
                             "aggregate mstore should be gone"
@@ -2470,7 +2464,7 @@ func private %f(v0.i256) -> i256 {
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
                     assert!(
-                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        func.dfg.downcast::<&data::Alloca>(inst).is_none(),
                         "dead materialization alloca should be removed"
                     );
                 }
@@ -2581,17 +2575,13 @@ func private %f(v0.i256, v1.i256) -> i256 {
             assert_aggregate_legalized(func, &ctx);
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(mload) =
-                        downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(mload) = func.dfg.downcast::<&data::Mload>(inst) {
                         assert!(
                             !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
                             "aggregate mload should be gone"
                         );
                     }
-                    if let Some(mstore) =
-                        downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(inst) {
                         assert!(
                             !shape::is_supported_aggregate_ty(&ctx, *mstore.ty()),
                             "aggregate mstore should be gone"
@@ -2631,17 +2621,13 @@ func private %f(v0.i256) -> i256 {
             assert_aggregate_legalized(func, &ctx);
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(mload) =
-                        downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(mload) = func.dfg.downcast::<&data::Mload>(inst) {
                         assert!(
                             !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
                             "aggregate mload should be gone"
                         );
                     }
-                    if let Some(mstore) =
-                        downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(inst) {
                         assert!(
                             !shape::is_supported_aggregate_ty(&ctx, *mstore.ty()),
                             "aggregate mstore should be gone"
@@ -2831,17 +2817,13 @@ func private %f(v0.i256) -> i256 {
             assert_aggregate_legalized(func, &ctx);
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(mload) =
-                        downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(mload) = func.dfg.downcast::<&data::Mload>(inst) {
                         assert!(
                             !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
                             "aggregate mload should be gone"
                         );
                     }
-                    if let Some(mstore) =
-                        downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(inst) {
                         assert!(
                             !shape::is_supported_aggregate_ty(&ctx, *mstore.ty()),
                             "aggregate mstore should be gone"

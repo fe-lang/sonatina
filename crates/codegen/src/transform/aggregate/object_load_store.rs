@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, InstId, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
     module::FuncRef,
 };
 
@@ -358,16 +358,13 @@ impl ObjectLoadStore {
     ) -> bool {
         let effects = accesses.effects(func, inst, object_effects);
         let exact = |value| tracked[value].and_then(TrackedObject::exact);
-        let read =
-            if let Some(load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)) {
-                exact(*load.object())
-            } else if let Some(load) =
-                downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
-            {
-                exact(*load.object()).and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
-            } else {
-                None
-            };
+        let read = if let Some(load) = func.dfg.downcast::<&data::ObjLoad>(inst) {
+            exact(*load.object())
+        } else if let Some(load) = func.dfg.downcast::<&data::EnumGetTag>(inst) {
+            exact(*load.object()).and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+        } else {
+            None
+        };
         if let Some(slice) = read
             && let Some(replacement) = self.replacement_for_load(func, inst, slice, available)
             && let Some(result) = func.dfg.inst_result(inst)
@@ -378,13 +375,11 @@ impl ObjectLoadStore {
         }
 
         let mut written = Vec::new();
-        if let Some(store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
+        if let Some(store) = func.dfg.downcast::<&data::ObjStore>(inst) {
             if let Some(slice) = exact(*store.object()) {
                 written.push((slice, *store.value()));
             }
-        } else if let Some(store) =
-            downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst)).copied()
-        {
+        } else if let Some(store) = func.dfg.downcast::<&data::EnumSetTag>(inst).copied() {
             if let Some(slice) =
                 exact(*store.object()).and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
             {
@@ -394,8 +389,7 @@ impl ObjectLoadStore {
                         .make_imm_value(enum_variant_tag_imm(*store.variant(), slice.ty)),
                 ));
             }
-        } else if let Some(store) =
-            downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        } else if let Some(store) = func.dfg.downcast::<&data::EnumWriteVariant>(inst).cloned()
             && let Some(base) = exact(*store.object())
         {
             for (index, &value) in store.values().iter().enumerate() {
@@ -449,6 +443,9 @@ impl ObjectLoadStore {
         let mut in_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
         let mut out_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
         let mut changed = false;
+        // Removing a dead store edits no other instruction, so each
+        // instruction's effects hold for the whole backward pass.
+        let mut inst_effects = FxHashMap::<InstId, ObjectInstEffects>::default();
 
         let mut dataflow_changed = true;
         while dataflow_changed {
@@ -485,14 +482,10 @@ impl ObjectLoadStore {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    transfer_backward_live(
-                        func,
-                        inst,
-                        tracked,
-                        accesses,
-                        &mut live,
-                        object_effects,
-                    );
+                    let effects = inst_effects
+                        .entry(inst)
+                        .or_insert_with(|| accesses.effects(func, inst, object_effects));
+                    transfer_backward_effects(func, tracked, accesses, effects, &mut live);
                 }
 
                 if live != in_states[block] {
@@ -523,7 +516,10 @@ impl ObjectLoadStore {
                 if removed {
                     continue;
                 }
-                transfer_backward_live(func, inst, tracked, accesses, &mut live, object_effects);
+                let effects = inst_effects
+                    .entry(inst)
+                    .or_insert_with(|| accesses.effects(func, inst, object_effects));
+                transfer_backward_effects(func, tracked, accesses, effects, &mut live);
             }
         }
 
@@ -540,14 +536,10 @@ impl ObjectLoadStore {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    let removable =
-                        downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                            || downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst))
-                                .is_some()
-                            || downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst))
-                                .is_some()
-                            || downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
-                                .is_some();
+                    let removable = func.dfg.downcast::<&data::ObjProj>(inst).is_some()
+                        || func.dfg.downcast::<&data::ObjIndex>(inst).is_some()
+                        || func.dfg.downcast::<&data::EnumProj>(inst).is_some()
+                        || func.dfg.downcast::<&data::ObjAlloc>(inst).is_some();
                     if !removable {
                         continue;
                     }
@@ -639,18 +631,6 @@ fn mark_access_live(
     }
 }
 
-fn transfer_backward_live(
-    func: &Function,
-    inst: InstId,
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    accesses: &ObjectAccessFacts,
-    live: &mut LiveLeafMap,
-    object_effects: Option<&ObjectEffectSummaryMap>,
-) {
-    let effects = accesses.effects(func, inst, object_effects);
-    transfer_backward_effects(func, tracked, accesses, &effects, live);
-}
-
 pub(crate) fn transfer_backward_effects(
     func: &Function,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
@@ -704,7 +684,7 @@ fn try_remove_dead_store(
     provenance: MayProvenance<'_>,
     live: &LiveLeafMap,
 ) -> bool {
-    if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(obj_store) = func.dfg.downcast::<&data::ObjStore>(inst) {
         let Some(tracked_object) = tracked[*obj_store.object()].as_ref().copied() else {
             return false;
         };
@@ -721,8 +701,7 @@ fn try_remove_dead_store(
         return true;
     }
 
-    if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
-    {
+    if let Some(enum_set_tag) = func.dfg.downcast::<&data::EnumSetTag>(inst) {
         let Some(tracked_object) = tracked[*enum_set_tag.object()].as_ref().copied() else {
             return false;
         };
@@ -742,9 +721,7 @@ fn try_remove_dead_store(
         return true;
     }
 
-    let Some(enum_write_variant) =
-        downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
-    else {
+    let Some(enum_write_variant) = func.dfg.downcast::<&data::EnumWriteVariant>(inst) else {
         return false;
     };
     let Some(tracked_object) = tracked[*enum_write_variant.object()].as_ref().copied() else {
@@ -777,9 +754,9 @@ fn root_has_live(live: &LiveLeafMap, root: ValueId) -> bool {
 }
 
 fn ends_with_return(func: &Function, block: BlockId) -> bool {
-    func.layout.last_inst_of(block).is_some_and(|inst| {
-        downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst)).is_some()
-    })
+    func.layout
+        .last_inst_of(block)
+        .is_some_and(|inst| func.dfg.downcast::<&control_flow::Return>(inst).is_some())
 }
 
 #[cfg(test)]

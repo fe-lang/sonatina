@@ -2,7 +2,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, InstId, Module, Type, ValueId,
-    inst::{cast, control_flow, data, downcast, evm},
+    inst::{cast, control_flow, data, evm},
     module::{FuncRef, ModuleCtx},
     types::EnumVariantRef,
 };
@@ -376,7 +376,7 @@ pub(crate) fn raw_pointer_stays_local(
                 continue;
             }
 
-            if let Some(gep) = downcast::<&data::Gep>(function.inst_set(), function.dfg.inst(user))
+            if let Some(gep) = function.dfg.downcast::<&data::Gep>(user)
                 && gep.values().first() == Some(&value)
             {
                 if let Some(result) = function.dfg.inst_result(user) {
@@ -385,8 +385,7 @@ pub(crate) fn raw_pointer_stays_local(
                 continue;
             }
 
-            if let Some(bitcast) =
-                downcast::<&cast::Bitcast>(function.inst_set(), function.dfg.inst(user))
+            if let Some(bitcast) = function.dfg.downcast::<&cast::Bitcast>(user)
                 && *bitcast.from() == value
             {
                 if let Some(result) = function.dfg.inst_result(user) {
@@ -395,8 +394,7 @@ pub(crate) fn raw_pointer_stays_local(
                 continue;
             }
 
-            if let Some(phi) =
-                downcast::<&control_flow::Phi>(function.inst_set(), function.dfg.inst(user))
+            if let Some(phi) = function.dfg.downcast::<&control_flow::Phi>(user)
                 && phi.args().iter().any(|(arg, _)| *arg == value)
             {
                 if let Some(result) = function.dfg.inst_result(user) {
@@ -405,8 +403,7 @@ pub(crate) fn raw_pointer_stays_local(
                 continue;
             }
 
-            if let Some(load) =
-                downcast::<&data::Mload>(function.inst_set(), function.dfg.inst(user))
+            if let Some(load) = function.dfg.downcast::<&data::Mload>(user)
                 && *load.addr() == value
             {
                 if allow_reads {
@@ -415,9 +412,7 @@ pub(crate) fn raw_pointer_stays_local(
                 return false;
             }
 
-            if let Some(store) =
-                downcast::<&data::Mstore>(function.inst_set(), function.dfg.inst(user))
-            {
+            if let Some(store) = function.dfg.downcast::<&data::Mstore>(user) {
                 if *store.addr() == value {
                     continue;
                 }
@@ -426,9 +421,7 @@ pub(crate) fn raw_pointer_stays_local(
                 }
             }
 
-            if let Some(copy) =
-                downcast::<&evm::EvmCodeCopy>(function.inst_set(), function.dfg.inst(user))
-            {
+            if let Some(copy) = function.dfg.downcast::<&evm::EvmCodeCopy>(user) {
                 if *copy.dst_addr() == value && *copy.code_offset() != value && *copy.len() != value
                 {
                     continue;
@@ -436,9 +429,7 @@ pub(crate) fn raw_pointer_stays_local(
                 return false;
             }
 
-            if let Some(copy) =
-                downcast::<&evm::EvmMcopy>(function.inst_set(), function.dfg.inst(user))
-            {
+            if let Some(copy) = function.dfg.downcast::<&evm::EvmMcopy>(user) {
                 if (*copy.dest() == value || *copy.addr() == value)
                     && (allow_reads || *copy.addr() != value)
                     && *copy.len() != value
@@ -448,11 +439,14 @@ pub(crate) fn raw_pointer_stays_local(
                 return false;
             }
 
-            if downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(user))
-                .is_some()
-                || downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(user))
+            if function.dfg.downcast::<&control_flow::Call>(user).is_some()
+                || function
+                    .dfg
+                    .downcast::<&control_flow::Return>(user)
                     .is_some_and(|ret| ret.args().iter().any(|arg| *arg == value))
-                || downcast::<&cast::PtrToInt>(function.inst_set(), function.dfg.inst(user))
+                || function
+                    .dfg
+                    .downcast::<&cast::PtrToInt>(user)
                     .is_some_and(|ptr_to_int| *ptr_to_int.from() == value)
             {
                 return false;
@@ -587,12 +581,10 @@ impl Walk<'_> {
             path,
             ..
         } = *self;
-        let inst_set = function.inst_set();
-        let inst = function.dfg.inst(self.user);
 
         // Storing the value, or packing it into an aggregate, carries the
         // object one step further away, whatever the value is.
-        if let Some(store) = downcast::<&data::ObjStore>(inst_set, inst)
+        if let Some(store) = function.dfg.downcast::<&data::ObjStore>(self.user)
             && *store.value() == value
         {
             return carry_into(
@@ -603,7 +595,7 @@ impl Walk<'_> {
                 on_special,
             );
         }
-        if let Some(write) = downcast::<&data::EnumWriteVariant>(inst_set, inst)
+        if let Some(write) = function.dfg.downcast::<&data::EnumWriteVariant>(self.user)
             && write.values().contains(&value)
         {
             for field in positions(write.values(), value) {
@@ -618,7 +610,7 @@ impl Walk<'_> {
             }
             return ControlFlow::Continue(());
         }
-        if let Some(insert) = downcast::<&data::InsertValue>(inst_set, inst)
+        if let Some(insert) = function.dfg.downcast::<&data::InsertValue>(self.user)
             && (*insert.dest() == value || *insert.value() == value)
         {
             let index = shape::const_u32(&function.dfg, *insert.idx());
@@ -634,7 +626,7 @@ impl Walk<'_> {
             }
             return ControlFlow::Continue(());
         }
-        if let Some(make) = downcast::<&data::EnumMake>(inst_set, inst)
+        if let Some(make) = function.dfg.downcast::<&data::EnumMake>(self.user)
             && make.values().contains(&value)
         {
             on_special(SpecialObjectUse::Carry)?;
@@ -644,7 +636,9 @@ impl Walk<'_> {
             }
             return ControlFlow::Continue(());
         }
-        if downcast::<&control_flow::Phi>(inst_set, inst)
+        if function
+            .dfg
+            .downcast::<&control_flow::Phi>(self.user)
             .is_some_and(|phi| phi.args().iter().any(|(arg, _)| *arg == value))
         {
             return self.follow(path.clone(), worklist, on_special);
@@ -667,52 +661,75 @@ impl Walk<'_> {
         let Self {
             function, value, ..
         } = *self;
-        let inst_set = function.inst_set();
-        let inst = function.dfg.inst(self.user);
 
-        if downcast::<&data::ObjProj>(inst_set, inst)
+        if function
+            .dfg
+            .downcast::<&data::ObjProj>(self.user)
             .is_some_and(|proj| proj.values().first() == Some(&value))
-            || downcast::<&data::ObjIndex>(inst_set, inst)
+            || function
+                .dfg
+                .downcast::<&data::ObjIndex>(self.user)
                 .is_some_and(|index| *index.object() == value)
-            || downcast::<&data::EnumProj>(inst_set, inst)
+            || function
+                .dfg
+                .downcast::<&data::EnumProj>(self.user)
                 .is_some_and(|enum_proj| *enum_proj.object() == value)
-            || downcast::<&data::EnumAssertVariantRef>(inst_set, inst)
+            || function
+                .dfg
+                .downcast::<&data::EnumAssertVariantRef>(self.user)
                 .is_some_and(|enum_assert_ref| *enum_assert_ref.object() == value)
         {
             return self.follow(Path::new(), worklist, on_special);
         }
-        if downcast::<&data::ObjLoad>(inst_set, inst).is_some_and(|load| *load.object() == value)
-            || downcast::<&data::ObjStore>(inst_set, inst)
+        if function
+            .dfg
+            .downcast::<&data::ObjLoad>(self.user)
+            .is_some_and(|load| *load.object() == value)
+            || function
+                .dfg
+                .downcast::<&data::ObjStore>(self.user)
                 .is_some_and(|store| *store.object() == value)
-            || downcast::<&data::ObjInitConst>(inst_set, inst)
+            || function
+                .dfg
+                .downcast::<&data::ObjInitConst>(self.user)
                 .is_some_and(|init| *init.object() == value)
-            || downcast::<&data::EnumGetTag>(inst_set, inst)
+            || function
+                .dfg
+                .downcast::<&data::EnumGetTag>(self.user)
                 .is_some_and(|enum_get_tag| *enum_get_tag.object() == value)
-            || downcast::<&data::EnumSetTag>(inst_set, inst)
+            || function
+                .dfg
+                .downcast::<&data::EnumSetTag>(self.user)
                 .is_some_and(|enum_set_tag| *enum_set_tag.object() == value)
-            || downcast::<&data::EnumWriteVariant>(inst_set, inst)
+            || function
+                .dfg
+                .downcast::<&data::EnumWriteVariant>(self.user)
                 .is_some_and(|enum_write_variant| *enum_write_variant.object() == value)
         {
             return ControlFlow::Continue(());
         }
-        if downcast::<&data::ObjMaterializeStack>(inst_set, inst)
+        if function
+            .dfg
+            .downcast::<&data::ObjMaterializeStack>(self.user)
             .is_some_and(|mat_stack| *mat_stack.object() == value)
         {
             return on_special(SpecialObjectUse::MaterializeStack(
                 function.dfg.inst_result(self.user),
             ));
         }
-        if downcast::<&data::ObjMaterializeHeap>(inst_set, inst)
+        if function
+            .dfg
+            .downcast::<&data::ObjMaterializeHeap>(self.user)
             .is_some_and(|mat_heap| *mat_heap.object() == value)
         {
             return on_special(SpecialObjectUse::MaterializeHeap);
         }
-        if let Some(call) = downcast::<&control_flow::Call>(inst_set, inst)
+        if let Some(call) = function.dfg.downcast::<&control_flow::Call>(self.user)
             && call.args().contains(&value)
         {
             return self.call_use(call, object_effects, worklist, on_special);
         }
-        if let Some(ret) = downcast::<&control_flow::Return>(inst_set, inst)
+        if let Some(ret) = function.dfg.downcast::<&control_flow::Return>(self.user)
             && ret.args().iter().any(|arg| *arg == value)
         {
             return on_special(SpecialObjectUse::Return { value, ret });
@@ -737,12 +754,10 @@ impl Walk<'_> {
             path,
             ..
         } = *self;
-        let inst_set = function.inst_set();
-        let inst = function.dfg.inst(self.user);
         let index = |value: ValueId| shape::const_u32(&function.dfg, value);
 
         let projection: Option<Path> = if let Some(proj) =
-            downcast::<&data::ObjProj>(inst_set, inst)
+            function.dfg.downcast::<&data::ObjProj>(self.user)
             && proj.values().first() == Some(&value)
         {
             Some(
@@ -751,11 +766,11 @@ impl Walk<'_> {
                     .map(|&field| Step::Field(index(field)))
                     .collect(),
             )
-        } else if let Some(obj_index) = downcast::<&data::ObjIndex>(inst_set, inst)
+        } else if let Some(obj_index) = function.dfg.downcast::<&data::ObjIndex>(self.user)
             && *obj_index.object() == value
         {
             Some(smallvec![Step::Field(index(*obj_index.index()))])
-        } else if let Some(enum_proj) = downcast::<&data::EnumProj>(inst_set, inst)
+        } else if let Some(enum_proj) = function.dfg.downcast::<&data::EnumProj>(self.user)
             && *enum_proj.object() == value
         {
             Some(smallvec![Step::Variant(
@@ -763,7 +778,9 @@ impl Walk<'_> {
                 index(*enum_proj.field())
             )])
         } else {
-            downcast::<&data::EnumAssertVariantRef>(inst_set, inst)
+            function
+                .dfg
+                .downcast::<&data::EnumAssertVariantRef>(self.user)
                 .is_some_and(|enum_assert_ref| *enum_assert_ref.object() == value)
                 .then(Path::new)
         };
@@ -773,29 +790,48 @@ impl Walk<'_> {
                 None => ControlFlow::Continue(()),
             };
         }
-        if downcast::<&data::ObjLoad>(inst_set, inst).is_some_and(|load| *load.object() == value) {
+        if function
+            .dfg
+            .downcast::<&data::ObjLoad>(self.user)
+            .is_some_and(|load| *load.object() == value)
+        {
             return self.follow(path[1..].into(), worklist, on_special);
         }
-        if downcast::<&data::ObjStore>(inst_set, inst).is_some_and(|store| *store.object() == value)
-            || downcast::<&data::ObjInitConst>(inst_set, inst)
+        if function
+            .dfg
+            .downcast::<&data::ObjStore>(self.user)
+            .is_some_and(|store| *store.object() == value)
+            || function
+                .dfg
+                .downcast::<&data::ObjInitConst>(self.user)
                 .is_some_and(|init| *init.object() == value)
-            || downcast::<&data::EnumGetTag>(inst_set, inst)
+            || function
+                .dfg
+                .downcast::<&data::EnumGetTag>(self.user)
                 .is_some_and(|enum_get_tag| *enum_get_tag.object() == value)
-            || downcast::<&data::EnumSetTag>(inst_set, inst)
+            || function
+                .dfg
+                .downcast::<&data::EnumSetTag>(self.user)
                 .is_some_and(|enum_set_tag| *enum_set_tag.object() == value)
-            || downcast::<&data::EnumWriteVariant>(inst_set, inst)
+            || function
+                .dfg
+                .downcast::<&data::EnumWriteVariant>(self.user)
                 .is_some_and(|enum_write_variant| *enum_write_variant.object() == value)
         {
             return ControlFlow::Continue(());
         }
-        if downcast::<&data::ObjMaterializeHeap>(inst_set, inst)
+        if function
+            .dfg
+            .downcast::<&data::ObjMaterializeHeap>(self.user)
             .is_some_and(|mat_heap| *mat_heap.object() == value)
         {
             return on_special(SpecialObjectUse::MaterializeHeap);
         }
         // A raw pointer into the memory can carry the object out only through
         // a read, which would recover the held reference as untracked bits.
-        if downcast::<&data::ObjMaterializeStack>(inst_set, inst)
+        if function
+            .dfg
+            .downcast::<&data::ObjMaterializeStack>(self.user)
             .is_some_and(|mat_stack| *mat_stack.object() == value)
             && function
                 .dfg
@@ -804,7 +840,7 @@ impl Walk<'_> {
         {
             return ControlFlow::Continue(());
         }
-        if let Some(call) = downcast::<&control_flow::Call>(inst_set, inst)
+        if let Some(call) = function.dfg.downcast::<&control_flow::Call>(self.user)
             && call.args().contains(&value)
         {
             return self.call_use(call, object_effects, worklist, on_special);
@@ -827,15 +863,14 @@ impl Walk<'_> {
             path,
             ..
         } = *self;
-        let inst_set = function.inst_set();
-        let inst = function.dfg.inst(self.user);
         let index = |value: ValueId| shape::const_u32(&function.dfg, value);
 
-        let extracted = if let Some(extract) = downcast::<&data::ExtractValue>(inst_set, inst)
+        let extracted = if let Some(extract) =
+            function.dfg.downcast::<&data::ExtractValue>(self.user)
             && *extract.dest() == value
         {
             Some(Step::Field(index(*extract.idx())))
-        } else if let Some(extract) = downcast::<&data::EnumExtract>(inst_set, inst)
+        } else if let Some(extract) = function.dfg.downcast::<&data::EnumExtract>(self.user)
             && *extract.value() == value
         {
             Some(Step::Variant(*extract.variant(), index(*extract.field())))
@@ -849,10 +884,17 @@ impl Walk<'_> {
                 ControlFlow::Continue(())
             };
         }
-        if downcast::<&data::EnumTag>(inst_set, inst).is_some_and(|tag| *tag.value() == value)
-            || downcast::<&data::EnumIsVariant>(inst_set, inst)
+        if function
+            .dfg
+            .downcast::<&data::EnumTag>(self.user)
+            .is_some_and(|tag| *tag.value() == value)
+            || function
+                .dfg
+                .downcast::<&data::EnumIsVariant>(self.user)
                 .is_some_and(|is_variant| *is_variant.value() == value)
-            || downcast::<&data::EnumAssertVariant>(inst_set, inst)
+            || function
+                .dfg
+                .downcast::<&data::EnumAssertVariant>(self.user)
                 .is_some_and(|assert| *assert.value() == value)
         {
             return ControlFlow::Continue(());
@@ -946,26 +988,24 @@ fn carry_into<T>(
         let Some(inst) = function.dfg.value_inst(value) else {
             return on_special(SpecialObjectUse::Unknown);
         };
-        let inst_set = function.inst_set();
-        let inst = function.dfg.inst(inst);
-        if downcast::<&data::ObjAlloc>(inst_set, inst).is_some() {
+        if function.dfg.downcast::<&data::ObjAlloc>(inst).is_some() {
             worklist.push((value, prepend(Step::Deref, &path)));
-        } else if let Some(proj) = downcast::<&data::ObjProj>(inst_set, inst) {
+        } else if let Some(proj) = function.dfg.downcast::<&data::ObjProj>(inst) {
             let fields = proj.values()[1..]
                 .iter()
                 .map(|&field| Step::Field(index(field)));
             pending.push((proj.values()[0], fields.chain(path).collect()));
-        } else if let Some(obj_index) = downcast::<&data::ObjIndex>(inst_set, inst) {
+        } else if let Some(obj_index) = function.dfg.downcast::<&data::ObjIndex>(inst) {
             let step = Step::Field(index(*obj_index.index()));
             pending.push((*obj_index.object(), prepend(step, &path)));
-        } else if let Some(enum_proj) = downcast::<&data::EnumProj>(inst_set, inst) {
+        } else if let Some(enum_proj) = function.dfg.downcast::<&data::EnumProj>(inst) {
             let step = Step::Variant(*enum_proj.variant(), index(*enum_proj.field()));
             pending.push((*enum_proj.object(), prepend(step, &path)));
         } else if let Some(enum_assert_ref) =
-            downcast::<&data::EnumAssertVariantRef>(inst_set, inst)
+            function.dfg.downcast::<&data::EnumAssertVariantRef>(inst)
         {
             pending.push((*enum_assert_ref.object(), path));
-        } else if let Some(phi) = downcast::<&control_flow::Phi>(inst_set, inst) {
+        } else if let Some(phi) = function.dfg.downcast::<&control_flow::Phi>(inst) {
             pending.extend(phi.args().iter().map(|(arg, _)| (*arg, path.clone())));
         } else {
             return on_special(SpecialObjectUse::Unknown);

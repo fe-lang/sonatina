@@ -83,7 +83,7 @@ mod tests {
     };
     use cranelift_entity::SecondaryMap;
     use sonatina_ir::{
-        InstDowncast, ValueId,
+        ValueId,
         cfg::ControlFlowGraph,
         inst::{control_flow, control_flow::BranchKind, evm},
     };
@@ -473,11 +473,7 @@ block3:
                 .iter_block()
                 .find(|&block| {
                     function.layout.last_inst_of(block).is_some_and(|inst| {
-                        <&evm::EvmRevert as InstDowncast>::downcast(
-                            function.inst_set(),
-                            function.dfg.inst(inst),
-                        )
-                        .is_some()
+                        function.dfg.downcast::<&evm::EvmRevert>(inst).is_some()
                     })
                 })
                 .expect("revert sink exists");
@@ -555,10 +551,7 @@ block3:
                 .iter_block()
                 .find(|&block| {
                     function.layout.last_inst_of(block).is_some_and(|inst| {
-                        <&control_flow::Unreachable as InstDowncast>::downcast(
-                            function.inst_set(),
-                            function.dfg.inst(inst),
-                        )
+                        function.dfg.downcast::<&control_flow::Unreachable>(inst)
                         .is_some()
                     })
                 })
@@ -713,11 +706,7 @@ block3:
                 .iter_block()
                 .find(|&block| {
                     function.layout.last_inst_of(block).is_some_and(|inst| {
-                        <&evm::EvmRevert as InstDowncast>::downcast(
-                            function.inst_set(),
-                            function.dfg.inst(inst),
-                        )
-                        .is_some()
+                        function.dfg.downcast::<&evm::EvmRevert>(inst).is_some()
                     })
                 })
                 .expect("revert sink exists");

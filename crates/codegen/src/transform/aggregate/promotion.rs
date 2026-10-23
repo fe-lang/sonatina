@@ -1,10 +1,7 @@
 pub use sonatina_ir::builder::SsaBuilder;
 
 use rustc_hash::FxHashSet;
-use sonatina_ir::{
-    ControlFlowGraph, Function, InstId,
-    inst::{control_flow, downcast},
-};
+use sonatina_ir::{ControlFlowGraph, Function, InstId, inst::control_flow};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReadPrefixRequirement {
@@ -36,9 +33,7 @@ pub(crate) fn unconditional_read_prefix(
         for inst in func.layout.iter_inst(block) {
             if is_read(inst) {
                 reads.push(inst);
-            } else if let Some(jump) =
-                downcast::<&control_flow::Jump>(func.inst_set(), func.dfg.inst(inst))
-            {
+            } else if let Some(jump) = func.dfg.downcast::<&control_flow::Jump>(inst) {
                 // A backedge would repeat these reads after later effects.
                 if requirement == ReadPrefixRequirement::SingleExecution
                     && cfg.preds_as_slice(*jump.dest()) != [block]

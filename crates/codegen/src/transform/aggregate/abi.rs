@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 use sonatina_ir::{
     Function, I256, Immediate, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
     module::{FuncRef, Module, ModuleCtx},
 };
 
@@ -226,10 +226,7 @@ impl AggregateExpandAbi {
         for block in blocks {
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
             for inst in insts {
-                let Some(ret) =
-                    downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst))
-                        .cloned()
-                else {
+                let Some(ret) = func.dfg.downcast::<&control_flow::Return>(inst).cloned() else {
                     continue;
                 };
 
@@ -260,9 +257,7 @@ impl AggregateExpandAbi {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
-                let Some(call) =
-                    downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)).cloned()
-                else {
+                let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst).cloned() else {
                     continue;
                 };
                 let Some(plan) = plans.get(call.callee()).cloned() else {
@@ -607,9 +602,7 @@ object @Contract {
 
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(call) =
-                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) {
                         assert_eq!(call.args().len(), 3);
                         assert_eq!(func.dfg.inst_results(inst).len(), 3);
                     }

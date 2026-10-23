@@ -334,8 +334,7 @@ impl ModuleLinker {
                 }
                 let mut visitor = InstUpdater { ref_map: &ref_map };
                 func.dfg
-                    .insts
-                    .values_mut()
+                    .all_insts_mut()
                     .for_each(|inst| inst.accept_mut(&mut visitor));
                 func.dfg.rebuild_value_caches();
 

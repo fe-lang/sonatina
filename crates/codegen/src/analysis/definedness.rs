@@ -4,7 +4,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     Function, Immediate, InstId, Value, ValueId,
     effects::AccessKind,
-    inst::{BinaryInstKind, InstClassKind, data, downcast},
+    inst::{BinaryInstKind, InstClassKind, data},
 };
 
 pub(crate) fn value_may_be_undef(
@@ -91,8 +91,8 @@ fn inst_result_may_be_undef(
 /// defined operands. Operand taint alone cannot prove their results defined.
 pub(crate) fn requires_definedness_evidence(func: &Function, inst: InstId) -> bool {
     func.dfg.is_call(inst)
-        || downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst)).is_some()
+        || func.dfg.downcast::<&data::ObjLoad>(inst).is_some()
+        || func.dfg.downcast::<&data::EnumGetTag>(inst).is_some()
         || func
             .dfg
             .effects(inst)

@@ -15,6 +15,7 @@ use crate::{
     ir_writer::IrWrite,
     isa::{Endian, Isa, TypeLayout, TypeLayoutError},
     object::Object,
+    parallel,
     types::{CompoundType, TypeStore},
 };
 
@@ -211,9 +212,24 @@ impl FuncStore {
     where
         F: Fn(FuncRef, &mut Function) + Sync + Send,
     {
+        if parallel::is_parallel(self, self.funcs.len()) {
+            self.funcs
+                .par_iter_mut()
+                .for_each(|mut entry| f(*entry.key(), entry.value_mut()))
+        } else {
+            self.funcs
+                .iter_mut()
+                .for_each(|mut entry| f(*entry.key(), entry.value_mut()))
+        }
+    }
+
+    /// The number of instructions the module's functions have made, removed
+    /// ones included: a measure of the work a pass over them does.
+    pub fn inst_count(&self) -> usize {
         self.funcs
-            .par_iter_mut()
-            .for_each(|mut entry| f(*entry.key(), entry.value_mut()))
+            .iter()
+            .map(|entry| entry.value().dfg.num_insts())
+            .sum()
     }
 
     #[doc(hidden)]

@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, I256, Immediate, InstId, Module, Type, Value, ValueId,
-    inst::{cast, data, downcast, evm},
+    inst::{cast, data, evm},
     module::{FuncRef, ModuleCtx},
     types::{CompoundType, CompoundTypeRef},
 };
@@ -165,7 +165,7 @@ impl ObjectLowerToMemory {
 
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_none() {
+                if func.dfg.downcast::<&data::ObjAlloc>(inst).is_none() {
                     continue;
                 }
                 let Some(result) = func.dfg.inst_result(inst) else {
@@ -235,9 +235,7 @@ impl ObjectLowerToMemory {
         inst: sonatina_ir::InstId,
         alloc_kinds: &FxHashMap<sonatina_ir::InstId, Materialization>,
     ) -> bool {
-        if let Some(obj_alloc) =
-            downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(obj_alloc) = func.dfg.downcast::<&data::ObjAlloc>(inst).cloned() {
             let kind = alloc_kinds
                 .get(&inst)
                 .copied()
@@ -269,9 +267,7 @@ impl ObjectLowerToMemory {
             return true;
         }
 
-        if let Some(obj_proj) =
-            downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(obj_proj) = func.dfg.downcast::<&data::ObjProj>(inst).cloned() {
             let (&base, rest) = obj_proj
                 .values()
                 .split_first()
@@ -288,9 +284,7 @@ impl ObjectLowerToMemory {
             return true;
         }
 
-        if let Some(obj_index) =
-            downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(obj_index) = func.dfg.downcast::<&data::ObjIndex>(inst).cloned() {
             let zero = func.dfg.make_imm_value(0i64);
             let index = zext_before(
                 func,
@@ -306,9 +300,7 @@ impl ObjectLowerToMemory {
             return true;
         }
 
-        if let Some(obj_load) =
-            downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(obj_load) = func.dfg.downcast::<&data::ObjLoad>(inst).cloned() {
             let pointee_ty = pointer_elem_ty(func, *obj_load.object())
                 .expect("obj.load requires pointer-typed operand after object lowering");
             func.dfg.replace_inst(
@@ -322,9 +314,7 @@ impl ObjectLowerToMemory {
             return true;
         }
 
-        if let Some(obj_store) =
-            downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(obj_store) = func.dfg.downcast::<&data::ObjStore>(inst).cloned() {
             let pointee_ty = pointer_elem_ty(func, *obj_store.object())
                 .expect("obj.store requires pointer-typed operand after object lowering");
             func.dfg.replace_inst(
@@ -339,21 +329,23 @@ impl ObjectLowerToMemory {
             return true;
         }
 
-        if let Some(mat_stack) =
-            downcast::<&data::ObjMaterializeStack>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        if let Some(mat_stack) = func
+            .dfg
+            .downcast::<&data::ObjMaterializeStack>(inst)
+            .cloned()
         {
             return alias_and_remove_object_materialize(func, inst, *mat_stack.object());
         }
 
-        if let Some(mat_heap) =
-            downcast::<&data::ObjMaterializeHeap>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        if let Some(mat_heap) = func
+            .dfg
+            .downcast::<&data::ObjMaterializeHeap>(inst)
+            .cloned()
         {
             return alias_and_remove_object_materialize(func, inst, *mat_heap.object());
         }
 
-        if let Some(mem_alloc) =
-            downcast::<&data::MemAllocDynamic>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(mem_alloc) = func.dfg.downcast::<&data::MemAllocDynamic>(inst).cloned() {
             func.dfg.replace_inst(
                 inst,
                 Box::new(evm::EvmMalloc::new_unchecked(
@@ -384,17 +376,20 @@ fn alias_and_remove_object_materialize(
 fn has_object_lowering_work(func: &Function) -> bool {
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
-            if downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                || downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                || downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                || downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                || downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                || downcast::<&data::ObjMaterializeStack>(func.inst_set(), func.dfg.inst(inst))
+            if func.dfg.downcast::<&data::ObjAlloc>(inst).is_some()
+                || func.dfg.downcast::<&data::ObjProj>(inst).is_some()
+                || func.dfg.downcast::<&data::ObjIndex>(inst).is_some()
+                || func.dfg.downcast::<&data::ObjLoad>(inst).is_some()
+                || func.dfg.downcast::<&data::ObjStore>(inst).is_some()
+                || func
+                    .dfg
+                    .downcast::<&data::ObjMaterializeStack>(inst)
                     .is_some()
-                || downcast::<&data::ObjMaterializeHeap>(func.inst_set(), func.dfg.inst(inst))
+                || func
+                    .dfg
+                    .downcast::<&data::ObjMaterializeHeap>(inst)
                     .is_some()
-                || downcast::<&data::MemAllocDynamic>(func.inst_set(), func.dfg.inst(inst))
-                    .is_some()
+                || func.dfg.downcast::<&data::MemAllocDynamic>(inst).is_some()
             {
                 return true;
             }
@@ -537,59 +532,46 @@ mod tests {
                 for block in func.layout.iter_block() {
                     for inst in func.layout.iter_inst(block) {
                         assert!(
-                            downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
-                                .is_none(),
+                            func.dfg.downcast::<&data::ObjAlloc>(inst).is_none(),
                             "obj.alloc remained in {}",
                             sig.name()
                         );
                         assert!(
-                            downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst))
-                                .is_none(),
+                            func.dfg.downcast::<&data::ObjProj>(inst).is_none(),
                             "obj.proj remained in {}",
                             sig.name()
                         );
                         assert!(
-                            downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst))
-                                .is_none(),
+                            func.dfg.downcast::<&data::ObjIndex>(inst).is_none(),
                             "obj.index remained in {}",
                             sig.name()
                         );
                         assert!(
-                            downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
-                                .is_none(),
+                            func.dfg.downcast::<&data::ObjLoad>(inst).is_none(),
                             "obj.load remained in {}",
                             sig.name()
                         );
                         assert!(
-                            downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
-                                .is_none(),
+                            func.dfg.downcast::<&data::ObjStore>(inst).is_none(),
                             "obj.store remained in {}",
                             sig.name()
                         );
                         assert!(
-                            downcast::<&data::ObjMaterializeStack>(
-                                func.inst_set(),
-                                func.dfg.inst(inst)
-                            )
-                            .is_none(),
+                            func.dfg
+                                .downcast::<&data::ObjMaterializeStack>(inst)
+                                .is_none(),
                             "obj.materialize.stack remained in {}",
                             sig.name()
                         );
                         assert!(
-                            downcast::<&data::ObjMaterializeHeap>(
-                                func.inst_set(),
-                                func.dfg.inst(inst)
-                            )
-                            .is_none(),
+                            func.dfg
+                                .downcast::<&data::ObjMaterializeHeap>(inst)
+                                .is_none(),
                             "obj.materialize.heap remained in {}",
                             sig.name()
                         );
                         assert!(
-                            downcast::<&data::MemAllocDynamic>(
-                                func.inst_set(),
-                                func.dfg.inst(inst)
-                            )
-                            .is_none(),
+                            func.dfg.downcast::<&data::MemAllocDynamic>(inst).is_none(),
                             "mem.alloc_dynamic remained in {}",
                             sig.name()
                         );
@@ -624,9 +606,7 @@ block0:
             let mut saw_gep = false;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(zext) =
-                        downcast::<&cast::Zext>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(zext) = func.dfg.downcast::<&cast::Zext>(inst) {
                         assert_eq!(func.dfg.value_ty(*zext.from()), Type::I8);
                         assert_eq!(
                             func.dfg
@@ -636,8 +616,7 @@ block0:
                         );
                         saw_zext = true;
                     }
-                    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(gep) = func.dfg.downcast::<&data::Gep>(inst) {
                         assert_eq!(func.dfg.value_ty(gep.values()[2]), Type::I256);
                         saw_gep = true;
                     }
@@ -727,10 +706,7 @@ object @Contract {
             assert!(
                 func.layout
                     .iter_all_insts()
-                    .all(
-                        |inst| downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst))
-                            .is_none()
-                    ),
+                    .all(|inst| func.dfg.downcast::<&evm::EvmMalloc>(inst).is_none()),
                 "make_pair should initialize the caller-provided object in place"
             );
         });
@@ -738,10 +714,7 @@ object @Contract {
             assert!(
                 func.layout
                     .iter_all_insts()
-                    .all(
-                        |inst| downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst))
-                            .is_none()
-                    ),
+                    .all(|inst| func.dfg.downcast::<&evm::EvmMalloc>(inst).is_none()),
                 "forward_pair should forward the caller-provided object without heap allocation"
             );
         });
@@ -750,12 +723,10 @@ object @Contract {
             assert!(
                 func.layout.iter_all_insts().all(|inst| {
                     assert!(
-                        downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        func.dfg.downcast::<&evm::EvmMalloc>(inst).is_none(),
                         "entry should keep the returned object caller-local"
                     );
-                    let Some(call) =
-                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-                    else {
+                    let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) else {
                         return true;
                     };
                     if *call.callee() == forward_pair {

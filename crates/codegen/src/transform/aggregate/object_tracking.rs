@@ -2,8 +2,9 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     Function, InstId, Type, ValueId,
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
     module::ModuleCtx,
+    types::CompoundType,
 };
 
 use super::{
@@ -193,8 +194,7 @@ fn insert_produced_object_root_slices(
 ) {
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
-            if let Some(obj_alloc) =
-                downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+            if let Some(obj_alloc) = func.dfg.downcast::<&data::ObjAlloc>(inst)
                 && let Some(result) = func.dfg.inst_result(inst)
                 && objref_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
             {
@@ -208,8 +208,7 @@ fn insert_produced_object_root_slices(
             let Some(object_effects) = fresh_call_effects else {
                 continue;
             };
-            let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-            else {
+            let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) else {
                 continue;
             };
             let Some(summary) = object_effects.get(call.callee()) else {
@@ -376,10 +375,13 @@ pub(crate) fn single_result_value(func: &Function, inst: InstId) -> Option<Value
 }
 
 pub(crate) fn objref_element_ty(ctx: &ModuleCtx, ty: Type) -> Option<Type> {
-    let sonatina_ir::types::CompoundType::ObjRef(elem) = ty.resolve_compound(ctx)? else {
+    let Type::Compound(cmpd) = ty else {
         return None;
     };
-    Some(elem)
+    ctx.with_ty_store(|store| match store.resolve_compound(cmpd) {
+        CompoundType::ObjRef(elem) => Some(*elem),
+        _ => None,
+    })
 }
 
 impl TrackedObject {

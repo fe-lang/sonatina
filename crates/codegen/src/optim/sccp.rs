@@ -128,9 +128,16 @@ impl SccpSolver {
         #[cfg(debug_assertions)]
         self.assert_no_executable_inst_results_are_bot(func);
 
-        changed |= self.remove_unreachable_edges(func, cleanup_mode);
+        let edges_removed = self.remove_unreachable_edges(func, cleanup_mode);
+        changed |= edges_removed;
         cfg.compute(func);
-        let fold_known_bits = KnownBitsQuery::new(func);
+        // Solving only reads the function, so its known bits still hold
+        // unless edge removal edited it.
+        let fold_known_bits = if edges_removed {
+            KnownBitsQuery::new(func)
+        } else {
+            solve_known_bits
+        };
         changed |= self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
 
         changed |= CfgCleanup::new(cleanup_mode).run(func);
@@ -176,7 +183,7 @@ impl SccpSolver {
 
     fn eval_edge(
         &mut self,
-        func: &mut Function,
+        func: &Function,
         edge: FlowEdge,
         const_paths: &ConstPathAnalysis,
         known_bits: &KnownBitsQuery,
@@ -1295,10 +1302,7 @@ mod tests {
                     }
                     for block in func.layout.iter_block() {
                         for inst in func.layout.iter_inst(block) {
-                            let Some(insert) = downcast::<&data::InsertValue>(
-                                func.inst_set(),
-                                func.dfg.inst(inst),
-                            ) else {
+                            let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst) else {
                                 continue;
                             };
                             let operand_undef = [*insert.dest(), *insert.idx(), *insert.value()]
@@ -1437,7 +1441,7 @@ mod tests {
 
             let block = func.layout.entry_block().expect("entry block");
             let term = func.layout.last_inst_of(block).expect("return");
-            let ret = downcast::<&Return>(func.inst_set(), func.dfg.inst(term)).expect("return");
+            let ret = func.dfg.downcast::<&Return>(term).expect("return");
             let value = ret.args().iter().next().copied().expect("return value");
             assert_eq!(func.dfg.value_imm(value), Some(Immediate::one(Type::I256)));
         });
@@ -1445,34 +1449,52 @@ mod tests {
 
     #[test]
     fn sccp_reuses_known_bits_queries_across_probes() {
-        let parsed = parse_module(
-            r#"
-target = "evm-ethereum-london"
-
-func public %f(v0.i256) -> i256 {
-block0:
+        // Folding reuses the solve-phase snapshot unless edge removal edits the function.
+        let cases = [
+            (
+                r#"
     v1.i256 = shr 224.i256 v0;
     v2.i256 = and v1 4294967295.i256;
     v3.i256 = and v2 4294967295.i256;
     return v3;
-}
 "#,
-        )
-        .expect("module parses");
-        let func_ref = parsed.module.funcs()[0];
+                1,
+            ),
+            (
+                r#"
+    v1.i256 = add 1.i256 2.i256;
+    v2.i1 = eq v1 3.i256;
+    br v2 block1 block2;
+block1:
+    return v0;
+block2:
+    return 0.i256;
+"#,
+                2,
+            ),
+        ];
+        for (body, expected) in cases {
+            let parsed = parse_module(&format!(
+                r#"
+target = "evm-ethereum-london"
 
-        parsed.module.func_store.modify(func_ref, |func| {
-            let mut cfg = ControlFlowGraph::default();
-            cfg.compute(func);
-            let (_, query_news) = count_query_news_for_test(|| {
-                let mut solver = SccpSolver::new();
-                solver.run(func, &mut cfg);
+func public %f(v0.i256) -> i256 {{
+block0:{body}}}
+"#
+            ))
+            .expect("module parses");
+            let func_ref = parsed.module.funcs()[0];
+
+            parsed.module.func_store.modify(func_ref, |func| {
+                let mut cfg = ControlFlowGraph::default();
+                cfg.compute(func);
+                let (_, query_news) = count_query_news_for_test(|| {
+                    let mut solver = SccpSolver::new();
+                    solver.run(func, &mut cfg);
+                });
+                assert_eq!(query_news, expected, "known-bits snapshots for:{body}");
             });
-            assert_eq!(
-                query_news, 2,
-                "SCCP should build one known-bits snapshot per phase"
-            );
-        });
+        }
     }
 
     #[test]
@@ -1508,8 +1530,7 @@ block0:
             let mut has_zero_add = false;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    let Some(add) = downcast::<&arith::Add>(func.inst_set(), func.dfg.inst(inst))
-                    else {
+                    let Some(add) = func.dfg.downcast::<&arith::Add>(inst) else {
                         continue;
                     };
                     let lhs_zero = func
@@ -1569,14 +1590,14 @@ block0:
             let mut has_bitcast = false;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(gep) = downcast::<&Gep>(func.inst_set(), func.dfg.inst(inst)) {
+                    if let Some(gep) = func.dfg.downcast::<&Gep>(inst) {
                         let values = gep.values();
                         let is_all_zero = values[1..]
                             .iter()
                             .all(|&idx| func.dfg.value_imm(idx).is_some_and(Immediate::is_zero));
                         has_all_zero_gep |= is_all_zero;
                     }
-                    if downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+                    if func.dfg.downcast::<&cast::Bitcast>(inst).is_some() {
                         has_bitcast = true;
                     }
                 }

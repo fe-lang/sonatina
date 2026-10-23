@@ -149,7 +149,8 @@ fn is_normal_exit_block(func: &Function, block: BlockId) -> bool {
 }
 
 fn is_constant_calldata_load(func: &Function, inst: InstId) -> bool {
-    downcast::<&evm::EvmCalldataLoad>(func.inst_set(), func.dfg.inst(inst))
+    func.dfg
+        .downcast::<&evm::EvmCalldataLoad>(inst)
         .is_some_and(|load| func.dfg.value_is_imm(*load.data_offset()))
 }
 

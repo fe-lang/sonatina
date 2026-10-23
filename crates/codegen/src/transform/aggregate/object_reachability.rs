@@ -14,6 +14,7 @@ use sonatina_ir::{
     Function, InstId, Type, ValueId,
     effects::{AccessKind, AccessLoc, MemoryAccess},
     inst::{cast, control_flow, data, downcast},
+    module::ModuleCtx,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -76,8 +77,17 @@ impl ObjectReachability {
                 this.contents.entry(root).or_default().external = true;
             }
         }
+        // Whether a value can carry a reference depends only on its type.
+        let mut type_bears_reference = FxHashMap::<Type, bool>::default();
+        let mut bears_reference = SecondaryMap::<ValueId, bool>::default();
+        for value in func.dfg.value_ids() {
+            let ty = func.dfg.value_ty(value);
+            bears_reference[value] = *type_bears_reference
+                .entry(ty)
+                .or_insert_with(|| reference_bearing_ty(func.ctx(), ty));
+        }
         for &arg in &func.arg_values {
-            if reference_bearing(func, arg) && this.references[arg].roots.is_empty() {
+            if bears_reference[arg] && this.references[arg].roots.is_empty() {
                 this.references[arg].external = true;
             }
         }
@@ -87,7 +97,7 @@ impl ObjectReachability {
             if this.aliases.is_fresh(RootValue::new(value)) {
                 this.references[value].roots.insert(RootValue::new(value));
             }
-            if reference_bearing(func, value)
+            if bears_reference[value]
                 && func.dfg.value_inst(value).is_none()
                 && !func.arg_values.contains(&value)
             {
@@ -98,7 +108,8 @@ impl ObjectReachability {
             let mut changed = false;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    changed |= this.transfer_references(func, inst, summaries, may);
+                    changed |=
+                        this.transfer_references(func, inst, summaries, may, &bears_reference);
                 }
             }
             for root in this.exposed.clone() {
@@ -165,6 +176,7 @@ impl ObjectReachability {
         inst: InstId,
         summaries: Option<&ObjectEffectSummaryMap>,
         may: MayProvenance<'_>,
+        bears_reference: &SecondaryMap<ValueId, bool>,
     ) -> bool {
         let data = func.dfg.inst(inst);
         let is = func.inst_set();
@@ -225,7 +237,7 @@ impl ObjectReachability {
         }
 
         for &result in func.dfg.inst_results(inst) {
-            if !reference_bearing(func, result)
+            if !bears_reference[result]
                 || self.roots.contains(&RootValue::new(result))
                 || self.aliases.is_fresh(RootValue::new(result))
             {
@@ -343,10 +355,11 @@ impl ObjectReachability {
 }
 
 pub(crate) fn reference_bearing(func: &Function, value: ValueId) -> bool {
-    let ty: Type = func.dfg.value_ty(value);
-    ty.is_obj_ref(func.ctx())
-        || ty.is_pointer(func.ctx())
-        || shape::is_reference_aggregate(func.ctx(), ty)
+    reference_bearing_ty(func.ctx(), func.dfg.value_ty(value))
+}
+
+fn reference_bearing_ty(ctx: &ModuleCtx, ty: Type) -> bool {
+    ty.is_obj_ref(ctx) || ty.is_pointer(ctx) || shape::is_reference_aggregate(ctx, ty)
 }
 
 /// Raw bytes have no typed-leaf coordinates. Only the bounded direct-allocation
@@ -359,7 +372,7 @@ pub(crate) fn raw_access_may_reach_objects(func: &Function, access: &MemoryAcces
         AccessLoc::LinearExact { addr, bytes, .. } => func
             .dfg
             .value_inst(addr)
-            .and_then(|inst| downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)))
+            .and_then(|inst| func.dfg.downcast::<&data::Alloca>(inst))
             .is_some_and(|alloc| {
                 func.ctx()
                     .size_of(*alloc.ty())

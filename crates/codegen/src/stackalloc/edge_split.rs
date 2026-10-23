@@ -104,7 +104,7 @@ impl StackifyEdgeSplitter {
         for (from, _, branch_slot) in edges {
             editor.split_out_edge(from, branch_slot);
         }
-        cfg.clone_from(editor.cfg());
+        *cfg = editor.into_cfg();
     }
 }
 

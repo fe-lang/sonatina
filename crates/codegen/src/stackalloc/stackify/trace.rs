@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt::Write};
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, Function, InstId, ValueId,
-    inst::{data, downcast},
+    inst::data,
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
     module::FuncRef,
 };
@@ -442,7 +442,7 @@ fn fmt_values(func: &Function, values: &[ValueId]) -> String {
 }
 
 fn fmt_trace_operands(func: &Function, inst: InstId, args: &[ValueId]) -> String {
-    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(gep) = func.dfg.downcast::<&data::Gep>(inst) {
         // Keep alias-canonicalized runtime operands from `args`, while still showing the full
         // static GEP index list by reinserting compile-time immediate-u32 indices.
         let mut runtime = args.iter().copied();
@@ -560,7 +560,7 @@ fn fmt_actions(actions: &[Action]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{fmt_trace_operands, fmt_values};
-    use sonatina_ir::inst::{data, downcast};
+    use sonatina_ir::inst::data;
     use sonatina_parser::parse_module;
 
     #[test]
@@ -588,12 +588,9 @@ block0:
             let inst = func
                 .layout
                 .iter_inst(block)
-                .find(|&inst| {
-                    downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                })
+                .find(|&inst| func.dfg.downcast::<&data::Gep>(inst).is_some())
                 .expect("gep inst exists");
-            let gep =
-                downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).expect("downcast gep");
+            let gep = func.dfg.downcast::<&data::Gep>(inst).expect("downcast gep");
             let base = gep.values()[0];
             let idx = gep.values()[1];
 

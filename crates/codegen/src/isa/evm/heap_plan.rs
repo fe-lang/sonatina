@@ -1,5 +1,4 @@
 use cranelift_entity::SecondaryMap;
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     AccessKind, AccessLoc, BlockId, Function, InstId, InstSetExt, MemoryAccess, Module, ValueId,
@@ -78,11 +77,8 @@ where
     A: Sync,
 {
     let abs_clobber_words = compute_abs_clobber_words(schedule, plan);
-    let mut results: Vec<_> = schedule
-        .funcs()
-        .par_iter()
-        .copied()
-        .map(|f| {
+    let mut results: Vec<_> =
+        sonatina_ir::parallel::map(&module.func_store, schedule.funcs(), |&f| {
             let func_plan = expect_func_entry(&plan.funcs, f, "memory plan");
             let analysis = expect_func_entry(analyses, f, "analysis");
             let analysis = analysis_view(analysis);
@@ -98,8 +94,7 @@ where
                 compute_future_bounds_for_func(function, &ctx)
             });
             (f, map)
-        })
-        .collect();
+        });
     results.sort_unstable_by_key(|(func, _)| func.as_u32());
 
     let mut out: FxHashMap<FuncRef, FxHashMap<InstId, u32>> = FxHashMap::default();

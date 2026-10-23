@@ -3,7 +3,6 @@ use sonatina_ir::{
     inst::{
         arith::{Add, Uaddo},
         cmp::Lt,
-        downcast,
     },
 };
 
@@ -13,7 +12,7 @@ pub fn legalize_multi_result(func: &mut Function) -> bool {
     for block in blocks {
         let insts: Vec<_> = func.layout.iter_inst(block).collect();
         for inst in insts {
-            let Some(uaddo) = downcast::<&Uaddo>(func.inst_set(), func.dfg.inst(inst)) else {
+            let Some(uaddo) = func.dfg.downcast::<&Uaddo>(inst) else {
                 continue;
             };
 

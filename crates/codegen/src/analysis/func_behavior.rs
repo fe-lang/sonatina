@@ -12,12 +12,14 @@ use sonatina_ir::{
 };
 
 use crate::{
-    cfg_scc::CfgSccAnalysis,
+    cfg_scc::has_cycle,
     module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef},
 };
 
 #[derive(Debug, Default, Clone)]
 struct LocalFacts {
+    /// The function's CFG, shared by the later per-function phases.
+    cfg: ControlFlowGraph,
     local_effects: FuncEffectSummary,
     callees: Vec<FuncRef>,
     has_body: bool,
@@ -190,10 +192,9 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
 
                 if !self.effects[func_ref].noreturn {
                     let effects = &self.effects;
-                    let has_return = self
-                        .module
-                        .func_store
-                        .view(func_ref, |func| has_reachable_return(func, effects));
+                    let has_return = self.module.func_store.view(func_ref, |func| {
+                        has_reachable_return(func, &facts.cfg, effects)
+                    });
                     if !has_return {
                         self.effects[func_ref].noreturn = true;
                     }
@@ -240,8 +241,9 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
                     }
 
                     let effects = &self.effects;
+                    let cfg = &self.locals[func_ref].cfg;
                     let may_commit = self.module.func_store.view(func_ref, |func| {
-                        has_reachable_committing_exit(func, effects)
+                        has_reachable_committing_exit(func, cfg, effects)
                     });
                     if may_commit != self.effects[func_ref].may_commit_visible_writes {
                         self.effects[func_ref].may_commit_visible_writes = may_commit;
@@ -259,21 +261,22 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
 
 fn has_reachable_committing_exit(
     func: &Function,
+    cfg: &ControlFlowGraph,
     effects: &SecondaryMap<FuncRef, FuncEffectSummary>,
 ) -> bool {
-    !blocks_that_may_reach_commit(func, |func_ref| effects[func_ref].clone()).is_empty()
+    !blocks_that_may_reach_commit(func, cfg, |func_ref| effects[func_ref].clone()).is_empty()
 }
 
+/// `cfg` must be computed from `func`.
 pub(crate) fn blocks_that_may_reach_commit(
     func: &Function,
+    cfg: &ControlFlowGraph,
     effects: impl Fn(FuncRef) -> FuncEffectSummary,
 ) -> FxHashSet<BlockId> {
     let Some(entry) = func.layout.entry_block() else {
         return FxHashSet::default();
     };
 
-    let mut cfg = ControlFlowGraph::new();
-    cfg.compute(func);
     let reachable = cfg.reachable_blocks();
     let exit_blocks: FxHashSet<BlockId> = cfg.exits.iter().copied().collect();
 
@@ -362,14 +365,12 @@ fn block_commit_state(
 
 fn has_reachable_return(
     func: &Function,
+    cfg: &ControlFlowGraph,
     effects: &SecondaryMap<FuncRef, FuncEffectSummary>,
 ) -> bool {
     let Some(entry) = func.layout.entry_block() else {
         return false;
     };
-
-    let mut cfg = ControlFlowGraph::new();
-    cfg.compute(func);
 
     let mut visited = FxHashSet::default();
     let mut stack = vec![entry];
@@ -429,13 +430,7 @@ fn compute_local_facts(func: &Function) -> LocalFacts {
 
     let reachable = cfg.reachable_blocks();
 
-    let mut cfg_scc = CfgSccAnalysis::new();
-    cfg_scc.compute(&cfg);
-
-    let cfg_has_cycle = cfg_scc
-        .topo_order()
-        .iter()
-        .any(|&scc| cfg_scc.scc_data(scc).is_cycle);
+    let cfg_has_cycle = has_cycle(&cfg);
 
     let mut local_effects = FuncEffectSummary::default();
     let mut callees = FxHashSet::default();
@@ -485,6 +480,7 @@ fn compute_local_facts(func: &Function) -> LocalFacts {
     }
 
     LocalFacts {
+        cfg,
         local_effects,
         callees,
         has_body: true,
@@ -741,6 +737,8 @@ func private %caller(v0.i1) {
                         })
                         .expect("call block should exist")
                 };
+                let mut cfg = ControlFlowGraph::new();
+                cfg.compute(func);
 
                 (
                     func.layout
@@ -748,7 +746,7 @@ func private %caller(v0.i1) {
                         .expect("caller has an entry block"),
                     find_call_block(commit),
                     find_call_block(revert_now),
-                    blocks_that_may_reach_commit(func, |func_ref| {
+                    blocks_that_may_reach_commit(func, &cfg, |func_ref| {
                         module.ctx.func_effects(func_ref)
                     }),
                 )

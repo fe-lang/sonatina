@@ -568,7 +568,7 @@ fn collect_alloca_visibility(
 
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
-            if <&Alloca as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst)).is_some()
+            if func.dfg.downcast::<&Alloca>(inst).is_some()
                 && let Some(root) = func.dfg.inst_result(inst)
                 && alloca_stays_local(func, inst, root, analysis)
             {
@@ -760,7 +760,7 @@ fn transfer_backward(
 
     // Before an `evm_malloc` runs, its keys name an earlier object, such as
     // the previous loop iteration's, which writes after it do not overwrite.
-    if <&EvmMalloc as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst)).is_some() {
+    if func.dfg.downcast::<&EvmMalloc>(inst).is_some() {
         let base = BaseObject::Malloc(inst);
         live.exit_live
             .retain(|key| !matches!(key, TrackedLocKey::Linear(key) if key.base == base));

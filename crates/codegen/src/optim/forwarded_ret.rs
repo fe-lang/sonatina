@@ -2,7 +2,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
     Function, Type, Value,
-    inst::{control_flow, downcast},
+    inst::control_flow,
     module::{FuncRef, Module},
 };
 
@@ -153,10 +153,7 @@ fn collect_plans(module: &Module, config: ForwardedRetElimConfig) -> FxHashMap<F
         module.func_store.view(func_ref, |function| {
             for block in function.layout.iter_block() {
                 for inst in function.layout.iter_inst(block) {
-                    let Some(ret) = downcast::<&control_flow::Return>(
-                        function.inst_set(),
-                        function.dfg.inst(inst),
-                    ) else {
+                    let Some(ret) = function.dfg.downcast::<&control_flow::Return>(inst) else {
                         continue;
                     };
                     saw_return = true;

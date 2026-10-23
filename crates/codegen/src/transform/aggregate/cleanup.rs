@@ -80,7 +80,6 @@ fn inst_operands(func: &Function, inst: InstId) -> SmallVec<[ValueId; 8]> {
 mod tests {
     use super::*;
     use crate::test_support::{lookup_func, parse_test_module};
-    use sonatina_ir::InstDowncast;
 
     #[test]
     fn dead_pure_cleanup_requeues_transitively_dead_defs() {
@@ -107,19 +106,15 @@ block0:
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
                     assert!(
-                        <&sonatina_ir::inst::arith::Add as InstDowncast>::downcast(
-                            func.inst_set(),
-                            func.dfg.inst(inst),
-                        )
-                        .is_none(),
+                        func.dfg
+                            .downcast::<&sonatina_ir::inst::arith::Add>(inst)
+                            .is_none(),
                         "dead add should be removed"
                     );
                     assert!(
-                        <&sonatina_ir::inst::arith::Sub as InstDowncast>::downcast(
-                            func.inst_set(),
-                            func.dfg.inst(inst),
-                        )
-                        .is_none(),
+                        func.dfg
+                            .downcast::<&sonatina_ir::inst::arith::Sub>(inst)
+                            .is_none(),
                         "dead sub should be removed"
                     );
                 }
@@ -157,19 +152,15 @@ block2:
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
                     assert!(
-                        <&sonatina_ir::inst::arith::Add as InstDowncast>::downcast(
-                            func.inst_set(),
-                            func.dfg.inst(inst),
-                        )
-                        .is_none(),
+                        func.dfg
+                            .downcast::<&sonatina_ir::inst::arith::Add>(inst)
+                            .is_none(),
                         "dead add cycle member should be removed"
                     );
                     assert!(
-                        <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(
-                            func.inst_set(),
-                            func.dfg.inst(inst),
-                        )
-                        .is_none(),
+                        func.dfg
+                            .downcast::<&sonatina_ir::inst::control_flow::Phi>(inst)
+                            .is_none(),
                         "dead phi cycle member should be removed"
                     );
                 }

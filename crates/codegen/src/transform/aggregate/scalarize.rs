@@ -90,10 +90,13 @@ impl IncomingPromotionPlan {
         let mut demanded: SmallVec<[bool; 4]> = smallvec![false; shape.leaves.len()];
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                let object = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                let object = func
+                    .dfg
+                    .downcast::<&data::ObjLoad>(inst)
                     .map(|load| *load.object())
                     .or_else(|| {
-                        downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                        func.dfg
+                            .downcast::<&data::Mload>(inst)
                             .map(|load| *load.addr())
                     });
                 let Some(projection) =
@@ -527,26 +530,25 @@ impl AggregateScalarize {
         let mut roots: Vec<(ValueId, RootKind, Type, shape::AggregateShape)> = Vec::new();
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                let Some((ptr_value, root_kind, ty)) =
-                    downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst))
-                        .map(|alloca| {
+                let Some((ptr_value, root_kind, ty)) = func
+                    .dfg
+                    .downcast::<&data::Alloca>(inst)
+                    .map(|alloca| {
+                        (
+                            func.dfg.inst_result(inst),
+                            RootKind::Alloca { inst },
+                            *alloca.ty(),
+                        )
+                    })
+                    .or_else(|| {
+                        func.dfg.downcast::<&data::ObjAlloc>(inst).map(|obj_alloc| {
                             (
                                 func.dfg.inst_result(inst),
-                                RootKind::Alloca { inst },
-                                *alloca.ty(),
+                                RootKind::ObjAlloc { inst },
+                                *obj_alloc.ty(),
                             )
                         })
-                        .or_else(|| {
-                            downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).map(
-                                |obj_alloc| {
-                                    (
-                                        func.dfg.inst_result(inst),
-                                        RootKind::ObjAlloc { inst },
-                                        *obj_alloc.ty(),
-                                    )
-                                },
-                            )
-                        })
+                    })
                 else {
                     continue;
                 };
@@ -787,7 +789,7 @@ impl AggregateScalarize {
                     continue;
                 }
 
-                if let Some(proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(user))
+                if let Some(proj) = func.dfg.downcast::<&data::ObjProj>(user)
                     && proj.values().first() == Some(&value)
                 {
                     if let Some(result) = func.dfg.inst_result(user) {
@@ -796,8 +798,7 @@ impl AggregateScalarize {
                     continue;
                 }
 
-                if let Some(index) =
-                    downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(user))
+                if let Some(index) = func.dfg.downcast::<&data::ObjIndex>(user)
                     && *index.object() == value
                 {
                     if let Some(result) = func.dfg.inst_result(user) {
@@ -806,8 +807,7 @@ impl AggregateScalarize {
                     continue;
                 }
 
-                if let Some(enum_proj) =
-                    downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(user))
+                if let Some(enum_proj) = func.dfg.downcast::<&data::EnumProj>(user)
                     && *enum_proj.object() == value
                 {
                     if let Some(result) = func.dfg.inst_result(user) {
@@ -816,8 +816,7 @@ impl AggregateScalarize {
                     continue;
                 }
 
-                if let Some(phi) =
-                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(user))
+                if let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(user)
                     && phi.args().iter().any(|(arg, _)| *arg == value)
                 {
                     if let Some(result) = func.dfg.inst_result(user) {
@@ -826,15 +825,25 @@ impl AggregateScalarize {
                     continue;
                 }
 
-                if downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(user))
+                if func
+                    .dfg
+                    .downcast::<&data::ObjStore>(user)
                     .is_some_and(|obj_store| *obj_store.object() == value)
-                    || downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
+                    || func
+                        .dfg
+                        .downcast::<&data::Mstore>(user)
                         .is_some_and(|mstore| *mstore.addr() == value)
-                    || downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(user))
+                    || func
+                        .dfg
+                        .downcast::<&data::ObjInitConst>(user)
                         .is_some_and(|init| *init.object() == value)
-                    || downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(user))
+                    || func
+                        .dfg
+                        .downcast::<&data::EnumSetTag>(user)
                         .is_some_and(|enum_set_tag| *enum_set_tag.object() == value)
-                    || downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(user))
+                    || func
+                        .dfg
+                        .downcast::<&data::EnumWriteVariant>(user)
                         .is_some_and(|enum_write_variant| *enum_write_variant.object() == value)
                 {
                     return true;
@@ -900,7 +909,7 @@ impl AggregateScalarize {
                 if !func.layout.is_inst_inserted(user) {
                     continue;
                 }
-                if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(user))
+                if let Some(mload) = func.dfg.downcast::<&data::Mload>(user)
                     && *mload.addr() == ptr
                 {
                     let load_ty = *mload.ty();
@@ -914,8 +923,7 @@ impl AggregateScalarize {
                         return false;
                     }
                 }
-                if let Some(obj_load) =
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(user))
+                if let Some(obj_load) = func.dfg.downcast::<&data::ObjLoad>(user)
                     && *obj_load.object() == ptr
                 {
                     let Some(result) = func.dfg.inst_result(user) else {
@@ -932,8 +940,7 @@ impl AggregateScalarize {
                         return false;
                     }
                 }
-                if let Some(mstore) =
-                    downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
+                if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(user)
                     && *mstore.addr() == ptr
                     && shape::is_supported_scalar_shape_ty(module, *mstore.ty())
                     && (!self.value_has_leaf_rewrite_plan(
@@ -945,8 +952,7 @@ impl AggregateScalarize {
                 {
                     return false;
                 }
-                if let Some(obj_store) =
-                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(user))
+                if let Some(obj_store) = func.dfg.downcast::<&data::ObjStore>(user)
                     && *obj_store.object() == ptr
                 {
                     let value_ty = func.dfg.value_ty(*obj_store.value());
@@ -961,14 +967,13 @@ impl AggregateScalarize {
                         return false;
                     }
                 }
-                if let Some(enum_get_tag) =
-                    downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(user))
+                if let Some(enum_get_tag) = func.dfg.downcast::<&data::EnumGetTag>(user)
                     && *enum_get_tag.object() == ptr
                 {
                     continue;
                 }
                 if let Some(enum_assert_ref) =
-                    downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(user))
+                    func.dfg.downcast::<&data::EnumAssertVariantRef>(user)
                     && *enum_assert_ref.object() == ptr
                 {
                     let Some(result) = func.dfg.inst_result(user) else {
@@ -979,14 +984,12 @@ impl AggregateScalarize {
                     }
                     continue;
                 }
-                if let Some(enum_set_tag) =
-                    downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(user))
+                if let Some(enum_set_tag) = func.dfg.downcast::<&data::EnumSetTag>(user)
                     && *enum_set_tag.object() == ptr
                 {
                     continue;
                 }
-                if let Some(enum_write_variant) =
-                    downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(user))
+                if let Some(enum_write_variant) = func.dfg.downcast::<&data::EnumWriteVariant>(user)
                     && *enum_write_variant.object() == ptr
                 {
                     for &payload in enum_write_variant.values() {
@@ -1080,29 +1083,20 @@ impl AggregateScalarize {
                 Value::Inst { inst, .. } => {
                     if func.dfg.call_info(*inst).is_some() {
                         false
-                    } else if downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(*inst))
-                        .is_some()
-                        || downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(*inst))
-                            .is_some()
-                        || downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(*inst))
-                            .is_some()
-                        || downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(*inst))
-                            .is_some()
-                        || downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(*inst))
-                            .is_some()
+                    } else if func.dfg.downcast::<&data::InsertValue>(*inst).is_some()
+                        || func.dfg.downcast::<&data::ExtractValue>(*inst).is_some()
+                        || func.dfg.downcast::<&data::EnumMake>(*inst).is_some()
+                        || func.dfg.downcast::<&data::EnumExtract>(*inst).is_some()
+                        || func.dfg.downcast::<&control_flow::Phi>(*inst).is_some()
                     {
                         true
-                    } else if let Some(bitcast) =
-                        downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(*inst))
-                    {
+                    } else if let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(*inst) {
                         self.aggregate_bitcast_is_scalarizable(
                             module,
                             func.dfg.value_ty(*bitcast.from()),
                             ty,
                         )
-                    } else if let Some(mload) =
-                        downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(*inst))
-                    {
+                    } else if let Some(mload) = func.dfg.downcast::<&data::Mload>(*inst) {
                         projection_of.get(*mload.addr()).is_some_and(|projection| {
                             self.projection_load_has_full_rewrite_plan(
                                 module,
@@ -1110,9 +1104,7 @@ impl AggregateScalarize {
                                 *mload.ty(),
                             )
                         })
-                    } else if let Some(obj_load) =
-                        downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(*inst))
-                    {
+                    } else if let Some(obj_load) = func.dfg.downcast::<&data::ObjLoad>(*inst) {
                         projection_of
                             .get(*obj_load.object())
                             .is_some_and(|projection| {
@@ -1177,9 +1169,7 @@ impl AggregateScalarize {
             Value::Undef { .. } => true,
             Value::Arg { .. } | Value::Immediate { .. } | Value::Global { .. } => false,
             Value::Inst { inst, .. } => {
-                if let Some(insert) =
-                    downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(*inst))
-                {
+                if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(*inst) {
                     let agg_ty = func.dfg.value_ty(value);
                     let Some(idx) = shape::const_u32(&func.dfg, *insert.idx()) else {
                         return false;
@@ -1200,9 +1190,7 @@ impl AggregateScalarize {
                         return false;
                     }
                     true
-                } else if let Some(enum_make) =
-                    downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(*inst))
-                {
+                } else if let Some(enum_make) = func.dfg.downcast::<&data::EnumMake>(*inst) {
                     let result_ty = func.dfg.value_ty(value);
                     if result_ty != *enum_make.ty() {
                         return false;
@@ -1234,9 +1222,7 @@ impl AggregateScalarize {
                         }
                     }
                     true
-                } else if let Some(extract) =
-                    downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(*inst))
-                {
+                } else if let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(*inst) {
                     let src_ty = func.dfg.value_ty(*extract.dest());
                     if !shape::is_supported_scalar_shape_ty(module, src_ty)
                         || !scalarizable[*extract.dest()]
@@ -1250,9 +1236,7 @@ impl AggregateScalarize {
                         return false;
                     };
                     slice.ty == func.dfg.value_ty(value)
-                } else if let Some(enum_extract) =
-                    downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(*inst))
-                {
+                } else if let Some(enum_extract) = func.dfg.downcast::<&data::EnumExtract>(*inst) {
                     let src_ty = func.dfg.value_ty(*enum_extract.value());
                     if !matches!(
                         src_ty.resolve_compound(module),
@@ -1273,16 +1257,12 @@ impl AggregateScalarize {
                         return false;
                     };
                     slice.ty == func.dfg.value_ty(value)
-                } else if let Some(phi) =
-                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(*inst))
-                {
+                } else if let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(*inst) {
                     let value_ty = func.dfg.value_ty(value);
                     phi.args()
                         .iter()
                         .all(|&(arg, _)| scalarizable[arg] && func.dfg.value_ty(arg) == value_ty)
-                } else if let Some(mload) =
-                    downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(*inst))
-                {
+                } else if let Some(mload) = func.dfg.downcast::<&data::Mload>(*inst) {
                     shape::is_supported_scalar_shape_ty(module, *mload.ty())
                         && projection_of.get(*mload.addr()).is_some_and(|projection| {
                             self.projection_load_has_full_rewrite_plan(
@@ -1292,9 +1272,7 @@ impl AggregateScalarize {
                             )
                         })
                         && *mload.ty() == func.dfg.value_ty(value)
-                } else if let Some(obj_load) =
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(*inst))
-                {
+                } else if let Some(obj_load) = func.dfg.downcast::<&data::ObjLoad>(*inst) {
                     let value_ty = func.dfg.value_ty(value);
                     shape::is_supported_scalar_shape_ty(module, value_ty)
                         && projection_of
@@ -1306,9 +1284,7 @@ impl AggregateScalarize {
                                     value_ty,
                                 )
                             })
-                } else if let Some(bitcast) =
-                    downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(*inst))
-                {
+                } else if let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(*inst) {
                     let from_ty = func.dfg.value_ty(*bitcast.from());
                     if !self.aggregate_bitcast_is_scalarizable(
                         module,
@@ -1343,8 +1319,7 @@ impl AggregateScalarize {
                 continue;
             }
 
-            if let Some(insert) =
-                downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(user))
+            if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(user)
                 && (*insert.dest() == value || *insert.value() == value)
             {
                 let Some(res) = func.dfg.inst_result(user) else {
@@ -1356,8 +1331,7 @@ impl AggregateScalarize {
                 continue;
             }
 
-            if let Some(extract) =
-                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(user))
+            if let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(user)
                 && *extract.dest() == value
             {
                 let Some(res) = func.dfg.inst_result(user) else {
@@ -1370,7 +1344,7 @@ impl AggregateScalarize {
                 continue;
             }
 
-            if let Some(phi) = downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(user))
+            if let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(user)
                 && phi.args().iter().any(|(arg, _)| *arg == value)
             {
                 let Some(res) = func.dfg.inst_result(user) else {
@@ -1382,28 +1356,25 @@ impl AggregateScalarize {
                 continue;
             }
 
-            if let Some(enum_tag) = downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(user))
+            if let Some(enum_tag) = func.dfg.downcast::<&data::EnumTag>(user)
                 && *enum_tag.value() == value
             {
                 continue;
             }
 
-            if let Some(enum_is_variant) =
-                downcast::<&data::EnumIsVariant>(func.inst_set(), func.dfg.inst(user))
+            if let Some(enum_is_variant) = func.dfg.downcast::<&data::EnumIsVariant>(user)
                 && *enum_is_variant.value() == value
             {
                 continue;
             }
 
-            if let Some(enum_assert) =
-                downcast::<&data::EnumAssertVariant>(func.inst_set(), func.dfg.inst(user))
+            if let Some(enum_assert) = func.dfg.downcast::<&data::EnumAssertVariant>(user)
                 && *enum_assert.value() == value
             {
                 continue;
             }
 
-            if let Some(enum_extract) =
-                downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(user))
+            if let Some(enum_extract) = func.dfg.downcast::<&data::EnumExtract>(user)
                 && *enum_extract.value() == value
             {
                 let Some(res) = func.dfg.inst_result(user) else {
@@ -1416,7 +1387,7 @@ impl AggregateScalarize {
                 continue;
             }
 
-            if let Some(mstore) = downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
+            if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(user)
                 && *mstore.value() == value
             {
                 if !shape::is_supported_scalar_shape_ty(module, *mstore.ty()) {
@@ -1428,8 +1399,7 @@ impl AggregateScalarize {
                 continue;
             }
 
-            if let Some(obj_store) =
-                downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(user))
+            if let Some(obj_store) = func.dfg.downcast::<&data::ObjStore>(user)
                 && *obj_store.value() == value
             {
                 if !shape::is_supported_scalar_shape_ty(module, func.dfg.value_ty(value)) {
@@ -1441,7 +1411,7 @@ impl AggregateScalarize {
                 continue;
             }
 
-            if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
+            if let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(user)
                 && *bitcast.from() == value
             {
                 let Some(res) = func.dfg.inst_result(user) else {
@@ -1458,8 +1428,7 @@ impl AggregateScalarize {
                 continue;
             }
 
-            if let Some(ret) =
-                downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(user))
+            if let Some(ret) = func.dfg.downcast::<&control_flow::Return>(user)
                 && ret.args().iter().enumerate().all(|(index, &arg)| {
                     arg != value || scalarizable_returns.get(index).copied().unwrap_or(false)
                 })
@@ -1484,7 +1453,7 @@ impl AggregateScalarize {
         for block in blocks {
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
             for inst in insts {
-                if downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_none() {
+                if func.dfg.downcast::<&control_flow::Phi>(inst).is_none() {
                     continue;
                 }
                 let Some(result) = func.dfg.inst_result(inst) else {
@@ -1534,20 +1503,19 @@ impl AggregateScalarize {
         ssa: &mut SsaBuilder,
         modified_leaves: &mut FxHashMap<ValueId, FxHashSet<usize>>,
     ) {
-        if let Some((projection_value, ty, result)) =
-            downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
-                .map(|mload| (*mload.addr(), *mload.ty(), func.dfg.inst_result(inst)))
-                .or_else(|| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).map(
-                        |obj_load| {
-                            let result = func.dfg.inst_result(inst);
-                            let ty = result
-                                .map(|result| func.dfg.value_ty(result))
-                                .unwrap_or(Type::Unit);
-                            (*obj_load.object(), ty, result)
-                        },
-                    )
+        if let Some((projection_value, ty, result)) = func
+            .dfg
+            .downcast::<&data::Mload>(inst)
+            .map(|mload| (*mload.addr(), *mload.ty(), func.dfg.inst_result(inst)))
+            .or_else(|| {
+                func.dfg.downcast::<&data::ObjLoad>(inst).map(|obj_load| {
+                    let result = func.dfg.inst_result(inst);
+                    let ty = result
+                        .map(|result| func.dfg.value_ty(result))
+                        .unwrap_or(Type::Unit);
+                    (*obj_load.object(), ty, result)
                 })
+            })
         {
             let Some(projection) = projection_of.get(projection_value) else {
                 return;
@@ -1614,9 +1582,7 @@ impl AggregateScalarize {
             return;
         }
 
-        if let Some(enum_get_tag) =
-            downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
-        {
+        if let Some(enum_get_tag) = func.dfg.downcast::<&data::EnumGetTag>(inst) {
             let Some(projection) = projection_of.get(*enum_get_tag.object()) else {
                 return;
             };
@@ -1644,9 +1610,7 @@ impl AggregateScalarize {
             return;
         }
 
-        if let Some(enum_set_tag) =
-            downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
-        {
+        if let Some(enum_set_tag) = func.dfg.downcast::<&data::EnumSetTag>(inst) {
             let Some(projection) = projection_of.get(*enum_set_tag.object()) else {
                 return;
             };
@@ -1672,7 +1636,7 @@ impl AggregateScalarize {
         }
 
         if let Some(enum_write_variant) =
-            downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst)).cloned()
+            func.dfg.downcast::<&data::EnumWriteVariant>(inst).cloned()
         {
             let Some(projection) = projection_of.get(*enum_write_variant.object()) else {
                 return;
@@ -1751,9 +1715,7 @@ impl AggregateScalarize {
             return;
         }
 
-        if let Some(init) =
-            downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(init) = func.dfg.downcast::<&data::ObjInitConst>(inst).cloned() {
             let Some(projection) = projection_of.get(*init.object()) else {
                 return;
             };
@@ -1793,17 +1755,16 @@ impl AggregateScalarize {
             return;
         }
 
-        let Some((projection_value, value, ty)) =
-            downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
-                .map(|mstore| (*mstore.addr(), *mstore.value(), *mstore.ty()))
-                .or_else(|| {
-                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).map(
-                        |obj_store| {
-                            let value = *obj_store.value();
-                            (*obj_store.object(), value, func.dfg.value_ty(value))
-                        },
-                    )
+        let Some((projection_value, value, ty)) = func
+            .dfg
+            .downcast::<&data::Mstore>(inst)
+            .map(|mstore| (*mstore.addr(), *mstore.value(), *mstore.ty()))
+            .or_else(|| {
+                func.dfg.downcast::<&data::ObjStore>(inst).map(|obj_store| {
+                    let value = *obj_store.value();
+                    (*obj_store.object(), value, func.dfg.value_ty(value))
                 })
+            })
         else {
             return;
         };
@@ -1865,9 +1826,7 @@ impl AggregateScalarize {
         scalarizable: &SecondaryMap<ValueId, bool>,
         scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
     ) {
-        let Some(bitcast) =
-            downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        else {
+        let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(inst).cloned() else {
             return;
         };
         let Some(result) = func.dfg.inst_result(inst) else {
@@ -1950,9 +1909,7 @@ impl AggregateScalarize {
         scalarizable: &SecondaryMap<ValueId, bool>,
         scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
     ) {
-        if let Some(insert) =
-            downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst).cloned() {
             let Some(result) = func.dfg.inst_result(inst) else {
                 return;
             };
@@ -1995,9 +1952,7 @@ impl AggregateScalarize {
             return;
         }
 
-        let Some(extract) =
-            downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        else {
+        let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(inst).cloned() else {
             return;
         };
         let Some(result) = func.dfg.inst_result(inst) else {
@@ -2044,9 +1999,7 @@ impl AggregateScalarize {
         scalarizable: &SecondaryMap<ValueId, bool>,
         scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
     ) {
-        if let Some(enum_make) =
-            downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(enum_make) = func.dfg.downcast::<&data::EnumMake>(inst).cloned() {
             let Some(result) = func.dfg.inst_result(inst) else {
                 return;
             };
@@ -2101,7 +2054,7 @@ impl AggregateScalarize {
             return;
         }
 
-        if let Some(enum_tag) = downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(inst)) {
+        if let Some(enum_tag) = func.dfg.downcast::<&data::EnumTag>(inst) {
             let Some(result) = func.dfg.inst_result(inst) else {
                 return;
             };
@@ -2130,9 +2083,7 @@ impl AggregateScalarize {
             return;
         }
 
-        if let Some(enum_is_variant) =
-            downcast::<&data::EnumIsVariant>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(enum_is_variant) = func.dfg.downcast::<&data::EnumIsVariant>(inst).cloned() {
             let Some(result) = func.dfg.inst_result(inst) else {
                 return;
             };
@@ -2160,9 +2111,7 @@ impl AggregateScalarize {
             return;
         }
 
-        let Some(enum_extract) =
-            downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        else {
+        let Some(enum_extract) = func.dfg.downcast::<&data::EnumExtract>(inst).cloned() else {
             return;
         };
         let Some(result) = func.dfg.inst_result(inst) else {
@@ -2221,9 +2170,7 @@ impl AggregateScalarize {
                 continue;
             };
             let agg_ty = func.dfg.value_ty(result);
-            let Some(phi) =
-                downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).cloned()
-            else {
+            let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(inst).cloned() else {
                 continue;
             };
             let Some(leaf_phis) = scalar_phi_results[result].clone() else {
@@ -2340,21 +2287,21 @@ impl AggregateScalarize {
         for block in blocks {
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
             for inst in insts {
-                let Some((result, load_ty)) =
-                    downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
-                        .and_then(|mload| {
+                let Some((result, load_ty)) = func
+                    .dfg
+                    .downcast::<&data::Mload>(inst)
+                    .and_then(|mload| {
+                        func.dfg
+                            .inst_result(inst)
+                            .map(|result| (result, *mload.ty()))
+                    })
+                    .or_else(|| {
+                        func.dfg.downcast::<&data::ObjLoad>(inst).and_then(|_| {
                             func.dfg
                                 .inst_result(inst)
-                                .map(|result| (result, *mload.ty()))
+                                .map(|result| (result, func.dfg.value_ty(result)))
                         })
-                        .or_else(|| {
-                            downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
-                                .and_then(|_| {
-                                    func.dfg
-                                        .inst_result(inst)
-                                        .map(|result| (result, func.dfg.value_ty(result)))
-                                })
-                        })
+                    })
                 else {
                     continue;
                 };
@@ -2809,7 +2756,10 @@ impl AggregateScalarize {
             let Some(ret_inst) = func.layout.last_inst_of(block) else {
                 continue;
             };
-            if downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(ret_inst)).is_none()
+            if func
+                .dfg
+                .downcast::<&control_flow::Return>(ret_inst)
+                .is_none()
             {
                 continue;
             }
@@ -2879,7 +2829,7 @@ impl AggregateScalarize {
     ) -> Option<String> {
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                if let Some(mload) = func.dfg.downcast::<&data::Mload>(inst)
                     && shape::is_supported_scalar_shape_ty(module, *mload.ty())
                     && let Some(projection) = projection_of.get(*mload.addr())
                     && promoted_by_root.contains_key(&projection.root_value.value())
@@ -2892,8 +2842,7 @@ impl AggregateScalarize {
                         mload.addr().as_u32(),
                     ));
                 }
-                if let Some(obj_load) =
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                if let Some(obj_load) = func.dfg.downcast::<&data::ObjLoad>(inst)
                     && let Some(result) = func.dfg.inst_result(inst)
                     && shape::is_supported_scalar_shape_ty(module, func.dfg.value_ty(result))
                     && let Some(projection) = projection_of.get(*obj_load.object())
@@ -2907,8 +2856,7 @@ impl AggregateScalarize {
                         obj_load.object().as_u32(),
                     ));
                 }
-                if let Some(mstore) =
-                    downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
+                if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(inst)
                     && shape::is_supported_scalar_shape_ty(module, *mstore.ty())
                     && let Some(projection) = projection_of.get(*mstore.addr())
                     && promoted_by_root.contains_key(&projection.root_value.value())
@@ -2922,8 +2870,7 @@ impl AggregateScalarize {
                         mstore.value().as_u32(),
                     ));
                 }
-                if let Some(obj_store) =
-                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
+                if let Some(obj_store) = func.dfg.downcast::<&data::ObjStore>(inst)
                     && shape::is_supported_scalar_shape_ty(
                         module,
                         func.dfg.value_ty(*obj_store.value()),
@@ -2942,8 +2889,7 @@ impl AggregateScalarize {
                         func.dfg.value_ty(*obj_store.value()),
                     ));
                 }
-                if let Some(init) =
-                    downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(inst))
+                if let Some(init) = func.dfg.downcast::<&data::ObjInitConst>(inst)
                     && let Some(projection) = projection_of.get(*init.object())
                     && promoted_by_root.contains_key(&projection.root_value.value())
                 {
@@ -3313,7 +3259,7 @@ mod tests {
         test_support::{lookup_func, parse_test_module},
         transform::aggregate::{ObjectReturnOutParam, compute_object_effect_summaries},
     };
-    use sonatina_ir::{InstDowncast, Module, inst::cast, ir_writer::FuncWriter, module::FuncRef};
+    use sonatina_ir::{Module, inst::cast, ir_writer::FuncWriter, module::FuncRef};
 
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -3371,31 +3317,28 @@ mod tests {
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
                 assert!(
-                    downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                    func.dfg.downcast::<&data::Alloca>(inst).is_none(),
                     "promoted alloca should be removed"
                 );
                 assert!(
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                    func.dfg.downcast::<&data::ObjAlloc>(inst).is_none(),
                     "promoted object root should be removed"
                 );
                 assert!(
-                    downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                    func.dfg.downcast::<&data::ObjProj>(inst).is_none(),
                     "promoted object projection should be removed"
                 );
                 assert!(
-                    downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                    func.dfg.downcast::<&data::ObjIndex>(inst).is_none(),
                     "promoted object index should be removed"
                 );
-                if let Some(mload) =
-                    <&data::Mload as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
-                {
+                if let Some(mload) = func.dfg.downcast::<&data::Mload>(inst) {
                     assert!(
                         !shape::is_supported_scalar_shape_ty(ctx, *mload.ty()),
                         "aggregate mload should be gone after scalarization"
                     );
                 }
-                if let Some(_obj_load) =
-                    <&data::ObjLoad as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
+                if let Some(_obj_load) = func.dfg.downcast::<&data::ObjLoad>(inst)
                     && let Some(result) = func.dfg.inst_result(inst)
                 {
                     assert!(
@@ -3403,18 +3346,13 @@ mod tests {
                         "aggregate obj.load should be gone after scalarization"
                     );
                 }
-                if let Some(mstore) =
-                    <&data::Mstore as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
-                {
+                if let Some(mstore) = func.dfg.downcast::<&data::Mstore>(inst) {
                     assert!(
                         !shape::is_supported_scalar_shape_ty(ctx, *mstore.ty()),
                         "aggregate mstore should be gone after scalarization"
                     );
                 }
-                if let Some(obj_store) = <&data::ObjStore as InstDowncast>::downcast(
-                    func.inst_set(),
-                    func.dfg.inst(inst),
-                ) {
+                if let Some(obj_store) = func.dfg.downcast::<&data::ObjStore>(inst) {
                     assert!(
                         !shape::is_supported_scalar_shape_ty(
                             ctx,
@@ -3462,8 +3400,7 @@ func private %f(v0.i1, v1.i1, v2.i256, v3.i256) -> i256 {
             assert_no_promoted_aggregate_artifacts(func, &module.ctx);
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
-                        .is_some()
+                    if func.dfg.downcast::<&control_flow::Phi>(inst).is_some()
                         && let Some(result) = func.dfg.inst_result(inst)
                     {
                         assert_eq!(func.dfg.value_ty(result), Type::I256);
@@ -3600,15 +3537,15 @@ func private %f() -> i256 {
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
                     assert!(
-                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        func.dfg.downcast::<&data::Alloca>(inst).is_none(),
                         "dead promoted alloca should be removed"
                     );
                     assert!(
-                        downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        func.dfg.downcast::<&data::Gep>(inst).is_none(),
                         "dead promoted gep should be removed"
                     );
                     assert!(
-                        downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        func.dfg.downcast::<&cast::Bitcast>(inst).is_none(),
                         "dead promoted bitcast should be removed"
                     );
                 }
@@ -4321,14 +4258,13 @@ func private %f(v0.objref<i256>) -> i256 {
                 .layout
                 .last_inst_of(func.layout.entry_block().unwrap())
                 .unwrap();
-            let ret =
-                downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(ret)).unwrap();
+            let ret = func.dfg.downcast::<&control_flow::Return>(ret).unwrap();
             let value = *ret.args().first().unwrap();
             let load = func
                 .dfg
                 .value_inst(value)
                 .expect("return value must remain defined");
-            assert!(downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(load)).is_some());
+            assert!(func.dfg.downcast::<&data::ObjLoad>(load).is_some());
         });
     }
 
@@ -4484,9 +4420,7 @@ block0:
                 let load = func
                     .layout
                     .iter_all_insts()
-                    .find(|&inst| {
-                        downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                    })
+                    .find(|&inst| func.dfg.downcast::<&data::ObjLoad>(inst).is_some())
                     .unwrap();
                 assert!(
                     memory
@@ -5199,10 +5133,7 @@ func private %f(v0.i1) -> i256 {
             let mut found = false;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    let Some(phi) = <&control_flow::Phi as InstDowncast>::downcast(
-                        func.inst_set(),
-                        func.dfg.inst(inst),
-                    ) else {
+                    let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(inst) else {
                         continue;
                     };
                     if func
@@ -5283,10 +5214,7 @@ func private %f() -> i256 {
             let mut found = false;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    let Some(phi) = <&control_flow::Phi as InstDowncast>::downcast(
-                        func.inst_set(),
-                        func.dfg.inst(inst),
-                    ) else {
+                    let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(inst) else {
                         continue;
                     };
                     if func
@@ -5411,10 +5339,7 @@ func private %f(v0.i1) -> i256 {
             assert_no_promoted_aggregate_artifacts(func, &ctx);
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(phi) = <&control_flow::Phi as InstDowncast>::downcast(
-                        func.inst_set(),
-                        func.dfg.inst(inst),
-                    ) {
+                    if let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(inst) {
                         let mut preds = FxHashSet::default();
                         for &(_, pred) in phi.args() {
                             assert!(preds.insert(pred), "phi should not retain duplicate preds");

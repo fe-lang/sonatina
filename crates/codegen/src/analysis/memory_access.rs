@@ -841,9 +841,7 @@ impl MemoryAccessAnalysis {
         if key.result_tys().len() != 1 {
             return None;
         }
-        if <&EvmKeccak256Words as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
-            .is_some()
-        {
+        if func.dfg.downcast::<&EvmKeccak256Words>(inst).is_some() {
             let words = key
                 .values()
                 .iter()

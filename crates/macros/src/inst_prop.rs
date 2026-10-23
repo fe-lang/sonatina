@@ -223,7 +223,11 @@ impl InstProp {
             let arm_body = if self.config.is_mut {
                 quote!(<&mut #p as #path_prefix::prelude::InstDowncastMut>::map_mut(isb, inst, |inst| inst as &mut dyn #trait_name))
             } else {
-                quote!(<&#p as #path_prefix::prelude::InstDowncast>::map(isb, inst, |inst| inst as &dyn #trait_name))
+                quote!(
+                    // SAFETY: the caller guarantees `type_id` is `inst`'s.
+                    unsafe { <&#p as #path_prefix::prelude::InstDowncast>::downcast_typed(isb, inst, type_id) }
+                        .map(|inst| inst as &dyn #trait_name)
+                )
             };
 
             quote!(
@@ -248,8 +252,13 @@ impl InstProp {
         } else {
             quote! {
                 impl<'a> #path_prefix::prelude::InstDowncast<'a> for &'a dyn #trait_name {
-                    fn downcast(isb: &dyn #path_prefix::prelude::InstSetBase, inst: &'a dyn #path_prefix::prelude::Inst) -> Option<Self> {
-                        match inst.type_id() {
+                    #[inline]
+                    unsafe fn downcast_typed(
+                        isb: &dyn #path_prefix::prelude::InstSetBase,
+                        inst: &'a dyn #path_prefix::prelude::Inst,
+                        type_id: std::any::TypeId,
+                    ) -> Option<Self> {
+                        match type_id {
                             #(#arms)*
                             _ => None
 

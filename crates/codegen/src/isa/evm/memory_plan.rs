@@ -1,5 +1,4 @@
 use cranelift_entity::SecondaryMap;
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, InstId, Module, ValueId, cfg::ControlFlowGraph, module::FuncRef};
@@ -536,18 +535,14 @@ pub(crate) fn compute_semantic_program_memory_plan(
     cost_model: &ArenaCostModel,
 ) -> ProgramMemoryPlan {
     let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
-    let mut stack_results: Vec<_> = schedule
-        .funcs()
-        .par_iter()
-        .copied()
-        .map(|func| {
+    let mut stack_results: Vec<_> =
+        sonatina_ir::parallel::map(&module.func_store, schedule.funcs(), |&func| {
             let analysis = analyses.get(&func).expect("missing FuncPreAnalysis");
             let stack = module.func_store.view(func, |function| {
                 alloc_ctx.compute_func_semantic_stack_objects(func, function, analysis)
             });
             (func, stack)
-        })
-        .collect();
+        });
     stack_results.sort_unstable_by_key(|(func, _)| func.as_u32());
 
     let mut stacks: FxHashMap<FuncRef, FuncStackObjects> = FxHashMap::default();
@@ -591,18 +586,15 @@ fn compute_program_memory_plan_from_stacks(
         });
     }
 
-    let mut placement_results: Vec<_> = funcs
-        .par_iter()
-        .copied()
-        .map(|func| {
+    let mut placement_results: Vec<_> =
+        sonatina_ir::parallel::map(&module.func_store, funcs, |&func| {
             let stack = expect_func_entry(stacks, func, "object facts");
             let is_recursive = schedule.is_recursive(func);
             (
                 func,
                 solve_func_placement(stack, &stack.obj_facts, is_recursive, cost_model),
             )
-        })
-        .collect();
+        });
     placement_results.sort_unstable_by_key(|(func, _)| func.as_u32());
 
     let mut placements: FxHashMap<FuncRef, FuncPlacementEval> = FxHashMap::default();

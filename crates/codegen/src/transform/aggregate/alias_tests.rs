@@ -2,7 +2,7 @@
 
 use sonatina_ir::{
     Module,
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
     ir_writer::FuncWriter,
     module::FuncRef,
 };
@@ -141,7 +141,8 @@ block3:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&control_flow::Phi>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .unwrap();
@@ -192,7 +193,8 @@ block3:
             .layout
             .iter_all_insts()
             .find_map(|inst| {
-                downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+                func.dfg
+                    .downcast::<&control_flow::Phi>(inst)
                     .and_then(|_| func.dfg.inst_result(inst))
             })
             .unwrap();
@@ -853,9 +855,7 @@ block0:
         let keys: Vec<_> = func
             .layout
             .iter_all_insts()
-            .filter(|&inst| {
-                downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
-            })
+            .filter(|&inst| func.dfg.downcast::<&data::ObjLoad>(inst).is_some())
             .map(|inst| memory.read_state(inst).map(|state| state.key()))
             .collect();
         assert_eq!(keys.len(), 2);
@@ -1026,7 +1026,8 @@ block0:
             .layout
             .iter_all_insts()
             .find_map(|inst| {
-                downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                func.dfg
+                    .downcast::<&data::ObjLoad>(inst)
                     .and_then(|_| func.dfg.inst_result(inst))
             })
             .unwrap();
@@ -1093,7 +1094,8 @@ block2:
             .layout
             .iter_all_insts()
             .find_map(|inst| {
-                downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                func.dfg
+                    .downcast::<&data::ObjLoad>(inst)
                     .and_then(|_| func.dfg.inst_result(inst))
             })
             .unwrap();

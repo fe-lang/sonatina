@@ -16,6 +16,7 @@ pub mod linkage;
 pub mod module;
 pub mod module_linker;
 pub mod object;
+pub mod parallel;
 pub mod trace_view;
 pub mod types;
 pub mod value;

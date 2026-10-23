@@ -122,7 +122,9 @@ impl TraitDefinition {
         let (arms, arms_mut): (Vec<_>, Vec<_>) = self.insts.iter().map(|path| {
             (quote!{
                 s if s == std::any::TypeId::of::<$crate::inst::#path>() => {
-                    <&#path as $crate::prelude::InstDowncast>::map(isb, inst, |inst| inst as &dyn $prop)
+                    // SAFETY: the caller guarantees `type_id` is `inst`'s.
+                    unsafe { <&#path as $crate::prelude::InstDowncast>::downcast_typed(isb, inst, type_id) }
+                        .map(|inst| inst as &dyn $prop)
                 }
             },
             quote!{
@@ -140,8 +142,13 @@ impl TraitDefinition {
             macro_rules! inst_downcast_from_all_insts {
                 (&dyn $prop:path) => {
                     impl<'a> $crate::prelude::InstDowncast<'a> for &'a dyn $prop {
-                        fn downcast(isb: &dyn $crate::prelude::InstSetBase, inst: &'a dyn $crate::prelude::Inst) -> Option<Self> {
-                            match inst.type_id() {
+                        #[inline]
+                        unsafe fn downcast_typed(
+                            isb: &dyn $crate::prelude::InstSetBase,
+                            inst: &'a dyn $crate::prelude::Inst,
+                            type_id: std::any::TypeId,
+                        ) -> Option<Self> {
+                            match type_id {
                                 #(#arms)*
                                 _ => None
 

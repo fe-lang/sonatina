@@ -1,5 +1,5 @@
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, InstDowncast,
+    BlockId, ControlFlowGraph, Function,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::Unreachable,
 };
@@ -122,11 +122,7 @@ fn trim_after_noreturn_call(editor: &mut CfgEditor<'_>) -> bool {
                     continue;
                 };
                 let already_normalized = editor.func().layout.next_inst_of(after).is_none()
-                    && <&Unreachable as InstDowncast>::downcast(
-                        editor.func().inst_set(),
-                        editor.func().dfg.inst(after),
-                    )
-                    .is_some();
+                    && editor.func().dfg.downcast::<&Unreachable>(after).is_some();
                 if already_normalized {
                     continue;
                 }
@@ -305,7 +301,7 @@ fn assert_ir_invariants(func: &Function, cfg: &ControlFlowGraph) {
 mod tests {
     use super::*;
     use sonatina_ir::{
-        InstDowncast, Module,
+        Module,
         inst::control_flow::{Return, Unreachable},
         ir_writer::FuncWriter,
         module::FuncRef,
@@ -358,17 +354,11 @@ func private %caller() {
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
             assert_eq!(insts.len(), 2);
             assert!(func.dfg.call_info(insts[0]).is_some());
-            assert!(
-                <&Unreachable as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(insts[1]))
-                    .is_some()
-            );
+            assert!(func.dfg.downcast::<&Unreachable>(insts[1]).is_some());
             assert_eq!(
                 insts
                     .iter()
-                    .filter(|&&inst| {
-                        <&Return as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
-                            .is_some()
-                    })
+                    .filter(|&&inst| { func.dfg.downcast::<&Return>(inst).is_some() })
                     .count(),
                 0
             );
@@ -472,13 +462,7 @@ func private %caller() {
             let block2_insts: Vec<_> = func.layout.iter_inst(block2).collect();
             assert_eq!(block2_insts.len(), 2);
             assert!(func.dfg.call_info(block2_insts[0]).is_some());
-            assert!(
-                <&Unreachable as InstDowncast>::downcast(
-                    func.inst_set(),
-                    func.dfg.inst(block2_insts[1]),
-                )
-                .is_some()
-            );
+            assert!(func.dfg.downcast::<&Unreachable>(block2_insts[1]).is_some());
 
             let block1 = func
                 .layout

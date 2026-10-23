@@ -555,8 +555,10 @@ fn apply_inline_skip(decision: cost::InlineDecision, stats: &mut InlineStats) {
 
 fn collect_call_sites(func: &Function) -> Vec<CallSite> {
     let is = func.inst_set();
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(func);
     let committing_blocks =
-        blocks_that_may_reach_commit(func, |func_ref| func.ctx().func_effects(func_ref));
+        blocks_that_may_reach_commit(func, &cfg, |func_ref| func.ctx().func_effects(func_ref));
     let mut sites = Vec::new();
 
     for block in func.layout.iter_block() {

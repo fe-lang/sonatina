@@ -2,7 +2,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, InstId, ValueId,
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
 };
 
 use crate::loop_analysis::{Loop, LoopTree};
@@ -418,7 +418,7 @@ fn collect_relevant_slices(
                 continue;
             }
 
-            if let Some(obj_load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+            if let Some(obj_load) = func.dfg.downcast::<&data::ObjLoad>(inst)
                 && let Some(slice) = tracked[*obj_load.object()]
                     .as_ref()
                     .copied()
@@ -427,8 +427,7 @@ fn collect_relevant_slices(
                 relevant.entry(slice.root).or_default().insert(slice);
             }
 
-            if let Some(enum_get_tag) =
-                downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
+            if let Some(enum_get_tag) = func.dfg.downcast::<&data::EnumGetTag>(inst)
                 && let Some(slice) = tracked[*enum_get_tag.object()]
                     .as_ref()
                     .copied()
@@ -607,19 +606,23 @@ fn transfer_inst(
     state: &mut MemoryState,
     record: &mut Option<&mut ObjectMemoryAnalysis>,
 ) {
-    let data = ctx.func.dfg.inst(inst);
-    let is = ctx.func.inst_set();
-    let is_call = downcast::<&control_flow::Call>(is, data).is_some();
-    if is_call || downcast::<&control_flow::Return>(is, data).is_some() {
+    let is_call = ctx.func.dfg.downcast::<&control_flow::Call>(inst).is_some();
+    if is_call
+        || ctx
+            .func
+            .dfg
+            .downcast::<&control_flow::Return>(inst)
+            .is_some()
+    {
         record_inst_pre_state(inst, state, record);
     }
     if !is_call {
         activate_defined_root(ctx, inst, state);
     }
 
-    let read = if let Some(load) = downcast::<&data::ObjLoad>(is, data) {
+    let read = if let Some(load) = ctx.func.dfg.downcast::<&data::ObjLoad>(inst) {
         ctx.tracked[*load.object()]
-    } else if let Some(tag) = downcast::<&data::EnumGetTag>(is, data) {
+    } else if let Some(tag) = ctx.func.dfg.downcast::<&data::EnumGetTag>(inst) {
         ctx.tracked[*tag.object()]
             .and_then(TrackedObject::exact)
             .and_then(|slice| enum_tag_object_slice(ctx.func.ctx(), slice))
@@ -637,7 +640,7 @@ fn transfer_inst(
             state.initialized_values.insert(result, facts);
         }
 
-        if ctx.promote_loaded_values && downcast::<&data::ObjLoad>(is, data).is_some() {
+        if ctx.promote_loaded_values && ctx.func.dfg.downcast::<&data::ObjLoad>(inst).is_some() {
             promote_loaded_value_to_carrier(ctx.func, inst, Some(read), state);
         }
     }
@@ -998,9 +1001,7 @@ mod tests {
             let load_inst = func
                 .layout
                 .iter_all_insts()
-                .find(|&inst| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                })
+                .find(|&inst| func.dfg.downcast::<&data::ObjLoad>(inst).is_some())
                 .expect("function should contain an obj.load");
             object_memory
                 .read_state(load_inst)
@@ -1096,9 +1097,7 @@ block0:
             let loads: Vec<_> = func
                 .layout
                 .iter_all_insts()
-                .filter(|&inst| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                })
+                .filter(|&inst| func.dfg.downcast::<&data::ObjLoad>(inst).is_some())
                 .collect();
             check(func, &memory, &loads);
         });
@@ -1539,10 +1538,7 @@ block0:
                     let call = func
                         .layout
                         .iter_all_insts()
-                        .find(|&inst| {
-                            downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-                                .is_some()
-                        })
+                        .find(|&inst| func.dfg.downcast::<&control_flow::Call>(inst).is_some())
                         .unwrap();
                     let state = &memory.inst_pre_states[&call];
                     assert_eq!(
@@ -1706,11 +1702,9 @@ block0:
                         .layout
                         .iter_all_insts()
                         .find(|&inst| {
-                            downcast::<&data::EnumAssertVariantRef>(
-                                func.inst_set(),
-                                func.dfg.inst(inst),
-                            )
-                            .is_some()
+                            func.dfg
+                                .downcast::<&data::EnumAssertVariantRef>(inst)
+                                .is_some()
                         })
                         .unwrap();
                     assert!(!memory.inst_clobbers_slice(assertion, read.read_slice()));
@@ -1796,10 +1790,7 @@ block0:
                 let tag = func
                     .layout
                     .iter_all_insts()
-                    .find(|&inst| {
-                        downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
-                            .is_some()
-                    })
+                    .find(|&inst| func.dfg.downcast::<&data::EnumGetTag>(inst).is_some())
                     .unwrap();
                 assert!(memory.read_state(tag).unwrap().may_be_undef());
             },

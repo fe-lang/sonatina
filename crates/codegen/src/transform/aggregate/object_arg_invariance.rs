@@ -3,7 +3,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     Function, InstId, Module, Type, ValueId,
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
     module::FuncRef,
     visitor::Visitor,
 };
@@ -105,9 +105,7 @@ pub(crate) fn compute_arg_invariance(
         module.func_store.view(caller, |func| {
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(call) =
-                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) {
                         calls
                             .entry(caller)
                             .or_default()
@@ -135,9 +133,7 @@ pub(crate) fn compute_arg_invariance(
             let mut seen = FxHashSet::default();
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    let Some(load) =
-                        downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
-                    else {
+                    let Some(load) = func.dfg.downcast::<&data::ObjLoad>(inst) else {
                         continue;
                     };
                     let access = accesses.access(*load.object(), None);
@@ -195,7 +191,7 @@ pub(crate) fn compute_arg_invariance(
                     continue;
                 };
                 let call =
-                    downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)).unwrap();
+                    func.dfg.downcast::<&control_flow::Call>(inst).unwrap();
                 let effects = accesses.effects(func, inst, Some(facts.effects()));
                 for candidate in candidates
                     .iter_mut()
@@ -234,7 +230,7 @@ pub(crate) fn compute_arg_invariance(
                         continue;
                     }
                     let allocation = func.dfg.value_inst(slice.root).is_some_and(|definition| {
-                        downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(definition))
+                        func.dfg.downcast::<&data::ObjAlloc>(definition)
                             .is_some()
                     });
                     candidate.entry_valid = candidate.entry_valid && allocation && memory.get_or_insert_with(|| {
@@ -283,7 +279,7 @@ mod tests {
             .iter_all_insts()
             .enumerate()
             .find_map(|(order, inst)| {
-                let load = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))?;
+                let load = func.dfg.downcast::<&data::ObjLoad>(inst)?;
                 match accesses.access(*load.object(), None).as_slice() {
                     [ObjectAccess::Exact(projection)]
                         if projection.root_value.value() == func.arg_values[0] =>
@@ -338,9 +334,7 @@ mod tests {
             let write = func
                 .layout
                 .iter_all_insts()
-                .position(|inst| {
-                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                })
+                .position(|inst| func.dfg.downcast::<&data::ObjStore>(inst).is_some())
                 .unwrap();
             assert_eq!(read < write, promoted, "{text}");
         });
@@ -422,12 +416,9 @@ block0:
             let inst = func
                 .layout
                 .iter_inst(func.layout.entry_block().unwrap())
-                .find(|&inst| {
-                    downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                })
+                .find(|&inst| func.dfg.downcast::<&control_flow::Call>(inst).is_some())
                 .unwrap();
-            let call =
-                downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)).unwrap();
+            let call = func.dfg.downcast::<&control_flow::Call>(inst).unwrap();
             let mut args = call.args().clone();
             args[1] = args[0];
             let call = control_flow::Call::new_unchecked(func.inst_set(), callee, args);

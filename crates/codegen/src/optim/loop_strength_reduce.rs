@@ -329,7 +329,7 @@ fn ensure_preheader(
         .collect();
     let mut editor = CfgEditor::new(func, CleanupMode::Strict);
     let preheader = editor.create_or_reuse_loop_preheader(header, &outside_preds)?;
-    *cfg = editor.cfg().clone();
+    *cfg = editor.into_cfg();
 
     if !outside_preds.contains(&preheader)
         && let Some(parent_loop) = lpt.parent_loop(loop_id)
