@@ -1374,7 +1374,7 @@ fn malloc_ptr_to_int_fact(func: &Function, value: ValueId) -> Option<RangeFact> 
     else {
         return None;
     };
-    let malloc = <&EvmMalloc as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(*inst))?;
+    let malloc = func.dfg.downcast::<&EvmMalloc>(*inst)?;
     let size = func.dfg.value_imm(*malloc.size())?;
     if size.is_negative() {
         return None;

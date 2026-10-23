@@ -4,7 +4,7 @@ use sonatina_ir::{
     Function, I256, Immediate, Module, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     global_variable::GvInitializer,
-    inst::{cmp, data, downcast},
+    inst::{cmp, data},
     isa::TypeLayoutError,
     module::ModuleCtx,
     types::{CompoundType, CompoundTypeRef, EnumData, EnumVariantRef, TypeStore},
@@ -449,18 +449,14 @@ fn rewrite_inst(
     inst: sonatina_ir::InstId,
     lowerer: &mut EnumTypeLowerer,
 ) -> bool {
-    if let Some(enum_make) =
-        downcast::<&data::EnumMake>(function.inst_set(), function.dfg.inst(inst)).cloned()
-    {
+    if let Some(enum_make) = function.dfg.downcast::<&data::EnumMake>(inst).cloned() {
         let layout = lowerer.layout(function.ctx(), enum_make.variant().enum_ty());
         let aggregate = lower_enum_make(function, inst, &layout, &enum_make);
         alias_and_remove_inst(function, inst, Some(aggregate));
         return true;
     }
 
-    if let Some(enum_tag) =
-        downcast::<&data::EnumTag>(function.inst_set(), function.dfg.inst(inst)).cloned()
-    {
+    if let Some(enum_tag) = function.dfg.downcast::<&data::EnumTag>(inst).cloned() {
         let result = function
             .dfg
             .inst_result(inst)
@@ -474,9 +470,7 @@ fn rewrite_inst(
         return true;
     }
 
-    if let Some(enum_is_variant) =
-        downcast::<&data::EnumIsVariant>(function.inst_set(), function.dfg.inst(inst)).cloned()
-    {
+    if let Some(enum_is_variant) = function.dfg.downcast::<&data::EnumIsVariant>(inst).cloned() {
         let layout = lowerer.layout(function.ctx(), enum_is_variant.variant().enum_ty());
         let tag =
             insert_extract_value_before(function, inst, *enum_is_variant.value(), 0, layout.tag_ty);
@@ -493,22 +487,21 @@ fn rewrite_inst(
         return true;
     }
 
-    if downcast::<&data::EnumAssertVariant>(function.inst_set(), function.dfg.inst(inst)).is_some()
+    if function
+        .dfg
+        .downcast::<&data::EnumAssertVariant>(inst)
+        .is_some()
     {
         alias_and_remove_inst(function, inst, None);
         return true;
     }
 
-    if let Some(enum_assert_ref) =
-        downcast::<&data::EnumAssertVariantRef>(function.inst_set(), function.dfg.inst(inst))
-    {
+    if let Some(enum_assert_ref) = function.dfg.downcast::<&data::EnumAssertVariantRef>(inst) {
         alias_and_remove_inst(function, inst, Some(*enum_assert_ref.object()));
         return true;
     }
 
-    if let Some(enum_extract) =
-        downcast::<&data::EnumExtract>(function.inst_set(), function.dfg.inst(inst)).cloned()
-    {
+    if let Some(enum_extract) = function.dfg.downcast::<&data::EnumExtract>(inst).cloned() {
         let layout = lowerer.layout(function.ctx(), enum_extract.variant().enum_ty());
         let field_idx = function
             .dfg
@@ -524,9 +517,7 @@ fn rewrite_inst(
         return true;
     }
 
-    if let Some(enum_set_tag) =
-        downcast::<&data::EnumSetTag>(function.inst_set(), function.dfg.inst(inst)).cloned()
-    {
+    if let Some(enum_set_tag) = function.dfg.downcast::<&data::EnumSetTag>(inst).cloned() {
         let layout = lowerer.layout(function.ctx(), enum_set_tag.variant().enum_ty());
         let tag_slot =
             insert_obj_proj_before(function, inst, *enum_set_tag.object(), 0, layout.tag_ty);
@@ -546,8 +537,10 @@ fn rewrite_inst(
         return true;
     }
 
-    if let Some(enum_write) =
-        downcast::<&data::EnumWriteVariant>(function.inst_set(), function.dfg.inst(inst)).cloned()
+    if let Some(enum_write) = function
+        .dfg
+        .downcast::<&data::EnumWriteVariant>(inst)
+        .cloned()
     {
         let layout = lowerer.layout(function.ctx(), enum_write.variant().enum_ty());
         for (field_idx, &value) in enum_write.values().iter().enumerate() {
@@ -584,9 +577,7 @@ fn rewrite_inst(
         return true;
     }
 
-    if let Some(enum_get_tag) =
-        downcast::<&data::EnumGetTag>(function.inst_set(), function.dfg.inst(inst)).cloned()
-    {
+    if let Some(enum_get_tag) = function.dfg.downcast::<&data::EnumGetTag>(inst).cloned() {
         let result = function
             .dfg
             .inst_result(inst)
@@ -607,9 +598,7 @@ fn rewrite_inst(
         return true;
     }
 
-    if let Some(enum_proj) =
-        downcast::<&data::EnumProj>(function.inst_set(), function.dfg.inst(inst)).cloned()
-    {
+    if let Some(enum_proj) = function.dfg.downcast::<&data::EnumProj>(inst).cloned() {
         let layout = lowerer.layout(function.ctx(), enum_proj.variant().enum_ty());
         let field_idx = function
             .dfg

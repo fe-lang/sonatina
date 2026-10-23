@@ -598,73 +598,75 @@ fn classify_declared_effects_with<S: EffectSink>(
     mut sink: S,
 ) -> S::Output {
     let inst = dfg.inst(inst_id);
-    let is = dfg.inst_set();
     let spaces = dfg.ctx.address_spaces();
 
-    if let Some(mload) = <&data::Mload as InstDowncast>::downcast(is, inst) {
+    if let Some(mload) = dfg.downcast::<&data::Mload>(inst_id) {
         let bytes = dfg.ctx.size_of_unchecked(*mload.ty()) as u32;
         sink.read_exact(spaces.default_space(), *mload.addr(), bytes, *mload.ty());
         return sink.finish();
     }
 
-    if let Some(mstore) = <&data::Mstore as InstDowncast>::downcast(is, inst) {
+    if let Some(mstore) = dfg.downcast::<&data::Mstore>(inst_id) {
         let bytes = dfg.ctx.size_of_unchecked(*mstore.ty()) as u32;
         sink.write_exact(spaces.default_space(), *mstore.addr(), bytes, *mstore.ty());
         return sink.finish();
     }
 
-    if let Some(mload) = <&EvmMload as InstDowncast>::downcast(is, inst) {
+    if let Some(mload) = dfg.downcast::<&EvmMload>(inst_id) {
         sink.read_exact(MEMORY, *mload.addr(), EVM_WORD_BYTES, Type::I256);
         return sink.finish();
     }
 
-    if let Some(mstore) = <&EvmMstore as InstDowncast>::downcast(is, inst) {
+    if let Some(mstore) = dfg.downcast::<&EvmMstore>(inst_id) {
         sink.write_exact(MEMORY, *mstore.addr(), EVM_WORD_BYTES, Type::I256);
         return sink.finish();
     }
 
-    if <&data::Alloca as InstDowncast>::downcast(is, inst).is_some() {
+    if dfg.downcast::<&data::Alloca>(inst_id).is_some() {
         sink.add_other(OtherEffects::ALLOC);
         return sink.finish();
     }
 
-    if <&data::ObjAlloc as InstDowncast>::downcast(is, inst).is_some() {
+    if dfg.downcast::<&data::ObjAlloc>(inst_id).is_some() {
         sink.add_other(OtherEffects::ALLOC);
         return sink.finish();
     }
 
-    if <&data::ObjLoad as InstDowncast>::downcast(is, inst).is_some() {
+    if dfg.downcast::<&data::ObjLoad>(inst_id).is_some() {
         sink.add_other(OtherEffects::OBSERVE);
         return sink.finish();
     }
 
-    if <&data::ObjStore as InstDowncast>::downcast(is, inst).is_some() {
+    if dfg.downcast::<&data::ObjStore>(inst_id).is_some() {
         sink.add_other(OtherEffects::MUTATE);
         return sink.finish();
     }
 
-    if <&data::BlackBox as InstDowncast>::downcast(is, inst).is_some() {
+    if dfg.downcast::<&data::BlackBox>(inst_id).is_some() {
         sink.add_other(OtherEffects::OBSERVE | OtherEffects::MUTATE);
         return sink.finish();
     }
 
-    if <&data::EnumGetTag as InstDowncast>::downcast(is, inst).is_some() {
+    if dfg.downcast::<&data::EnumGetTag>(inst_id).is_some() {
         sink.add_other(OtherEffects::OBSERVE);
         return sink.finish();
     }
 
-    if <&data::EnumAssertVariant as InstDowncast>::downcast(is, inst).is_some() {
+    if dfg.downcast::<&data::EnumAssertVariant>(inst_id).is_some() {
         sink.add_other(OtherEffects::OBSERVE | OtherEffects::CONTROL);
         return sink.finish();
     }
 
-    if <&data::EnumAssertVariantRef as InstDowncast>::downcast(is, inst).is_some() {
+    if dfg
+        .downcast::<&data::EnumAssertVariantRef>(inst_id)
+        .is_some()
+    {
         sink.add_other(OtherEffects::OBSERVE);
         return sink.finish();
     }
 
-    if <&data::EnumSetTag as InstDowncast>::downcast(is, inst).is_some()
-        || <&data::EnumWriteVariant as InstDowncast>::downcast(is, inst).is_some()
+    if dfg.downcast::<&data::EnumSetTag>(inst_id).is_some()
+        || dfg.downcast::<&data::EnumWriteVariant>(inst_id).is_some()
     {
         sink.add_other(OtherEffects::MUTATE);
         return sink.finish();
@@ -675,32 +677,32 @@ fn classify_declared_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
-    if let Some(mstore8) = <&EvmMstore8 as InstDowncast>::downcast(is, inst) {
+    if let Some(mstore8) = dfg.downcast::<&EvmMstore8>(inst_id) {
         sink.write_exact(MEMORY, *mstore8.addr(), 1, Type::I8);
         return sink.finish();
     }
 
-    if let Some(sload) = <&EvmSload as InstDowncast>::downcast(is, inst) {
+    if let Some(sload) = dfg.downcast::<&EvmSload>(inst_id) {
         sink.read_keyed(STORAGE, *sload.key(), EVM_WORD_BYTES);
         return sink.finish();
     }
 
-    if let Some(sstore) = <&EvmSstore as InstDowncast>::downcast(is, inst) {
+    if let Some(sstore) = dfg.downcast::<&EvmSstore>(inst_id) {
         sink.write_keyed(STORAGE, *sstore.key(), EVM_WORD_BYTES);
         return sink.finish();
     }
 
-    if let Some(tload) = <&EvmTload as InstDowncast>::downcast(is, inst) {
+    if let Some(tload) = dfg.downcast::<&EvmTload>(inst_id) {
         sink.read_keyed(TRANSIENT, *tload.key(), EVM_WORD_BYTES);
         return sink.finish();
     }
 
-    if let Some(tstore) = <&EvmTstore as InstDowncast>::downcast(is, inst) {
+    if let Some(tstore) = dfg.downcast::<&EvmTstore>(inst_id) {
         sink.write_keyed(TRANSIENT, *tstore.key(), EVM_WORD_BYTES);
         return sink.finish();
     }
 
-    if let Some(calldata_load) = <&EvmCalldataLoad as InstDowncast>::downcast(is, inst) {
+    if let Some(calldata_load) = dfg.downcast::<&EvmCalldataLoad>(inst_id) {
         let ty = dfg
             .inst_result(inst_id)
             .map(|value| dfg.value_ty(value))
@@ -709,41 +711,41 @@ fn classify_declared_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
-    if let Some(code_load) = <&EvmCodeLoad as InstDowncast>::downcast(is, inst) {
+    if let Some(code_load) = dfg.downcast::<&EvmCodeLoad>(inst_id) {
         sink.read_exact(CODE, *code_load.code_offset(), EVM_WORD_BYTES, Type::I256);
         return sink.finish();
     }
 
-    if let Some(keccak) = <&EvmKeccak256 as InstDowncast>::downcast(is, inst) {
+    if let Some(keccak) = dfg.downcast::<&EvmKeccak256>(inst_id) {
         sink.read_range(MEMORY, *keccak.addr(), *keccak.len());
         return sink.finish();
     }
 
-    if let Some(copy) = <&EvmCalldataCopy as InstDowncast>::downcast(is, inst) {
+    if let Some(copy) = dfg.downcast::<&EvmCalldataCopy>(inst_id) {
         sink.read_range(CALLDATA, *copy.data_offset(), *copy.len());
         sink.write_range(MEMORY, *copy.dst_addr(), *copy.len());
         return sink.finish();
     }
 
-    if let Some(copy) = <&EvmCodeCopy as InstDowncast>::downcast(is, inst) {
+    if let Some(copy) = dfg.downcast::<&EvmCodeCopy>(inst_id) {
         sink.read_range(CODE, *copy.code_offset(), *copy.len());
         sink.write_range(MEMORY, *copy.dst_addr(), *copy.len());
         return sink.finish();
     }
 
-    if let Some(copy) = <&EvmReturnDataCopy as InstDowncast>::downcast(is, inst) {
+    if let Some(copy) = dfg.downcast::<&EvmReturnDataCopy>(inst_id) {
         sink.read_range(RETURNDATA, *copy.data_offset(), *copy.len());
         sink.write_range(MEMORY, *copy.dst_addr(), *copy.len());
         return sink.finish();
     }
 
-    if let Some(copy) = <&EvmExtCodeCopy as InstDowncast>::downcast(is, inst) {
+    if let Some(copy) = dfg.downcast::<&EvmExtCodeCopy>(inst_id) {
         sink.write_range(MEMORY, *copy.dst_addr(), *copy.len());
         sink.add_other(OtherEffects::OBSERVE);
         return sink.finish();
     }
 
-    if let Some(mcopy) = <&EvmMcopy as InstDowncast>::downcast(is, inst) {
+    if let Some(mcopy) = dfg.downcast::<&EvmMcopy>(inst_id) {
         // EIP-5656: a zero-length copy does not access or expand memory,
         // regardless of either address. Positive-length self-copies still can.
         if !dfg.value_imm(*mcopy.len()).is_some_and(Immediate::is_zero) {
@@ -753,42 +755,42 @@ fn classify_declared_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
-    if let Some(memzero) = <&Memzero as InstDowncast>::downcast(is, inst) {
+    if let Some(memzero) = dfg.downcast::<&Memzero>(inst_id) {
         sink.write_range(MEMORY, *memzero.dest(), *memzero.len());
         return sink.finish();
     }
 
-    if let Some(log) = <&EvmLog0 as InstDowncast>::downcast(is, inst) {
+    if let Some(log) = dfg.downcast::<&EvmLog0>(inst_id) {
         record_read_memory_with_other(&mut sink, *log.addr(), *log.len(), OtherEffects::MUTATE);
         return sink.finish();
     }
 
-    if let Some(log) = <&EvmLog1 as InstDowncast>::downcast(is, inst) {
+    if let Some(log) = dfg.downcast::<&EvmLog1>(inst_id) {
         record_read_memory_with_other(&mut sink, *log.addr(), *log.len(), OtherEffects::MUTATE);
         return sink.finish();
     }
 
-    if let Some(log) = <&EvmLog2 as InstDowncast>::downcast(is, inst) {
+    if let Some(log) = dfg.downcast::<&EvmLog2>(inst_id) {
         record_read_memory_with_other(&mut sink, *log.addr(), *log.len(), OtherEffects::MUTATE);
         return sink.finish();
     }
 
-    if let Some(log) = <&EvmLog3 as InstDowncast>::downcast(is, inst) {
+    if let Some(log) = dfg.downcast::<&EvmLog3>(inst_id) {
         record_read_memory_with_other(&mut sink, *log.addr(), *log.len(), OtherEffects::MUTATE);
         return sink.finish();
     }
 
-    if let Some(log) = <&EvmLog4 as InstDowncast>::downcast(is, inst) {
+    if let Some(log) = dfg.downcast::<&EvmLog4>(inst_id) {
         record_read_memory_with_other(&mut sink, *log.addr(), *log.len(), OtherEffects::MUTATE);
         return sink.finish();
     }
 
-    if let Some(ret) = <&EvmReturn as InstDowncast>::downcast(is, inst) {
+    if let Some(ret) = dfg.downcast::<&EvmReturn>(inst_id) {
         record_read_memory_with_other(&mut sink, *ret.addr(), *ret.len(), OtherEffects::CONTROL);
         return sink.finish();
     }
 
-    if let Some(revert) = <&EvmRevert as InstDowncast>::downcast(is, inst) {
+    if let Some(revert) = dfg.downcast::<&EvmRevert>(inst_id) {
         record_read_memory_with_other(
             &mut sink,
             *revert.addr(),
@@ -798,17 +800,17 @@ fn classify_declared_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
-    if let Some(create) = <&EvmCreate as InstDowncast>::downcast(is, inst) {
+    if let Some(create) = dfg.downcast::<&EvmCreate>(inst_id) {
         record_create_effects(&mut sink, *create.addr(), *create.len());
         return sink.finish();
     }
 
-    if let Some(create) = <&EvmCreate2 as InstDowncast>::downcast(is, inst) {
+    if let Some(create) = dfg.downcast::<&EvmCreate2>(inst_id) {
         record_create_effects(&mut sink, *create.addr(), *create.len());
         return sink.finish();
     }
 
-    if let Some(call) = <&EvmCall as InstDowncast>::downcast(is, inst) {
+    if let Some(call) = dfg.downcast::<&EvmCall>(inst_id) {
         record_external_call_effects(
             &mut sink,
             *call.arg_addr(),
@@ -820,7 +822,7 @@ fn classify_declared_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
-    if let Some(call) = <&EvmCallCode as InstDowncast>::downcast(is, inst) {
+    if let Some(call) = dfg.downcast::<&EvmCallCode>(inst_id) {
         record_external_call_effects(
             &mut sink,
             *call.arg_addr(),
@@ -832,7 +834,7 @@ fn classify_declared_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
-    if let Some(call) = <&EvmDelegateCall as InstDowncast>::downcast(is, inst) {
+    if let Some(call) = dfg.downcast::<&EvmDelegateCall>(inst_id) {
         record_external_call_effects(
             &mut sink,
             *call.arg_addr(),
@@ -844,7 +846,7 @@ fn classify_declared_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
-    if let Some(call) = <&EvmStaticCall as InstDowncast>::downcast(is, inst) {
+    if let Some(call) = dfg.downcast::<&EvmStaticCall>(inst_id) {
         record_external_call_effects(
             &mut sink,
             *call.arg_addr(),
@@ -856,27 +858,29 @@ fn classify_declared_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
-    if <&EvmMalloc as InstDowncast>::downcast(is, inst).is_some() {
+    if dfg.downcast::<&EvmMalloc>(inst_id).is_some() {
         record_malloc_effects(&mut sink);
         return sink.finish();
     }
 
-    if <&EvmStop as InstDowncast>::downcast(is, inst).is_some()
-        || <&EvmInvalid as InstDowncast>::downcast(is, inst).is_some()
-        || <&control_flow::Unreachable as InstDowncast>::downcast(is, inst).is_some()
-        || <&control_flow::Return as InstDowncast>::downcast(is, inst).is_some()
+    if dfg.downcast::<&EvmStop>(inst_id).is_some()
+        || dfg.downcast::<&EvmInvalid>(inst_id).is_some()
+        || dfg
+            .downcast::<&control_flow::Unreachable>(inst_id)
+            .is_some()
+        || dfg.downcast::<&control_flow::Return>(inst_id).is_some()
     {
         sink.add_other(OtherEffects::CONTROL);
         return sink.finish();
     }
 
-    if <&EvmSelfDestruct as InstDowncast>::downcast(is, inst).is_some() {
+    if dfg.downcast::<&EvmSelfDestruct>(inst_id).is_some() {
         sink.add_other(OtherEffects::MUTATE | OtherEffects::CONTROL);
         return sink.finish();
     }
 
     if is_observe_only_evm_inst(dfg, inst_id) {
-        if <&EvmMsize as InstDowncast>::downcast(is, inst).is_some() {
+        if dfg.downcast::<&EvmMsize>(inst_id).is_some() {
             sink.read_whole(MEMORY);
         }
         sink.add_other(OtherEffects::OBSERVE);

@@ -1,7 +1,7 @@
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
     Function, InstSetExt, Module, Type,
-    inst::{control_flow, downcast, evm::inst_set::EvmInstKind},
+    inst::{control_flow, evm::inst_set::EvmInstKind},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
     types::{CompoundType, CompoundTypeRef},
@@ -48,7 +48,7 @@ pub(crate) fn collect_unsupported_evm_calls(
             for block in function.layout.iter_block() {
                 for inst in function.layout.iter_inst(block) {
                     if let Some(call) =
-                        downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
+                        function.dfg.downcast::<&control_flow::Call>(inst)
                     {
                         let call_results = function.dfg.inst_results(inst);
                         let callee = *call.callee();

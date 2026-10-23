@@ -1,7 +1,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Linkage, Module,
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
     module::{FuncHints, FuncRef},
 };
 
@@ -484,30 +484,28 @@ fn compute_inlinee_summary(
         for inst_id in func.layout.iter_inst(block) {
             insts += 1;
 
-            if downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst_id)).is_some() {
+            if func.dfg.downcast::<&data::ObjLoad>(inst_id).is_some() {
                 scalarization.object_load_count += 1;
-            } else if downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst_id)).is_some()
-            {
+            } else if func.dfg.downcast::<&data::ObjStore>(inst_id).is_some() {
                 scalarization.object_store_count += 1;
-            } else if downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst_id)).is_some()
-                || downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst_id)).is_some()
-                || downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst_id)).is_some()
+            } else if func.dfg.downcast::<&data::ObjProj>(inst_id).is_some()
+                || func.dfg.downcast::<&data::ObjIndex>(inst_id).is_some()
+                || func.dfg.downcast::<&data::EnumProj>(inst_id).is_some()
             {
                 scalarization.object_slice_count += 1;
-            } else if downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst_id))
-                .is_some()
-                || downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst_id)).is_some()
-                || downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst_id))
+            } else if func.dfg.downcast::<&data::EnumGetTag>(inst_id).is_some()
+                || func.dfg.downcast::<&data::EnumSetTag>(inst_id).is_some()
+                || func
+                    .dfg
+                    .downcast::<&data::EnumWriteVariant>(inst_id)
                     .is_some()
             {
                 scalarization.enum_object_op_count += 1;
-            } else if let Some(insert) =
-                downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst_id))
+            } else if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst_id)
                 && is_scalarizable_aggregate_value(func, *insert.dest())
             {
                 scalarization.aggregate_insert_count += 1;
-            } else if let Some(extract) =
-                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst_id))
+            } else if let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(inst_id)
                 && is_scalarizable_aggregate_value(func, *extract.dest())
             {
                 scalarization.aggregate_extract_count += 1;
@@ -521,9 +519,7 @@ fn compute_inlinee_summary(
 
             if func.dfg.is_return(inst_id) {
                 returns += 1;
-                if let Some(ret) =
-                    downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst_id))
-                {
+                if let Some(ret) = func.dfg.downcast::<&control_flow::Return>(inst_id) {
                     scalarization.aggregate_return_count += ret
                         .args()
                         .iter()
@@ -583,12 +579,12 @@ pub(super) fn loaded_field_reconstruction(
     let mut loads: FxHashSet<_> = insts
         .iter()
         .copied()
-        .filter(|&inst| downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some())
+        .filter(|&inst| func.dfg.downcast::<&data::ObjLoad>(inst).is_some())
         .collect();
     if loads.is_empty()
-        || !insts.iter().any(|&inst| {
-            downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        })
+        || !insts
+            .iter()
+            .any(|&inst| func.dfg.downcast::<&data::InsertValue>(inst).is_some())
     {
         return (0, Vec::new());
     }
@@ -596,7 +592,7 @@ pub(super) fn loaded_field_reconstruction(
         AggregateScalarize::default().scalarizable_values_for_inlining(func, scalarizable_returns);
     let mut eligible_returns = scalarizable_returns.to_vec();
     for &inst in &insts {
-        if let Some(ret) = downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst)) {
+        if let Some(ret) = func.dfg.downcast::<&control_flow::Return>(inst) {
             for (eligible, &value) in eligible_returns.iter_mut().zip(ret.args().iter()) {
                 *eligible &= !is_scalarizable_aggregate_value(func, value) || scalarizable[value];
             }
@@ -605,7 +601,7 @@ pub(super) fn loaded_field_reconstruction(
     let count = insts
         .iter()
         .filter_map(|&inst| {
-            let insert = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst))?;
+            let insert = func.dfg.downcast::<&data::InsertValue>(inst)?;
             if !scalarizable[func.dfg.inst_result(inst)?] {
                 return None;
             }
@@ -616,10 +612,9 @@ pub(super) fn loaded_field_reconstruction(
                 return None;
             }
             let load_inst = func.dfg.value_inst(*insert.value())?;
-            let load = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(load_inst))?;
+            let load = func.dfg.downcast::<&data::ObjLoad>(load_inst)?;
             let projection_inst = func.dfg.value_inst(*load.object())?;
-            let projection =
-                downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(projection_inst))?;
+            let projection = func.dfg.downcast::<&data::ObjProj>(projection_inst)?;
             let [object, index] = projection.values().as_slice() else {
                 return None;
             };

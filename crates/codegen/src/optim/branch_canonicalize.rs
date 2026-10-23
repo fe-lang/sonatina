@@ -1,6 +1,6 @@
 use sonatina_ir::{
     BlockId, Function, Immediate, InstId, Type, Value, ValueId,
-    inst::{BinaryInstKind, InstClassKind, UnaryInstKind, cmp, control_flow::Br, downcast},
+    inst::{BinaryInstKind, InstClassKind, UnaryInstKind, cmp, control_flow::Br},
 };
 
 #[derive(Default)]
@@ -19,7 +19,7 @@ impl BranchCanonicalize {
             let Some(term) = func.layout.last_inst_of(block) else {
                 continue;
             };
-            let Some(br) = downcast::<&Br>(func.inst_set(), func.dfg.inst(term)) else {
+            let Some(br) = func.dfg.downcast::<&Br>(term) else {
                 continue;
             };
             let cond = *br.cond();

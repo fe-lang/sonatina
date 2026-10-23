@@ -157,7 +157,6 @@ mod tests {
         provenance::collect_root_provenance,
         shape,
     };
-    use sonatina_ir::inst::downcast;
 
     fn leaves_from_mask(mask: u8) -> LiveLeaves {
         let mut leaves = LiveLeaves::default();
@@ -249,9 +248,7 @@ block0:
             let obj_proj = func
                 .layout
                 .iter_all_insts()
-                .find(|&inst| {
-                    downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                })
+                .find(|&inst| func.dfg.downcast::<&data::ObjProj>(inst).is_some())
                 .expect("obj.proj should exist");
 
             let accesses = ObjectAccessFacts::new(func, None);
@@ -300,11 +297,9 @@ block0:
             let store = func
                 .layout
                 .iter_all_insts()
-                .find(|&inst| {
-                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                })
+                .find(|&inst| func.dfg.downcast::<&data::ObjStore>(inst).is_some())
                 .expect("obj.store should exist");
-            let store = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(store)).unwrap();
+            let store = func.dfg.downcast::<&data::ObjStore>(store).unwrap();
             let roots = provenance.may().may_roots(*store.value());
             assert!(roots.observed().is_empty());
             assert!(
@@ -342,16 +337,15 @@ block0:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjAlloc>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("enum alloc should exist");
             let enum_write_variant = func
                 .layout
                 .iter_all_insts()
-                .find_map(|inst| {
-                    downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
-                })
+                .find_map(|inst| func.dfg.downcast::<&data::EnumWriteVariant>(inst))
                 .expect("enum.write_variant should exist");
             let pointee_ty = objref_element_ty(func.ctx(), func.dfg.value_ty(enum_root))
                 .expect("alloc result should be an objref");

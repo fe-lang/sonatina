@@ -559,8 +559,7 @@ fn compute_summary_for_func(
 
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
-                if let Some(obj_alloc) =
-                    downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(inst))
+                if let Some(obj_alloc) = function.dfg.downcast::<&data::ObjAlloc>(inst)
                     && let Some(result) = function.dfg.inst_result(inst)
                 {
                     root_slices.insert(
@@ -614,9 +613,7 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if let Some(obj_load) =
-                    downcast::<&data::ObjLoad>(function.inst_set(), function.dfg.inst(inst))
-                {
+                if let Some(obj_load) = function.dfg.downcast::<&data::ObjLoad>(inst) {
                     record_read(
                         &mut summary,
                         &root_captures,
@@ -626,9 +623,7 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if let Some(enum_get_tag) =
-                    downcast::<&data::EnumGetTag>(function.inst_set(), function.dfg.inst(inst))
-                {
+                if let Some(enum_get_tag) = function.dfg.downcast::<&data::EnumGetTag>(inst) {
                     record_enum_tag_read(
                         &mut summary,
                         &root_captures,
@@ -638,10 +633,9 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if let Some(enum_assert_ref) = downcast::<&data::EnumAssertVariantRef>(
-                    function.inst_set(),
-                    function.dfg.inst(inst),
-                ) {
+                if let Some(enum_assert_ref) =
+                    function.dfg.downcast::<&data::EnumAssertVariantRef>(inst)
+                {
                     record_enum_tag_read(
                         &mut summary,
                         &root_captures,
@@ -651,9 +645,7 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if let Some(obj_store) =
-                    downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(inst))
-                {
+                if let Some(obj_store) = function.dfg.downcast::<&data::ObjStore>(inst) {
                     record_unmapped_publication(
                         function,
                         &mut summary,
@@ -677,9 +669,7 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if let Some(init) =
-                    downcast::<&data::ObjInitConst>(function.inst_set(), function.dfg.inst(inst))
-                {
+                if let Some(init) = function.dfg.downcast::<&data::ObjInitConst>(inst) {
                     record_write(
                         &mut summary,
                         &mut root_captures,
@@ -689,9 +679,7 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if let Some(enum_set_tag) =
-                    downcast::<&data::EnumSetTag>(function.inst_set(), function.dfg.inst(inst))
-                {
+                if let Some(enum_set_tag) = function.dfg.downcast::<&data::EnumSetTag>(inst) {
                     record_enum_tag_write(
                         &mut summary,
                         &mut root_captures,
@@ -701,10 +689,9 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if let Some(enum_write_variant) = downcast::<&data::EnumWriteVariant>(
-                    function.inst_set(),
-                    function.dfg.inst(inst),
-                ) {
+                if let Some(enum_write_variant) =
+                    function.dfg.downcast::<&data::EnumWriteVariant>(inst)
+                {
                     record_enum_write_variant(
                         function,
                         &mut summary,
@@ -717,10 +704,7 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if let Some(mat_stack) = downcast::<&data::ObjMaterializeStack>(
-                    function.inst_set(),
-                    function.dfg.inst(inst),
-                ) {
+                if let Some(mat_stack) = function.dfg.downcast::<&data::ObjMaterializeStack>(inst) {
                     record_materialize(
                         &mut summary,
                         &root_captures,
@@ -731,10 +715,7 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if let Some(mat_heap) = downcast::<&data::ObjMaterializeHeap>(
-                    function.inst_set(),
-                    function.dfg.inst(inst),
-                ) {
+                if let Some(mat_heap) = function.dfg.downcast::<&data::ObjMaterializeHeap>(inst) {
                     record_materialize(
                         &mut summary,
                         &root_captures,
@@ -745,9 +726,7 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if let Some(ret) =
-                    downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
-                {
+                if let Some(ret) = function.dfg.downcast::<&control_flow::Return>(inst) {
                     // Callers cannot relate a reference returned under an
                     // unclassified effect to its argument, so it escapes.
                     let unclassified = matches!(
@@ -797,9 +776,7 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
-                    .is_some()
-                {
+                if function.dfg.downcast::<&control_flow::Call>(inst).is_some() {
                     merge_call_effects(
                         function,
                         inst,
@@ -1007,9 +984,7 @@ fn analyze_returns(
         }
 
         for inst in function.layout.iter_inst(block) {
-            let Some(ret) =
-                downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
-            else {
+            let Some(ret) = function.dfg.downcast::<&control_flow::Return>(inst) else {
                 continue;
             };
             saw_return = true;
@@ -1354,7 +1329,9 @@ fn merge_call_effects(
     summaries: &ObjectEffectSummaryMap,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) {
-    let call = downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
+    let call = function
+        .dfg
+        .downcast::<&control_flow::Call>(inst)
         .expect("merge_call_effects requires a call instruction");
     let callee_summary = call_effect_summary(function, call, summaries, layout_cache);
 
@@ -1405,7 +1382,9 @@ fn apply_call_capture_transfer(
     summaries: &ObjectEffectSummaryMap,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) {
-    let call = downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
+    let call = function
+        .dfg
+        .downcast::<&control_flow::Call>(inst)
         .expect("apply_call_capture_transfer requires a call instruction");
     let callee_summary = call_effect_summary(function, call, summaries, layout_cache);
 
@@ -2048,8 +2027,8 @@ pub(crate) fn is_fresh_root(function: &Function, value: ValueId) -> bool {
     let Some(inst) = function.dfg.value_inst(value) else {
         return false;
     };
-    downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(inst)).is_some()
-        || downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst)).is_some()
+    function.dfg.downcast::<&data::ObjAlloc>(inst).is_some()
+        || function.dfg.downcast::<&control_flow::Call>(inst).is_some()
 }
 
 pub(crate) fn whole_root_slice(

@@ -2,7 +2,7 @@
 
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashSet;
-use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstDowncast, InstId, inst::data::Alloca};
+use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId, inst::data::Alloca};
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
@@ -324,7 +324,7 @@ fn is_live_root_inst(func: &Function, inst_id: InstId, call_policy: AdceCallPoli
         };
     }
 
-    if <&Alloca as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst_id)).is_some() {
+    if func.dfg.downcast::<&Alloca>(inst_id).is_some() {
         return false;
     }
 

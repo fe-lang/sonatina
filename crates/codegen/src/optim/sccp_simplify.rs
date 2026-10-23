@@ -286,11 +286,7 @@ pub(super) fn simplify_inst(
 #[cfg(test)]
 mod tests {
     use cranelift_entity::SecondaryMap;
-    use sonatina_ir::{
-        Function, I256, Immediate, InstId, Type, U256,
-        inst::{data, downcast},
-        module::FuncRef,
-    };
+    use sonatina_ir::{Function, I256, Immediate, InstId, Type, U256, inst::data, module::FuncRef};
     use sonatina_parser::parse_module;
 
     use super::{AuxDeps, SimplifyAction, SimplifyCtx, simplify_inst};
@@ -571,9 +567,7 @@ block0:
     fn find_const_load_inst(func: &Function) -> InstId {
         func.layout
             .iter_all_insts()
-            .find(|&inst| {
-                downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
-            })
+            .find(|&inst| func.dfg.downcast::<&data::ConstLoad>(inst).is_some())
             .expect("missing const.load")
     }
 }

@@ -6,7 +6,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     Function, ValueId,
-    inst::{cast, control_flow, data, downcast},
+    inst::{cast, control_flow, data},
 };
 use sonatina_parser::parse_module;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
@@ -182,7 +182,7 @@ fn aggregate_is_definitely_non_undef(
         return true;
     };
 
-    if let Some(insert) = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst) {
         if value_is_definitely_non_undef(func, *insert.dest(), definitely_non_undef) {
             return true;
         }
@@ -209,7 +209,7 @@ fn aggregate_is_definitely_non_undef(
             });
     }
 
-    if let Some(phi) = downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(inst) {
         return phi.args().iter().any(|&(arg, _)| arg != value)
             && phi.args().iter().all(|&(arg, _)| {
                 func.dfg.value_ty(arg) == ty
@@ -217,11 +217,11 @@ fn aggregate_is_definitely_non_undef(
             });
     }
 
-    if let Some(extract) = downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(inst) {
         return value_is_definitely_non_undef(func, *extract.dest(), definitely_non_undef);
     }
 
-    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(inst) {
         return value_is_definitely_non_undef(func, *bitcast.from(), definitely_non_undef);
     }
 
@@ -274,8 +274,7 @@ fn collect_insert_assignments(func: &Function, value: ValueId) -> Option<FxHashM
     let mut assignments: FxHashMap<u32, ValueId> = FxHashMap::default();
     let mut current = value;
     while let Some(inst) = func.dfg.value_inst(current) {
-        let Some(insert) = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst))
-        else {
+        let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst) else {
             break;
         };
         let idx = inst_const_index(func, *insert.idx())?;
@@ -321,7 +320,7 @@ fn source_for_path_value(func: &Function, value: ValueId, path: &mut Vec<u32>) -
 fn extract_chain_source(func: &Function, mut value: ValueId, path: &[u32]) -> Option<ValueId> {
     for &idx in path.iter().rev() {
         let inst = func.dfg.value_inst(value)?;
-        let extract = downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))?;
+        let extract = func.dfg.downcast::<&data::ExtractValue>(inst)?;
         if inst_const_index(func, *extract.idx()) != Some(idx) {
             return None;
         }

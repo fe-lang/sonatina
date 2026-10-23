@@ -1295,10 +1295,7 @@ mod tests {
                     }
                     for block in func.layout.iter_block() {
                         for inst in func.layout.iter_inst(block) {
-                            let Some(insert) = downcast::<&data::InsertValue>(
-                                func.inst_set(),
-                                func.dfg.inst(inst),
-                            ) else {
+                            let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst) else {
                                 continue;
                             };
                             let operand_undef = [*insert.dest(), *insert.idx(), *insert.value()]
@@ -1437,7 +1434,7 @@ mod tests {
 
             let block = func.layout.entry_block().expect("entry block");
             let term = func.layout.last_inst_of(block).expect("return");
-            let ret = downcast::<&Return>(func.inst_set(), func.dfg.inst(term)).expect("return");
+            let ret = func.dfg.downcast::<&Return>(term).expect("return");
             let value = ret.args().iter().next().copied().expect("return value");
             assert_eq!(func.dfg.value_imm(value), Some(Immediate::one(Type::I256)));
         });
@@ -1508,8 +1505,7 @@ block0:
             let mut has_zero_add = false;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    let Some(add) = downcast::<&arith::Add>(func.inst_set(), func.dfg.inst(inst))
-                    else {
+                    let Some(add) = func.dfg.downcast::<&arith::Add>(inst) else {
                         continue;
                     };
                     let lhs_zero = func
@@ -1569,14 +1565,14 @@ block0:
             let mut has_bitcast = false;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(gep) = downcast::<&Gep>(func.inst_set(), func.dfg.inst(inst)) {
+                    if let Some(gep) = func.dfg.downcast::<&Gep>(inst) {
                         let values = gep.values();
                         let is_all_zero = values[1..]
                             .iter()
                             .all(|&idx| func.dfg.value_imm(idx).is_some_and(Immediate::is_zero));
                         has_all_zero_gep |= is_all_zero;
                     }
-                    if downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+                    if func.dfg.downcast::<&cast::Bitcast>(inst).is_some() {
                         has_bitcast = true;
                     }
                 }

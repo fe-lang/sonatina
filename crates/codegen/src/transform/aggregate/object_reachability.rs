@@ -359,7 +359,7 @@ pub(crate) fn raw_access_may_reach_objects(func: &Function, access: &MemoryAcces
         AccessLoc::LinearExact { addr, bytes, .. } => func
             .dfg
             .value_inst(addr)
-            .and_then(|inst| downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)))
+            .and_then(|inst| func.dfg.downcast::<&data::Alloca>(inst))
             .is_some_and(|alloc| {
                 func.ctx()
                     .size_of(*alloc.ty())

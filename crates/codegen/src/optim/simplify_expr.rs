@@ -3,7 +3,7 @@ use sonatina_ir::{
     Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
     inst::{
         BinaryInstKind, CastInstKind, InstClassKind, InstKeyExt, OwnedInstKey, UnaryInstKind, cast,
-        downcast, evm::EvmKeccak256Words,
+        evm::EvmKeccak256Words,
     },
 };
 
@@ -1419,14 +1419,14 @@ pub(crate) fn simplify_cast(
     if matches!(kind, CastInstKind::Trunc)
         && let Some((inst, _)) = func.dfg.value_inst_result(from)
     {
-        if let Some(zext) = downcast::<&cast::Zext>(func.inst_set(), func.dfg.inst(inst)) {
+        if let Some(zext) = func.dfg.downcast::<&cast::Zext>(inst) {
             let src = *zext.from();
             if func.dfg.value_ty(src) == ty {
                 return SimplifiedResult::Copy(src);
             }
         }
 
-        if let Some(sext) = downcast::<&cast::Sext>(func.inst_set(), func.dfg.inst(inst)) {
+        if let Some(sext) = func.dfg.downcast::<&cast::Sext>(inst) {
             let src = *sext.from();
             if func.dfg.value_ty(src) == ty {
                 return SimplifiedResult::Copy(src);

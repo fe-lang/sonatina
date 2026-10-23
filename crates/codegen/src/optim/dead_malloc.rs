@@ -21,7 +21,7 @@ use crate::analysis::memory_access::MemoryAccessAnalysis;
 pub(super) fn eliminate_dead_mallocs(func: &mut Function) -> bool {
     let mut sizes = FxHashMap::default();
     for inst in func.layout.iter_all_insts() {
-        if let Some(malloc) = downcast::<&EvmMalloc>(func.inst_set(), func.dfg.inst(inst)) {
+        if let Some(malloc) = func.dfg.downcast::<&EvmMalloc>(inst) {
             let Some(size) = func.dfg.value_imm(*malloc.size()).map(|imm| imm.as_i256()) else {
                 return false;
             };

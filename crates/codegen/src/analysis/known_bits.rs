@@ -1444,7 +1444,7 @@ block0:
     fn find_const_load_result(func: &Function) -> ValueId {
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+                if func.dfg.downcast::<&data::ConstLoad>(inst).is_some() {
                     return func.dfg.inst_result(inst).expect("result");
                 }
             }

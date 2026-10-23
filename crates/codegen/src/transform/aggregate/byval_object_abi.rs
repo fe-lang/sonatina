@@ -7,7 +7,7 @@ use sonatina_ir::{
     Function, InstId, Module, Type, Value, ValueId,
     cfg::ControlFlowGraph,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{control_flow, data, downcast},
+    inst::{control_flow, data},
     module::{FuncRef, ModuleCtx},
     types::CompoundType,
 };
@@ -351,12 +351,11 @@ impl ObjectAggregateAbi {
                 }
                 module.func_store.modify(func, |function| {
                     for site in &calls[&func] {
-                        let callee = *downcast::<&control_flow::Call>(
-                            function.inst_set(),
-                            function.dfg.inst(site.inst),
-                        )
-                        .unwrap()
-                        .callee();
+                        let callee = *function
+                            .dfg
+                            .downcast::<&control_flow::Call>(site.inst)
+                            .unwrap()
+                            .callee();
                         let facts = self.collect_caller_elision_facts(
                             function,
                             plans.get(&func),
@@ -710,9 +709,7 @@ impl ObjectAggregateAbi {
         let mut saw_return = false;
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
-                let Some(ret) =
-                    downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
-                else {
+                let Some(ret) = function.dfg.downcast::<&control_flow::Return>(inst) else {
                     continue;
                 };
                 saw_return = true;
@@ -749,8 +746,7 @@ impl ObjectAggregateAbi {
         let mut folded = SmallVec::with_capacity(roots.len());
         for root in roots {
             let alloc_inst = function.dfg.value_inst(root)?;
-            let obj_alloc =
-                downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(alloc_inst))?;
+            let obj_alloc = function.dfg.downcast::<&data::ObjAlloc>(alloc_inst)?;
             if *obj_alloc.ty() != ret_ty
                 || !function.layout.is_inst_inserted(alloc_inst)
                 || !self.return_root_is_rewritable(function, root, &rewrite_ctx)
@@ -775,9 +771,7 @@ impl ObjectAggregateAbi {
         let mut root_slices = FxHashMap::default();
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
-                let Some(obj_alloc) =
-                    downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(inst))
-                else {
+                let Some(obj_alloc) = function.dfg.downcast::<&data::ObjAlloc>(inst) else {
                     continue;
                 };
                 let Some(result) = function.dfg.inst_result(inst) else {
@@ -800,8 +794,7 @@ impl ObjectAggregateAbi {
         provenance: CompleteProvenance<'_>,
     ) -> Option<SmallVec<[ValueId; 4]>> {
         if let Some(load_inst) = function.dfg.value_inst(value)
-            && let Some(obj_load) =
-                downcast::<&data::ObjLoad>(function.inst_set(), function.dfg.inst(load_inst))
+            && let Some(obj_load) = function.dfg.downcast::<&data::ObjLoad>(load_inst)
             && root_slices.get(obj_load.object()) == Some(&root_slice)
         {
             return Some(smallvec::smallvec![*obj_load.object()]);
@@ -892,9 +885,10 @@ impl ObjectAggregateAbi {
         for block in blocks {
             let insts: Vec<_> = function.layout.iter_inst(block).collect();
             for inst in insts {
-                let Some(ret) =
-                    downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
-                        .cloned()
+                let Some(ret) = function
+                    .dfg
+                    .downcast::<&control_flow::Return>(inst)
+                    .cloned()
                 else {
                     continue;
                 };
@@ -1014,9 +1008,7 @@ impl ObjectAggregateAbi {
     ) -> SmallVec<[CopyRootCandidate; 2]> {
         let mut candidates = SmallVec::new();
         for &user in function.dfg.users(arg.old_arg) {
-            let Some(store) =
-                downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(user))
-            else {
+            let Some(store) = function.dfg.downcast::<&data::ObjStore>(user) else {
                 continue;
             };
             if *store.value() != arg.old_arg {
@@ -1026,9 +1018,7 @@ impl ObjectAggregateAbi {
             let Some(alloc_inst) = function.dfg.value_inst(root) else {
                 continue;
             };
-            let Some(obj_alloc) =
-                downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(alloc_inst))
-            else {
+            let Some(obj_alloc) = function.dfg.downcast::<&data::ObjAlloc>(alloc_inst) else {
                 continue;
             };
             if *obj_alloc.ty() != arg.original_ty
@@ -1065,8 +1055,7 @@ impl ObjectAggregateAbi {
             if first_user.is_none() {
                 first_user = Some(inst);
             }
-            if let Some(store) =
-                downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(inst))
+            if let Some(store) = function.dfg.downcast::<&data::ObjStore>(inst)
                 && *store.object() == root
             {
                 whole_store_count += 1;
@@ -1079,8 +1068,7 @@ impl ObjectAggregateAbi {
             if function.layout.inst_block(user) == entry {
                 continue;
             }
-            if let Some(store) =
-                downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(user))
+            if let Some(store) = function.dfg.downcast::<&data::ObjStore>(user)
                 && *store.object() == root
             {
                 return false;
@@ -1111,8 +1099,7 @@ impl ObjectAggregateAbi {
             .into_iter()
             .flat_map(|block| function.layout.iter_inst(block))
             .filter_map(|inst| {
-                let call =
-                    downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))?;
+                let call = function.dfg.downcast::<&control_flow::Call>(inst)?;
                 let plan = plans.get(call.callee())?;
                 let following = function.layout.next_inst_of(inst);
                 // Record original stores before generated copy initializers can
@@ -1125,20 +1112,18 @@ impl ObjectAggregateAbi {
                     .filter(|(_, ret)| ret.kind == RetAbiKind::OutObject)
                     .map(|(&result, _)| {
                         following.filter(|&store| {
-                            downcast::<&data::ObjStore>(
-                                function.inst_set(),
-                                function.dfg.inst(store),
-                            )
-                            .is_some_and(|store| *store.value() == result)
+                            function
+                                .dfg
+                                .downcast::<&data::ObjStore>(store)
+                                .is_some_and(|store| *store.value() == result)
                                 && function
                                     .dfg
                                     .users(result)
                                     .filter(|&&user| {
-                                        downcast::<&data::ObjStore>(
-                                            function.inst_set(),
-                                            function.dfg.inst(user),
-                                        )
-                                        .is_some_and(|store| *store.value() == result)
+                                        function
+                                            .dfg
+                                            .downcast::<&data::ObjStore>(user)
+                                            .is_some_and(|store| *store.value() == result)
                                     })
                                     .count()
                                     == 1
@@ -1151,10 +1136,11 @@ impl ObjectAggregateAbi {
         calls
             .into_iter()
             .map(|(inst, stores)| {
-                let call =
-                    downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
-                        .unwrap()
-                        .clone();
+                let call = function
+                    .dfg
+                    .downcast::<&control_flow::Call>(inst)
+                    .unwrap()
+                    .clone();
                 self.rewrite_call(function, inst, &call, &plans[call.callee()], stores)
             })
             .collect()
@@ -1357,17 +1343,20 @@ impl ObjectAggregateAbi {
         object_effects: &ObjectEffectSummaryMap,
         facts: &CallerElisionFacts,
     ) {
-        let call =
-            downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(site.inst))
-                .unwrap()
-                .clone();
+        let call = function
+            .dfg
+            .downcast::<&control_flow::Call>(site.inst)
+            .unwrap()
+            .clone();
         let original_args: SmallVec<[ValueId; 8]> = site
             .input_copies
             .iter()
             .zip(call.args().iter().skip(plan.hidden_out_tys.len()))
             .map(|(copy, &arg)| {
                 copy.map_or(arg, |copy| {
-                    *downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(copy))
+                    *function
+                        .dfg
+                        .downcast::<&data::ObjStore>(copy)
                         .unwrap()
                         .value()
                 })
@@ -1659,8 +1648,7 @@ impl ObjectAggregateAbi {
         request: ReturnCandidateRequest,
         facts: &CallerElisionFacts,
     ) -> Option<ReturnCandidate> {
-        let store =
-            downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(store_inst))?;
+        let store = function.dfg.downcast::<&data::ObjStore>(store_inst)?;
         if *store.value() != old_result {
             return None;
         }
@@ -1697,8 +1685,7 @@ impl ObjectAggregateAbi {
         facts: &CallerElisionFacts,
     ) -> Option<(ValueId, ObjectSlice)> {
         let load_inst = function.dfg.value_inst(actual)?;
-        let obj_load =
-            downcast::<&data::ObjLoad>(function.inst_set(), function.dfg.inst(load_inst))?;
+        let obj_load = function.dfg.downcast::<&data::ObjLoad>(load_inst)?;
         let source_obj = *obj_load.object();
         if function.dfg.value_ty(source_obj) != expected_objref_ty {
             return None;
@@ -1734,11 +1721,13 @@ impl ObjectAggregateAbi {
         }
 
         let def_inst = function.dfg.value_inst(root)?;
-        if downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(def_inst)).is_some() {
+        if function.dfg.downcast::<&data::ObjAlloc>(def_inst).is_some() {
             return Some(SourceOwnership::FreshLocal);
         }
 
-        downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(def_inst))
+        function
+            .dfg
+            .downcast::<&control_flow::Call>(def_inst)
             .filter(|_| facts.root_total_leaves.contains_key(&root))
             .map(|_| SourceOwnership::FreshLocal)
     }
@@ -2234,7 +2223,7 @@ mod tests {
     };
     use sonatina_ir::{
         Function, Module, ValueId,
-        inst::{control_flow, data, downcast},
+        inst::{control_flow, data},
         ir_writer::FuncWriter,
     };
 
@@ -2269,7 +2258,7 @@ mod tests {
         let mut count = 0;
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+                if func.dfg.downcast::<&data::ObjAlloc>(inst).is_some() {
                     count += 1;
                 }
             }
@@ -2283,7 +2272,7 @@ mod tests {
             let mut count = 0;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+                    if func.dfg.downcast::<&data::ObjStore>(inst).is_some() {
                         count += 1;
                     }
                 }
@@ -2299,9 +2288,7 @@ mod tests {
             let mut found = None;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    let Some(call) =
-                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-                    else {
+                    let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) else {
                         continue;
                     };
                     if *call.callee() != callee_ref {
@@ -2320,7 +2307,7 @@ mod tests {
         module.func_store.view(func_ref, |func| {
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_none() {
+                    if func.dfg.downcast::<&data::ObjAlloc>(inst).is_none() {
                         continue;
                     }
                     return func
@@ -2334,9 +2321,9 @@ mod tests {
     }
 
     fn value_is_obj_alloc(func: &Function, value: ValueId) -> bool {
-        func.dfg.value_inst(value).is_some_and(|inst| {
-            downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        })
+        func.dfg
+            .value_inst(value)
+            .is_some_and(|inst| func.dfg.downcast::<&data::ObjAlloc>(inst).is_some())
     }
 
     fn value_is_arg(func: &Function, value: ValueId) -> bool {
@@ -2802,14 +2789,9 @@ block0:
                 let call_inst = func
                     .layout
                     .iter_inst(func.layout.entry_block().unwrap())
-                    .find(|&inst| {
-                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-                            .is_some()
-                    })
+                    .find(|&inst| func.dfg.downcast::<&control_flow::Call>(inst).is_some())
                     .unwrap();
-                let call =
-                    downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(call_inst))
-                        .unwrap();
+                let call = func.dfg.downcast::<&control_flow::Call>(call_inst).unwrap();
                 let mut args = call.args().clone();
                 args[1] = args[0];
                 let call = control_flow::Call::new_unchecked(func.inst_set(), make, args);
@@ -3528,9 +3510,7 @@ block0:
             let mut call_inst = None;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(obj_index) =
-                        downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst))
-                    {
+                    if let Some(obj_index) = func.dfg.downcast::<&data::ObjIndex>(inst) {
                         indexed.push(
                             func.dfg
                                 .inst_result(inst)
@@ -3543,15 +3523,12 @@ block0:
                             "obj.index base should stay an objref"
                         );
                     }
-                    if let Some(obj_load) =
-                        downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    if let Some(obj_load) = func.dfg.downcast::<&data::ObjLoad>(inst)
                         && func.dfg.value_ty(*obj_load.object()).is_obj_ref(func.ctx())
                     {
                         loaded = func.dfg.inst_result(inst);
                     }
-                    if downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-                        .is_some()
-                    {
+                    if func.dfg.downcast::<&control_flow::Call>(inst).is_some() {
                         call_inst = Some(inst);
                     }
                 }
@@ -3722,9 +3699,7 @@ block2:
             let mut calls = Vec::new();
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    let Some(call) =
-                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-                    else {
+                    let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) else {
                         continue;
                     };
                     if *call.callee() == callee_ref {

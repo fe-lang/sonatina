@@ -1,5 +1,5 @@
 //! This module contains Sonatine IR data flow graph.
-use std::io;
+use std::{any::TypeId, io};
 
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl};
 use dyn_clone::clone_box;
@@ -63,8 +63,7 @@ pub struct DataFlowGraph {
     #[doc(hidden)]
     pub values: PrimaryMap<ValueId, Value>,
     live_values: SecondaryMap<ValueId, bool>,
-    #[doc(hidden)]
-    pub insts: PrimaryMap<InstId, Box<dyn Inst>>,
+    insts: PrimaryMap<InstId, InstSlot>,
     live_insts: SecondaryMap<InstId, bool>,
     inst_results: SecondaryMap<InstId, SmallVec<[ValueId; 1]>>,
     #[doc(hidden)]
@@ -74,11 +73,28 @@ pub struct DataFlowGraph {
     users: SecondaryMap<ValueId, ValueUsers>,
 }
 
+/// An instruction with its concrete type, which downcasts compare instead of
+/// asking the instruction.
+struct InstSlot {
+    type_id: TypeId,
+    inst: Box<dyn Inst>,
+}
+
+impl InstSlot {
+    fn new(inst: Box<dyn Inst>) -> Self {
+        let type_id = inst.as_ref().type_id();
+        Self { type_id, inst }
+    }
+}
+
 impl Clone for DataFlowGraph {
     fn clone(&self) -> Self {
         let mut insts = PrimaryMap::with_capacity(self.insts.len());
-        for inst in self.insts.values() {
-            insts.push(clone_box(inst.as_ref()));
+        for slot in self.insts.values() {
+            insts.push(InstSlot {
+                type_id: slot.type_id,
+                inst: clone_box(slot.inst.as_ref()),
+            });
         }
 
         Self {
@@ -131,7 +147,7 @@ impl DataFlowGraph {
     }
 
     pub fn make_inst_dyn(&mut self, inst: Box<dyn Inst>) -> InstId {
-        let inst_id = self.insts.push(inst);
+        let inst_id = self.insts.push(InstSlot::new(inst));
         self.live_insts[inst_id] = true;
         self.attach_user(inst_id);
         inst_id
@@ -214,11 +230,10 @@ impl DataFlowGraph {
     ///
     /// Callers must ensure the replacement preserves result count, ordering, and types.
     pub fn replace_inst_preserving_results(&mut self, inst_id: InstId, new: Box<dyn Inst>) {
-        let slot = &mut self.insts[inst_id];
-        let old = &mut std::mem::replace(slot, new);
+        let old = std::mem::replace(&mut self.insts[inst_id], InstSlot::new(new));
 
         // Remove the arguments of the old inst from the user set.
-        old.for_each_value(&mut |value| {
+        old.inst.for_each_value(&mut |value| {
             self.remove_user(value, inst_id);
         });
 
@@ -349,24 +364,29 @@ impl DataFlowGraph {
         if !self.has_inst(inst_id) {
             return None;
         }
-        Some(self.insts[inst_id].as_ref())
+        Some(self.insts[inst_id].inst.as_ref())
     }
 
     pub fn inst(&self, inst_id: InstId) -> &dyn Inst {
         debug_assert!(self.has_inst(inst_id));
-        self.insts[inst_id].as_ref()
+        self.insts[inst_id].inst.as_ref()
     }
 
     pub fn inst_mut(&mut self, inst_id: InstId) -> &mut dyn Inst {
         debug_assert!(self.has_inst(inst_id));
-        self.insts[inst_id].as_mut()
+        self.insts[inst_id].inst.as_mut()
+    }
+
+    /// Every instruction made, removed ones included.
+    pub fn all_insts_mut(&mut self) -> impl Iterator<Item = &mut dyn Inst> {
+        self.insts.values_mut().map(|slot| slot.inst.as_mut())
     }
 
     pub fn get_inst_mut(&mut self, inst_id: InstId) -> Option<&mut dyn Inst> {
         if !self.has_inst(inst_id) {
             return None;
         }
-        Some(self.insts[inst_id].as_mut())
+        Some(self.insts[inst_id].inst.as_mut())
     }
 
     pub fn get_value(&self, value_id: ValueId) -> Option<&Value> {
@@ -414,14 +434,14 @@ impl DataFlowGraph {
     }
 
     pub fn attach_user(&mut self, inst_id: InstId) {
-        let inst = &self.insts[inst_id];
+        let inst = &self.insts[inst_id].inst;
         inst.for_each_value(&mut |value| {
             self.users[value].insert(inst_id);
         })
     }
 
     pub fn untrack_inst(&mut self, inst_id: InstId) {
-        let inst = &self.insts[inst_id];
+        let inst = &self.insts[inst_id].inst;
         inst.for_each_value(&mut |value| {
             self.users[value].remove(&inst_id);
         })
@@ -493,9 +513,16 @@ impl DataFlowGraph {
         self.try_single_inst_result(inst_id)
     }
 
+    /// `inst_id`'s instruction as `T`, comparing the type recorded with the
+    /// instruction rather than asking the instruction for it.
+    pub fn downcast<'a, T: InstDowncast<'a>>(&'a self, inst_id: InstId) -> Option<T> {
+        let slot = &self.insts[inst_id];
+        // SAFETY: a slot's type is its instruction's (`InstSlot::new`).
+        unsafe { T::downcast_typed(self.ctx.inst_set, slot.inst.as_ref(), slot.type_id) }
+    }
+
     pub fn branch_info(&self, inst_id: InstId) -> Option<&dyn BranchInfo> {
-        let inst = self.inst(inst_id);
-        InstDowncast::downcast(self.ctx.inst_set, inst)
+        self.downcast(inst_id)
     }
 
     pub fn is_terminator(&self, inst_id: InstId) -> bool {
@@ -533,9 +560,7 @@ impl DataFlowGraph {
     }
 
     pub fn cast_phi(&self, inst_id: InstId) -> Option<&control_flow::Phi> {
-        let inst = self.inst(inst_id);
-        let is = self.inst_set();
-        InstDowncast::downcast(is, inst)
+        self.downcast(inst_id)
     }
 
     fn cast_phi_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Phi> {
@@ -545,14 +570,11 @@ impl DataFlowGraph {
     }
 
     pub fn call_info(&self, inst_id: InstId) -> Option<&dyn CallInfo> {
-        let inst = self.inst(inst_id);
-        InstDowncast::downcast(self.ctx.inst_set, inst)
+        self.downcast(inst_id)
     }
 
     pub fn cast_jump(&self, inst_id: InstId) -> Option<&control_flow::Jump> {
-        let inst = self.inst(inst_id);
-        let is = self.inst_set();
-        InstDowncast::downcast(is, inst)
+        self.downcast(inst_id)
     }
 
     pub fn cast_jump_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Jump> {
@@ -562,15 +584,11 @@ impl DataFlowGraph {
     }
 
     pub fn cast_call(&self, inst_id: InstId) -> Option<&control_flow::Call> {
-        let inst = self.inst(inst_id);
-        let is = self.inst_set();
-        InstDowncast::downcast(is, inst)
+        self.downcast(inst_id)
     }
 
     pub fn cast_br_table(&self, inst_id: InstId) -> Option<&control_flow::BrTable> {
-        let inst = self.inst(inst_id);
-        let is = self.inst_set();
-        InstDowncast::downcast(is, inst)
+        self.downcast(inst_id)
     }
 
     pub fn make_phi(&self, args: control_flow::PhiArgs) -> Phi {
@@ -591,7 +609,7 @@ impl DataFlowGraph {
             }
 
             let mut uses_value = false;
-            self.insts[inst].for_each_value_mut(&mut |user_value| {
+            self.insts[inst].inst.for_each_value_mut(&mut |user_value| {
                 if *user_value == value {
                     *user_value = alias;
                     uses_value = true;
@@ -614,11 +632,11 @@ impl DataFlowGraph {
         self.untrack_inst(inst_id);
 
         let results = std::mem::take(&mut self.inst_results[inst_id]);
-        let inst_text = self.insts[inst_id].as_text();
+        let inst_text = self.insts[inst_id].inst.as_text();
         for value_id in results {
             let users = self.users[value_id]
                 .iter()
-                .map(|&user| format!("{user:?}:{}", self.insts[user].as_text()))
+                .map(|&user| format!("{user:?}:{}", self.insts[user].inst.as_text()))
                 .collect::<Vec<_>>();
             assert!(
                 self.users_num(value_id) == 0,
@@ -770,12 +788,11 @@ impl DataFlowGraph {
     }
 
     pub fn is_return(&self, inst_id: InstId) -> bool {
-        <&control_flow::Return as InstDowncast>::downcast(self.inst_set(), self.inst(inst_id))
-            .is_some()
+        self.downcast::<&control_flow::Return>(inst_id).is_some()
     }
 
     pub fn return_args(&self, inst: InstId) -> Option<&[ValueId]> {
-        let r: &control_flow::Return = InstDowncast::downcast(self.inst_set(), self.inst(inst))?;
+        let r: &control_flow::Return = self.downcast(inst)?;
         Some(r.args().as_slice())
     }
 
@@ -788,7 +805,7 @@ impl DataFlowGraph {
         let new_inst = branch.rewrite_edges_to_block(inst_set, from, to);
         self.remove_old_users(inst_id, new_inst.as_ref());
 
-        self.insts[inst_id] = new_inst;
+        self.insts[inst_id] = InstSlot::new(new_inst);
     }
 
     pub fn remove_branch_edges_to_block(&mut self, inst_id: InstId, dest: BlockId) {
@@ -800,7 +817,7 @@ impl DataFlowGraph {
         let new_inst = branch.remove_edges_to_block(inst_set, dest);
         self.remove_old_users(inst_id, new_inst.as_ref());
 
-        self.insts[inst_id] = new_inst;
+        self.insts[inst_id] = InstSlot::new(new_inst);
     }
 
     pub fn rewrite_branch_edge_dest(&mut self, inst_id: InstId, edge_idx: usize, to: BlockId) {
@@ -812,7 +829,7 @@ impl DataFlowGraph {
         let new_inst = branch.rewrite_edge_dest(inst_set, edge_idx, to);
         self.remove_old_users(inst_id, new_inst.as_ref());
 
-        self.insts[inst_id] = new_inst;
+        self.insts[inst_id] = InstSlot::new(new_inst);
     }
 
     pub fn remove_branch_edge(&mut self, inst_id: InstId, edge_idx: usize) {
@@ -824,7 +841,7 @@ impl DataFlowGraph {
         let new_inst = branch.remove_edge(inst_set, edge_idx);
         self.remove_old_users(inst_id, new_inst.as_ref());
 
-        self.insts[inst_id] = new_inst;
+        self.insts[inst_id] = InstSlot::new(new_inst);
     }
 
     pub fn retain_branch_edges(&mut self, inst_id: InstId, keep_mask: &[bool]) {
@@ -836,7 +853,7 @@ impl DataFlowGraph {
         let new_inst = branch.retain_edges(inst_set, keep_mask);
         self.remove_old_users(inst_id, new_inst.as_ref());
 
-        self.insts[inst_id] = new_inst;
+        self.insts[inst_id] = InstSlot::new(new_inst);
     }
 
     fn remove_old_users(&mut self, inst_id: InstId, new: &dyn Inst) {

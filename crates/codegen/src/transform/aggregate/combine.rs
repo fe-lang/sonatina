@@ -300,17 +300,17 @@ impl AggregateCombine {
         inst: InstId,
         facts: &AggregateValueFacts,
     ) -> bool {
-        if downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        if func.dfg.downcast::<&data::EnumTag>(inst).is_some() {
             self.try_rewrite_enum_tag(func, inst)
-        } else if downcast::<&data::EnumIsVariant>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        } else if func.dfg.downcast::<&data::EnumIsVariant>(inst).is_some() {
             self.try_rewrite_enum_is_variant(func, inst)
-        } else if downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        } else if func.dfg.downcast::<&data::EnumExtract>(inst).is_some() {
             self.try_rewrite_enum_extract(func, inst)
-        } else if downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        } else if func.dfg.downcast::<&data::ExtractValue>(inst).is_some() {
             self.try_rewrite_extract(func, inst)
-        } else if downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        } else if func.dfg.downcast::<&data::InsertValue>(inst).is_some() {
             self.try_rewrite_insert(func, inst, facts)
-        } else if downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        } else if func.dfg.downcast::<&control_flow::Phi>(inst).is_some() {
             self.try_rewrite_phi(func, inst, &facts.definitely_non_undef)
         } else {
             false
@@ -318,8 +318,7 @@ impl AggregateCombine {
     }
 
     fn try_rewrite_enum_tag(&mut self, func: &mut Function, inst: InstId) -> bool {
-        let Some(enum_tag) = downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(inst))
-        else {
+        let Some(enum_tag) = func.dfg.downcast::<&data::EnumTag>(inst) else {
             return false;
         };
         let Some(result) = func.dfg.inst_result(inst) else {
@@ -337,9 +336,7 @@ impl AggregateCombine {
     }
 
     fn try_rewrite_enum_is_variant(&mut self, func: &mut Function, inst: InstId) -> bool {
-        let Some(enum_is_variant) =
-            downcast::<&data::EnumIsVariant>(func.inst_set(), func.dfg.inst(inst))
-        else {
+        let Some(enum_is_variant) = func.dfg.downcast::<&data::EnumIsVariant>(inst) else {
             return false;
         };
         let Some(result) = func.dfg.inst_result(inst) else {
@@ -356,9 +353,7 @@ impl AggregateCombine {
     }
 
     fn try_rewrite_enum_extract(&mut self, func: &mut Function, inst: InstId) -> bool {
-        let Some(enum_extract) =
-            downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(inst))
-        else {
+        let Some(enum_extract) = func.dfg.downcast::<&data::EnumExtract>(inst) else {
             return false;
         };
         let Some(result) = func.dfg.inst_result(inst) else {
@@ -384,8 +379,7 @@ impl AggregateCombine {
     }
 
     fn try_rewrite_extract(&mut self, func: &mut Function, inst: InstId) -> bool {
-        let Some(extract) = downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))
-        else {
+        let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(inst) else {
             return false;
         };
         let extract = extract.clone();
@@ -439,9 +433,7 @@ impl AggregateCombine {
         let Some(bitcast_inst) = func.dfg.value_inst(dest) else {
             return false;
         };
-        let Some(bitcast) =
-            downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(bitcast_inst)).cloned()
-        else {
+        let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(bitcast_inst).cloned() else {
             return false;
         };
 
@@ -503,8 +495,7 @@ impl AggregateCombine {
         inst: InstId,
         facts: &AggregateValueFacts,
     ) -> bool {
-        let Some(insert) = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst))
-        else {
+        let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst) else {
             return false;
         };
         let insert = insert.clone();
@@ -523,8 +514,7 @@ impl AggregateCombine {
 
         // AC3: overwrite collapse.
         if let Some(prev_inst) = func.dfg.value_inst(*insert.dest())
-            && let Some(prev) =
-                downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(prev_inst))
+            && let Some(prev) = func.dfg.downcast::<&data::InsertValue>(prev_inst)
             && equivalent_indices(func, *insert.idx(), *prev.idx())
         {
             let rewritten = data::InsertValue::new_unchecked(
@@ -565,7 +555,7 @@ impl AggregateCombine {
     }
 
     fn try_rewrite_phi_of_extracts(&mut self, func: &mut Function, inst: InstId) -> bool {
-        let Some(phi) = downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)) else {
+        let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(inst) else {
             return false;
         };
         let phi = phi.clone();
@@ -578,8 +568,7 @@ impl AggregateCombine {
         let Some(first_extract_inst) = func.dfg.value_inst(first_val) else {
             return false;
         };
-        let Some(first_extract) =
-            downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(first_extract_inst))
+        let Some(first_extract) = func.dfg.downcast::<&data::ExtractValue>(first_extract_inst)
         else {
             return false;
         };
@@ -595,9 +584,7 @@ impl AggregateCombine {
             let Some(extract_inst) = func.dfg.value_inst(incoming) else {
                 return false;
             };
-            let Some(extract) =
-                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(extract_inst))
-            else {
+            let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(extract_inst) else {
                 return false;
             };
             if inst_const_index(func, *extract.idx()) != Some(idx) {
@@ -631,7 +618,7 @@ impl AggregateCombine {
         inst: InstId,
         definitely_non_undef: &SecondaryMap<ValueId, bool>,
     ) -> bool {
-        let Some(phi) = downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)) else {
+        let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(inst) else {
             return false;
         };
         let phi = phi.clone();
@@ -644,9 +631,7 @@ impl AggregateCombine {
         let Some(first_insert_inst) = func.dfg.value_inst(first_val) else {
             return false;
         };
-        let Some(first_insert) =
-            downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(first_insert_inst))
-        else {
+        let Some(first_insert) = func.dfg.downcast::<&data::InsertValue>(first_insert_inst) else {
             return false;
         };
         if is_identical_field_reinsert(func, first_insert, definitely_non_undef) {
@@ -667,9 +652,7 @@ impl AggregateCombine {
             let Some(insert_inst) = func.dfg.value_inst(incoming) else {
                 return false;
             };
-            let Some(insert) =
-                downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(insert_inst))
-            else {
+            let Some(insert) = func.dfg.downcast::<&data::InsertValue>(insert_inst) else {
                 return false;
             };
             if is_identical_field_reinsert(func, insert, definitely_non_undef) {
@@ -862,7 +845,7 @@ fn collect_local_object_roots(func: &Function) -> FxHashSet<ValueId> {
 
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
-            let Some(_) = downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)) else {
+            let Some(_) = func.dfg.downcast::<&data::ObjAlloc>(inst) else {
                 continue;
             };
             let Some(result) = func.dfg.inst_result(inst) else {
@@ -890,7 +873,7 @@ fn try_remove_dead_local_enum_write(
     enum_aliases: EnumAliasContext<'_>,
     live: &LiveLeafMap,
 ) -> bool {
-    if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
+    if let Some(obj_store) = func.dfg.downcast::<&data::ObjStore>(inst)
         && let Some((object, variant, field)) = enum_field_of_value(func, *obj_store.object())
         && let Some(base_slice) = enum_aliases.exact_local(func, local_roots, object)
         && let Some(field_slice) =
@@ -901,7 +884,7 @@ fn try_remove_dead_local_enum_write(
         return true;
     }
 
-    if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
+    if let Some(enum_set_tag) = func.dfg.downcast::<&data::EnumSetTag>(inst)
         && let Some(tag_slice) = enum_aliases
             .exact_local(func, local_roots, *enum_set_tag.object())
             .and_then(|slice| enum_tag_object_slice(func.ctx(), slice.slice()))
@@ -911,8 +894,7 @@ fn try_remove_dead_local_enum_write(
         return true;
     }
 
-    if let Some(enum_write_variant) =
-        downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
+    if let Some(enum_write_variant) = func.dfg.downcast::<&data::EnumWriteVariant>(inst)
         && let Some(base_slice) =
             enum_aliases.exact_local(func, local_roots, *enum_write_variant.object())
         && !enum_write_variant_slices(func.ctx(), base_slice.slice(), enum_write_variant)
@@ -988,7 +970,7 @@ fn edge_enum_object_facts(
         return edge_state;
     };
 
-    if let Some(br_table) = downcast::<&control_flow::BrTable>(func.inst_set(), func.dfg.inst(term))
+    if let Some(br_table) = func.dfg.downcast::<&control_flow::BrTable>(term)
         && let Some((object, variant)) =
             br_table_edge_variant(func, br_table, succ, &out_state.observations)
     {
@@ -1075,19 +1057,20 @@ fn transfer_enum_object_facts(
     state: &mut EnumFlowState,
 ) {
     let effects = &aliases.effects[&inst];
-    let data = func.dfg.inst(inst);
-    let is = func.inst_set();
-    let tag = downcast::<&data::EnumSetTag>(is, data);
-    let write = downcast::<&data::EnumWriteVariant>(is, data);
-    let field_store = downcast::<&data::ObjStore>(is, data).and_then(|store| {
-        let (object, variant, field) = enum_field_of_value(func, *store.object())?;
-        Some((
-            aliases.exact_enum(func, object)?,
-            variant,
-            field,
-            *store.value(),
-        ))
-    });
+    let tag = func.dfg.downcast::<&data::EnumSetTag>(inst);
+    let write = func.dfg.downcast::<&data::EnumWriteVariant>(inst);
+    let field_store = func
+        .dfg
+        .downcast::<&data::ObjStore>(inst)
+        .and_then(|store| {
+            let (object, variant, field) = enum_field_of_value(func, *store.object())?;
+            Some((
+                aliases.exact_enum(func, object)?,
+                variant,
+                field,
+                *store.value(),
+            ))
+        });
     let target = tag
         .and_then(|tag| aliases.exact_enum(func, *tag.object()))
         .or_else(|| write.and_then(|write| aliases.exact_enum(func, *write.object())))
@@ -1120,7 +1103,7 @@ fn transfer_enum_object_facts(
     if let Some((object, facts)) = preserved {
         state.facts.insert(object, facts);
     }
-    if let Some(assertion) = downcast::<&data::EnumAssertVariantRef>(is, data)
+    if let Some(assertion) = func.dfg.downcast::<&data::EnumAssertVariantRef>(inst)
         && let Some(object) = aliases.exact_enum(func, *assertion.object())
     {
         update_known_enum_variant_fact(func, &mut state.facts, object, *assertion.variant());
@@ -1134,7 +1117,7 @@ fn transfer_enum_object_facts(
         update_enum_write_variant_fact(&mut state.facts, object, *write.variant(), write.values());
     } else if let Some((object, variant, field, value)) = field_store {
         update_enum_store_fact(&mut state.facts, object, variant, field, value);
-    } else if let Some(tag) = downcast::<&data::EnumGetTag>(is, data)
+    } else if let Some(tag) = func.dfg.downcast::<&data::EnumGetTag>(inst)
         && let Some(object) = aliases.exact_enum(func, *tag.object())
         && let Some(result) = func.dfg.inst_result(inst)
     {
@@ -1276,7 +1259,7 @@ fn enum_variant_count(
 
 fn enum_proj_of_value(func: &Function, value: ValueId) -> Option<data::EnumProj> {
     let inst = func.dfg.value_inst(value)?;
-    downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)).cloned()
+    func.dfg.downcast::<&data::EnumProj>(inst).cloned()
 }
 
 fn append_phi_at_block_top(
@@ -1329,7 +1312,7 @@ fn append_non_phi_after_phi_region<I: sonatina_ir::Inst>(
 
 fn enum_make_of_value(func: &Function, value: ValueId) -> Option<data::EnumMake> {
     let inst = func.dfg.value_inst(value)?;
-    downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(inst)).cloned()
+    func.dfg.downcast::<&data::EnumMake>(inst).cloned()
 }
 
 fn inst_const_index(func: &Function, v: ValueId) -> Option<u32> {
@@ -1368,12 +1351,12 @@ fn is_identical_field_reinsert(
         .dfg
         .value_inst(*insert.value())
         .is_some_and(|src_inst| {
-            downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(src_inst)).is_some_and(
-                |extract| {
+            func.dfg
+                .downcast::<&data::ExtractValue>(src_inst)
+                .is_some_and(|extract| {
                     *extract.dest() == *insert.dest()
                         && inst_const_index(func, *extract.idx()) == Some(idx)
-                },
-            )
+                })
         })
 }
 
@@ -1393,8 +1376,7 @@ fn walk_insert_chain_for_field(
     let Some(def_inst) = func.dfg.value_inst(aggregate) else {
         return AggregateFieldLookup::BaseNeedsExtract(aggregate);
     };
-    let Some(insert) = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(def_inst))
-    else {
+    let Some(insert) = func.dfg.downcast::<&data::InsertValue>(def_inst) else {
         return AggregateFieldLookup::BaseNeedsExtract(aggregate);
     };
     let Some(insert_idx) = inst_const_index(func, *insert.idx()) else {
@@ -1440,16 +1422,13 @@ block0:
             let mut extract_count = 0;
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    let Some(extract) =
-                        downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))
-                    else {
+                    let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(inst) else {
                         continue;
                     };
                     extract_count += 1;
 
                     if let Some(dest_inst) = func.dfg.value_inst(*extract.dest())
-                        && let Some(bitcast) =
-                            downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(dest_inst))
+                        && let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(dest_inst)
                     {
                         let from_ty = func.dfg.value_ty(*bitcast.from());
                         let to_ty = func.dfg.value_ty(*extract.dest());
@@ -1495,13 +1474,16 @@ block0:
                 .layout
                 .last_inst_of(func.layout.entry_block().unwrap())
                 .unwrap();
-            let ret = downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(ret_inst))
+            let ret = func
+                .dfg
+                .downcast::<&control_flow::Return>(ret_inst)
                 .unwrap();
             let returned = *ret.args().first().expect("return value");
             let extract_inst = func.dfg.value_inst(returned).expect("extract result");
-            let extract =
-                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(extract_inst))
-                    .unwrap();
+            let extract = func
+                .dfg
+                .downcast::<&data::ExtractValue>(extract_inst)
+                .unwrap();
 
             assert_eq!(*extract.dest(), func.arg_values[0]);
             assert_eq!(shape::const_u32(&func.dfg, *extract.idx()), Some(2));
@@ -1544,17 +1526,9 @@ block2:
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
                     assert!(
-                        downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(inst)).is_none()
-                            && downcast::<&data::EnumIsVariant>(
-                                func.inst_set(),
-                                func.dfg.inst(inst),
-                            )
-                            .is_none()
-                            && downcast::<&data::EnumExtract>(
-                                func.inst_set(),
-                                func.dfg.inst(inst),
-                            )
-                            .is_none(),
+                        func.dfg.downcast::<&data::EnumTag>(inst).is_none()
+                            && func.dfg.downcast::<&data::EnumIsVariant>(inst).is_none()
+                            && func.dfg.downcast::<&data::EnumExtract>(inst).is_none(),
                         "enum value query should fold away",
                     );
                 }

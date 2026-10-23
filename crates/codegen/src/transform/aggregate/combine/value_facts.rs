@@ -83,8 +83,7 @@ impl AggregateValueFacts {
         for &value in &aggregates {
             facts.definitely_non_undef[value] = !is_explicit_undef(func, value);
             if let Some(inst) = func.dfg.value_inst(value)
-                && let Some(insert) =
-                    downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst))
+                && let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst)
             {
                 let ty = func.dfg.value_ty(value);
                 let index = inst_const_index(func, *insert.idx());
@@ -285,8 +284,7 @@ impl ReconstructionSources<'_> {
         // The last inserted field must itself come from this path. Reject a
         // mismatching path before walking a potentially large nested aggregate.
         let inst = self.func.dfg.value_inst(value)?;
-        let insert =
-            downcast::<&data::InsertValue>(self.func.inst_set(), self.func.dfg.inst(inst))?;
+        let insert = self.func.dfg.downcast::<&data::InsertValue>(inst)?;
         let index = inst_const_index(self.func, *insert.idx())?;
         let field = *insert.value();
         path.push(index);
@@ -297,9 +295,7 @@ impl ReconstructionSources<'_> {
         let mut assignments = FxHashMap::default();
         let mut current = value;
         while let Some(inst) = self.func.dfg.value_inst(current) {
-            let Some(insert) =
-                downcast::<&data::InsertValue>(self.func.inst_set(), self.func.dfg.inst(inst))
-            else {
+            let Some(insert) = self.func.dfg.downcast::<&data::InsertValue>(inst) else {
                 break;
             };
             let index = inst_const_index(self.func, *insert.idx())?;
@@ -323,7 +319,7 @@ impl ReconstructionSources<'_> {
 fn extract_chain_source(func: &Function, mut value: ValueId, path: &[u32]) -> Option<ValueId> {
     for &index in path.iter().rev() {
         let inst = func.dfg.value_inst(value)?;
-        let extract = downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))?;
+        let extract = func.dfg.downcast::<&data::ExtractValue>(inst)?;
         if inst_const_index(func, *extract.idx()) != Some(index) {
             return None;
         }

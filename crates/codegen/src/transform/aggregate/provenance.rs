@@ -19,7 +19,7 @@ use sonatina_ir::{
     BlockId, Function, InstId, Type, ValueId,
     cfg::ControlFlowGraph,
     effects::AccessKind,
-    inst::{cast, control_flow, data, downcast},
+    inst::{cast, control_flow, data},
     module::{FuncRef, ModuleCtx},
     types::CompoundType,
 };
@@ -460,8 +460,7 @@ impl<'a> ProvenanceSnapshot<'a> {
                 && !root_slices.contains_key(&value)
                 && func.dfg.value_inst(value).is_none_or(|inst| {
                     self.possible_root_transfers[value].is_none()
-                        && downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
-                            .is_none()
+                        && func.dfg.downcast::<&data::ObjLoad>(inst).is_none()
                 })
             {
                 // Missing origins and unsupported producers are contributors,
@@ -724,7 +723,7 @@ fn possible_root_transfer_for_inst(
 ) -> Option<PossibleRootTransfer> {
     let result = single_result_value(func, inst)?;
 
-    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(gep) = func.dfg.downcast::<&data::Gep>(inst) {
         return gep
             .values()
             .first()
@@ -732,19 +731,17 @@ fn possible_root_transfer_for_inst(
             .map(|source| PossibleRootTransfer::source(result, source));
     }
 
-    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(inst) {
         return Some(PossibleRootTransfer::source(result, *bitcast.from()));
     }
 
     // Stack materialization exposes the same storage. Preserve its possible
     // roots so raw-pointer GEPs, casts, and phis remain visible to alias checks.
-    if let Some(materialize) =
-        downcast::<&data::ObjMaterializeStack>(func.inst_set(), func.dfg.inst(inst))
-    {
+    if let Some(materialize) = func.dfg.downcast::<&data::ObjMaterializeStack>(inst) {
         return Some(PossibleRootTransfer::source(result, *materialize.object()));
     }
 
-    if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(obj_proj) = func.dfg.downcast::<&data::ObjProj>(inst) {
         return obj_proj
             .values()
             .first()
@@ -752,17 +749,15 @@ fn possible_root_transfer_for_inst(
             .map(|source| PossibleRootTransfer::source(result, source));
     }
 
-    if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(obj_index) = func.dfg.downcast::<&data::ObjIndex>(inst) {
         return Some(PossibleRootTransfer::source(result, *obj_index.object()));
     }
 
-    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(enum_proj) = func.dfg.downcast::<&data::EnumProj>(inst) {
         return Some(PossibleRootTransfer::source(result, *enum_proj.object()));
     }
 
-    if let Some(enum_assert_ref) =
-        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
-    {
+    if let Some(enum_assert_ref) = func.dfg.downcast::<&data::EnumAssertVariantRef>(inst) {
         return Some(PossibleRootTransfer::source(
             result,
             *enum_assert_ref.object(),
@@ -773,18 +768,19 @@ fn possible_root_transfer_for_inst(
     // extracted reference can alias an existing root, even though no root was
     // recorded for the aggregate value itself. An empty known set is not a
     // proof that this reference is disjoint from every tracked object.
-    if (downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(inst)).is_some())
+    if (func.dfg.downcast::<&data::ExtractValue>(inst).is_some()
+        || func.dfg.downcast::<&data::EnumExtract>(inst).is_some())
         && reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
     {
         return Some(PossibleRootTransfer::unknown(result));
     }
 
-    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) {
         return call_possible_root_transfer(func, result, call, object_effects);
     }
 
-    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+    func.dfg
+        .downcast::<&control_flow::Phi>(inst)
         .map(|phi| PossibleRootTransfer::sources(result, phi.args().iter().map(|(arg, _)| *arg)))
 }
 
@@ -953,7 +949,7 @@ fn refine_possible_roots_from_objref_loads(
 ) {
     let has_reference_load = snapshot.single_result_insts.iter().any(|&(inst, result)| {
         reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
-            && downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
+            && func.dfg.downcast::<&data::ObjLoad>(inst).is_some()
     });
     if !has_reference_load {
         if widen_unresolved_references(func, possible_roots, maybe_unknown) {
@@ -1020,8 +1016,7 @@ fn refine_possible_roots_from_objref_loads(
                     changed = true;
                 }
 
-                if let Some(obj_load) =
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                if let Some(obj_load) = func.dfg.downcast::<&data::ObjLoad>(inst)
                     && let Some(result) = single_result_value(func, inst)
                     && reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
                     && union_capture_roots_for_value(
@@ -1088,7 +1083,7 @@ fn compute_capture_states_for_blocks(
     let mut initial_captures = RootCaptureMap::default();
     for block in func.layout.iter_block().filter(|&block| reachable[block]) {
         for inst in func.layout.iter_inst(block) {
-            if let Some(load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+            if let Some(load) = func.dfg.downcast::<&data::ObjLoad>(inst)
                 && let Some(result) = single_result_value(func, inst)
                 && reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
             {
@@ -1255,7 +1250,7 @@ fn widen_interfering_captures(
     summaries: Option<&ObjectEffectSummaryMap>,
     captures: &mut RootCaptureMap,
 ) {
-    let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst));
+    let call = func.dfg.downcast::<&control_flow::Call>(inst);
     let fallback;
     let summary = if let Some(call) = call {
         Some(
@@ -1352,7 +1347,9 @@ fn merge_call_capture_roots(
     object_effects: Option<&ObjectEffectSummaryMap>,
     root_captures: &mut RootCaptureMap,
 ) {
-    let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+    let call = func
+        .dfg
+        .downcast::<&control_flow::Call>(inst)
         .expect("merge_call_capture_roots requires a call instruction");
     let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
         return;
@@ -1607,7 +1604,7 @@ fn derive_exact_state(
         .map_or(ExactState::Blocked, ExactState::Exact);
     }
 
-    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) {
         return derive_call_exact_state(
             func,
             inst,
@@ -1620,9 +1617,9 @@ fn derive_exact_state(
         );
     }
 
-    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).map_or(
-        ExactState::Unknown,
-        |phi| {
+    func.dfg
+        .downcast::<&control_flow::Phi>(inst)
+        .map_or(ExactState::Unknown, |phi| {
             derive_phi_state(
                 func,
                 result,
@@ -1632,8 +1629,7 @@ fn derive_exact_state(
                 maybe_unknown,
                 value_sccs,
             )
-        },
-    )
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1679,7 +1675,7 @@ fn derive_possible_projections(
         );
     }
 
-    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) {
         return derive_call_possible_projections(
             func,
             inst,
@@ -1694,7 +1690,8 @@ fn derive_possible_projections(
         );
     }
 
-    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+    func.dfg
+        .downcast::<&control_flow::Phi>(inst)
         .map(|phi| {
             let candidates = join_projection_candidates(
                 phi.args().iter().map(|&(arg, _)| arg),
@@ -1924,37 +1921,36 @@ fn compute_supported_value_sccs(func: &Function) -> FxHashMap<ValueId, usize> {
 }
 
 fn supported_value_deps(func: &Function, inst: InstId) -> Option<Vec<ValueId>> {
-    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(gep) = func.dfg.downcast::<&data::Gep>(inst) {
         return gep.values().first().copied().map(|base| vec![base]);
     }
 
-    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(inst) {
         return Some(vec![*bitcast.from()]);
     }
 
-    if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(obj_proj) = func.dfg.downcast::<&data::ObjProj>(inst) {
         return obj_proj.values().first().copied().map(|base| vec![base]);
     }
 
-    if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(obj_index) = func.dfg.downcast::<&data::ObjIndex>(inst) {
         return Some(vec![*obj_index.object()]);
     }
 
-    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(enum_proj) = func.dfg.downcast::<&data::EnumProj>(inst) {
         return Some(vec![*enum_proj.object()]);
     }
 
-    if let Some(enum_assert_ref) =
-        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
-    {
+    if let Some(enum_assert_ref) = func.dfg.downcast::<&data::EnumAssertVariantRef>(inst) {
         return Some(vec![*enum_assert_ref.object()]);
     }
 
-    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
+    if let Some(call) = func.dfg.downcast::<&control_flow::Call>(inst) {
         return Some(call.args().iter().copied().collect());
     }
 
-    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+    func.dfg
+        .downcast::<&control_flow::Phi>(inst)
         .map(|phi| phi.args().iter().map(|(arg, _)| *arg).collect())
 }
 
@@ -2025,7 +2021,7 @@ fn fresh_call_root_projection(
     object_effects: Option<&ObjectEffectSummaryMap>,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> Option<Projection> {
-    let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))?;
+    let call = func.dfg.downcast::<&control_flow::Call>(inst)?;
     if !matches!(
         object_effects
             .and_then(|effects| effects.get(call.callee()))
@@ -2137,23 +2133,23 @@ fn map_projection_candidates_for_result(
 }
 
 fn projection_transfer_inst(func: &Function, inst: InstId) -> Option<ProjectionTransferInst<'_>> {
-    let inst_data = func.dfg.inst(inst);
-    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), inst_data) {
+    if let Some(gep) = func.dfg.downcast::<&data::Gep>(inst) {
         return Some(ProjectionTransferInst::Gep(gep));
     }
-    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), inst_data) {
+    if let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(inst) {
         return Some(ProjectionTransferInst::Bitcast(bitcast));
     }
-    if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), inst_data) {
+    if let Some(obj_proj) = func.dfg.downcast::<&data::ObjProj>(inst) {
         return Some(ProjectionTransferInst::ObjProj(obj_proj));
     }
-    if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), inst_data) {
+    if let Some(obj_index) = func.dfg.downcast::<&data::ObjIndex>(inst) {
         return Some(ProjectionTransferInst::ObjIndex(obj_index));
     }
-    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), inst_data) {
+    if let Some(enum_proj) = func.dfg.downcast::<&data::EnumProj>(inst) {
         return Some(ProjectionTransferInst::EnumProj(enum_proj));
     }
-    downcast::<&data::EnumAssertVariantRef>(func.inst_set(), inst_data)
+    func.dfg
+        .downcast::<&data::EnumAssertVariantRef>(inst)
         .map(ProjectionTransferInst::EnumAssertVariantRef)
 }
 
@@ -2498,7 +2494,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ExtractValue>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("reference extraction should exist");
@@ -2533,7 +2530,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::EnumExtract>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("reference extraction should exist");
@@ -2580,10 +2578,12 @@ block3:
                 let provenance =
                     collect_root_provenance(func, func.ctx(), &roots, &mut cache, None);
                 for inst in func.layout.iter_all_insts() {
-                    let inst_data = func.dfg.inst(inst);
-                    if downcast::<&data::ObjMaterializeStack>(func.inst_set(), inst_data).is_some()
-                        || downcast::<&data::Gep>(func.inst_set(), inst_data).is_some()
-                        || downcast::<&cast::Bitcast>(func.inst_set(), inst_data).is_some()
+                    if func
+                        .dfg
+                        .downcast::<&data::ObjMaterializeStack>(inst)
+                        .is_some()
+                        || func.dfg.downcast::<&data::Gep>(inst).is_some()
+                        || func.dfg.downcast::<&cast::Bitcast>(inst).is_some()
                     {
                         let result = func.dfg.inst_result(inst).unwrap();
                         let roots = provenance.may().may_roots(result);
@@ -2624,7 +2624,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjAlloc>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("alloc root should exist");
@@ -2669,7 +2670,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjLoad>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("load result should exist");
@@ -2678,7 +2680,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjAlloc>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                         .filter(|&result| func.dfg.value_ty(result) == func.dfg.value_ty(loaded))
                 })
@@ -2725,7 +2728,8 @@ block2:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjLoad>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("load result should exist");
@@ -2765,7 +2769,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .filter_map(|inst| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjLoad>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .collect();
@@ -2776,7 +2781,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .filter_map(|inst| {
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjAlloc>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                         .filter(|&result| func.dfg.value_ty(result) == func.dfg.value_ty(*loaded))
                 })
@@ -2829,7 +2835,8 @@ block3:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjLoad>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("load result should exist");
@@ -2837,7 +2844,8 @@ block3:
                 .layout
                 .iter_all_insts()
                 .filter_map(|inst| {
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjAlloc>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                         .filter(|&result| func.dfg.value_ty(result) == func.dfg.value_ty(loaded))
                 })
@@ -2894,7 +2902,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .filter_map(|inst| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjLoad>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .collect();
@@ -2905,7 +2914,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .filter_map(|inst| {
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjAlloc>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                         .filter(|&result| func.dfg.value_ty(result) == func.dfg.value_ty(*loaded))
                 })
@@ -2956,7 +2966,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .filter_map(|inst| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjLoad>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .collect();
@@ -2967,7 +2978,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .filter_map(|inst| {
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjAlloc>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                         .filter(|&result| func.dfg.value_ty(result) == func.dfg.value_ty(*loaded))
                 })
@@ -3027,7 +3039,8 @@ block3:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjLoad>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                         .filter(|&result| {
                             reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
@@ -3112,7 +3125,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&control_flow::Call>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("call result should exist");
@@ -3177,7 +3191,8 @@ block3:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjLoad>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                         .filter(|&result| {
                             reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
@@ -3235,7 +3250,8 @@ block3:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjLoad>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                         .filter(|&result| {
                             reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
@@ -3286,7 +3302,8 @@ block3:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjProj>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("projection result should exist");
@@ -3294,7 +3311,8 @@ block3:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&control_flow::Phi>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("phi result should exist");
@@ -3363,7 +3381,8 @@ block3:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&control_flow::Phi>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("phi result should exist");
@@ -3371,7 +3390,8 @@ block3:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&data::ObjAlloc>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("alloc root should exist");
@@ -3420,7 +3440,8 @@ block0:
                 .layout
                 .iter_all_insts()
                 .find_map(|inst| {
-                    downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                    func.dfg
+                        .downcast::<&control_flow::Call>(inst)
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("call result should exist");
@@ -3496,14 +3517,16 @@ block0:
                 let root = insts
                     .iter()
                     .find_map(|&inst| {
-                        downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                        func.dfg
+                            .downcast::<&data::ObjAlloc>(inst)
                             .and_then(|_| func.dfg.inst_result(inst))
                     })
                     .expect("alloc root should exist");
                 let returned = insts
                     .iter()
                     .find_map(|&inst| {
-                        downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst))
+                        func.dfg
+                            .downcast::<&control_flow::Return>(inst)
                             .and_then(|ret| ret.arg().copied())
                     })
                     .expect("returned value should exist");

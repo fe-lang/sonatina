@@ -2,7 +2,7 @@ use smallvec::SmallVec;
 use sonatina_ir::{
     Function, I256, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{cast, data, downcast},
+    inst::{cast, data},
     types::{CompoundType, EnumVariantRef},
 };
 
@@ -188,9 +188,7 @@ impl<'a> AggregateValueReconstructor<'a> {
             ));
         };
 
-        if let Some(insert) =
-            downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(def_inst))
-        {
+        if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(def_inst) {
             let insert_idx = shape::const_u32(&func.dfg, *insert.idx())?;
             return if insert_idx == target_idx {
                 Some(*insert.value())
@@ -205,8 +203,7 @@ impl<'a> AggregateValueReconstructor<'a> {
             };
         }
 
-        if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(def_inst))
-        {
+        if let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(def_inst) {
             let source = *bitcast.from();
             let source_ty = func.dfg.value_ty(source);
             if shape::is_supported_scalar_shape_ty(func.ctx(), source_ty) {
@@ -417,10 +414,9 @@ fn resolve_known_enum_variant(
     let idx = if let Some(imm) = func.dfg.value_imm(value) {
         imm.to_nonnegative_usize()?
     } else if let Some(inst) = func.dfg.value_inst(value)
-        && let Some(enum_tag) = downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(inst))
+        && let Some(enum_tag) = func.dfg.downcast::<&data::EnumTag>(inst)
         && let Some(make_inst) = func.dfg.value_inst(*enum_tag.value())
-        && let Some(enum_make) =
-            downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(make_inst))
+        && let Some(enum_make) = func.dfg.downcast::<&data::EnumMake>(make_inst)
     {
         usize::try_from(enum_make.variant().index()).ok()?
     } else {
@@ -468,11 +464,8 @@ fn enum_child_value_from_source(
     }
 
     let source_value = match func.dfg.value_inst(aggregate) {
-        Some(def_inst)
-            if downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(def_inst)).is_some() =>
-        {
-            let enum_make =
-                downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(def_inst)).cloned()?;
+        Some(def_inst) if func.dfg.downcast::<&data::EnumMake>(def_inst).is_some() => {
+            let enum_make = func.dfg.downcast::<&data::EnumMake>(def_inst).cloned()?;
             if target_idx == 0 {
                 return Some(Some(func.dfg.make_imm_value(enum_variant_tag_imm(
                     *enum_make.variant(),
@@ -664,12 +657,12 @@ block0:
 
             assert_eq!(func.dfg.value_ty(rebuilt), inner);
             let rebuilt_inst = func.dfg.value_inst(rebuilt).unwrap();
-            let bitcast =
-                downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(rebuilt_inst)).unwrap();
+            let bitcast = func.dfg.downcast::<&cast::Bitcast>(rebuilt_inst).unwrap();
             let extract_inst = func.dfg.value_inst(*bitcast.from()).unwrap();
-            let extract =
-                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(extract_inst))
-                    .unwrap();
+            let extract = func
+                .dfg
+                .downcast::<&data::ExtractValue>(extract_inst)
+                .unwrap();
             assert_eq!(*extract.dest(), arg);
             assert_eq!(shape::const_u32(&func.dfg, *extract.idx()), Some(0));
         });
@@ -715,8 +708,7 @@ block0:
 
             assert_eq!(func.dfg.value_ty(rebuilt), dst);
             let rebuilt_inst = func.dfg.value_inst(rebuilt).unwrap();
-            let bitcast =
-                downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(rebuilt_inst)).unwrap();
+            let bitcast = func.dfg.downcast::<&cast::Bitcast>(rebuilt_inst).unwrap();
             assert_eq!(*bitcast.from(), arg);
         });
     }
@@ -776,15 +768,17 @@ block0:
                 .unwrap();
 
             let scalar_to_agg_inst = func.dfg.value_inst(scalar_to_agg).unwrap();
-            let scalar_to_agg_bitcast =
-                downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(scalar_to_agg_inst))
-                    .unwrap();
+            let scalar_to_agg_bitcast = func
+                .dfg
+                .downcast::<&cast::Bitcast>(scalar_to_agg_inst)
+                .unwrap();
             assert_eq!(*scalar_to_agg_bitcast.from(), scalar);
 
             let agg_to_scalar_inst = func.dfg.value_inst(agg_to_scalar).unwrap();
-            let agg_to_scalar_bitcast =
-                downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(agg_to_scalar_inst))
-                    .unwrap();
+            let agg_to_scalar_bitcast = func
+                .dfg
+                .downcast::<&cast::Bitcast>(agg_to_scalar_inst)
+                .unwrap();
             assert_eq!(*agg_to_scalar_bitcast.from(), aggregate);
         });
     }
@@ -827,9 +821,10 @@ block0:
                 .unwrap();
 
             let rebuilt_inst = func.dfg.value_inst(rebuilt).unwrap();
-            let extract =
-                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(rebuilt_inst))
-                    .unwrap();
+            let extract = func
+                .dfg
+                .downcast::<&data::ExtractValue>(rebuilt_inst)
+                .unwrap();
             assert_eq!(*extract.dest(), func.arg_values[0]);
             assert_eq!(shape::const_u32(&func.dfg, *extract.idx()), Some(1));
         });
@@ -883,17 +878,19 @@ block0:
                 rebuild_scalar_shape_from_leaf_values(func, ret, &module_ctx, pair, &leaves)
                     .unwrap();
             let rebuilt_inst = func.dfg.value_inst(rebuilt).unwrap();
-            let final_insert =
-                downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(rebuilt_inst))
-                    .unwrap();
+            let final_insert = func
+                .dfg
+                .downcast::<&data::InsertValue>(rebuilt_inst)
+                .unwrap();
             assert_eq!(shape::const_u32(&func.dfg, *final_insert.idx()), Some(1));
             let enum_child = *final_insert.value();
             assert_eq!(func.dfg.value_ty(enum_child), enum_ty);
 
             let enum_make_inst = func.dfg.value_inst(enum_child).unwrap();
-            let enum_make =
-                downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(enum_make_inst))
-                    .unwrap();
+            let enum_make = func
+                .dfg
+                .downcast::<&data::EnumMake>(enum_make_inst)
+                .unwrap();
             assert_eq!(*enum_make.ty(), enum_ty);
             assert_eq!(*enum_make.variant(), EnumVariantRef::new(enum_cmpd, 0));
             assert!(enum_make.values().is_empty());
@@ -950,17 +947,19 @@ block0:
                 rebuild_scalar_shape_from_leaf_values(func, ret, &module_ctx, pair, &leaves)
                     .unwrap();
             let rebuilt_inst = func.dfg.value_inst(rebuilt).unwrap();
-            let final_insert =
-                downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(rebuilt_inst))
-                    .unwrap();
+            let final_insert = func
+                .dfg
+                .downcast::<&data::InsertValue>(rebuilt_inst)
+                .unwrap();
             assert_eq!(shape::const_u32(&func.dfg, *final_insert.idx()), Some(1));
             let enum_child = *final_insert.value();
             assert_eq!(func.dfg.value_ty(enum_child), enum_ty);
 
             let enum_make_inst = func.dfg.value_inst(enum_child).unwrap();
-            let enum_make =
-                downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(enum_make_inst))
-                    .unwrap();
+            let enum_make = func
+                .dfg
+                .downcast::<&data::EnumMake>(enum_make_inst)
+                .unwrap();
             assert_eq!(*enum_make.ty(), enum_ty);
             assert_eq!(*enum_make.variant(), EnumVariantRef::new(enum_cmpd, 1));
             assert_eq!(enum_make.values().len(), 1);

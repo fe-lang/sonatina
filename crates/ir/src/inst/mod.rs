@@ -10,7 +10,10 @@ pub mod inst_set;
 pub mod logic;
 pub mod native;
 
-use std::{any::Any, io};
+use std::{
+    any::{Any, TypeId},
+    io,
+};
 
 use dyn_clone::DynClone;
 use macros::inst_prop;
@@ -106,7 +109,22 @@ impl IrWrite<FuncWriteCtx<'_>> for InstId {
 pub trait HasInst<I: Inst> {}
 
 pub trait InstDowncast<'a>: Sized {
-    fn downcast(isb: &dyn InstSetBase, inst: &'a dyn Inst) -> Option<Self>;
+    /// `inst` as `Self`, given its concrete type, so that a caller that knows
+    /// the type saves asking the instruction for it.
+    ///
+    /// # Safety
+    ///
+    /// `type_id` must be the `TypeId` of `inst`'s concrete type.
+    unsafe fn downcast_typed(
+        isb: &dyn InstSetBase,
+        inst: &'a dyn Inst,
+        type_id: TypeId,
+    ) -> Option<Self>;
+
+    fn downcast(isb: &dyn InstSetBase, inst: &'a dyn Inst) -> Option<Self> {
+        // SAFETY: the type is `inst`'s own.
+        unsafe { Self::downcast_typed(isb, inst, inst.type_id()) }
+    }
 
     fn map<F, R>(isb: &dyn InstSetBase, inst: &'a dyn Inst, f: F) -> Option<R>
     where

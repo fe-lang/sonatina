@@ -436,12 +436,18 @@ impl InstStruct {
         let has_inst_method = ty_name_to_method_name(struct_name);
         quote! {
             impl<'a> crate::InstDowncast<'a> for &'a #struct_name {
-                fn downcast(isb: &dyn crate::InstSetBase, inst: &'a dyn crate::Inst) -> Option<Self> {
+                #[inline]
+                unsafe fn downcast_typed(
+                    isb: &dyn crate::InstSetBase,
+                    inst: &'a dyn crate::Inst,
+                    type_id: ::std::any::TypeId,
+                ) -> Option<Self> {
                     // Most downcasts fail, so compare the type before asking the ISA.
-                    if inst.type_id() != ::std::any::TypeId::of::<#struct_name>() {
+                    if type_id != ::std::any::TypeId::of::<#struct_name>() {
                         return None;
                     }
                     isb.#has_inst_method()?;
+                    // SAFETY: the caller guarantees `inst` is a `#struct_name`.
                     unsafe { Some(&*(inst as *const dyn crate::Inst as *const #struct_name)) }
                 }
             }

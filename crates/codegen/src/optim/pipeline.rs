@@ -1042,7 +1042,6 @@ mod tests {
         inst::{
             arith::Add,
             control_flow::{Call, Return},
-            downcast,
         },
         ir_writer::FuncWriter,
         module::{FuncHints, InlineHint},
@@ -1136,9 +1135,7 @@ block0:
                     let inst = func
                         .layout
                         .iter_inst(func.layout.entry_block().unwrap())
-                        .find(|&inst| {
-                            downcast::<&Call>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                        })
+                        .find(|&inst| func.dfg.downcast::<&Call>(inst).is_some())
                         .unwrap();
                     let call =
                         Call::new_unchecked(func.inst_set(), writer, smallvec![func.arg_values[0]]);

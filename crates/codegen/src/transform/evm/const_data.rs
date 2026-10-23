@@ -444,14 +444,10 @@ impl ConstDataLower {
         inst: InstId,
         info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
-        if let Some(load) =
-            downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(load) = func.dfg.downcast::<&data::ConstLoad>(inst).cloned() {
             return self.rewrite_const_load(module, func, inst, *load.object(), info);
         }
-        if let Some(init) =
-            downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(init) = func.dfg.downcast::<&data::ObjInitConst>(inst).cloned() {
             return self.rewrite_obj_init_const(module, func, inst, init, info);
         }
         false
@@ -524,9 +520,7 @@ impl ConstDataLower {
         inst: InstId,
         info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
-        if let Some(const_ref) =
-            downcast::<&data::ConstRef>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(const_ref) = func.dfg.downcast::<&data::ConstRef>(inst).cloned() {
             let global = const_ref.global().gv();
             let ty = module.ctx.with_gv_store(|store| store.ty(global));
             let path = ConstPath {
@@ -538,17 +532,13 @@ impl ConstDataLower {
             info.replace_with_alias(func, inst, replacement);
             return true;
         }
-        if let Some(proj) =
-            downcast::<&data::ConstProj>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(proj) = func.dfg.downcast::<&data::ConstProj>(inst).cloned() {
             let Some((&base, rest)) = proj.values().split_first() else {
                 panic!("const.proj requires a base operand");
             };
             return self.rewrite_live_const_subref(module, func, inst, base, rest, info);
         }
-        if let Some(index) =
-            downcast::<&data::ConstIndex>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
+        if let Some(index) = func.dfg.downcast::<&data::ConstIndex>(inst).cloned() {
             return self.rewrite_live_const_subref(
                 module,
                 func,
@@ -1124,7 +1114,7 @@ fn const_load_row_candidate(
     order: usize,
     info: &ConstRewriteInfo<'_>,
 ) -> Option<ConstLoadRowCandidate> {
-    let load = downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).cloned()?;
+    let load = func.dfg.downcast::<&data::ConstLoad>(inst).cloned()?;
     let result_ty = func
         .dfg
         .inst_result(inst)
@@ -1346,11 +1336,11 @@ fn const_steps_offset_bytes(
 fn assert_no_const_ops(func: &Function) {
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
-            if downcast::<&data::ConstRef>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                || downcast::<&data::ConstProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                || downcast::<&data::ConstIndex>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                || downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                || downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(inst)).is_some()
+            if func.dfg.downcast::<&data::ConstRef>(inst).is_some()
+                || func.dfg.downcast::<&data::ConstProj>(inst).is_some()
+                || func.dfg.downcast::<&data::ConstIndex>(inst).is_some()
+                || func.dfg.downcast::<&data::ConstLoad>(inst).is_some()
+                || func.dfg.downcast::<&data::ObjInitConst>(inst).is_some()
             {
                 panic!(
                     "const-data lowering invariant violated: high-level const instruction remained in function"
