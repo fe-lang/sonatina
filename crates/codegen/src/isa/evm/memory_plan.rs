@@ -168,8 +168,15 @@ macro_rules! impl_frame_queries {
                     .flatten()
             }
 
+            /// Stable objects live in a dynamic frame, as for every recursive
+            /// function, even when there are none.
             pub fn uses_dynamic_frame(&self) -> bool {
                 matches!(self.stable_mode, StableMode::DynamicFrame)
+            }
+
+            /// Entering the function pushes a dynamic frame.
+            pub fn has_dynamic_frame(&self) -> bool {
+                self.dynamic_frame_layout().is_some()
             }
 
             pub fn abs_words_end(&self) -> u32 {

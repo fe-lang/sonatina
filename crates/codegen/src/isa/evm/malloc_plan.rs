@@ -68,13 +68,13 @@ pub(crate) fn compute_transient_malloc_call_barriers(
         .par_iter()
         .copied()
         .map(|func| {
-            let uses_dynamic_frame = semantic_plans
+            let has_dynamic_frame = semantic_plans
                 .get(&func)
-                .is_some_and(|plan| plan.dynamic_frame_layout().is_some());
+                .is_some_and(SemanticFuncPlan::has_dynamic_frame);
             let allocates = module
                 .func_store
                 .view(func, |function| func_allocates(function, isa));
-            (func, uses_dynamic_frame || allocates)
+            (func, has_dynamic_frame || allocates)
         })
         .collect();
     local_results.sort_unstable_by_key(|(func, _)| func.as_u32());

@@ -78,7 +78,7 @@ pub(crate) fn compute_machine_dyn_sp_plan(
             .any(|func| {
                 mem_plans
                     .get(&func)
-                    .is_some_and(MachineFuncPlan::uses_dynamic_frame)
+                    .is_some_and(MachineFuncPlan::has_dynamic_frame)
             })
         {
             ready_sccs.insert(scc_ref);

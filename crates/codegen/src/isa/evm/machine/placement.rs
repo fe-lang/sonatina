@@ -245,7 +245,7 @@ pub(crate) fn compute_semantic_memory_placement(
     let has_dynamic_frames = semantic_plan
         .funcs
         .values()
-        .any(memory_plan::SemanticFuncPlan::uses_dynamic_frame);
+        .any(memory_plan::SemanticFuncPlan::has_dynamic_frame);
     let backend_spill_scratch_reserve_peak = backend_spill_reserves
         .values()
         .map(|reserve| reserve.scratch_words)
@@ -527,7 +527,7 @@ fn compute_func_heap_facts(
     func_plan: &memory_plan::SemanticFuncPlan,
     entry_may_have_live_frame: &FxHashMap<FuncRef, bool>,
 ) -> FuncHeapFacts {
-    let needs_dyn_sp_clamp = func_plan.uses_dynamic_frame()
+    let needs_dyn_sp_clamp = func_plan.has_dynamic_frame()
         || entry_may_have_live_frame
             .get(&func)
             .copied()
@@ -1104,7 +1104,7 @@ fn compute_entry_may_have_live_frame(
             semantic_plan
                 .funcs
                 .get(func)
-                .is_some_and(memory_plan::SemanticFuncPlan::uses_dynamic_frame)
+                .is_some_and(memory_plan::SemanticFuncPlan::has_dynamic_frame)
         })
     };
 

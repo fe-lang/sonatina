@@ -490,11 +490,13 @@ impl FinalSpillChoiceCtx<'_> {
             .map(|reserve| reserve.scratch_words)
             .max()
             .unwrap_or(0);
-        let has_dynamic_frames = self
-            .base_placement
-            .funcs
-            .values()
-            .any(|plan| plan.mem_plan.uses_dynamic_frame());
+        // A recursive function pushes a frame once it has stable words.
+        let has_dynamic_frames = self.funcs.iter().any(|&func| {
+            self.base_placement.funcs[&func]
+                .mem_plan
+                .uses_dynamic_frame()
+                && trial_words(func).1 != 0
+        });
 
         let mut scratch_peak_words = self
             .funcs

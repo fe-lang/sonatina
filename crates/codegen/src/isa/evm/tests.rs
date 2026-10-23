@@ -933,6 +933,76 @@ object @Contract {
 }
 
 #[test]
+fn frameless_recursion_needs_no_dyn_sp() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %count(v0.i256) -> i256 {
+block0:
+    v1.i1 = is_zero v0;
+    br v1 block1 block2;
+block1:
+    return 0.i256;
+block2:
+    v2.i256 = sub v0 1.i256;
+    v3.i256 = call %count v2;
+    v4.i256 = add v3 1.i256;
+    return v4;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %count 3.i256;
+    v1.*i256 = evm_malloc 32.i256;
+    mstore v1 v0 i256;
+    v2.i256 = ptr_to_int v1 i256;
+    evm_return v2 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let entry = find_func(&parsed.module, "entry");
+    let count = find_func(&parsed.module, "count");
+    let backend = osaka_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(
+            &parsed.module,
+            &[entry, count],
+            entry,
+        ))
+        .expect("prepare should succeed");
+    let count_plan = prepared
+        .function_plan(count)
+        .expect("missing function plan");
+    assert!(count_plan.mem_plan.uses_dynamic_frame());
+    assert!(!count_plan.mem_plan.has_dynamic_frame());
+    for func in [entry, count] {
+        let plan = prepared.function_plan(func).expect("missing function plan");
+        assert_eq!(plan.dyn_sp_plan.entry_init, None);
+        assert!(plan.dyn_sp_plan.frontier_init_calls.is_empty());
+        assert!(plan.dyn_sp_plan.checked_frontier_init_calls.is_empty());
+        let lowered = backend
+            .lower_function(&prepared, func)
+            .expect("function lowers");
+        assert!(
+            !contains_subsequence(
+                &lowered_bytes(&lowered),
+                &[OpCode::PUSH1 as u8, DYN_SP_SLOT, OpCode::MLOAD as u8]
+            ),
+            "no frame is ever pushed, so nothing reads the dynamic SP"
+        );
+    }
+}
+
+#[test]
 fn recursive_entry_without_live_frame_initializes_dyn_sp_directly() {
     let parsed = parse_module(
         r#"
