@@ -6,7 +6,7 @@ use sonatina_ir::{
 };
 
 use crate::{
-    cfg_scc::CfgSccAnalysis,
+    cfg_scc::has_cycle,
     module_analysis::ModuleInfo,
     transform::aggregate::{objref_element_ty, scalarize::AggregateScalarize, shape},
 };
@@ -542,12 +542,7 @@ fn compute_inlinee_summary(
         base_cost += ((blocks - 1) * 3) as i32;
     }
 
-    let mut cfg_scc = CfgSccAnalysis::new();
-    cfg_scc.compute(&cfg);
-    let has_loop = cfg_scc
-        .topo_order()
-        .iter()
-        .any(|&scc| cfg_scc.scc_data(scc).is_cycle);
+    let has_loop = has_cycle(&cfg);
     scalarization.score = compute_scalarization_benefit_score(scalarization);
 
     InlineeSummary {

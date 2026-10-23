@@ -41,13 +41,9 @@ impl ObjectAliasFacts {
                 origins.insert(arg, ObjectOrigin::Incoming);
             }
         }
-        let mut sccs = CfgSccAnalysis::new();
-        sccs.compute(cfg);
+        // Only blocks with a fresh origin need their cycle membership.
+        let mut sccs = None;
         for block in func.layout.iter_block() {
-            // Disconnected code has no dynamic-instance proof from this CFG.
-            let repeating = sccs
-                .scc_of(block)
-                .is_none_or(|scc| sccs.scc_data(scc).is_cycle);
             for inst in func.layout.iter_inst(block) {
                 let data = func.dfg.inst(inst);
                 let fresh = downcast::<&data::ObjAlloc>(func.inst_set(), data).is_some()
@@ -60,6 +56,15 @@ impl ObjectAliasFacts {
                             })
                     });
                 if fresh && let [result] = func.dfg.inst_results(inst) {
+                    let sccs = sccs.get_or_insert_with(|| {
+                        let mut sccs = CfgSccAnalysis::new();
+                        sccs.compute(cfg);
+                        sccs
+                    });
+                    // Disconnected code has no dynamic-instance proof from this CFG.
+                    let repeating = sccs
+                        .scc_of(block)
+                        .is_none_or(|scc| sccs.scc_data(scc).is_cycle);
                     origins.insert(*result, ObjectOrigin::Fresh { repeating });
                 }
             }

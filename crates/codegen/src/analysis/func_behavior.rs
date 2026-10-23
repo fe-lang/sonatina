@@ -12,7 +12,7 @@ use sonatina_ir::{
 };
 
 use crate::{
-    cfg_scc::CfgSccAnalysis,
+    cfg_scc::has_cycle,
     module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef},
 };
 
@@ -429,13 +429,7 @@ fn compute_local_facts(func: &Function) -> LocalFacts {
 
     let reachable = cfg.reachable_blocks();
 
-    let mut cfg_scc = CfgSccAnalysis::new();
-    cfg_scc.compute(&cfg);
-
-    let cfg_has_cycle = cfg_scc
-        .topo_order()
-        .iter()
-        .any(|&scc| cfg_scc.scc_data(scc).is_cycle);
+    let cfg_has_cycle = has_cycle(&cfg);
 
     let mut local_effects = FuncEffectSummary::default();
     let mut callees = FxHashSet::default();

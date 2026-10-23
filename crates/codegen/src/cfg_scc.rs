@@ -62,6 +62,19 @@ impl SccData {
     }
 }
 
+/// Whether a cycle is reachable from `cfg.entry()`. A DFS post-order finishes
+/// every successor before its predecessor, except across a cycle's back edge.
+pub fn has_cycle(cfg: &ControlFlowGraph) -> bool {
+    let post_order: Vec<_> = cfg.post_order().collect();
+    let mut index = SecondaryMap::<BlockId, usize>::with_capacity(post_order.len());
+    for (i, &block) in post_order.iter().enumerate() {
+        index[block] = i;
+    }
+    post_order
+        .iter()
+        .any(|&block| cfg.succs_of(block).any(|&succ| index[succ] >= index[block]))
+}
+
 impl CfgSccAnalysis {
     pub fn new() -> Self {
         Self::default()
@@ -300,6 +313,13 @@ mod tests {
         }
 
         assert_eq!(analysis.topo_order().len(), analysis.scc_count());
+        assert_eq!(
+            has_cycle(cfg),
+            analysis
+                .topo_order()
+                .iter()
+                .any(|&scc| analysis.scc_data(scc).is_cycle)
+        );
 
         for &scc in analysis.topo_order() {
             let data = analysis.scc_data(scc);
