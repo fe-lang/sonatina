@@ -6,8 +6,8 @@ input_file: test_files/evm/spilled_phi_edge_rotation_opt2.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 312 bytes
-  total: 312 bytes
+  section runtime: 313 bytes
+  total: 313 bytes
 
 functions:
   mem: global_dyn_base=0x2a0 arena_base=0x40 scratch_peak_words=0 stable_chain_peak_words=19
@@ -16,5 +16,5 @@ functions:
 
 evm:
   case zero: calldata_len=32 success reason=Return gas_used=21167 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=39
-  case one: calldata_len=32 success reason=Return gas_used=21486 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=346
-  case three: calldata_len=32 success reason=Return gas_used=22100 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=960
+  case one: calldata_len=32 success reason=Return gas_used=21497 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=357
+  case three: calldata_len=32 success reason=Return gas_used=22089 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=949

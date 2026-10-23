@@ -1,0 +1,27 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/infinite_self_loop_layout.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v5.i1 = is_zero v0;
+        br v5 block2 block1;
+
+    block1:
+        jump block1;
+
+    block2:
+        mstore 0.i256 0.i256 i256;
+        evm_return 0.i256 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

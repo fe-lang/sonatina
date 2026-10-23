@@ -16,5 +16,5 @@ functions:
 
 evm:
   case zero: calldata_len=32 success reason=Return gas_used=21188 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=60
-  case one: calldata_len=32 success reason=Return gas_used=21251 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=111
-  case three: calldata_len=32 success reason=Return gas_used=21373 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=233
+  case one: calldata_len=32 success reason=Return gas_used=21262 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=122
+  case three: calldata_len=32 success reason=Return gas_used=21362 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=222

@@ -631,6 +631,191 @@ fn local_fallthrough_layout_skips_non_loop_branches() {
     assert_eq!(order, vec![0, 1, 2]);
 }
 
+const BOTTOM_TESTED_LOOP_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256, v1.i1) -> i256 {
+block0:
+    br v1 block4 block1;
+
+block1:
+    v2.i256 = phi (0.i256 block0) (v3 block2) (v3 block3);
+    v3.i256 = add v2 1.i256;
+    v4.i1 = lt v3 v0;
+    br v4 block2 block5;
+
+block2:
+    jump block1;
+
+block5:
+    v5.i1 = eq v3 7.i256;
+    br v5 block3 block4;
+
+block3:
+    jump block1;
+
+block4:
+    return v0;
+}
+"#;
+
+#[test]
+fn local_fallthrough_layout_places_back_edge_trampoline_before_header() {
+    let order = rewrite_local_fallthrough_order_from_src(
+        BOTTOM_TESTED_LOOP_SRC,
+        "main",
+        &[0, 1, 5, 4, 2, 3],
+    );
+
+    // Only one trampoline per header can fall through into it.
+    assert_eq!(order, vec![0, 2, 1, 5, 4, 3]);
+}
+
+#[test]
+fn local_fallthrough_layout_keeps_placed_back_edge_trampoline() {
+    let order = rewrite_local_fallthrough_order_from_src(
+        BOTTOM_TESTED_LOOP_SRC,
+        "main",
+        &[0, 3, 1, 5, 4, 2],
+    );
+
+    assert_eq!(order, vec![0, 3, 1, 5, 4, 2]);
+}
+
+#[test]
+fn local_fallthrough_layout_keeps_back_edge_trampoline_off_first_block() {
+    let order = rewrite_local_fallthrough_order_from_src(
+        BOTTOM_TESTED_LOOP_SRC,
+        "main",
+        &[1, 5, 4, 0, 2, 3],
+    );
+
+    assert_eq!(order, vec![1, 5, 4, 0, 2, 3]);
+}
+
+#[test]
+fn local_fallthrough_layout_keeps_back_edge_trampolines_for_size() {
+    let order = rewrite_local_fallthrough_order_from_src_with_profile(
+        BOTTOM_TESTED_LOOP_SRC,
+        "main",
+        &[0, 1, 5, 4, 2, 3],
+        false,
+    );
+
+    assert_eq!(order, vec![0, 1, 5, 4, 2, 3]);
+}
+
+const SELF_LOOP_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block1;
+
+block2:
+    return 0.i256;
+}
+"#;
+
+#[test]
+fn local_fallthrough_layout_keeps_infinite_self_loop() {
+    let order = rewrite_local_fallthrough_order_from_src(SELF_LOOP_SRC, "main", &[0, 1, 2]);
+
+    assert_eq!(order, vec![0, 1, 2]);
+}
+
+const LATCH_FALLS_INTO_TRAMPOLINE_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256, v1.i1) -> i256 {
+block0:
+    br v1 block4 block1;
+
+block1:
+    v2.i256 = phi (0.i256 block0) (v3 block3);
+    v3.i256 = add v2 1.i256;
+    v4.i1 = gt v3 v0;
+    br v4 block2 block3;
+
+block3:
+    jump block1;
+
+block4:
+    return 1.i256;
+
+block2:
+    return v3;
+}
+"#;
+
+#[test]
+fn local_fallthrough_layout_keeps_back_edge_trampoline_fallen_into() {
+    let order = rewrite_local_fallthrough_order_from_src(
+        LATCH_FALLS_INTO_TRAMPOLINE_SRC,
+        "main",
+        &[0, 1, 3, 4, 2],
+    );
+
+    assert_eq!(order, vec![0, 1, 3, 4, 2]);
+}
+
+#[test]
+fn local_fallthrough_layout_moves_fallen_into_trampoline_when_other_target_follows() {
+    let order = rewrite_local_fallthrough_order_from_src(
+        LATCH_FALLS_INTO_TRAMPOLINE_SRC,
+        "main",
+        &[0, 1, 3, 2, 4],
+    );
+
+    assert_eq!(order, vec![0, 3, 1, 2, 4]);
+}
+
+const LATCH_STAYS_IN_LOOP_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256, v1.i1, v2.i1) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v3.i256 = phi (0.i256 block0) (v4 block3) (v4 block5);
+    v4.i256 = add v3 1.i256;
+    br v1 block2 block4;
+
+block2:
+    br v2 block3 block5;
+
+block3:
+    jump block1;
+
+block4:
+    jump block5;
+
+block5:
+    v5.i1 = lt v4 v0;
+    br v5 block1 block6;
+
+block6:
+    return v4;
+}
+"#;
+
+#[test]
+fn local_fallthrough_layout_keeps_trampoline_whose_branch_stays_in_loop() {
+    // Moving block3 would leave block2's zero edge to block5, another path
+    // around the loop, without its fallthrough.
+    let order = rewrite_local_fallthrough_order_from_src(
+        LATCH_STAYS_IN_LOOP_SRC,
+        "main",
+        &[0, 1, 2, 3, 4, 5, 6],
+    );
+
+    assert_eq!(order, vec![0, 1, 2, 3, 4, 5, 6]);
+}
+
 #[test]
 fn local_fallthrough_layout_rewrites_non_loop_diamond() {
     let order = rewrite_local_fallthrough_order_from_src_with_profile(
