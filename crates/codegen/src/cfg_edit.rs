@@ -984,7 +984,10 @@ fn append_phi_inputs_for_new_pred(
     }
 }
 
-fn iter_phis_in_block(func: &Function, block: BlockId) -> impl Iterator<Item = InstId> + '_ {
+pub(crate) fn iter_phis_in_block(
+    func: &Function,
+    block: BlockId,
+) -> impl Iterator<Item = InstId> + '_ {
     let mut next_inst = func.layout.first_inst_of(block);
     std::iter::from_fn(move || {
         let inst = next_inst?;
@@ -992,6 +995,52 @@ fn iter_phis_in_block(func: &Function, block: BlockId) -> impl Iterator<Item = I
         next_inst = func.layout.next_inst_of(inst);
         Some(inst)
     })
+}
+
+/// Whether `value` is the result of an instruction in `block`.
+pub(crate) fn defined_in(func: &Function, value: ValueId, block: BlockId) -> bool {
+    matches!(
+        func.dfg.get_value(value),
+        Some(Value::Inst { inst, .. }) if func.layout.is_inst_inserted(*inst)
+            && func.layout.inst_block(*inst) == block
+    )
+}
+
+/// Inserts a copy of `inst` before `before`, with its operands renamed through
+/// `map`, and maps each of `inst`'s results to the copy's.
+pub(crate) fn clone_inst_before(
+    func: &mut Function,
+    inst: InstId,
+    before: InstId,
+    map: &mut FxHashMap<ValueId, ValueId>,
+) {
+    let mut cloned = func.dfg.clone_inst(inst);
+    cloned.for_each_value_mut(&mut |value| {
+        if let Some(&mapped) = map.get(value) {
+            *value = mapped;
+        }
+    });
+    let attribution = func.inst_attribution(inst);
+    let new_inst = func.dfg.make_inst_dyn(cloned);
+    func.layout.insert_inst_before(new_inst, before);
+    let results: SmallVec<[ValueId; 2]> = func
+        .dfg
+        .inst_results(inst)
+        .to_vec()
+        .into_iter()
+        .enumerate()
+        .map(|(result_idx, old)| {
+            let new = func.dfg.make_value(Value::Inst {
+                inst: new_inst,
+                result_idx: result_idx.try_into().expect("too many instruction results"),
+                ty: func.dfg.value_ty(old),
+            });
+            map.insert(old, new);
+            new
+        })
+        .collect();
+    func.dfg.attach_results(new_inst, &results);
+    func.apply_inst_attribution(new_inst, &attribution);
 }
 
 pub(crate) fn remove_phi_incoming_from(func: &mut Function, block: BlockId, pred: BlockId) {

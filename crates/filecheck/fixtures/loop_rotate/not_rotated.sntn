@@ -1,0 +1,170 @@
+target = "evm-ethereum-osaka"
+
+# check:  block1:
+# nextln:     v1.i256 = phi (0.i256 block0) (v2 block1);
+# check:      br v3 block1 block2;
+func public %already_bottom_tested(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v2 block1);
+        v2.i256 = add v1 1.i256;
+        v3.i1 = lt v2 v0;
+        br v3 block1 block2;
+
+    block2:
+        return v2;
+}
+
+# check:  block1:
+# nextln:     v1.i256 = phi (0.i256 block0) (v3 block2);
+# nextln:     mstore v0 v1 i256;
+# check:      jump block1;
+func public %header_writes_memory(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v3 block2);
+        mstore v0 v1 i256;
+        v2.i1 = lt v1 10.i256;
+        br v2 block2 block3;
+
+    block2:
+        v3.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return v1;
+}
+
+# check:  block1:
+# nextln:     v2.i256 = phi (0.i256 block0) (v3 block2) (v4 block3);
+# nextln:     v5.i1 = lt v2 v0;
+# nextln:     br v5 block4 block5;
+func public %two_latches(v0.i256, v1.i1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = phi (0.i256 block0) (v3 block2) (v4 block3);
+        v5.i1 = lt v2 v0;
+        br v5 block4 block5;
+
+    block4:
+        br v1 block2 block3;
+
+    block2:
+        v3.i256 = add v2 1.i256;
+        jump block1;
+
+    block3:
+        v4.i256 = add v2 2.i256;
+        jump block1;
+
+    block5:
+        return v2;
+}
+
+# check:  block1:
+# nextln:     v2.i256 = phi (0.i256 block0) (v4 block2);
+# nextln:     v3.i1 = lt v2 v0;
+# nextln:     br v3 block2 block3;
+func public %exit_entered_from_outside(v0.i256, v1.i1) -> i256 {
+    block0:
+        br v1 block1 block3;
+
+    block1:
+        v2.i256 = phi (0.i256 block0) (v4 block2);
+        v3.i1 = lt v2 v0;
+        br v3 block2 block3;
+
+    block2:
+        v4.i256 = add v2 1.i256;
+        jump block1;
+
+    block3:
+        v5.i256 = phi (1.i256 block0) (v2 block1);
+        return v5;
+}
+
+# check:  block1:
+# nextln:     v1.i256 = phi (0.i256 block0) (v4 block2);
+# nextln:     v2.i256 = call %bound v0;
+# check:      jump block1;
+func public %header_calls(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v4 block2);
+        v2.i256 = call %bound v0;
+        v3.i1 = lt v1 v2;
+        br v3 block2 block3;
+
+    block2:
+        v4.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return v1;
+}
+
+# check:  block1:
+# nextln:     v1.i256 = phi (0.i256 block0) (v4 block2);
+# nextln:     v2.i256 = mload v0 i256;
+# check:      jump block1;
+func public %header_reads_memory(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v4 block2);
+        v2.i256 = mload v0 i256;
+        v3.i1 = lt v1 v2;
+        br v3 block2 block3;
+
+    block2:
+        v4.i256 = add v1 1.i256;
+        mstore v0 v4 i256;
+        jump block1;
+
+    block3:
+        return v1;
+}
+
+# check:  return v0;
+func public %bound(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+# check:  block1:
+# nextln:     v2.i256 = phi (0.i256 block0) (v4 block3);
+# nextln:     v3.i1 = lt v2 v0;
+# nextln:     br v3 block2 block4;
+func public %unreachable_exit_pred(v0.i256, v1.i1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = phi (0.i256 block0) (v4 block3);
+        v3.i1 = lt v2 v0;
+        br v3 block2 block4;
+
+    block2:
+        jump block3;
+
+    block3:
+        v4.i256 = add v2 1.i256;
+        jump block1;
+
+    block5:
+        br v1 block4 block3;
+
+    block4:
+        v6.i256 = phi (v2 block1) (9.i256 block5);
+        v7.i256 = add v6 v2;
+        return v7;
+}

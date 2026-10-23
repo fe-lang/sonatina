@@ -7,8 +7,8 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_master_baseline.snt
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1958 bytes
-  total: 1958 bytes
+  section runtime: 1942 bytes
+  total: 1942 bytes
 
 functions:
   mem: global_dyn_base=0xc0 arena_base=0xa0 scratch_peak_words=1 stable_chain_peak_words=0
@@ -16,15 +16,15 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
   sigma_full: ir_blocks=4 ir_insts=28 vcode_ops=82 fixups=1 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
-  mix: ir_blocks=13 ir_insts=47 vcode_ops=102 fixups=10 imm_bytes=22
+  mix: ir_blocks=13 ir_insts=46 vcode_ops=94 fixups=8 imm_bytes=21
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
-  poseidon_mock: ir_blocks=15 ir_insts=52 vcode_ops=146 fixups=20 imm_bytes=21
+  poseidon_mock: ir_blocks=15 ir_insts=52 vcode_ops=143 fixups=19 imm_bytes=21
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
   entry: ir_blocks=3 ir_insts=7 vcode_ops=28 fixups=5 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=44860 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=23860
+  case ok: calldata_len=0 success reason=Return gas_used=42664 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=21664
 
 
 --------------- DEBUG ---------------
@@ -272,116 +272,106 @@ sigma_full:
 mix:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v8.i256 = evm_mload v6;
+    PUSH1 0x40 (64)  // v6.i256 = evm_mload v5;
     MLOAD
-    PUSH1 0xbf (191)  // v13.i256 = gt v8 v11;
+    PUSH1 0xbf (191)  // v11.i256 = gt v6 v9;
     DUP2
     GT
-    PUSH1 block9  // br v13 block13 block8;
+    PUSH1 block9  // br v11 block13 block8;
     JUMPI
   block8:
     POP  // jump block9;
     PUSH1 0xc0 (192)
   block9:
     JUMPDEST
-    PUSH1 0x60 (96)  // v19.i256 = add v14 v17;
+    PUSH1 0x60 (96)  // v17.i256 = add v13 v14;
     DUP2
     ADD
-    PUSH1 0x40 (64)  // evm_mstore v6 v19;
+    PUSH1 0x40 (64)  // evm_mstore v5 v17;
     MSTORE
-    PUSH0 0x0 (0)  // v21.i256 = sym_addr $__fe_const_data_1;
-    PUSH0 0x0 (0)  // v23.i256 = sym_size $__fe_const_data_1;
-    SWAP1  // evm_code_copy v14 v21 v23;
+    PUSH0 0x0 (0)  // v19.i256 = sym_addr $__fe_const_data_1;
+    PUSH0 0x0 (0)  // v21.i256 = sym_size $__fe_const_data_1;
+    SWAP1  // evm_code_copy v13 v19 v21;
     DUP3
     CODECOPY
-    PUSH0 0x0 (0)  // v27.i256 = sym_addr $__fe_const_data_2;
-    PUSH0 0x0 (0)  // v28.i256 = sym_size $__fe_const_data_2;
-    DUP3  // jump block1;
+    PUSH0 0x0 (0)  // v23.i256 = sym_addr $__fe_const_data_2;
+    PUSH0 0x0 (0)  // v27.i256 = sym_size $__fe_const_data_2;
+    DUP3  // jump block2;
     PUSH0
-  block1:
+  block2:
     JUMPDEST
-    PUSH1 0x3 (3)  // v29.i256 = lt v2 v63;
-    DUP2
-    LT
-    PUSH1 block14  // br v29 block14 block4;
-    JUMPI
-  block4:
-    POP  // return v14;
-    POP
-    POP
-    POP
-    SWAP1
-    POP
-    SWAP1
-    JUMP
-  block14:
-    JUMPDEST
-    DUP6  // jump block5;
-    PUSH0
-  block5:
-    JUMPDEST
-    PUSH1 0x3 (3)  // v30.i256 = lt v4 v63;
-    DUP2
-    LT
-    PUSH1 block6  // br v30 block6 block3;
-    JUMPI
-  block3:
-    POP  // v33.i256 = add v2 v32;
-    POP
-    PUSH1 0x1 (1)
-    ADD
-    SWAP1  // v35.i256 = add v3 v34;
-    PUSH1 0x20 (32)
-    ADD
-    SWAP1  // jump block1;
-    PUSH1 block1
-    JUMP
+    PUSH0  // jump block6;
   block6:
     JUMPDEST
-    DUP4  // v36.i256 = evm_mload v3;
+    DUP3  // v28.i256 = evm_mload v3;
     MLOAD
-    PUSH1 0x40 (64)  // v38.i256 = evm_mload v6;
+    PUSH1 0x40 (64)  // v63.i256 = evm_mload v5;
     MLOAD
-    PUSH1 0xbf (191)  // v39.i256 = gt v38 v11;
+    PUSH1 0xbf (191)  // v29.i256 = gt v63 v9;
     DUP2
     GT
-    PUSH1 block12  // br v39 block15 block11;
+    PUSH1 block12  // br v29 block15 block11;
     JUMPI
   block11:
     POP  // jump block12;
     PUSH1 0xc0 (192)
   block12:
     JUMPDEST
-    DUP7  // evm_code_copy v40 v27 v28;
-    DUP9
+    DUP6  // evm_code_copy v30 v23 v27;
+    DUP8
     DUP3
     CODECOPY
-    PUSH1 0x60 (96)  // v42.i256 = mul v2 v17;
-    DUP6
+    PUSH1 0x60 (96)  // v32.i256 = mul v2 v14;
+    DUP5
     MUL
-    ADD  // v43.i256 = add v40 v42;
-    DUP3  // v44.i256 = shl v61 v4;
+    ADD  // v33.i256 = add v30 v32;
+    DUP3  // v35.i256 = shl v61 v4;
     PUSH1 0x5 (5)
     SHL
-    ADD  // v45.i256 = add v43 v44;
-    MLOAD  // v48.i256 = evm_mload v45;
-    DUP4  // v49.i256 = evm_mload v5;
-    MLOAD
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v51.i256 = evm_mul_mod v48 v49 v50;
+    DUP1  // v36.i256 = add v33 v35;
+    SWAP2
+    ADD
+    MLOAD  // v38.i256 = evm_mload v36;
+    SWAP1  // v40.i256 = add v0 v35;
+    DUP10
+    ADD
+    MLOAD  // v42.i256 = evm_mload v40;
+    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v44.i256 = evm_mul_mod v38 v42 v43;
     SWAP2
     MULMOD
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v54.i256 = evm_add_mod v36 v51 v50;
+    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v45.i256 = evm_add_mod v28 v44 v43;
     SWAP2
     ADDMOD
-    DUP5  // evm_mstore v3 v54;
+    DUP4  // evm_mstore v3 v45;
     MSTORE
-    PUSH1 0x1 (1)  // v56.i256 = add v4 v32;
+    PUSH1 0x1 (1)  // v49.i256 = add v4 v48;
     ADD
-    SWAP1  // v59.i256 = add v5 v34;
+    PUSH1 0x3 (3)  // v51.i256 = lt v49 v50;
+    DUP2
+    LT
+    PUSH1 block6  // br v51 block16 block3;
+    JUMPI
+  block3:
+    POP  // v54.i256 = add v2 v48;
+    PUSH1 0x1 (1)
+    ADD
+    PUSH1 0x3 (3)  // v56.i256 = lt v54 v50;
+    DUP2
+    LT
+    SWAP2  // v59.i256 = add v3 v34;
     PUSH1 0x20 (32)
     ADD
-    SWAP1  // jump block5;
-    PUSH1 block5
+    SWAP2  // br v56 block14 block4;
+    PUSH1 block2
+    JUMPI
+  block4:
+    POP  // return v13;
+    POP
+    POP
+    POP
+    SWAP1
+    POP
+    SWAP1
     JUMP
 
 // func private %poseidon_mock(v0.i256, v1.i256) -> i256
@@ -431,113 +421,110 @@ poseidon_mock:
     PUSH1 0x2 (2)  // evm_mstore v54 v55;
     PUSH1 0xa0 (160)
     MSTORE
-    PUSH0  // jump block1;
+    PUSH0  // jump block2;
     SWAP1
     SWAP2
     PUSH0
-  block1:
-    JUMPDEST
-    PUSH1 0x2 (2)  // v56.i256 = lt v66 v55;
-    DUP4
-    LT
-    PUSH1 block2  // br v56 block2 block4;
-    JUMPI
-  block4:
-    PUSH1 0x2 (2)  // evm_mstore v54 v55;
-    PUSH1 0xa0 (160)
-    MSTORE
-    PUSH0  // jump block5;
-    SWAP3
-    POP
-  block5:
-    JUMPDEST
-    PUSH1 0x2 (2)  // v58.i256 = lt v27 v55;
-    DUP4
-    LT
-    PUSH1 block6  // br v58 block6 block8;
-    JUMPI
-    PUSH1 block8
-    JUMP
   block2:
     JUMPDEST
-    SWAP1  // v19.i256 = call %ark v4 v3;
+    SWAP1  // v56.i256 = call %ark v4 v3;
     DUP2
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH1 `pc + (4)`  // v20.i256 = call %sigma_full v19;
+    PUSH1 `pc + (4)`  // v58.i256 = call %sigma_full v56;
     SWAP1
     PUSH1 FuncRef(2)
     JUMP
     JUMPDEST
-    PUSH1 `pc + (4)`  // v22.i256 = call %mix v20;
+    PUSH1 `pc + (4)`  // v60.i256 = call %mix v58;
     SWAP1
     PUSH1 FuncRef(3)
     JUMP
     JUMPDEST
-    PUSH1 0x3 (3)  // v23.i256 = add v3 v10;
+    PUSH1 0x3 (3)  // v7.i256 = add v3 v61;
     DUP3
     ADD
-    SWAP2  // v24.i256 = lt v23 v3;
+    SWAP2  // v8.i256 = lt v7 v3;
     DUP3
     LT
-    PUSH1 __evm_shared_tail_0  // br v24 block16 block3;
+    PUSH1 __evm_shared_tail_0  // br v8 block16 block3;
     JUMPI
   block3:
-    SWAP2  // v42.i256 = add v66 v15;
+    SWAP2  // v11.i256 = add v66 v10;
     PUSH1 0x1 (1)
     ADD
-    SWAP2  // jump block1;
+    PUSH1 0x2 (2)  // v13.i256 = lt v11 v55;
+    DUP2
+    LT
+    PUSH1 block17  // br v13 block17 block4;
+    JUMPI
+  block4:
+    POP  // evm_mstore v54 v55;
+    PUSH1 0x2 (2)
+    PUSH1 0xa0 (160)
+    MSTORE
+    PUSH0  // jump block6;
+    SWAP2
     SWAP1
-    PUSH1 block1
-    JUMP
   block6:
     JUMPDEST
-    SWAP1  // v61.i256 = call %ark v25 v63;
+    SWAP1  // v15.i256 = call %ark v25 v63;
     DUP2
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH1 `pc + (4)`  // v7.i256 = call %sigma_full v61;
+    PUSH1 `pc + (4)`  // v17.i256 = call %sigma_full v15;
     SWAP1
     PUSH1 FuncRef(2)
     JUMP
     JUMPDEST
-    PUSH1 `pc + (4)`  // v8.i256 = call %mix v7;
+    PUSH1 `pc + (4)`  // v19.i256 = call %mix v17;
     SWAP1
     PUSH1 FuncRef(3)
     JUMP
     JUMPDEST
-    PUSH1 0x3 (3)  // v11.i256 = add v63 v10;
+    PUSH1 0x3 (3)  // v20.i256 = add v63 v61;
     DUP3
     ADD
-    SWAP2  // v13.i256 = lt v11 v63;
+    SWAP2  // v22.i256 = lt v20 v63;
     DUP3
     LT
-    PUSH1 __evm_shared_tail_0  // br v13 block17 block7;
+    PUSH1 __evm_shared_tail_0  // br v22 block18 block7;
     JUMPI
   block7:
-    SWAP2  // v17.i256 = add v27 v15;
+    SWAP2  // v23.i256 = add v27 v10;
     PUSH1 0x1 (1)
     ADD
-    SWAP2  // jump block5;
-    SWAP1
-    PUSH1 block5
-    JUMP
+    PUSH1 0x2 (2)  // v24.i256 = lt v23 v55;
+    DUP2
+    LT
+    PUSH1 block19  // br v24 block19 block8;
+    JUMPI
   block8:
-    JUMPDEST
-    POP  // v60.i256 = evm_mload v25;
-    SWAP1
+    POP  // v42.i256 = evm_mload v19;
     POP
     MLOAD
     SWAP1  // evm_mstore v29 v32;
     PUSH1 0x40 (64)
     MSTORE
-    SWAP1  // return v60;
+    SWAP1  // return v42;
+    JUMP
+  block19:
+    JUMPDEST
+    SWAP2  // jump block6;
+    SWAP1
+    PUSH1 block6
+    JUMP
+  block17:
+    JUMPDEST
+    SWAP2  // jump block2;
+    SWAP1
+    PUSH1 block2
     JUMP
 
 // func public %entry()

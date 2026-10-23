@@ -10,23 +10,20 @@ func public %entry() {
         v0.i256 = evm_calldata_load 0.i32;
         v1.i256 = and v0 1.i256;
         v14.i1 = is_zero v1;
-        br v14 block3 block2;
+        br v14 block4 block2;
 
     block2:
-        jump block3;
-
-    block3:
-        v3.i256 = phi (1.i256 block0) (2.i256 block2) (v8 block4);
-        v4.i256 = add v3 7.i256;
-        v5.i1 = lt v4 12.i256;
-        br v5 block4 block5;
+        jump block4;
 
     block4:
-        v8.i256 = add v3 1.i256;
-        jump block3;
+        v16.i256 = phi (v8 block4) (1.i256 block0) (2.i256 block2);
+        v8.i256 = add v16 1.i256;
+        v18.i256 = add v8 7.i256;
+        v20.i1 = lt v18 12.i256;
+        br v20 block4 block5;
 
     block5:
-        mstore 0.i256 v4 i256;
+        mstore 0.i256 v18 i256;
         evm_return 0.i256 32.i256;
 }
 

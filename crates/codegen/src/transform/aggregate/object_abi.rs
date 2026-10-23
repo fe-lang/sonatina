@@ -441,6 +441,7 @@ impl ObjectReturnOutParam {
                 )
             },
             true,
+            false,
         )
     }
 

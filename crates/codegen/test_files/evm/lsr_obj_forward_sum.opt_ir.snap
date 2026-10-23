@@ -16,23 +16,20 @@ func public %entry() {
         obj.store v3 3.i256;
         v4.objref<i256> = obj.index v0 3.i256;
         obj.store v4 4.i256;
-        jump block3;
-
-    block3:
-        v13.i256 = phi (0.i256 block0) (v20 block4);
-        v15.i256 = phi (0.i256 block0) (v19 block4);
-        v16.i1 = lt v13 4.i256;
-        br v16 block4 block1;
+        jump block4;
 
     block4:
-        v17.objref<i256> = obj.index v0 v13;
+        v22.i256 = phi (0.i256 block0) (v20 block4);
+        v21.i256 = phi (0.i256 block0) (v19 block4);
+        v17.objref<i256> = obj.index v0 v22;
         v18.i256 = obj.load v17;
-        v19.i256 = add v15 v18;
-        v20.i256 = add v13 1.i256;
-        jump block3;
+        v19.i256 = add v21 v18;
+        v20.i256 = add v22 1.i256;
+        v24.i1 = lt v20 4.i256;
+        br v24 block4 block1;
 
     block1:
-        mstore 0.i256 v15 i256;
+        mstore 0.i256 v19 i256;
         evm_return 0.i256 32.i256;
 }
 

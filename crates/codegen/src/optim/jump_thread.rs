@@ -23,7 +23,7 @@ use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, InstId, Value, ValueId, inst::control_flow::BranchKind};
 
 use crate::{
-    cfg_edit::{CfgEditor, CleanupMode},
+    cfg_edit::{CfgEditor, CleanupMode, clone_inst_before, defined_in},
     domtree::DomTree,
 };
 
@@ -161,14 +161,6 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
     })
 }
 
-fn defined_in(func: &Function, value: ValueId, block: BlockId) -> bool {
-    matches!(
-        func.dfg.get_value(value),
-        Some(Value::Inst { inst, .. }) if func.layout.is_inst_inserted(*inst)
-            && func.layout.inst_block(*inst) == block
-    )
-}
-
 /// Threads every predecessor of `block` that can be. All are chosen before
 /// any edge moves: retargeting one simplifies the block's phis that become
 /// trivial, which can turn the condition into a constant.
@@ -263,33 +255,7 @@ fn thread_edge(
 
     let pred_term = func.layout.last_inst_of(pred).expect("terminated block");
     for &inst in &cand.body {
-        let mut cloned = func.dfg.clone_inst(inst);
-        cloned.for_each_value_mut(&mut |value| {
-            if let Some(&mapped) = map.get(value) {
-                *value = mapped;
-            }
-        });
-        let attribution = func.inst_attribution(inst);
-        let new_inst = func.dfg.make_inst_dyn(cloned);
-        func.layout.insert_inst_before(new_inst, pred_term);
-        let results: SmallVec<[ValueId; 2]> = func
-            .dfg
-            .inst_results(inst)
-            .to_vec()
-            .into_iter()
-            .enumerate()
-            .map(|(result_idx, old)| {
-                let new = func.dfg.make_value(Value::Inst {
-                    inst: new_inst,
-                    result_idx: result_idx.try_into().expect("too many instruction results"),
-                    ty: func.dfg.value_ty(old),
-                });
-                map.insert(old, new);
-                new
-            })
-            .collect();
-        func.dfg.attach_results(new_inst, &results);
-        func.apply_inst_attribution(new_inst, &attribution);
+        clone_inst_before(func, inst, pred_term, &mut map);
     }
 
     // The successor's phis take, from `pred`, what they took from the block.

@@ -47,6 +47,7 @@ use super::{
     known_bits_simplify::KnownBitsSimplify,
     licm::LicmSolver,
     load_store::LoadStoreSolver,
+    loop_rotate::LoopRotate,
     loop_strength_reduce::LoopStrengthReduce,
     multi_result_legalize::legalize_multi_result,
     range_branch_simplify::{RangeBranchSimplify, has_conditional_branch},
@@ -90,6 +91,8 @@ pub enum Pass {
     Adce,
     /// Loop invariant code motion.
     Licm,
+    /// Move a loop's exit test from its header to its latch.
+    LoopRotate,
     /// Loop strength reduction for affine memory addresses.
     LoopStrengthReduce,
     /// Sink pure instructions into the blocks that use their results.
@@ -186,6 +189,11 @@ impl Pass {
             Pass::Licm => PassInfo {
                 name: "licm",
                 needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::LoopRotate => PassInfo {
+                name: "loop_rotate",
+                needs_func_behavior: false,
                 invalidates_func_behavior: true,
             },
             Pass::LoopStrengthReduce => PassInfo {
@@ -298,6 +306,7 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::CheckedArithElim,
     Pass::JumpThread,
     Pass::RangeBranchSimplify,
+    Pass::LoopRotate,
     Pass::Sccp,
     Pass::ScalarCanonicalize,
     Pass::Gvn,
@@ -322,6 +331,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::CheckedArithElim,
     Pass::JumpThread,
     Pass::RangeBranchSimplify,
+    Pass::LoopRotate,
     Pass::Sccp,
     Pass::ScalarCanonicalize,
     Pass::Gvn,
@@ -419,21 +429,30 @@ fn speed_inliner_config() -> InlinerConfig {
 }
 
 impl Pipeline {
-    fn optimized_with_inliner_config(inliner_config: InlinerConfig) -> Self {
+    fn optimized(inliner_config: InlinerConfig, rotate_loops: bool) -> Self {
+        // Rotation copies each rotated loop's header, so a size-oriented
+        // pipeline leaves loops as they are.
+        let passes = |passes: &[Pass]| {
+            passes
+                .iter()
+                .copied()
+                .filter(|&pass| rotate_loops || pass != Pass::LoopRotate)
+                .collect()
+        };
         let mut p = Self::new();
         p.inliner_config = inliner_config;
         p.add_step(Step::Inline);
         // Prune helpers made unreachable by inlining before analyzing their bodies.
         p.add_step(Step::DeadFuncElim);
-        p.add_step(Step::FuncPasses(PRIMARY_FUNC_PASSES.to_vec()));
+        p.add_step(Step::FuncPasses(passes(PRIMARY_FUNC_PASSES)));
         p.add_step(Step::Inline);
-        p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
+        p.add_step(Step::FuncPasses(passes(SECONDARY_FUNC_PASSES)));
         p.add_step(Step::DeadArgElim);
         p.add_step(Step::FuncPasses(POST_DEAD_ARG_CLEANUP_PASSES.to_vec()));
         p.add_step(Step::DeadFuncElim);
         p.add_step(Step::PromoteObjectArgs);
         p.add_step(Step::Inline);
-        p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
+        p.add_step(Step::FuncPasses(passes(SECONDARY_FUNC_PASSES)));
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(POST_INLINE_CLEANUP_PASSES.to_vec()));
         p.add_step(Step::DeadFuncElim);
@@ -458,17 +477,18 @@ impl Pipeline {
     /// Size-oriented optimization pipeline preset.
     ///
     /// It uses the same aggressive pass schedule as [`Pipeline::speed`], but
-    /// keeps inlining biased toward avoiding code size growth.
+    /// keeps inlining biased toward avoiding code size growth and does not
+    /// rotate loops.
     pub fn size() -> Self {
-        Self::optimized_with_inliner_config(size_inliner_config())
+        Self::optimized(size_inliner_config(), false)
     }
 
     /// Speed-oriented optimization pipeline preset.
     ///
     /// Uses the same pass schedule as [`Pipeline::size`], but widens the
-    /// inliner budget for runtime speed.
+    /// inliner budget for runtime speed and rotates loops.
     pub fn speed() -> Self {
-        Self::optimized_with_inliner_config(speed_inliner_config())
+        Self::optimized(speed_inliner_config(), true)
     }
 
     /// Default optimization pipeline with a speed-oriented ordering.
@@ -486,6 +506,7 @@ impl Pipeline {
     ///    - `CheckedArithElim`
     ///    - `JumpThread`
     ///    - `RangeBranchSimplify`
+    ///    - `LoopRotate` — move header exit tests to the latch
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
     ///    - `ScalarCanonicalize` — local canonical forms for scalar SSA instructions
     ///    - `Gvn` — sparse predicated global value numbering with value-phi resolution
@@ -508,6 +529,7 @@ impl Pipeline {
     ///    - `CheckedArithElim`
     ///    - `JumpThread`
     ///    - `RangeBranchSimplify`
+    ///    - `LoopRotate`
     ///    - `Sccp`
     ///    - `ScalarCanonicalize`
     ///    - `Gvn`
@@ -929,6 +951,10 @@ fn run_pass(
                 CfgCleanup::new(CleanupMode::Strict).run(func)
             };
             changed || cleaned
+        }
+        Pass::LoopRotate => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.loop_rotate").entered();
+            LoopRotate::new().run(func)
         }
         Pass::LoopStrengthReduce => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.loop_strength_reduce").entered();
@@ -2588,10 +2614,11 @@ func private %entry(v0.i32, v1.i32) -> i32 {
     }
 
     #[test]
-    fn size_and_speed_share_same_step_schedule() {
+    fn size_and_speed_differ_only_in_loop_rotation() {
         let size = Pipeline::size();
         let speed = Pipeline::speed();
         assert_eq!(size.steps.len(), speed.steps.len());
+        let mut rotates = false;
         for (size_step, speed_step) in size.steps.iter().zip(speed.steps.iter()) {
             match (size_step, speed_step) {
                 (Step::Inline, Step::Inline)
@@ -2599,11 +2626,18 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 | (Step::PromoteObjectArgs, Step::PromoteObjectArgs)
                 | (Step::DeadFuncElim, Step::DeadFuncElim) => {}
                 (Step::FuncPasses(size_passes), Step::FuncPasses(speed_passes)) => {
-                    assert_eq!(size_passes, speed_passes);
+                    rotates |= speed_passes.contains(&Pass::LoopRotate);
+                    let without_rotation: Vec<_> = speed_passes
+                        .iter()
+                        .copied()
+                        .filter(|&pass| pass != Pass::LoopRotate)
+                        .collect();
+                    assert_eq!(size_passes, &without_rotation);
                 }
-                _ => panic!("size and speed should differ only in inliner config"),
+                _ => panic!("size and speed should share their step schedule"),
             }
         }
+        assert!(rotates);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use sonatina_filecheck::{
     branch_canonicalize::BranchCanonicalizeTransform, cfg_cleanup::CfgCleanupTransform,
     checked_arith_elim::CheckedArithElimTransform, code_sink::CodeSinkTransform, gvn::GvnTransform,
     jump_thread::JumpThreadTransform, known_bits_simplify::KnownBitsSimplifyTransform,
-    licm::LicmTransformer, load_store::LoadStoreTransform,
+    licm::LicmTransformer, load_store::LoadStoreTransform, loop_rotate::LoopRotateTransform,
     loop_strength_reduce::LoopStrengthReduceTransform,
     range_branch_simplify::RangeBranchSimplifyTransform, sccp::SccpTransform,
 };
@@ -47,6 +47,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(LicmTransformer::default());
+    runner.run();
+
+    runner.attach_transformer(LoopRotateTransform);
     runner.run();
 
     runner.attach_transformer(LoopStrengthReduceTransform::default());

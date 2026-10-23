@@ -36,26 +36,23 @@ func private %test_view_param_local_ref_take_reverse() {
         v42.*i256 = gep v39 0.i256 1.i256;
         mstore v42 v3 i256;
         v72.*[i256; 8] = int_to_ptr v3 *[i256; 8];
-        jump block9;
-
-    block9:
-        v58.i256 = phi (0.i256 block0) (v75 block10);
-        v60.i256 = phi (0.i256 block0) (v76 block10);
-        v61.i1 = lt v60 4.i256;
-        v62.i256 = zext v61 i256;
-        v118.i1 = is_zero v62;
-        br v118 block1 block10;
+        jump block10;
 
     block10:
-        v71.i256 = sub 7.i256 v60;
+        v132.i256 = phi (0.i256 block0) (v75 block10);
+        v131.i256 = phi (0.i256 block0) (v76 block10);
+        v71.i256 = sub 7.i256 v131;
         v73.*i256 = gep v72 0.i256 v71;
         v74.i256 = mload v73 i256;
-        v75.i256 = add v58 v74;
-        v76.i256 = add v60 1.i256;
-        jump block9;
+        v75.i256 = add v132 v74;
+        v76.i256 = add v131 1.i256;
+        v134.i1 = lt v76 4.i256;
+        v136.i256 = zext v134 i256;
+        v138.i1 = is_zero v136;
+        br v138 block1 block10;
 
     block1:
-        v30.i1 = eq v58 26.i256;
+        v30.i1 = eq v75 26.i256;
         v31.i256 = zext v30 i256;
         v77.i1 = is_zero v31;
         v78.i256 = zext v77 i256;
@@ -72,25 +69,22 @@ func private %test_view_param_local_ref_take_reverse() {
         mstore v83 4.i256 i256;
         v85.*i256 = gep v82 0.i256 1.i256;
         mstore v85 v3 i256;
-        jump block25;
-
-    block25:
-        v101.i256 = phi (0.i256 block18) (v113 block26);
-        v103.i256 = phi (0.i256 block18) (v114 block26);
-        v104.i1 = lt v103 4.i256;
-        v105.i256 = zext v104 i256;
-        v120.i1 = is_zero v105;
-        br v120 block17 block26;
+        jump block26;
 
     block26:
-        v111.*i256 = gep v72 0.i256 v103;
+        v123.i256 = phi (0.i256 block18) (v113 block26);
+        v122.i256 = phi (0.i256 block18) (v114 block26);
+        v111.*i256 = gep v72 0.i256 v122;
         v112.i256 = mload v111 i256;
-        v113.i256 = add v101 v112;
-        v114.i256 = add v103 1.i256;
-        jump block25;
+        v113.i256 = add v123 v112;
+        v114.i256 = add v122 1.i256;
+        v125.i1 = lt v114 4.i256;
+        v127.i256 = zext v125 i256;
+        v129.i1 = is_zero v127;
+        br v129 block17 block26;
 
     block17:
-        v34.i1 = eq v101 10.i256;
+        v34.i1 = eq v113 10.i256;
         v35.i256 = zext v34 i256;
         v115.i1 = is_zero v35;
         v116.i256 = zext v115 i256;
