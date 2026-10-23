@@ -243,23 +243,26 @@ block0:
 fn destructured_reference_product_cannot_capture_a_local_reference() {
     let source = r#"
 type @parts = {i64, objref<i64>};
-func inline(never) private %capture_product(v0.objref<objref<i64>>) -> i64 {
+type @holder = {objref<i64>};
+func inline(never) private %capture_product(v0.objref<@holder>) -> i64 {
 block0:
     v1.objref<i64> = obj.alloc i64;
     obj.store v1 7.i64;
     v2.@parts = insert_value undef.@parts 1.i8 v1;
     v3.objref<i64> = extract_value v2 1.i8;
-    obj.store v0 v3;
+    v4.objref<objref<i64>> = obj.proj v0 0.i8;
+    obj.store v4 v3;
     return 1.i64;
 }
 func public %entry() -> i64 {
 block0:
-    v0.objref<objref<i64>> = obj.alloc objref<i64>;
+    v0.objref<@holder> = obj.alloc @holder;
     v1.i64 = call %capture_product v0;
-    v2.objref<i64> = obj.load v0;
-    v3.i64 = obj.load v2;
-    v4.i64 = add v1 v3;
-    return v4;
+    v2.objref<objref<i64>> = obj.proj v0 0.i8;
+    v3.objref<i64> = obj.load v2;
+    v4.i64 = obj.load v3;
+    v5.i64 = add v1 v4;
+    return v5;
 }
 "#;
     for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
