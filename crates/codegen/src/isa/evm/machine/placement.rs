@@ -176,6 +176,8 @@ pub(crate) fn compute_semantic_memory_placement(
     let final_scratch_reserves =
         final_scratch_reserve_ranges(funcs, &semantic_plan, backend_spill_reserves);
 
+    let (free_ptr_slot_may_be_touched, free_ptr_write_summaries) =
+        compute_program_free_ptr_slot_facts(module, schedule, backend);
     let transient_malloc_call_barriers = malloc_plan::compute_transient_malloc_call_barriers(
         module,
         schedule,
@@ -206,16 +208,19 @@ pub(crate) fn compute_semantic_memory_placement(
                         &transient_malloc_call_barriers,
                         &analysis.inst_liveness,
                     );
+                    // A raw write of the slot, here or in a callee, may have
+                    // allocated what outlives the call; the restore would free it.
                     let restores_free_ptr =
-                        malloc_plan::should_restore_free_ptr_on_internal_returns(
-                            function,
-                            &module.ctx,
-                            &backend.isa,
-                            &analysis.cfg,
-                            ptr_escape,
-                            &analysis.prov,
-                            &transient,
-                        );
+                        !free_ptr_write_summaries.get(&func).copied().unwrap_or(true)
+                            && malloc_plan::should_restore_free_ptr_on_internal_returns(
+                                function,
+                                &module.ctx,
+                                &backend.isa,
+                                &analysis.cfg,
+                                ptr_escape,
+                                &analysis.prov,
+                                &transient,
+                            );
                     (escape_kinds, transient, restores_free_ptr)
                 });
             (
@@ -262,8 +267,6 @@ pub(crate) fn compute_semantic_memory_placement(
         })
     });
     let entry_may_have_live_frame = compute_entry_may_have_live_frame(schedule, &semantic_plan);
-    let (free_ptr_slot_may_be_touched, free_ptr_write_summaries) =
-        compute_program_free_ptr_slot_facts(module, schedule, backend);
     let mut heap_facts_results: Vec<_> = funcs
         .par_iter()
         .copied()
