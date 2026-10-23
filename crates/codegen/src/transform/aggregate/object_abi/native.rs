@@ -978,6 +978,70 @@ block0:
     }
 
     #[test]
+    fn local_references_stay_local_through_callees_that_only_pack_them() {
+        // `%pick` packs the reference beside a value and, past a join with no
+        // pair, reads only the value back.
+        let (lifetimes, _) = check_f(
+            r#"
+type @pair = { i64, objref<i64> };
+func private %pick(v0.objref<i64>, v1.i1) -> i64 {
+block0:
+    v2.i64 = obj.load v0;
+    v3.@pair = insert_value undef.@pair 0.i64 v2;
+    v4.@pair = insert_value v3 1.i64 v0;
+    br v1 block1 block2;
+block1:
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v5.@pair = phi (v4 block1) (undef.@pair block2);
+    br v1 block4 block5;
+block4:
+    v6.i64 = extract_value v5 0.i64;
+    return v6;
+block5:
+    return 0.i64;
+}
+func private %f() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 5.i64;
+    v1.i64 = call %pick v0 1.i1;
+    return v1;
+}
+"#,
+        );
+        assert_eq!(lifetimes, Ok(()));
+        // `%keep` extracts the packed reference and stores it beyond the frame.
+        let (lifetimes, _) = check_f(
+            r#"
+type @pair = { i64, objref<i64> };
+func private %keep(v0.objref<i64>, v1.objref<objref<i64>>) {
+block0:
+    v2.@pair = insert_value undef.@pair 0.i64 1.i64;
+    v3.@pair = insert_value v2 1.i64 v0;
+    v4.objref<i64> = extract_value v3 1.i64;
+    obj.store v1 v4;
+    return;
+}
+func private %f(v0.objref<objref<i64>>) {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    call %keep v1 v0;
+    return;
+}
+"#,
+        );
+        assert!(
+            lifetimes
+                .as_ref()
+                .is_err_and(|error| error.starts_with("unproven escape of local object")),
+            "{lifetimes:?}"
+        );
+    }
+
+    #[test]
     fn heap_exports_reach_references_through_holder_calls_and_nested_holders() {
         for (name, source, roots) in [
             // `%export` exports the holder `v1`, and with it `v0`.

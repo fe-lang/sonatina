@@ -555,6 +555,57 @@ block0:
 }
 
 #[test]
+fn references_a_callee_only_packs_stay_on_the_stack() {
+    // `%pick` packs a reference into `v1` beside the value it reads and,
+    // past a join with no pair, reads only that value back.
+    let source = r#"
+type @pair = { i64, objref<i64> };
+func inline(never) private %pick(v0.objref<i64>, v1.i1) -> i64 {
+block0:
+    v2.i64 = obj.load v0;
+    v3.@pair = insert_value undef.@pair 0.i64 v2;
+    v4.@pair = insert_value v3 1.i64 v0;
+    br v1 block1 block2;
+block1:
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v5.@pair = phi (v4 block1) (undef.@pair block2);
+    br v1 block4 block5;
+block4:
+    v6.i64 = extract_value v5 0.i64;
+    return v6;
+block5:
+    return 100.i64;
+}
+func public %exercise(v0.i64) -> i64 {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v1 v0;
+    v2.i64 = call %pick v1 1.i1;
+    v3.i64 = call %pick v1 0.i1;
+    v4.i64 = add v2 v3;
+    return v4;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let exercise: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("exercise").unwrap()) };
+        for input in [0, 4, -9] {
+            assert_eq!(unsafe { exercise(input) }, input + 100, "{level:?}");
+        }
+    }
+}
+
+#[test]
 fn references_in_holders_passed_to_calls_and_nested_holders_stay_on_the_stack() {
     // A reference into `v1` rests in the holder `v2`, which `%bump` borrows,
     // and then in `v4`, which holds `v2`; each path writes through it.

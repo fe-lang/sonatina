@@ -517,6 +517,55 @@ fn walk_object_root_uses_impl<T>(
     None
 }
 
+/// Whether the reference `value`, which `inst` packs into an SSA aggregate,
+/// stays packed: no use recovers it, by extracting it or by loading it from a
+/// local allocation that holds the aggregate, and neither the aggregate nor
+/// such an allocation leaves the function.
+pub(crate) fn packed_reference_stays_packed(
+    function: &Function,
+    inst: InstId,
+    value: ValueId,
+) -> bool {
+    let mut worklist = Vec::new();
+    let mut packed = |special: SpecialObjectUse<'_>| match special {
+        SpecialObjectUse::Carry => ControlFlow::Continue(()),
+        _ => ControlFlow::Break(()),
+    };
+    let pack = Walk {
+        function,
+        user: inst,
+        value,
+        path: &Path::new(),
+    };
+    if pack.walk_use(None, &mut worklist, &mut packed).is_break() {
+        return false;
+    }
+    let mut seen = FxHashSet::default();
+    while let Some((value, path)) = worklist.pop() {
+        // An empty path leads to the reference itself.
+        if path.is_empty() {
+            return false;
+        }
+        if !seen.insert((value, path.clone())) {
+            continue;
+        }
+        for &user in function.dfg.users(value) {
+            let walk = Walk {
+                function,
+                user,
+                value,
+                path: &path,
+            };
+            if function.layout.is_inst_inserted(user)
+                && walk.walk_use(None, &mut worklist, &mut packed).is_break()
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// One use, `user`, of a walked `value` that reaches the object along `path`.
 struct Walk<'a> {
     function: &'a Function,

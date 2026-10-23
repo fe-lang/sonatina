@@ -22,7 +22,7 @@ use super::{
         merge_root_capture_maps, slices_overlap_relative,
     },
     object_alias::ObjectAliasFacts,
-    object_locality::object_root_stays_local_with_effects,
+    object_locality::{object_root_stays_local_with_effects, packed_reference_stays_packed},
     object_reachability::reference_bearing,
     object_tracking::{AggregateFacts, objref_element_ty, single_result_value},
     provenance::{
@@ -780,11 +780,17 @@ fn compute_summary_for_func(
                     // Capture summaries describe references stored in objects,
                     // not references embedded in SSA aggregate values. Crossing
                     // that boundary lets the reference escape our tracked uses,
-                    // including through an aggregate return or a later call.
+                    // as through an aggregate return, a later call or an
+                    // extraction, unless it stays packed.
                     for &value in values {
-                        for (src_arg, _) in
-                            capture_source_slices(&root_captures, effect_provenance, value, None)
+                        let sources =
+                            capture_source_slices(&root_captures, effect_provenance, value, None);
+                        if sources.is_empty()
+                            || packed_reference_stays_packed(function, inst, value)
                         {
+                            continue;
+                        }
+                        for (src_arg, _) in sources {
                             summary.arg_effects[src_arg].escapes = true;
                         }
                     }
@@ -2255,6 +2261,102 @@ block0:
             let summary = &summaries[&lookup_func(&module, name)];
             assert!(!summary.arg_effects[0].local_only, "{name}");
             assert!(summary.arg_effects[0].escapes, "{name}");
+        }
+    }
+
+    #[test]
+    fn packed_reference_escapes_only_where_it_can_leave_its_aggregate() {
+        // `v4` packs the argument reference `v0` beside a value.
+        for (name, body, escapes) in [
+            // Only the value is read, after a join with no pair.
+            (
+                "other_field_after_join",
+                "br v1 block1 block2;\n\
+                 block1:\n\
+                     jump block3;\n\
+                 block2:\n\
+                     jump block3;\n\
+                 block3:\n\
+                     v5.@Pair = phi (v4 block1) (undef.@Pair block2);\n\
+                     v6.i256 = extract_value v5 0.i256;\n\
+                     return v6;",
+                false,
+            ),
+            (
+                "nested_other_field",
+                "v5.@Outer = insert_value undef.@Outer 0.i256 v4;\n\
+                 v6.@Outer = insert_value v5 1.i256 3.i256;\n\
+                 v7.i256 = extract_value v6 1.i256;\n\
+                 return v7;",
+                false,
+            ),
+            (
+                "variant_tag",
+                "v5.@Slot = enum.make @Slot #Full (v4);\n\
+                 v6.i1 = enum.is_variant v5 #Full;\n\
+                 v7.i256 = zext v6 i256;\n\
+                 return v7;",
+                false,
+            ),
+            // A local allocation holds the pair, and only the value is loaded.
+            (
+                "local_holder_other_field",
+                "v5.objref<@Pair> = obj.alloc @Pair;\n\
+                 obj.store v5 v4;\n\
+                 v6.objref<i256> = obj.proj v5 0.i256;\n\
+                 v7.i256 = obj.load v6;\n\
+                 return v7;",
+                false,
+            ),
+            (
+                "extracted",
+                "v5.objref<i256> = extract_value v4 1.i256;\n\
+                 v6.i256 = obj.load v5;\n\
+                 return v6;",
+                true,
+            ),
+            (
+                "passed_on",
+                "call %sink v4;\n\
+                 return 0.i256;",
+                true,
+            ),
+            (
+                "stored_into_argument",
+                "obj.store v2 v4;\n\
+                 return 0.i256;",
+                true,
+            ),
+            (
+                "loaded_from_local_holder",
+                "v5.objref<@Pair> = obj.alloc @Pair;\n\
+                 obj.store v5 v4;\n\
+                 v6.objref<objref<i256>> = obj.proj v5 1.i256;\n\
+                 v7.objref<i256> = obj.load v6;\n\
+                 v8.i256 = obj.load v7;\n\
+                 return v8;",
+                true,
+            ),
+        ] {
+            let module = parse_test_module(&format!(
+                r#"
+target = "evm-ethereum-osaka"
+type @Pair = {{ i256, objref<i256> }};
+type @Outer = {{ @Pair, i256 }};
+type @Slot = enum {{ #Empty, #Full(@Pair) }};
+declare external %sink(@Pair);
+func private %f(v0.objref<i256>, v1.i1, v2.objref<@Pair>) -> i256 {{
+block0:
+    v3.@Pair = insert_value undef.@Pair 0.i256 7.i256;
+    v4.@Pair = insert_value v3 1.i256 v0;
+    {body}
+}}
+"#
+            ));
+            let summaries = compute_object_effect_summaries(&module);
+            let effect = &summaries[&lookup_func(&module, "f")].arg_effects[0];
+            assert_eq!(effect.escapes, escapes, "{name}");
+            assert_eq!(effect.local_only, !escapes, "{name}");
         }
     }
 
