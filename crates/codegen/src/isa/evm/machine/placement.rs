@@ -40,8 +40,8 @@ use super::{
         },
     },
     free_ptr_floor::{
-        ProgramFreePtrFloorInput, compute_call_free_ptr_effects, compute_free_ptr_write_summaries,
-        compute_program_free_ptr_floor_before_malloc,
+        CallFreePtrEffect, ProgramFreePtrFloorInput, compute_call_free_ptr_effects,
+        compute_free_ptr_write_summaries, compute_program_free_ptr_floor_before_malloc,
     },
     heap_state::compute_exact_heap_base_before_malloc,
 };
@@ -267,21 +267,35 @@ pub(crate) fn compute_semantic_memory_placement(
         })
     });
     let entry_may_have_live_frame = compute_entry_may_have_live_frame(schedule, &semantic_plan);
+    let call_effects = compute_call_free_ptr_effects(
+        module,
+        schedule,
+        analyses,
+        &semantic_plan.funcs,
+        backend.isa.inst_set(),
+        &free_ptr_write_summaries,
+        &free_ptr_restoring_funcs,
+    );
     let mut heap_facts_results: Vec<_> = funcs
         .par_iter()
         .copied()
         .map(|func| {
             let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
             let analysis = expect_func_entry(analyses, func, "pre-analysis");
+            let needs_dyn_sp_clamp = func_plan.has_dynamic_frame()
+                || entry_may_have_live_frame
+                    .get(&func)
+                    .copied()
+                    .unwrap_or(false);
             let facts = module.func_store.view(func, |function| {
                 compute_func_heap_facts(
                     function,
-                    func,
                     &module.ctx,
                     &backend.isa,
                     analysis,
                     func_plan,
-                    &entry_may_have_live_frame,
+                    &call_effects,
+                    needs_dyn_sp_clamp,
                 )
             });
             (func, facts)
@@ -468,10 +482,7 @@ pub(crate) fn compute_semantic_memory_placement(
             analyses,
             source_is: backend.isa.inst_set(),
             malloc_placements: &malloc_placements,
-            call_effects: &compute_call_free_ptr_effects(
-                &free_ptr_write_summaries,
-                &free_ptr_restoring_funcs,
-            ),
+            call_effects: &call_effects,
         });
     let func_placements = funcs
         .iter()
@@ -520,23 +531,19 @@ pub(crate) struct FuncHeapFacts {
 
 fn compute_func_heap_facts(
     function: &Function,
-    func: FuncRef,
     module: &ModuleCtx,
     isa: &Evm,
     analysis: &FuncPreAnalysis,
     func_plan: &memory_plan::SemanticFuncPlan,
-    entry_may_have_live_frame: &FxHashMap<FuncRef, bool>,
+    call_effects: &FxHashMap<FuncRef, CallFreePtrEffect>,
+    needs_dyn_sp_clamp: bool,
 ) -> FuncHeapFacts {
-    let needs_dyn_sp_clamp = func_plan.has_dynamic_frame()
-        || entry_may_have_live_frame
-            .get(&func)
-            .copied()
-            .unwrap_or(false);
     let exact_heap_base_before_malloc = compute_exact_heap_base_before_malloc(
         function,
         isa,
         &analysis.cfg,
         func_plan,
+        call_effects,
         !needs_dyn_sp_clamp,
     );
     let terminal_private_mallocs = TerminalPrivateMallocAnalysis {

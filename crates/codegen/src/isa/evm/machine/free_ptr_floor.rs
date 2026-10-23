@@ -8,7 +8,11 @@ use sonatina_ir::{
 use std::iter;
 
 use crate::{
-    isa::evm::{FREE_PTR_SLOT, WORD_BYTES, memory_plan::FuncPreAnalysis, prepare::value_imm_u32},
+    isa::evm::{
+        FREE_PTR_SLOT, WORD_BYTES,
+        memory_plan::{FuncPreAnalysis, SemanticFuncPlan, expect_func_entry},
+        prepare::{blocks_reaching_return, value_imm_u32},
+    },
     module_analysis::CallGraphSchedule,
 };
 
@@ -63,7 +67,8 @@ pub(crate) fn compute_free_ptr_write_summaries(
 /// What a call does to the free pointer, as its caller sees on return.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CallFreePtrEffect {
-    /// Leaves it where it was: the callee restores it.
+    /// Leaves it where it was: the callee restores it, or neither advances
+    /// nor writes it.
     Keeps,
     /// Only advances it, through compiler-managed allocations.
     Advances,
@@ -71,20 +76,68 @@ pub(crate) enum CallFreePtrEffect {
     MayWrite,
 }
 
-/// The effect of calling each function on the free pointer.
+/// The effect of calling each function on the free pointer. A function
+/// advances it when a persistent malloc, or a call that advances it, lies on
+/// a path that returns, unless the function restores the free pointer it was
+/// entered with.
 pub(crate) fn compute_call_free_ptr_effects(
+    module: &Module,
+    schedule: &CallGraphSchedule,
+    analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
+    semantic_funcs: &FxHashMap<FuncRef, SemanticFuncPlan>,
+    source_is: &EvmInstSet,
     write_summaries: &FxHashMap<FuncRef, bool>,
     restoring: &FxHashSet<FuncRef>,
 ) -> FxHashMap<FuncRef, CallFreePtrEffect> {
-    write_summaries
-        .iter()
-        .map(|(&func, &writes)| {
+    let mut advancing: FxHashMap<FuncRef, bool> =
+        schedule.funcs().iter().map(|&func| (func, false)).collect();
+    for &scc in schedule.topo.iter().rev() {
+        let members = schedule.members(scc);
+        loop {
+            let mut changed = false;
+            for &func in members {
+                if restoring.contains(&func) || advancing[&func] {
+                    continue;
+                }
+                let transient_mallocs =
+                    &expect_func_entry(semantic_funcs, func, "semantic plan").transient_mallocs;
+                let cfg = &expect_func_entry(analyses, func, "pre-analysis").cfg;
+                let advances = module.func_store.view(func, |function| {
+                    let returning = blocks_reaching_return(function, cfg);
+                    function.layout.iter_block().any(|block| {
+                        returning.contains(&block)
+                            && function.layout.iter_inst(block).any(|inst| {
+                                match source_is.resolve_inst(function.dfg.inst(inst)) {
+                                    EvmInstKind::EvmMalloc(_) => !transient_mallocs.contains(&inst),
+                                    EvmInstKind::Call(call) => {
+                                        advancing.get(call.callee()).copied().unwrap_or(true)
+                                    }
+                                    _ => false,
+                                }
+                            })
+                    })
+                });
+                if advances {
+                    advancing.insert(func, true);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+    advancing
+        .into_iter()
+        .map(|(func, advances)| {
             let effect = if restoring.contains(&func) {
                 CallFreePtrEffect::Keeps
-            } else if writes {
+            } else if write_summaries.get(&func).copied().unwrap_or(true) {
                 CallFreePtrEffect::MayWrite
-            } else {
+            } else if advances {
                 CallFreePtrEffect::Advances
+            } else {
+                CallFreePtrEffect::Keeps
             };
             (func, effect)
         })

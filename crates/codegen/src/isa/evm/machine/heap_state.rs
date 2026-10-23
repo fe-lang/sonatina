@@ -18,11 +18,14 @@ use sonatina_ir::{
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
+    module::FuncRef,
 };
 
 use crate::isa::evm::{
     memory_plan::SemanticFuncPlan, prepare::memory_access_may_touch_free_ptr_slot,
 };
+
+use super::free_ptr_floor::CallFreePtrEffect;
 
 /// Per-block fixpoint states of a forward heap dataflow.
 pub(crate) struct HeapDataflowStates<S: Copy + Default> {
@@ -96,24 +99,24 @@ pub(crate) fn inst_writes_free_ptr_slot(function: &Function, inst: InstId) -> bo
 }
 
 /// The exactness pass: for each malloc, whether `memory[0x40]` provably still
-/// holds its function-entry value at that point. Persistent mallocs, internal
-/// calls, and any possible 0x40 write kill exactness; transient mallocs
-/// preserve it (their lowering never touches the slot).
-///
-/// PARITY: internal calls kill exactness unconditionally, even though the
-/// floor pass consults callee write summaries. Relaxing this would let more
-/// mallocs become Fixed and needs its own snapshot-reviewed change.
+/// holds its function-entry value at that point. Persistent mallocs, calls
+/// that may move the free pointer, and any possible 0x40 write kill
+/// exactness; transient mallocs preserve it (their lowering never touches the
+/// slot).
 pub(crate) fn compute_exact_heap_base_before_malloc(
     function: &Function,
     isa: &Evm,
     cfg: &ControlFlowGraph,
     func_plan: &SemanticFuncPlan,
+    call_effects: &FxHashMap<FuncRef, CallFreePtrEffect>,
     entry_heap_base_is_exact: bool,
 ) -> FxHashMap<InstId, bool> {
     let transfer =
         |inst: InstId, exact: bool| match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
             EvmInstKind::EvmMalloc(_) => exact && func_plan.transient_mallocs.contains(&inst),
-            EvmInstKind::Call(_) => false,
+            EvmInstKind::Call(call) => {
+                exact && call_effects.get(call.callee()) == Some(&CallFreePtrEffect::Keeps)
+            }
             _ => exact && !inst_writes_free_ptr_slot(function, inst),
         };
 
