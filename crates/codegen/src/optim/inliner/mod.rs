@@ -249,6 +249,14 @@ impl Inliner {
                     .unwrap_or_default();
 
                 for site in sites {
+                    // Earlier inlining may have deleted later callsites in this snapshot,
+                    // for example when a terminating splice truncates the block.
+                    if !module.func_store.view(caller_ref, |caller| {
+                        caller.layout.is_inst_inserted(site.call_inst)
+                    }) {
+                        continue;
+                    }
+
                     let hints = module.ctx.func_hints(site.callee);
                     if hints.contains(FuncHints::NOINLINE) {
                         stats.skipped_noinline_hint += 1;
