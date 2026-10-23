@@ -443,6 +443,9 @@ impl ObjectLoadStore {
         let mut in_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
         let mut out_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
         let mut changed = false;
+        // Removing a dead store edits no other instruction, so each
+        // instruction's effects hold for the whole backward pass.
+        let mut inst_effects = FxHashMap::<InstId, ObjectInstEffects>::default();
 
         let mut dataflow_changed = true;
         while dataflow_changed {
@@ -479,14 +482,10 @@ impl ObjectLoadStore {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    transfer_backward_live(
-                        func,
-                        inst,
-                        tracked,
-                        accesses,
-                        &mut live,
-                        object_effects,
-                    );
+                    let effects = inst_effects
+                        .entry(inst)
+                        .or_insert_with(|| accesses.effects(func, inst, object_effects));
+                    transfer_backward_effects(func, tracked, accesses, effects, &mut live);
                 }
 
                 if live != in_states[block] {
@@ -517,7 +516,10 @@ impl ObjectLoadStore {
                 if removed {
                     continue;
                 }
-                transfer_backward_live(func, inst, tracked, accesses, &mut live, object_effects);
+                let effects = inst_effects
+                    .entry(inst)
+                    .or_insert_with(|| accesses.effects(func, inst, object_effects));
+                transfer_backward_effects(func, tracked, accesses, effects, &mut live);
             }
         }
 
@@ -627,18 +629,6 @@ fn mark_access_live(
             mark_root_live(live, root.root, root.total_leaves);
         }
     }
-}
-
-fn transfer_backward_live(
-    func: &Function,
-    inst: InstId,
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    accesses: &ObjectAccessFacts,
-    live: &mut LiveLeafMap,
-    object_effects: Option<&ObjectEffectSummaryMap>,
-) {
-    let effects = accesses.effects(func, inst, object_effects);
-    transfer_backward_effects(func, tracked, accesses, &effects, live);
 }
 
 pub(crate) fn transfer_backward_effects(
