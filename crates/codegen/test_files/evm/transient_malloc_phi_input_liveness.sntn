@@ -1,10 +1,12 @@
-#! evm.config: { opt: 1 }
+#! evm.config: { opt: s }
 #! evm.case: ok
 #!   calldata:
 #!   expect: return
 
 # `v1` is last used as the loop pointer's phi input from `block0`. It keeps the
 # first allocation live across the second, which must not reuse its memory.
+# Built for size, which does not rotate loops: rotating this one-trip loop
+# would fold it away, and with it the phi this test needs.
 target = "evm-ethereum-osaka"
 
 func public %entry() {

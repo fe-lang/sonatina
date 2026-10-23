@@ -11,6 +11,7 @@ pub mod jump_thread;
 pub mod known_bits_simplify;
 pub mod licm;
 pub mod load_store;
+pub mod loop_rotate;
 pub mod loop_strength_reduce;
 pub mod range_branch_simplify;
 pub mod sccp;
@@ -157,7 +158,7 @@ impl<'a> FileChecker<'a> {
 
     fn check_func(&mut self, parsed_module: &ParsedModule, func_ref: FuncRef) -> FileCheckResult {
         let comments = &parsed_module.debug.func_comments[func_ref];
-        let verify_cfg = VerifierConfig::for_level(VerificationLevel::Fast);
+        let verify_cfg = VerifierConfig::for_level(VerificationLevel::Full);
 
         let (func_ir, func_name, verify_err) =
             parsed_module.module.func_store.modify(func_ref, |func| {

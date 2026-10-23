@@ -6,94 +6,53 @@ input_file: test_files/evm/fe_hash2_repro_loop_direct_const_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 132 bytes
-  total: 132 bytes
+  section runtime: 93 bytes
+  total: 93 bytes
 
 functions:
-  mem: global_dyn_base=0x60 arena_base=0x0 scratch_peak_words=3 stable_chain_peak_words=0
-  __repro_runtime_entry: ir_blocks=6 ir_insts=20 vcode_ops=51 fixups=6 imm_bytes=13
-    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
+  mem: global_dyn_base=0x20 arena_base=0x0 scratch_peak_words=1 stable_chain_peak_words=0
+  __repro_runtime_entry: ir_blocks=3 ir_insts=9 vcode_ops=23 fixups=3 imm_bytes=5
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21175 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=175
+  case ok: calldata_len=0 success reason=Return gas_used=21066 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=66
 
 
 --------------- DEBUG ---------------
 
 // func private %__repro_runtime_entry()
   block0 P=[] T=[]
-    // v3.i256 = sym_addr $__fe_const_data_0;
+    // v0.i256 = sym_addr $__fe_const_data_0;
+    - stack=[]
+      sym_addr [] -> v0
+    // evm_code_copy 0.i256 v0 32.i256;
+    - stack=[v0], last_use=[v0]
+      pre: [PUSH(32), SWAP1, PUSH(0)]
+      evm_code_copy [0, v0, 32]
+    // v3.i256 = sym_addr $__fe_const_data_1;
     - stack=[]
       sym_addr [] -> v3
-    // evm_code_copy 64.i256 v3 32.i256;
+    // evm_code_copy 0.i256 v3 32.i256;
     - stack=[v3], last_use=[v3]
-      pre: [PUSH(32), SWAP1, PUSH(64)]
-      evm_code_copy [64, v3, 32]
-    // v5.i256 = evm_mload 64.i256;
+      pre: [PUSH(32), SWAP1, PUSH(0)]
+      evm_code_copy [0, v3, 32]
+    // v4.i256 = evm_mload 0.i256;
     - stack=[]
-      pre: [PUSH(64)]
-      evm_mload [64] -> v5
-    // evm_mstore 32.i256 v5;
-    - stack=[v5], last_use=[v5]
-      pre: [PUSH(32)]
-      evm_mstore [32, v5]
-    // v6.i256 = sym_addr $__fe_const_data_1;
-    - stack=[]
-      sym_addr [] -> v6
-    // jump block1;
-    - stack=[v6]
-      exit(block1): [PUSH(0), PUSH(32)]
-      jump -> block1
-  block1 P=[v0, v1] T=[v6]
-    // v8.i256 = lt v1 1.i256;
-    - stack=[v0, v1, v6]
-      pre: [PUSH(1), DUP3]
-      lt [v1, 1] -> v8
-    // br v8 block2 block3;
-    - stack=[v8, v0, v1, v6]
-      br [v8] -> [block2, block3]
-  block2 P=[] T=[v1, v6]
-    inherited from block1: [v0x, v1, v6]
-    // evm_code_copy 64.i256 v6 32.i256;
-    - stack=[v0x, v1, v6]
-      cleanup: [POP]
-      pre: [PUSH(32), DUP3, PUSH(64)]
-      evm_code_copy [64, v6, 32]
-    // v10.i256 = evm_mload 64.i256;
-    - stack=[v1, v6]
-      pre: [PUSH(64)]
-      evm_mload [64] -> v10
-    // evm_mstore 0.i256 v10;
-    - stack=[v10, v1, v6], last_use=[v10]
       pre: [PUSH(0)]
-      evm_mstore [0, v10]
-    // v11.i256 = add v1 1.i256;
-    - stack=[v1, v6], last_use=[v1]
-      pre: [PUSH(1)]
-      add [1, v1] -> v11
-    // jump block1;
-    - stack=[v11, v6]
-      exit(block1): [PUSH(0)]
-      jump -> block1
-  block3 P=[] T=[v0]
-    inherited from block1: [v0, v1x, v6x]
-    // v12.i256 = evm_mload v0;
-    - stack=[v0, v1x, v6x], last_use=[v0]
-      cleanup: [SWAP2, POP, POP]
-      evm_mload [v0] -> v12
-    // v14.i256 = eq v12 2.i256;
-    - stack=[v12], last_use=[v12]
+      evm_mload [0] -> v4
+    // v6.i256 = eq v4 2.i256;
+    - stack=[v4], last_use=[v4]
       pre: [PUSH(2)]
-      eq [2, v12] -> v14
-    // br v14 block5 block4;
-    - stack=[v14]
-      br [v14] -> [block5, block4]
-  block4 P=[] T=[]
+      eq [2, v4] -> v6
+    // br v6 block2 block1;
+    - stack=[v6]
+      br [v6] -> [block2, block1]
+  block1 P=[] T=[]
     // evm_revert 0.i256 0.i256;
     - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
-  block5 P=[] T=[]
+  block2 P=[] T=[]
     // evm_return 0.i256 0.i256;
     - stack=[]
       pre: [PUSH(0), PUSH(0)]
@@ -102,58 +61,27 @@ evm:
 // func private %__repro_runtime_entry()
 __repro_runtime_entry:
   block0:
-    PUSH0 0x0 (0)  // v3.i256 = sym_addr $__fe_const_data_0;
-    PUSH1 0x20 (32)  // evm_code_copy 64.i256 v3 32.i256;
+    PUSH0 0x0 (0)  // v0.i256 = sym_addr $__fe_const_data_0;
+    PUSH1 0x20 (32)  // evm_code_copy 0.i256 v0 32.i256;
     SWAP1
-    PUSH1 0x40 (64)
+    PUSH0
     CODECOPY
-    PUSH1 0x40 (64)  // v5.i256 = evm_mload 64.i256;
+    PUSH0 0x0 (0)  // v3.i256 = sym_addr $__fe_const_data_1;
+    PUSH1 0x20 (32)  // evm_code_copy 0.i256 v3 32.i256;
+    SWAP1
+    PUSH0
+    CODECOPY
+    PUSH0  // v4.i256 = evm_mload 0.i256;
     MLOAD
-    PUSH1 0x20 (32)  // evm_mstore 32.i256 v5;
-    MSTORE
-    PUSH0 0x0 (0)  // v6.i256 = sym_addr $__fe_const_data_1;
-    PUSH0  // jump block1;
-    PUSH1 0x20 (32)
-  block1:
-    JUMPDEST
-    PUSH1 0x1 (1)  // v8.i256 = lt v1 1.i256;
-    DUP3
-    LT
-    PUSH1 block2  // br v8 block2 block3;
-    JUMPI
-  block3:
-    SWAP2  // v12.i256 = evm_mload v0;
-    POP
-    POP
-    MLOAD
-    PUSH1 0x2 (2)  // v14.i256 = eq v12 2.i256;
+    PUSH1 0x2 (2)  // v6.i256 = eq v4 2.i256;
     EQ
-    PUSH1 block5  // br v14 block5 block4;
+    PUSH1 block2  // br v6 block2 block1;
     JUMPI
-    PUSH1 block4
-    JUMP
-  block2:
-    JUMPDEST
-    POP  // evm_code_copy 64.i256 v6 32.i256;
-    PUSH1 0x20 (32)
-    DUP3
-    PUSH1 0x40 (64)
-    CODECOPY
-    PUSH1 0x40 (64)  // v10.i256 = evm_mload 64.i256;
-    MLOAD
-    PUSH0  // evm_mstore 0.i256 v10;
-    MSTORE
-    PUSH1 0x1 (1)  // v11.i256 = add v1 1.i256;
-    ADD
-    PUSH0  // jump block1;
-    PUSH1 block1
-    JUMP
-  block4:
-    JUMPDEST
+  block1:
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
-  block5:
+  block2:
     JUMPDEST
     PUSH0  // evm_return 0.i256 0.i256;
     PUSH0

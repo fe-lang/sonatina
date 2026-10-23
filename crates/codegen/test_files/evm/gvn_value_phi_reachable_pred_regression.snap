@@ -15,5 +15,5 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case even: calldata_len=32 success reason=Return gas_used=21429 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=289
-  case odd: calldata_len=32 success reason=Return gas_used=21387 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=247
+  case even: calldata_len=32 success reason=Return gas_used=21383 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=243
+  case odd: calldata_len=32 success reason=Return gas_used=21341 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=201
