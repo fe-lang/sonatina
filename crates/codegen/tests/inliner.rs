@@ -340,6 +340,59 @@ func public %caller(v0.i1) -> i32 {
 }
 
 #[test]
+fn full_inliner_does_not_mutate_caller_on_unresolved_phi_ref() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %bad(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i32 = phi (v2 block1) (3.i32 block2);
+        return v1;
+
+    block4:
+        v2.i32 = add 1.i32 2.i32;
+        jump block3;
+}
+
+func public %caller(v0.i1) -> i32 {
+    block0:
+        v1.i32 = call %bad v0;
+        return v1;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let caller_ref = find_func(module, "caller");
+    let before = module.func_store.view(caller_ref, |func| {
+        FuncWriter::new(caller_ref, func).dump_string()
+    });
+
+    let stats = Inliner::new(full_only_inliner_test_config()).run(module);
+
+    let after = module.func_store.view(caller_ref, |func| {
+        FuncWriter::new(caller_ref, func).dump_string()
+    });
+
+    assert_eq!(
+        before, after,
+        "caller should not be mutated when a callee phi refers to an unreachable definition"
+    );
+    assert_eq!(stats.full_calls_inlined, 0);
+}
+
+#[test]
 fn full_inliner_clones_multi_result_body_and_returns() {
     let source = r#"
 target = "evm-ethereum-osaka"

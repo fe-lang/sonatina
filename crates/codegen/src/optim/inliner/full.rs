@@ -4,7 +4,6 @@ use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Inst, InstId, Module, Type, Value, ValueId,
     module::FuncRef, visitor::Visitor,
 };
-use sonatina_verifier::{VerifierConfig, verify_function};
 
 use crate::cfg_edit::{CfgEditor, CleanupMode};
 
@@ -114,7 +113,7 @@ pub(super) fn try_inline_callsite_full(
 
     let reachable: FxHashSet<BlockId> = rpo.iter().copied().collect();
     if !validated_callees.contains(&callee_key) {
-        validate_full_inline_callee_rewriteability(module, callee_ref, callee, &rpo, &reachable)?;
+        validate_full_inline_callee_rewriteability(callee, &rpo, &reachable)?;
         validated_callees.insert(callee_key);
     }
 
@@ -223,7 +222,7 @@ pub(super) fn try_inline_callsite_full(
                     args.iter()
                         .map(|&value| {
                             map_or_materialize(callee, editor.func_mut(), &mut value_map, value)
-                                .expect("verified return value should rewrite")
+                                .expect("validated return value should rewrite")
                         })
                         .collect()
                 })
@@ -260,7 +259,7 @@ pub(super) fn try_inline_callsite_full(
     for fixup in &phi_fixups {
         let mapped = *value_map
             .get(&fixup.old_value)
-            .expect("verified phi fixup should resolve");
+            .expect("validated phi fixup should resolve");
 
         let func = editor.func_mut();
         func.dfg.edit_phi(fixup.phi_inst, |phi| {
@@ -365,6 +364,7 @@ struct OperandValidator<'a> {
     reachable: &'a FxHashSet<BlockId>,
     arg_values: &'a FxHashSet<ValueId>,
     seen_values: &'a FxHashSet<ValueId>,
+    phi_forward_refs: &'a mut Vec<ValueId>,
     mode: ValueValidationMode,
     ok: bool,
 }
@@ -378,14 +378,11 @@ impl OperandValidator<'_> {
                     self.ok = false;
                 }
             }
-            Value::Inst { .. } => match self.mode {
-                ValueValidationMode::RequireMapped => {
-                    if !self.seen_values.contains(&value) {
-                        self.ok = false;
-                    }
-                }
-                ValueValidationMode::AllowForwardRefsInPhi => {}
+            Value::Inst { .. } if !self.seen_values.contains(&value) => match self.mode {
+                ValueValidationMode::RequireMapped => self.ok = false,
+                ValueValidationMode::AllowForwardRefsInPhi => self.phi_forward_refs.push(value),
             },
+            Value::Inst { .. } => {}
         }
     }
 }
@@ -402,30 +399,22 @@ impl Visitor for OperandValidator<'_> {
     }
 }
 
+/// Checks what cloning `callee`'s reachable blocks relies on: every reachable
+/// block ends in a terminator, every block operand is reachable, and every
+/// value operand is an argument, a constant, or a result defined earlier in
+/// reverse post-order. A phi operand may instead be a result of a later
+/// reachable block. A callee that passes cannot fail partway through the
+/// rewrite. Other malformations are copied as they are and left to the module
+/// verifier.
 fn validate_full_inline_callee_rewriteability(
-    module: &Module,
-    callee_ref: FuncRef,
     callee: &Function,
     rpo: &[BlockId],
     reachable: &FxHashSet<BlockId>,
 ) -> Result<(), FullInlineFail> {
-    if verify_function(
-        &module.ctx,
-        callee_ref,
-        callee,
-        &VerifierConfig {
-            check_dominance: true,
-            ..VerifierConfig::default()
-        },
-    )
-    .has_errors()
-    {
-        return Err(FullInlineFail::MalformedCallee);
-    }
-
     let layout_blocks: FxHashSet<BlockId> = callee.layout.iter_block().collect();
     let arg_values: FxHashSet<ValueId> = callee.arg_values.iter().copied().collect();
     let mut seen_values: FxHashSet<ValueId> = arg_values.clone();
+    let mut phi_forward_refs = Vec::new();
 
     for &block in rpo {
         if !layout_blocks.contains(&block) {
@@ -450,6 +439,7 @@ fn validate_full_inline_callee_rewriteability(
                 reachable,
                 arg_values: &arg_values,
                 seen_values: &seen_values,
+                phi_forward_refs: &mut phi_forward_refs,
                 mode: if is_phi {
                     ValueValidationMode::AllowForwardRefsInPhi
                 } else {
@@ -473,6 +463,7 @@ fn validate_full_inline_callee_rewriteability(
             reachable,
             arg_values: &arg_values,
             seen_values: &seen_values,
+            phi_forward_refs: &mut phi_forward_refs,
             mode: ValueValidationMode::RequireMapped,
             ok: true,
         };
@@ -482,7 +473,14 @@ fn validate_full_inline_callee_rewriteability(
         }
     }
 
-    Ok(())
+    if phi_forward_refs
+        .iter()
+        .all(|value| seen_values.contains(value))
+    {
+        Ok(())
+    } else {
+        Err(FullInlineFail::MalformedCallee)
+    }
 }
 
 fn map_or_materialize(
