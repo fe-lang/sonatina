@@ -22,7 +22,9 @@ pub enum CleanupMode {
 ///
 /// Edits update the CFG for only the blocks they change. Its predecessor and successor sets stay
 /// current, but its edge ids and the order of predecessor edges and exits drift from a fresh
-/// computation until [`Self::recompute_cfg`] or [`Self::into_cfg`].
+/// computation until [`Self::recompute_cfg`] or [`Self::into_cfg`]. Edits through
+/// [`Self::func_mut`] are invisible to the editor: one that changes a terminator must be followed
+/// by [`Self::recompute_cfg`] before [`Self::cfg`] is read.
 pub struct CfgEditor<'f> {
     func: &'f mut Function,
     cfg: ControlFlowGraph,
@@ -46,7 +48,10 @@ impl<'f> CfgEditor<'f> {
         self.func
     }
 
+    /// The function, for edits the editor doesn't track; [`Self::into_cfg`] rebuilds the CFG
+    /// after any.
     pub fn func_mut(&mut self) -> &mut Function {
+        self.cfg_is_fresh = false;
         self.func
     }
 
@@ -1296,6 +1301,40 @@ mod tests {
                 sorted(edges(&fresh, fresh.pred_edges_as_slice(block)))
             );
         }
+    }
+
+    #[test]
+    fn into_cfg_sees_terminators_edited_through_func_mut() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1) -> i32 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    return 1.i32;
+
+block2:
+    return 2.i32;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let [b0, b1, _] = func.layout.iter_block().collect::<Vec<_>>()[..] else {
+                panic!("three blocks");
+            };
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let term = editor.func().layout.last_inst_of(b0).unwrap();
+            let jump = Jump::new_unchecked(editor.func().inst_set(), b1);
+            editor.func_mut().dfg.replace_inst(term, Box::new(jump));
+
+            let cfg = editor.into_cfg();
+            assert_eq!(cfg.succs_as_slice(b0), &[b1]);
+            assert_cfg_matches_function(func, &cfg);
+        });
     }
 
     #[test]
