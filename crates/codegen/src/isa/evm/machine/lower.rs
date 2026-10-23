@@ -133,6 +133,8 @@ struct FuncLowerCtx<'a> {
     current_block: Option<BlockId>,
     active_source_inst: Option<sonatina_ir::InstId>,
     pending_phis: Vec<(sonatina_ir::InstId, sonatina_ir::InstId)>,
+    /// The free pointer on entry, stored back before each internal return.
+    entry_free_ptr: Option<ValueId>,
 }
 
 fn lower_function(
@@ -161,6 +163,7 @@ fn lower_function(
         current_block: None,
         active_source_inst: None,
         pending_phis: Vec::new(),
+        entry_free_ptr: None,
     };
 
     ctx.initialize_map_slots();
@@ -235,6 +238,11 @@ impl FuncLowerCtx<'_> {
         for source_block in self.source_block_order.clone() {
             let start_block = self.machine_block(source_block)?;
             self.current_block = Some(start_block);
+            if self.placement.restores_free_ptr
+                && Some(source_block) == self.source.layout.entry_block()
+            {
+                self.entry_free_ptr = Some(self.emit_mload_abs(FREE_PTR_SLOT as u32));
+            }
             for source_inst in self.source.layout.iter_inst(source_block) {
                 if self.source.dfg.is_phi(source_inst) {
                     continue;
@@ -331,6 +339,16 @@ impl FuncLowerCtx<'_> {
                     .copied()
                     .map(|value| self.lower_value(value))
                     .collect::<Result<SmallVec<[_; 2]>, _>>()?;
+                if let Some(entry_free_ptr) = self.entry_free_ptr {
+                    let slot = self.i256_imm(FREE_PTR_SLOT as u32);
+                    let block = self
+                        .current_block
+                        .expect("free-pointer restore needs a current block");
+                    self.append_inst_no_result_to(
+                        block,
+                        evm::EvmMstore::new(self.is, slot, entry_free_ptr),
+                    );
+                }
                 self.insert_no_result(
                     source_inst,
                     control_flow::Return::new(self.is, control_flow::ReturnArgs::from(args)),

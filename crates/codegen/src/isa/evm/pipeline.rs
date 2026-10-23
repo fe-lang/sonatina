@@ -27,8 +27,7 @@ use sonatina_ir::{Module, module::FuncRef};
 
 use super::{
     EvmBackend, LateCleanupProfile, PtrEscapeSummaries, collect_unsupported_evm_calls,
-    compute_ptr_escape_summaries, prepare_free_ptr_restore, promote_local_mallocs,
-    validate_supported_lowering_ir,
+    compute_ptr_escape_summaries, promote_local_mallocs, validate_supported_lowering_ir,
 };
 
 pub(crate) struct EvmPipelineArtifacts {
@@ -306,32 +305,6 @@ impl EvmPipelineContext<'_> {
     }
 
     fn run_memory_legalization(&mut self) -> Result<(), String> {
-        self.ptr_escape = Some(compute_ptr_escape_summaries(
-            self.module(),
-            &self.funcs,
-            &self.backend.isa,
-        ));
-        let ptr_escape = self
-            .ptr_escape
-            .as_ref()
-            .ok_or_else(|| "missing ptr escape summaries before free-ptr restore".to_string())?;
-        {
-            let module = self.module();
-            let module_ctx = &module.ctx;
-            let backend = self.backend;
-            for &func in &self.funcs {
-                let _span = trace_span!(
-                    "sonatina.codegen.evm.prepare_free_ptr_restore.func",
-                    func_ref = func.as_u32()
-                )
-                .entered();
-                module.func_store.modify(func, |function| {
-                    prepare_free_ptr_restore(function, module_ctx, backend, ptr_escape);
-                });
-            }
-        }
-        self.func_behavior_dirty = true;
-
         {
             let module = self.module();
             let module_ctx = &module.ctx;

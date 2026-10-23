@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2136
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/loops.sntn
 ---
@@ -129,7 +130,7 @@ __Bench_runtime:
     DUP2  // v27.i256 = lt v26 v75;
     DUP2
     LT
-    PUSH1 block9  // br v27 block7 block65;
+    PUSH1 block9  // br v27 block8 block65;
     JUMPI
   block65:
     SWAP1  // jump block12;
@@ -255,7 +256,7 @@ __Bench_runtime:
     DUP4  // v44.i256 = lt v82 v41;
     DUP2
     LT
-    PUSH1 block30  // br v44 block30 block74;
+    PUSH1 block31  // br v44 block31 block74;
     JUMPI
   block74:
     POP  // jump block35;
@@ -264,7 +265,7 @@ __Bench_runtime:
     POP
     PUSH1 block35
     JUMP
-  block30:
+  block31:
     JUMPDEST
     SWAP1  // jump block32;
     PUSH1 block32
@@ -306,7 +307,7 @@ __Bench_runtime:
     DUP2  // v84.i256 = lt v83 v59;
     DUP2
     LT
-    PUSH1 block41  // br v84 block39 block77;
+    PUSH1 block41  // br v84 block40 block77;
     JUMPI
   block77:
     SWAP1  // jump block44;
@@ -355,9 +356,9 @@ __Bench_runtime:
     DUP3  // v86.i256 = gt v68 v65;
     DUP2
     GT
-    PUSH1 block80  // br v86 block80 block48;
+    PUSH1 block80  // br v86 block80 block49;
     JUMPI
-  block48:
+  block49:
     SWAP1  // jump block50;
     PUSH1 block50
     JUMP
@@ -417,7 +418,7 @@ __Bench_runtime:
     DUP4  // v99.i256 = lt v98 v89;
     DUP2
     LT
-    PUSH1 block57  // br v99 block57 block83;
+    PUSH1 block58  // br v99 block58 block83;
     JUMPI
   block83:
     POP  // jump block62;
@@ -426,7 +427,7 @@ __Bench_runtime:
     POP
     PUSH1 block62
     JUMP
-  block57:
+  block58:
     JUMPDEST
     SWAP1  // jump block59;
     PUSH1 block59

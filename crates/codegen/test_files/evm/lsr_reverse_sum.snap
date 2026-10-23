@@ -7,16 +7,16 @@ input_file: test_files/evm/lsr_reverse_sum.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 83 bytes
-  total: 83 bytes
+  section runtime: 85 bytes
+  total: 85 bytes
 
 functions:
   mem: global_dyn_base=0x60 arena_base=0x60 scratch_peak_words=0 stable_chain_peak_words=0
-  entry: ir_blocks=4 ir_insts=22 vcode_ops=55 fixups=1 imm_bytes=24
+  entry: ir_blocks=4 ir_insts=21 vcode_ops=57 fixups=1 imm_bytes=23
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21390 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=390
+  case ok: calldata_len=0 success reason=Return gas_used=21386 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=386
 
 
 --------------- DEBUG ---------------
@@ -27,16 +27,16 @@ entry:
     PUSH1 0x60 (96)
     PUSH1 0x40 (64)
     MSTORE
-    PUSH1 0x1 (1)  // evm_mstore v2 v3;
+    PUSH1 0x1 (1)  // evm_mstore v3 v4;
     PUSH1 0x60 (96)
     MSTORE
-    PUSH1 0x2 (2)  // evm_mstore 128.i256 v6;
+    PUSH1 0x2 (2)  // evm_mstore 128.i256 v7;
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x3 (3)  // evm_mstore 160.i256 v9;
+    PUSH1 0x3 (3)  // evm_mstore 160.i256 v10;
     PUSH1 0xa0 (160)
     MSTORE
-    PUSH1 0x4 (4)  // evm_mstore 192.i256 v11;
+    PUSH1 0x4 (4)  // evm_mstore 192.i256 4.i256;
     PUSH1 0xc0 (192)
     MSTORE
     PUSH1 0x5 (5)  // evm_mstore 224.i256 5.i256;
@@ -51,33 +51,35 @@ entry:
     PUSH1 0x8 (8)  // evm_mstore 320.i256 8.i256;
     PUSH2 0x140 (320)
     MSTORE
-    PUSH0  // jump block2;
+    PUSH2 0x140 (320)  // jump block2;
+    PUSH0
     PUSH0
   block2:
     JUMPDEST
-    DUP1  // v24.i256 = sub 7.i256 v0;
-    PUSH1 0x7 (7)
-    SUB
-    PUSH1 0x5 (5)  // v25.i256 = shl 5.i256 v24;
-    SHL
-    PUSH1 0x60 (96)  // v26.i256 = add v2 v25;
-    ADD
-    MLOAD  // v27.i256 = evm_mload v26;
-    SWAP1  // v28.i256 = add v1 v27;
+    DUP3  // v26.i256 = evm_mload v2;
+    MLOAD
+    SWAP1  // v27.i256 = add v1 v26;
     SWAP2
     ADD
-    SWAP1  // v29.i256 = add v0 v3;
+    SWAP1  // v28.i256 = add v0 v4;
     PUSH1 0x1 (1)
     ADD
-    PUSH1 0x4 (4)  // v30.i256 = lt v29 v11;
+    PUSH1 0x4 (4)  // v29.i256 = lt v28 4.i256;
     DUP2
     LT
-    PUSH1 block2  // br v30 block1 block3;
+    PUSH1 0x20 (32)  // v30.i256 = sub v2 v5;
+    SWAP1
+    SWAP4
+    SUB
+    SWAP3  // br v29 block1 block3;
+    PUSH1 block2
     JUMPI
   block3:
-    POP  // evm_mstore 0.i256 v28;
+    POP  // evm_mstore 0.i256 v27;
+    SWAP1
+    POP
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 v4;
+    PUSH1 0x20 (32)  // evm_return 0.i256 v5;
     PUSH0
     RETURN

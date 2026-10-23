@@ -53,7 +53,6 @@ use super::{
         placement::{MemoryPlacementSection, compute_semantic_memory_placement},
         prepare::{SectionStackifySearchCaches, prepare_machine_stackify_analyses},
     },
-    malloc_plan,
     memory_plan::{
         self, BackendSpillPlan, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan,
         ProgramMemoryPlan, STATIC_BASE, SemanticFuncPlan, WORD_BYTES, compute_abs_clobber_words,
@@ -238,7 +237,9 @@ pub(crate) fn function_free_ptr_slot_facts(
     let terminal_payload_scratch = terminal_payload_scratch_insts(function, backend);
     // A write on a path that never returns cannot change the free pointer the
     // caller continues with, so only writes that reach a return count.
-    let returning = blocks_reaching_return(function, backend);
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+    let returning = blocks_reaching_return(function, &cfg);
     let mut facts = FreePtrSlotFacts::default();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
@@ -273,10 +274,10 @@ pub(crate) fn function_free_ptr_slot_facts(
     facts
 }
 
-/// Whether `inst` has the shape of the internal-return restore: a store into
-/// the free-pointer slot of the value the entry block's first instruction
-/// loaded from it, or that load when such stores are all that use it. User
-/// code of this shape is exempt too, wherever its stores sit.
+/// Whether `inst` has the shape of the restore machine lowering emits for
+/// internal returns: a store into the free-pointer slot of the value the entry
+/// block's first instruction loaded from it, or that load when such stores
+/// are all that use it. Its stores may sit anywhere.
 fn is_entry_free_ptr_restore(function: &Function, backend: &EvmBackend, inst: InstId) -> bool {
     let resolve = |inst: InstId| backend.isa.inst_set().resolve_inst(function.dfg.inst(inst));
     let is_slot = |addr: ValueId| value_imm_u32(function, addr) == Some(FREE_PTR_SLOT as u32);
@@ -306,27 +307,24 @@ fn is_entry_free_ptr_restore(function: &Function, backend: &EvmBackend, inst: In
 }
 
 /// The blocks from which a return to the caller is reachable.
-fn blocks_reaching_return(function: &Function, backend: &EvmBackend) -> FxHashSet<BlockId> {
-    let mut cfg = ControlFlowGraph::new();
-    cfg.compute(function);
-    let mut reaching: FxHashSet<BlockId> = function
+pub(crate) fn blocks_reaching_return(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+) -> FxHashSet<BlockId> {
+    let mut reaching = FxHashSet::default();
+    let mut pending: Vec<BlockId> = function
         .layout
         .iter_block()
         .filter(|&block| {
-            function.layout.last_inst_of(block).is_some_and(|inst| {
-                matches!(
-                    backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-                    EvmInstKind::Return(_)
-                )
-            })
+            function
+                .layout
+                .last_inst_of(block)
+                .is_some_and(|inst| function.dfg.is_return(inst))
         })
         .collect();
-    let mut pending: Vec<_> = reaching.iter().copied().collect();
     while let Some(block) = pending.pop() {
-        for &pred in cfg.preds_of(block) {
-            if reaching.insert(pred) {
-                pending.push(pred);
-            }
+        if reaching.insert(block) {
+            pending.extend(cfg.preds_of(block).copied());
         }
     }
     reaching
@@ -1523,57 +1521,6 @@ pub(crate) fn compute_return_escape_caller_clamp_words(
     }
 
     clamp_words
-}
-
-pub(crate) fn prepare_free_ptr_restore(
-    function: &mut Function,
-    module: &ModuleCtx,
-    backend: &EvmBackend,
-    ptr_escape: &PtrEscapeSummaries,
-) {
-    let _span = trace_span!("sonatina.codegen.evm.prepare_free_ptr_restore").entered();
-    let mut did_insert = false;
-    loop {
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(function);
-
-        let mut splitter = CriticalEdgeSplitter::new();
-        splitter.run(function, &mut cfg);
-
-        let mut liveness = Liveness::new();
-        liveness.compute(function, &cfg);
-
-        let mut inst_liveness = InstLiveness::new();
-        inst_liveness.compute(function, &cfg, &liveness);
-
-        let prov_info = compute_provenance(function, module, &backend.isa, ptr_escape);
-        let transient_mallocs = malloc_plan::compute_transient_mallocs(
-            function,
-            module,
-            &backend.isa,
-            ptr_escape,
-            &prov_info,
-            None,
-            &inst_liveness,
-        );
-
-        if !did_insert
-            && malloc_plan::should_restore_free_ptr_on_internal_returns(
-                function,
-                module,
-                &backend.isa,
-                ptr_escape,
-                &prov_info,
-                &transient_mallocs,
-            )
-        {
-            malloc_plan::insert_free_ptr_restore_on_internal_returns(function, &backend.isa);
-            did_insert = true;
-            continue;
-        }
-
-        break;
-    }
 }
 
 fn prepare_high_evm_pre_analysis(

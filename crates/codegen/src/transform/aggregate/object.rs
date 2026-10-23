@@ -821,8 +821,8 @@ object @Contract {
         prepared.module().func_store.view(entry, |func| {
             let dumped = FuncWriter::new(entry, func).dump_string();
             assert!(
-                dumped.contains("evm_mload 64.i256") && dumped.contains("evm_mstore 64.i256"),
-                "escaping stack materialization must force heap allocation in machine IR:\n{dumped}"
+                dumped.contains("evm_mload 64.i256"),
+                "escaping stack materialization must allocate from the heap in machine IR:\n{dumped}"
             );
         });
     }

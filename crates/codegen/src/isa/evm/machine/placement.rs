@@ -40,7 +40,7 @@ use super::{
         },
     },
     free_ptr_floor::{
-        ProgramFreePtrFloorInput, compute_free_ptr_write_summaries,
+        ProgramFreePtrFloorInput, compute_call_free_ptr_effects, compute_free_ptr_write_summaries,
         compute_program_free_ptr_floor_before_malloc,
     },
     heap_state::compute_exact_heap_base_before_malloc,
@@ -65,6 +65,9 @@ pub(crate) struct EvmFuncPlacementPlan {
     pub(crate) mem_plan: memory_plan::SemanticFuncPlan,
     pub(crate) malloc_placements: FxHashMap<InstId, MallocPlacement>,
     pub(crate) free_ptr_floor_before_malloc: FxHashMap<InstId, Option<u32>>,
+    /// Internal returns restore the free pointer the function was entered
+    /// with, releasing its own heap allocations.
+    pub(crate) restores_free_ptr: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,7 +188,7 @@ pub(crate) fn compute_semantic_memory_placement(
         .copied()
         .map(|func| {
             let analysis = expect_func_entry(analyses, func, "pre-analysis");
-            let (malloc_escape_kinds, transient_mallocs) =
+            let (malloc_escape_kinds, transient_mallocs, restores_free_ptr) =
                 module.func_store.view(func, |function| {
                     let escape_kinds = malloc_plan::compute_malloc_escape_kinds_for_function(
                         function,
@@ -200,19 +203,38 @@ pub(crate) fn compute_semantic_memory_placement(
                         &backend.isa,
                         ptr_escape,
                         &analysis.prov,
-                        Some(&transient_malloc_call_barriers),
+                        &transient_malloc_call_barriers,
                         &analysis.inst_liveness,
                     );
-                    (escape_kinds, transient)
+                    let restores_free_ptr =
+                        malloc_plan::should_restore_free_ptr_on_internal_returns(
+                            function,
+                            &module.ctx,
+                            &backend.isa,
+                            &analysis.cfg,
+                            ptr_escape,
+                            &analysis.prov,
+                            &transient,
+                        );
+                    (escape_kinds, transient, restores_free_ptr)
                 });
-            (func, malloc_escape_kinds, transient_mallocs)
+            (
+                func,
+                malloc_escape_kinds,
+                transient_mallocs,
+                restores_free_ptr,
+            )
         })
         .collect();
     annotations.sort_unstable_by_key(|(func, ..)| func.as_u32());
-    for (func, malloc_escape_kinds, transient_mallocs) in annotations {
+    let mut free_ptr_restoring_funcs = FxHashSet::default();
+    for (func, malloc_escape_kinds, transient_mallocs, restores_free_ptr) in annotations {
         if let Some(func_plan) = semantic_plan.funcs.get_mut(&func) {
             func_plan.malloc_escape_kinds = malloc_escape_kinds;
             func_plan.transient_mallocs = transient_mallocs;
+        }
+        if restores_free_ptr {
+            free_ptr_restoring_funcs.insert(func);
         }
     }
     let has_dynamic_frames = semantic_plan
@@ -443,7 +465,10 @@ pub(crate) fn compute_semantic_memory_placement(
             analyses,
             source_is: backend.isa.inst_set(),
             malloc_placements: &malloc_placements,
-            free_ptr_write_summaries: &free_ptr_write_summaries,
+            call_effects: &compute_call_free_ptr_effects(
+                &free_ptr_write_summaries,
+                &free_ptr_restoring_funcs,
+            ),
         });
     let func_placements = funcs
         .iter()
@@ -465,6 +490,7 @@ pub(crate) fn compute_semantic_memory_placement(
                     mem_plan: func_plan.clone(),
                     malloc_placements,
                     free_ptr_floor_before_malloc,
+                    restores_free_ptr: free_ptr_restoring_funcs.contains(&func),
                 },
             )
         })

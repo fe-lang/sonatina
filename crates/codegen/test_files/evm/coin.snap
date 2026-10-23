@@ -1985,20 +1985,20 @@ evm:
     - stack=[v1, v0, <RET>]
       pre: [PUSH(8192), DUP2]
       lt [v1, 8192] -> v9
-    // br v9 block5 block8;
+    // br v9 block8 block5;
     - stack=[v9, v1, v0, <RET>]
-      br [v9] -> [block5, block8]
-  block5 P=[] T=[v0]
+      br [v9] -> [block8, block5]
+  block5 P=[] T=[v1, v0]
+    inherited from block3: [v1, v0, <RET>]
+    // jump block6;
+    - stack=[v1, v0, <RET>]
+      jump -> block6
+  block8 P=[] T=[v0]
     inherited from block3: [v1x, v0, <RET>]
     // jump block6;
     - stack=[v1x, v0, <RET>]
       cleanup: [POP]
       exit(block6): [PUSH(8192)]
-      jump -> block6
-  block8 P=[] T=[v1, v0]
-    inherited from block3: [v1, v0, <RET>]
-    // jump block6;
-    - stack=[v1, v0, <RET>]
       jump -> block6
   block6 P=[v2] T=[v0]
     // v11.i256 = add v2 v0;
@@ -3675,10 +3675,10 @@ alloc:
     PUSH2 0x2000 (8192)  // v12.i256 = lt v3 v11;
     DUP2
     LT
-    ISZERO  // br v12 block5 block8;
+    ISZERO  // br v12 block8 block5;
     PUSH1 block6
     JUMPI
-  block5:
+  block8:
     POP  // jump block6;
     PUSH2 0x2000 (8192)
   block6:

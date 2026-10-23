@@ -193,18 +193,92 @@ fn free_ptr_restore_preserves_heap_published_by_a_callee() {
     ))
     .expect("module parses");
     let backend = osaka_backend();
-    let summaries =
-        compute_ptr_escape_summaries(&parsed.module, &parsed.module.funcs(), &backend.isa);
-    let forward = find_func(&parsed.module, "forward");
-    parsed.module.func_store.modify(forward, |function| {
-        let before = function.layout.iter_all_insts().count();
-        prepare_free_ptr_restore(function, &parsed.module.ctx, &backend, &summaries);
-        let after = function.layout.iter_all_insts().count();
-        assert_eq!(
-            before, after,
-            "callee's published allocation prevents heap restoration"
-        );
-    });
+    let entry = find_func(&parsed.module, "entry");
+    let placement = compute_test_memory_placement(&parsed.module, &backend, entry, &[]);
+    assert!(
+        !placement.funcs[&find_func(&parsed.module, "forward")].restores_free_ptr,
+        "callee's published allocation prevents heap restoration"
+    );
+}
+
+#[test]
+fn free_ptr_restore_follows_final_transient_mallocs() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %fill(v0.*i256) {
+block0:
+    mstore v0 1.i256 i256;
+    return;
+}
+
+func private %scratch() {
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    mstore v0 2.i256 i256;
+    return;
+}
+
+func private %transient() -> i256 {
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    call %fill v0;
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+func private %persistent() -> i256 {
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    call %fill v0;
+    call %scratch;
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+func private %reverting(v0.i1) -> i256 {
+block0:
+    br v0 block1 block2;
+block1:
+    v1.*i256 = evm_malloc 32.i256;
+    call %scratch;
+    mstore v1 3.i256 i256;
+    v2.i256 = ptr_to_int v1 i256;
+    evm_revert v2 32.i256;
+block2:
+    return 4.i256;
+}
+
+func public %entry(v0.i1) {
+block0:
+    v1.i256 = call %transient;
+    v2.i256 = call %persistent;
+    v3.i256 = call %reverting v0;
+    v4.i256 = add v1 v2;
+    v5.i256 = add v4 v3;
+    mstore 0.i256 v5 i256;
+    evm_return 0.i256 32.i256;
+}
+"#,
+    )
+    .expect("module parses");
+    let backend = osaka_backend();
+    let entry = find_func(&parsed.module, "entry");
+    let placement = compute_test_memory_placement(&parsed.module, &backend, entry, &[]);
+    let restores = |name| placement.funcs[&find_func(&parsed.module, name)].restores_free_ptr;
+    assert!(
+        !restores("transient"),
+        "a call that cannot allocate leaves the buffer transient, with nothing to release"
+    );
+    assert!(
+        restores("persistent"),
+        "an allocating call makes the buffer persistent, released on return"
+    );
+    assert!(
+        !restores("reverting"),
+        "a persistent buffer that no return follows needs no release"
+    );
 }
 
 fn first_memory_op(lowered: &LoweredFunction<OpCode>) -> Option<u8> {

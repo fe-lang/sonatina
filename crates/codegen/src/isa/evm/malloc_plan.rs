@@ -2,13 +2,9 @@ use cranelift_entity::SecondaryMap;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    AccessKind, AccessLoc, BlockId, Function, InstId, InstSetExt, Module, Type, Value, ValueId,
+    AccessKind, AccessLoc, BlockId, Function, InstId, InstSetExt, Module, Value, ValueId,
     cfg::ControlFlowGraph,
-    func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{
-        data::{Mload, Mstore},
-        evm::inst_set::EvmInstKind,
-    },
+    inst::evm::inst_set::EvmInstKind,
     isa::{
         Isa,
         evm::{Evm, space::MEMORY},
@@ -24,7 +20,7 @@ use super::{
         for_each_escape_event_at_inst,
     },
     memory_plan::SemanticFuncPlan,
-    prepare::memory_access_may_touch_free_ptr_slot,
+    prepare::{blocks_reaching_return, memory_access_may_touch_free_ptr_slot},
     private_malloc::PrivateMallocUseAnalysis,
     ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo},
@@ -90,17 +86,20 @@ pub(crate) fn compute_transient_malloc_call_barriers(
     )
 }
 
+/// Whether internal returns should restore the free pointer the function was
+/// entered with, releasing the heap a persistent malloc took on a path to
+/// one. Nothing that outlives the call may point into that heap.
 pub(crate) fn should_restore_free_ptr_on_internal_returns(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
+    cfg: &ControlFlowGraph,
     ptr_escape: &PtrEscapeSummaries,
     prov_info: &ProvenanceInfo,
     transient_mallocs: &FxHashSet<InstId>,
 ) -> bool {
-    let mut has_internal_return = false;
+    let reaches_return = blocks_reaching_return(function, cfg);
     let mut has_persistent_malloc = false;
-
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
@@ -113,16 +112,13 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
                 // by callees, even when no caller-owned pointer escapes.
                 return false;
             }
-            if matches!(data, EvmInstKind::Return(_)) {
-                has_internal_return = true;
-            }
-            if matches!(data, EvmInstKind::EvmMalloc(_)) && !transient_mallocs.contains(&inst) {
-                has_persistent_malloc = true;
-            }
+            has_persistent_malloc |= matches!(data, EvmInstKind::EvmMalloc(_))
+                && !transient_mallocs.contains(&inst)
+                && reaches_return.contains(&block);
         }
     }
 
-    if !has_internal_return || !has_persistent_malloc {
+    if !has_persistent_malloc {
         return false;
     }
 
@@ -144,57 +140,13 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
     true
 }
 
-pub(crate) fn insert_free_ptr_restore_on_internal_returns(function: &mut Function, isa: &Evm) {
-    let Some(entry) = function.layout.entry_block() else {
-        return;
-    };
-
-    let addr = function.dfg.make_imm_value(64i32);
-
-    let mut insert_loc = CursorLocation::BlockTop(entry);
-    for inst in function.layout.iter_inst(entry) {
-        if function.dfg.is_phi(inst) {
-            insert_loc = CursorLocation::At(inst);
-        } else {
-            break;
-        }
-    }
-
-    let mut cursor = InstInserter::at_location(insert_loc);
-    let load_inst = cursor.insert_inst_data(function, Mload::new(isa.inst_set(), addr, Type::I256));
-    let saved = cursor.make_result(function, load_inst, Type::I256);
-    cursor.attach_result(function, load_inst, saved);
-
-    let mut return_insts: Vec<(sonatina_ir::BlockId, InstId)> = Vec::new();
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            if matches!(
-                isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-                EvmInstKind::Return(_)
-            ) {
-                return_insts.push((block, inst));
-            }
-        }
-    }
-
-    for (block, ret_inst) in return_insts {
-        let prev = function.layout.prev_inst_of(ret_inst);
-        let loc = prev.map_or(CursorLocation::BlockTop(block), CursorLocation::At);
-        let mut cursor = InstInserter::at_location(loc);
-        let _ = cursor.insert_inst_data(
-            function,
-            Mstore::new(isa.inst_set(), addr, saved, Type::I256),
-        );
-    }
-}
-
 pub(crate) fn compute_transient_mallocs(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
     ptr_escape: &PtrEscapeSummaries,
     prov_info: &ProvenanceInfo,
-    call_barriers: Option<&TransientMallocCallBarriers>,
+    call_barriers: &TransientMallocCallBarriers,
     inst_liveness: &InstLiveness,
 ) -> FxHashSet<InstId> {
     let mut mallocs: FxHashSet<InstId> = FxHashSet::default();
@@ -272,13 +224,11 @@ pub(crate) fn compute_transient_mallocs(
             };
 
             let callee = call_info.callee();
-            let is_barrier = call_barriers.is_none_or(|barriers| {
-                *barriers.get(&callee).unwrap_or_else(|| {
-                    panic!(
-                        "missing transient malloc call barrier for callee {}",
-                        callee.as_u32()
-                    )
-                })
+            let is_barrier = *call_barriers.get(&callee).unwrap_or_else(|| {
+                panic!(
+                    "missing transient malloc call barrier for callee {}",
+                    callee.as_u32()
+                )
             });
             if !is_barrier {
                 continue;

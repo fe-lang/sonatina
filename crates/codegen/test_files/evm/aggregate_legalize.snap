@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 1937
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/aggregate_legalize.sntn
 ---
@@ -27,14 +28,14 @@ entry:
     CALLDATALOAD
     PUSH1 0x20 (32)  // v5.i256 = evm_calldata_load v4;
     CALLDATALOAD
-    DUP2  // br v2 block2 block4;
-    PUSH1 block2
+    DUP2  // br v2 block4 block2;
+    PUSH1 block4
     JUMPI
-  block4:
+  block2:
     DUP2  // jump block3;
     PUSH1 block3
     JUMP
-  block2:
+  block4:
     JUMPDEST
     DUP1  // jump block3;
   block3:
