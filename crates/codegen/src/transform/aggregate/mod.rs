@@ -4,7 +4,7 @@ mod alias_tests;
 mod arg_promotion;
 pub(crate) mod byval_object_abi;
 mod capture_state;
-mod cleanup;
+pub(crate) mod cleanup;
 pub(crate) mod combine;
 pub(crate) mod enum_lowering;
 pub(crate) mod legalize;
