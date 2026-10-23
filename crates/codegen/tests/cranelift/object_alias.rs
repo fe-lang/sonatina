@@ -225,6 +225,11 @@ block0:
             CraneliftJitBackend::new(),
         )
         .with_opt_level(level);
+        let report = verify_module(
+            compiler.optimize(),
+            &VerifierConfig::for_level(VerificationLevel::Full),
+        );
+        assert!(report.is_ok(), "{level:?}: {report}");
         let artifact = compiler.compile().unwrap_or_else(|errors| {
             panic!("destructured reference product at {level:?}: {errors:?}")
         });
