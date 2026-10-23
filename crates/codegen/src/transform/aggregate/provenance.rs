@@ -2350,15 +2350,18 @@ fn bitcast_projection_slice(
 }
 
 fn reference_element_ty(module: &ModuleCtx, ty: Type) -> Option<Type> {
-    match ty.resolve_compound(module)? {
+    let Type::Compound(cmpd) = ty else {
+        return None;
+    };
+    module.with_ty_store(|store| match store.resolve_compound(cmpd) {
         CompoundType::Ptr(elem) | CompoundType::ObjRef(elem) | CompoundType::ConstRef(elem) => {
-            Some(elem)
+            Some(*elem)
         }
         CompoundType::Struct(_)
         | CompoundType::Array { .. }
         | CompoundType::Enum(_)
         | CompoundType::Func { .. } => None,
-    }
+    })
 }
 
 fn projection_slice_can_view_as(

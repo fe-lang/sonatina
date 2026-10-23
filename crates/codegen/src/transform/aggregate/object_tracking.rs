@@ -4,6 +4,7 @@ use sonatina_ir::{
     Function, InstId, Type, ValueId,
     inst::{control_flow, data},
     module::ModuleCtx,
+    types::CompoundType,
 };
 
 use super::{
@@ -374,10 +375,13 @@ pub(crate) fn single_result_value(func: &Function, inst: InstId) -> Option<Value
 }
 
 pub(crate) fn objref_element_ty(ctx: &ModuleCtx, ty: Type) -> Option<Type> {
-    let sonatina_ir::types::CompoundType::ObjRef(elem) = ty.resolve_compound(ctx)? else {
+    let Type::Compound(cmpd) = ty else {
         return None;
     };
-    Some(elem)
+    ctx.with_ty_store(|store| match store.resolve_compound(cmpd) {
+        CompoundType::ObjRef(elem) => Some(*elem),
+        _ => None,
+    })
 }
 
 impl TrackedObject {
