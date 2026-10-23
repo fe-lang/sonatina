@@ -189,3 +189,102 @@ block0:
         );
     }
 }
+
+// A flattened product argument may be reassembled and destructured in its
+// callee without causing the caller's stack reference to escape.
+#[test]
+fn destructured_reference_product_preserves_native_stack_lifetime() {
+    let source = r#"
+type @parts = {i64, objref<i64>};
+func inline(never) private %read_product(v0.i64, v1.objref<i64>) -> i64 {
+block0:
+    v2.objref<@parts> = obj.alloc @parts;
+    v3.@parts = insert_value undef.@parts 0.i8 v0;
+    v4.@parts = insert_value v3 1.i8 v1;
+    v5.objref<i64> = obj.proj v2 0.i8;
+    v6.i64 = extract_value v4 0.i8;
+    obj.store v5 v6;
+    v7.objref<objref<i64>> = obj.proj v2 1.i8;
+    v8.objref<i64> = extract_value v4 1.i8;
+    obj.store v7 v8;
+    v9.i64 = obj.load v8;
+    v10.i64 = add v6 v9;
+    return v10;
+}
+func public %entry() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 3.i64;
+    v1.i64 = call %read_product 2.i64 v0;
+    return v1;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let mut compiler = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level);
+        let report = verify_module(
+            compiler.optimize(),
+            &VerifierConfig::for_level(VerificationLevel::Full),
+        );
+        assert!(report.is_ok(), "{level:?}: {report}");
+        let artifact = compiler.compile().unwrap_or_else(|errors| {
+            panic!("destructured reference product at {level:?}: {errors:?}")
+        });
+        let entry: unsafe extern "C" fn() -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("entry").unwrap()) };
+        assert_eq!(unsafe { entry() }, 5, "{level:?}");
+    }
+}
+
+#[test]
+fn destructured_reference_product_cannot_capture_a_local_reference() {
+    let source = r#"
+type @parts = {i64, objref<i64>};
+type @holder = {objref<i64>};
+func inline(never) private %capture_product(v0.objref<@holder>) -> i64 {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v1 7.i64;
+    v2.@parts = insert_value undef.@parts 1.i8 v1;
+    v3.objref<i64> = extract_value v2 1.i8;
+    v4.objref<objref<i64>> = obj.proj v0 0.i8;
+    obj.store v4 v3;
+    return 1.i64;
+}
+func public %entry() -> i64 {
+block0:
+    v0.objref<@holder> = obj.alloc @holder;
+    v1.i64 = call %capture_product v0;
+    v2.objref<objref<i64>> = obj.proj v0 0.i8;
+    v3.objref<i64> = obj.load v2;
+    v4.i64 = obj.load v3;
+    v5.i64 = add v1 v4;
+    return v5;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let mut compiler = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level);
+        let report = verify_module(
+            compiler.optimize(),
+            &VerifierConfig::for_level(VerificationLevel::Full),
+        );
+        assert!(report.is_ok(), "{level:?}: {report}");
+        let errors = match compiler.compile() {
+            Ok(_) => panic!("{level:?}: product captured a local reference"),
+            Err(errors) => errors,
+        };
+        assert!(
+            errors.iter().any(|error| error.to_string().contains(
+                "native reference lifetime in capture_product: unproven escape of local object"
+            )),
+            "{level:?}: {errors:?}"
+        );
+    }
+}
