@@ -565,6 +565,18 @@ pub(super) fn loaded_field_reconstruction(
     func: &Function,
     scalarizable_returns: &[bool],
 ) -> (usize, Vec<bool>) {
+    // Most callees have no loaded field to reconstruct anywhere; skip the CFG.
+    if !func
+        .layout
+        .iter_all_insts()
+        .any(|inst| func.dfg.downcast::<&data::ObjLoad>(inst).is_some())
+        || !func
+            .layout
+            .iter_all_insts()
+            .any(|inst| func.dfg.downcast::<&data::InsertValue>(inst).is_some())
+    {
+        return (0, Vec::new());
+    }
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(func);
     let insts: Vec<_> = cfg
