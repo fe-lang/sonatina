@@ -82,6 +82,38 @@ impl ExactEnumSlice {
         self.0.root()
     }
 }
+/// Object facts for the function as it stands; any edit makes them stale.
+struct CombineObjectFacts {
+    accesses: ObjectAccessFacts,
+    tracked: SecondaryMap<ValueId, Option<TrackedObject>>,
+    effects: FxHashMap<InstId, ObjectInstEffects>,
+}
+
+impl CombineObjectFacts {
+    fn compute(
+        func: &Function,
+        object_effects: Option<&ObjectEffectSummaryMap>,
+        layout_cache: &mut shape::AggregateLayoutCache,
+    ) -> Self {
+        let accesses = ObjectAccessFacts::new(func, object_effects);
+        let tracked = accesses.tracked_all(func, layout_cache);
+        let effects = accesses.effects_by_inst(func, object_effects);
+        Self {
+            accesses,
+            tracked,
+            effects,
+        }
+    }
+
+    fn aliases(&self) -> EnumAliasContext<'_> {
+        EnumAliasContext {
+            tracked: &self.tracked,
+            accesses: &self.accesses,
+            effects: &self.effects,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct EnumAliasContext<'a> {
     tracked: &'a SecondaryMap<ValueId, Option<TrackedObject>>,
@@ -132,18 +164,12 @@ impl AggregateCombine {
         self.layout_cache.clear();
         func.rebuild_users();
 
+        let mut facts = CombineObjectFacts::compute(func, object_effects, &mut self.layout_cache);
         loop {
             let mut iter_changed = false;
             self.replacements.clear();
             let value_facts = AggregateValueFacts::compute(func);
-            let accesses = ObjectAccessFacts::new(func, object_effects);
-            let tracked = accesses.tracked_all(func, &mut self.layout_cache);
-            let effects = accesses.effects_by_inst(func, object_effects);
-            let enum_aliases = EnumAliasContext {
-                tracked: &tracked,
-                accesses: &accesses,
-                effects: &effects,
-            };
+            let enum_aliases = facts.aliases();
             let enum_entry_facts = compute_enum_object_entry_facts(func, enum_aliases);
             let blocks: Vec<_> = func.layout.iter_block().collect();
             for block in blocks {
@@ -169,14 +195,17 @@ impl AggregateCombine {
             }
             if iter_changed {
                 func.rebuild_users();
+                facts = CombineObjectFacts::compute(func, object_effects, &mut self.layout_cache);
             }
-            iter_changed |=
-                remove_dead_local_enum_writes(func, &mut self.layout_cache, object_effects);
-            if !iter_changed {
+            let removed = remove_dead_local_enum_writes(func, &facts, &mut self.layout_cache);
+            if !(iter_changed || removed) {
                 break;
             }
             self.changed = true;
             func.rebuild_users();
+            if removed {
+                facts = CombineObjectFacts::compute(func, object_effects, &mut self.layout_cache);
+            }
         }
 
         self.changed
@@ -734,23 +763,18 @@ fn compute_enum_object_entry_facts(
 }
 fn remove_dead_local_enum_writes(
     func: &mut Function,
+    facts: &CombineObjectFacts,
     layout_cache: &mut shape::AggregateLayoutCache,
-    summaries: Option<&ObjectEffectSummaryMap>,
 ) -> bool {
     let local_roots = collect_local_object_roots(func);
     if local_roots.is_empty() {
         return false;
     }
 
-    let accesses = ObjectAccessFacts::new(func, summaries);
-    let tracked = accesses.tracked_all(func, layout_cache);
-    let local_tracked = accesses.tracked_for_roots(func, &local_roots, layout_cache);
-    let effects = accesses.effects_by_inst(func, summaries);
-    let enum_aliases = EnumAliasContext {
-        tracked: &tracked,
-        accesses: &accesses,
-        effects: &effects,
-    };
+    let local_tracked = facts
+        .accesses
+        .tracked_for_roots(func, &local_roots, layout_cache);
+    let enum_aliases = facts.aliases();
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(func);
     let reachable = cfg.reachable_blocks();
@@ -788,8 +812,8 @@ fn remove_dead_local_enum_writes(
                     transfer_backward_effects(
                         func,
                         &local_tracked,
-                        &accesses,
-                        &effects[&inst],
+                        &facts.accesses,
+                        &facts.effects[&inst],
                         &mut live,
                     );
                 }
@@ -830,8 +854,8 @@ fn remove_dead_local_enum_writes(
                 transfer_backward_effects(
                     func,
                     &local_tracked,
-                    &accesses,
-                    &effects[&inst],
+                    &facts.accesses,
+                    &facts.effects[&inst],
                     &mut live,
                 );
             }
