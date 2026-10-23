@@ -841,6 +841,7 @@ impl ObjectAggregateAbi {
             rewrite_ctx.object_effects,
             |value| self.return_root_value_is_allowed(function, value, root, rewrite_ctx),
             true,
+            false,
         )
     }
 
@@ -1754,6 +1755,7 @@ impl ObjectAggregateAbi {
             root,
             object_effects,
             |value| value == root,
+            false,
             false,
         )
     }

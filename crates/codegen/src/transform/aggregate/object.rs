@@ -197,7 +197,7 @@ impl ObjectLowerToMemory {
         if let Some(materialization) =
             object_locality::walk_object_root_uses(func, root, |special| match special {
                 SpecialObjectUse::MaterializeStack(Some(ptr))
-                    if object_locality::raw_pointer_stays_local(func, ptr) =>
+                    if object_locality::raw_pointer_stays_local(func, ptr, true) =>
                 {
                     std::ops::ControlFlow::Continue(())
                 }
