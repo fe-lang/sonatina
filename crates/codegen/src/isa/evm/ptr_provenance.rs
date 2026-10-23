@@ -313,6 +313,14 @@ impl Provenance {
             && self.bases.iter().all(|b| matches!(b, PtrBase::Alloca(_)))
     }
 
+    /// The address can only point into the allocation made by `malloc`.
+    pub(crate) fn is_within_malloc(&self, malloc: InstId) -> bool {
+        !self.is_unknown_ptr()
+            && self.arg_memory.is_empty()
+            && self.forwarded_args.is_empty()
+            && matches!(self.bases.as_slice(), [PtrBase::Malloc(base)] if *base == malloc)
+    }
+
     /// A store to this address may land outside every allocation and argument
     /// whose contents the analysis records.
     fn is_untracked_memory(&self) -> bool {
@@ -1015,6 +1023,12 @@ pub(crate) fn compute_provenance(
                     | EvmInstKind::EvmUdiv(_)
                     | EvmInstKind::EvmUmod(_)
                     | EvmInstKind::EvmSmod(_)
+                    | EvmInstKind::EvmUaddsat(_)
+                    | EvmInstKind::EvmSaddsat(_)
+                    | EvmInstKind::EvmUsubsat(_)
+                    | EvmInstKind::EvmSsubsat(_)
+                    | EvmInstKind::EvmUmulsat(_)
+                    | EvmInstKind::EvmSmulsat(_)
                     | EvmInstKind::EvmAddMod(_)
                     | EvmInstKind::EvmMulMod(_)
                     | EvmInstKind::EvmExp(_)

@@ -1,5 +1,4 @@
 use rustc_hash::FxHashSet;
-use smallvec::SmallVec;
 use sonatina_ir::{
     InstId, InstSetExt, U256,
     inst::evm::machine_inst_set::EvmMachineInstKind,
@@ -20,7 +19,7 @@ use super::{
     stack::{
         emit_narrow_signed_saturating_binary, emit_narrow_unsigned_saturating_binary,
         ensure_dyn_sp_init, fold_stack_actions, init_dyn_sp, low_bits_mask, scalar_bit_width,
-        swap_op,
+        split_at_continuation, swap_op,
     },
 };
 
@@ -123,14 +122,10 @@ impl EvmMachineFunctionLowering<'_> {
 
                 emit_pre_actions(ctx, alloc.pre_inst(insn));
 
+                // The lazy-frame plan never transitions inside case compares.
                 for (case_idx, (_, dest)) in table.iter().enumerate() {
                     let dest = self.canonical_block_target(*dest);
-                    self.emit_actions_for_site(
-                        ctx,
-                        alloc.br_table_case(insn, case_idx),
-                        frame_layout,
-                        FrameSite::PreInst(insn),
-                    );
+                    self.emit_actions(ctx, alloc.br_table_case(insn, case_idx), frame_layout);
                     ctx.push(OpCode::EQ);
                     ctx.push_jump_target(OpCode::PUSH1, Label::Block(dest));
                     ctx.push(OpCode::JUMPI);
@@ -145,74 +140,41 @@ impl EvmMachineFunctionLowering<'_> {
             }
             EvmMachineInstKind::Call(call) => {
                 let callee = *call.callee();
-                let mut actions = alloc.pre_inst(insn).clone();
+                let site = FrameSite::PreInst(insn);
+                let actions = alloc.pre_inst(insn);
 
-                let cont_pos = actions
-                    .iter()
-                    .position(|action| matches!(action, Action::PushContinuationOffset));
-                if let Some(cont_pos) = cont_pos {
-                    let suffix: SmallVec<[Action; 2]> = actions.drain(cont_pos + 1..).collect();
-                    let marker = actions.remove(cont_pos);
-                    debug_assert_eq!(
-                        marker,
-                        Action::PushContinuationOffset,
-                        "expected continuation marker at split point"
-                    );
-
-                    let prefix_folded_len = fold_stack_actions(&actions).len();
-                    self.emit_actions_for_site_from_offset(
-                        ctx,
-                        &actions,
-                        frame_layout,
-                        FrameSite::PreInst(insn),
-                        0,
-                    );
-
-                    let push_callback = ctx.push(OpCode::PUSH1);
-
-                    self.emit_actions_for_site_from_offset(
-                        ctx,
-                        &suffix,
-                        frame_layout,
-                        FrameSite::PreInst(insn),
-                        prefix_folded_len,
-                    );
-
-                    match self.frontier_init_kind(insn) {
-                        Some(DynSpInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
-                        Some(DynSpInitKind::Checked) => {
-                            ensure_dyn_sp_init(ctx, self.dyn_base());
-                        }
-                        None => {}
+                self.emit_lazy_frame_before_site(ctx, frame_layout, site);
+                let push_callback = match split_at_continuation(actions) {
+                    Some((prefix, suffix)) => {
+                        self.emit_site_actions(ctx, prefix, frame_layout, site, 0);
+                        let push_callback = ctx.push(OpCode::PUSH1);
+                        let suffix_index = fold_stack_actions(prefix).len();
+                        self.emit_site_actions(ctx, suffix, frame_layout, site, suffix_index);
+                        Some(push_callback)
                     }
+                    None => {
+                        self.emit_site_actions(ctx, actions, frame_layout, site, 0);
+                        None
+                    }
+                };
+                self.emit_lazy_frame_after_site(ctx, frame_layout, site);
 
-                    let p = ctx.push(OpCode::PUSH1);
-                    ctx.add_label_reference(p, Label::Function(callee));
-                    ctx.push(OpCode::JUMP);
+                match self.frontier_init_kind(insn) {
+                    Some(DynSpInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
+                    Some(DynSpInitKind::Checked) => {
+                        ensure_dyn_sp_init(ctx, self.dyn_base());
+                    }
+                    None => {}
+                }
 
+                let p = ctx.push(OpCode::PUSH1);
+                ctx.add_label_reference(p, Label::Function(callee));
+                ctx.push(OpCode::JUMP);
+
+                if let Some(push_callback) = push_callback {
                     let jumpdest_op = ctx.push(OpCode::JUMPDEST);
                     ctx.add_label_reference(push_callback, Label::Insn(jumpdest_op));
-
                     emit_post_actions(ctx, alloc.post_inst(insn));
-                } else {
-                    self.emit_actions_for_site(
-                        ctx,
-                        &actions,
-                        frame_layout,
-                        FrameSite::PreInst(insn),
-                    );
-
-                    match self.frontier_init_kind(insn) {
-                        Some(DynSpInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
-                        Some(DynSpInitKind::Checked) => {
-                            ensure_dyn_sp_init(ctx, self.dyn_base());
-                        }
-                        None => {}
-                    }
-
-                    let p = ctx.push(OpCode::PUSH1);
-                    ctx.add_label_reference(p, Label::Function(callee));
-                    ctx.push(OpCode::JUMP);
                 }
             }
             EvmMachineInstKind::Return(_) => {

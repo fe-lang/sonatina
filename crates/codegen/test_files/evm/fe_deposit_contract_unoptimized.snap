@@ -1,32 +1,32 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 1937
+assertion_line: 2136
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_deposit_contract_unoptimized.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 2460 bytes
-  section runtime: 2384 bytes
-  total: 4844 bytes
+  section init: 2439 bytes
+  section runtime: 2363 bytes
+  total: 4802 bytes
 
 functions:
   mem: global_dyn_base=0x1c0 arena_base=0x60 scratch_peak_words=5 stable_chain_peak_words=6
   contract_init_root_DepositContract: ir_blocks=10 ir_insts=28 vcode_ops=72 fixups=6 imm_bytes=16
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=2
-  contract_runtime_root_DepositContract: ir_blocks=138 ir_insts=475 vcode_ops=1489 fixups=90 imm_bytes=403
+  contract_runtime_root_DepositContract: ir_blocks=138 ir_insts=475 vcode_ops=1490 fixups=90 imm_bytes=403
     mem: scratch_words=5 stable_words=6 stable_mode=StableAbs(base=0x100) entry_abs_words=5 abs_words_end=11
   core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7: ir_blocks=23 ir_insts=54 vcode_ops=144 fixups=9 imm_bytes=29
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=1268920 gas_refunded=0 logs=0 output=create len=2384 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=1264366 gas_refunded=0 logs=0 output=create len=2363 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case supports_interface_erc165: calldata_len=36 success reason=Return gas_used=21478 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=238
-  case supports_interface_deposit: calldata_len=36 success reason=Return gas_used=21506 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=266
-  case supports_interface_unknown: calldata_len=36 success reason=Return gas_used=21493 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=253
+  case supports_interface_deposit: calldata_len=36 success reason=Return gas_used=21508 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=268
+  case supports_interface_unknown: calldata_len=36 success reason=Return gas_used=21497 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=257
   case get_deposit_root_empty: calldata_len=4 success reason=Return gas_used=102652 gas_refunded=0 logs=0 output=call len=32 tx_gas=21064 runtime_gas=81588
-  case get_deposit_count_empty: calldata_len=4 success reason=Return gas_used=23576 gas_refunded=0 logs=0 output=call len=96 tx_gas=21064 runtime_gas=2512
+  case get_deposit_count_empty: calldata_len=4 success reason=Return gas_used=23526 gas_refunded=0 logs=0 output=call len=96 tx_gas=21064 runtime_gas=2462
   case deposit_rejects_zero_value: calldata_len=420 revert gas_used=26827 output_len=132 tx_gas=25296 runtime_gas=1531
 
 
@@ -168,15 +168,16 @@ contract_runtime_root_DepositContract:
   block18:
     PUSH4 0x85640907 (2237925639)  // v33.i256 = eq v30 2237925639.i256;
     EQ
-    PUSH1 block141  // br v33 block141 block13;
+    ISZERO  // br v33 block13 block141;
+    PUSH1 block141
     JUMPI
   block13:
-    PUSH0  // jump block14;
+    PUSH1 0x1 (1)  // jump block14;
     PUSH1 block14
     JUMP
   block141:
     JUMPDEST
-    PUSH1 0x1 (1)  // jump block14;
+    PUSH0  // jump block14;
     PUSH1 block14
     JUMP
   block140:

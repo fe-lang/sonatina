@@ -7,19 +7,19 @@ use sonatina_ir::{BlockId, InstId, Module, ValueId, cfg::ControlFlowGraph, modul
 use crate::{
     bitset::BitSet,
     liveness::InstLiveness,
-    module_analysis::{CallGraphSccs, CallGraphSchedule, SccRef},
+    module_analysis::{CallGraphSchedule, SccRef},
     stackalloc::{StackifyAlloc, StackifyTrace},
 };
 
 #[cfg(debug_assertions)]
-use super::static_arena_alloc::{LiveRegion, StackObj, StackObjKind};
+use super::static_arena_alloc::{LiveRegion, StackObj};
 use super::{
     frame_layout::DynamicFrameLayout,
     malloc_plan::MallocEscapeKind,
     placement_search::{FuncPlacementEval, solve_func_placement},
     ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, ProvenanceInfo},
-    static_arena_alloc::{FuncStackObjects, ObjFacts, StackObjId, StaticArenaAllocCtx},
+    static_arena_alloc::{FuncStackObjects, StackObjId, StaticArenaAllocCtx},
 };
 use sonatina_ir::isa::evm::Evm;
 
@@ -168,8 +168,15 @@ macro_rules! impl_frame_queries {
                     .flatten()
             }
 
+            /// Stable objects live in a dynamic frame, as for every recursive
+            /// function, even when there are none.
             pub fn uses_dynamic_frame(&self) -> bool {
                 matches!(self.stable_mode, StableMode::DynamicFrame)
+            }
+
+            /// Entering the function pushes a dynamic frame.
+            pub fn has_dynamic_frame(&self) -> bool {
+                self.dynamic_frame_layout().is_some()
             }
 
             pub fn abs_words_end(&self) -> u32 {
@@ -468,82 +475,6 @@ block0:
         assert_eq!(plan.scratch_peak_words, 5);
         assert_eq!(plan.global_dyn_base, abs_addr_for_word(STATIC_BASE, 5));
     }
-
-    #[test]
-    fn abs_clobber_extra_reserve_extends_scratch_end() {
-        let parsed = parse_module(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %entry() {
-block0:
-    return;
-}
-"#,
-        )
-        .expect("module parses");
-        let func = parsed.module.funcs()[0];
-        let plan = ProgramMemoryPlan {
-            arena_base: STATIC_BASE,
-            scratch_peak_words: 3,
-            stable_chain_peak_words: 0,
-            global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
-            funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
-        };
-        let reserve_words = FxHashMap::from_iter([(
-            func,
-            BackendSpillReserve {
-                scratch_words: 2,
-                stable_words: 0,
-            },
-        )]);
-        let clobber_words = compute_abs_clobber_words_with_extra(
-            &CallGraphSchedule::compute(&parsed.module, &[func]),
-            &plan,
-            &reserve_words,
-        );
-
-        assert_eq!(clobber_words[&func], 5);
-    }
-
-    #[test]
-    fn abs_clobber_extra_reserve_extends_static_stable_end() {
-        let parsed = parse_module(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %entry() {
-block0:
-    return;
-}
-"#,
-        )
-        .expect("module parses");
-        let func = parsed.module.funcs()[0];
-        let mut func_plan = empty_func_plan(1, StableMode::StableAbs { base_word: 4 });
-        func_plan.stable_words = 4;
-        let plan = ProgramMemoryPlan {
-            arena_base: STATIC_BASE,
-            scratch_peak_words: 1,
-            stable_chain_peak_words: 4,
-            global_dyn_base: abs_addr_for_word(STATIC_BASE, 5),
-            funcs: FxHashMap::from_iter([(func, func_plan)]),
-        };
-        let reserve_words = FxHashMap::from_iter([(
-            func,
-            BackendSpillReserve {
-                scratch_words: 0,
-                stable_words: 2,
-            },
-        )]);
-        let clobber_words = compute_abs_clobber_words_with_extra(
-            &CallGraphSchedule::compute(&parsed.module, &[func]),
-            &plan,
-            &reserve_words,
-        );
-
-        assert_eq!(clobber_words[&func], 10);
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -584,10 +515,9 @@ pub(crate) struct FuncPreAnalysis {
     pub(crate) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
     /// Pointer provenance computed with the section's escape summaries.
     pub(crate) prov: ProvenanceInfo,
-    /// Value provenance computed with all-conservative callee summaries.
-    /// Heap bounds deliberately use this weaker variant: they must hold even
-    /// where the real summaries would allow more reuse (see heap_plan).
-    pub(crate) prov_conservative_value: SecondaryMap<ValueId, Provenance>,
+    /// Value provenance for heap bounds (see
+    /// [`super::heap_plan::compute_heap_bound_provenance`]).
+    pub(crate) heap_bound_prov: SecondaryMap<ValueId, Provenance>,
 }
 
 pub(crate) struct MachineStackifyAnalysis {
@@ -628,7 +558,7 @@ pub(crate) fn compute_semantic_program_memory_plan(
     let plan = compute_program_memory_plan_from_stacks(module, schedule, &stacks, cost_model);
 
     #[cfg(debug_assertions)]
-    verify_program_memory_plan(schedule.funcs(), &stacks, &schedule.sccs, &plan);
+    verify_program_memory_plan(schedule, &stacks, &plan);
 
     plan
 }
@@ -666,12 +596,10 @@ fn compute_program_memory_plan_from_stacks(
         .copied()
         .map(|func| {
             let stack = expect_func_entry(stacks, func, "object facts");
-            let scc_ref = schedule.sccs.scc_ref(func);
-            let is_recursive = schedule.sccs.scc_info(scc_ref).is_cycle;
-            let facts = build_planner_facts(stack, &schedule.sccs, scc_ref, is_recursive);
+            let is_recursive = schedule.is_recursive(func);
             (
                 func,
-                solve_func_placement(stack, &facts, is_recursive, cost_model),
+                solve_func_placement(stack, &stack.obj_facts, is_recursive, cost_model),
             )
         })
         .collect();
@@ -776,19 +704,15 @@ fn compute_program_memory_plan_from_stacks(
     }
 }
 
-pub(crate) fn compute_abs_clobber_words_with_extra(
+pub(crate) fn compute_abs_clobber_words(
     schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
-    extra_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, u32> {
     schedule.join_over_callees(
         |func| {
-            let extra_reserve = extra_reserves.get(&func).copied().unwrap_or_default();
             plan.funcs
                 .get(&func)
-                .map_or(extra_reserve.max_words(), |func_plan| {
-                    func_plan.abs_words_end_with_reserve(extra_reserve)
-                })
+                .map_or(0, SemanticFuncPlan::abs_words_end)
         },
         |acc, callee_end| *acc = (*acc).max(*callee_end),
     )
@@ -798,60 +722,6 @@ impl SemanticFuncPlan {
     pub fn active_abs_words(&self) -> u32 {
         self.entry_abs_words.max(self.abs_words_end())
     }
-
-    /// The absolute clobber end of this frame if `extra_reserve` more words
-    /// were appended to each region. Unlike [`Self::abs_words_end`], a
-    /// `StableMode::None` frame still accounts for a nonzero stable reserve
-    /// (the reserve would force a stable frame into existence).
-    pub(crate) fn abs_words_end_with_reserve(&self, extra_reserve: BackendSpillReserve) -> u32 {
-        let scratch_end = add_words(self.scratch_words, extra_reserve.scratch_words);
-        let stable_end = match self.stable_mode {
-            StableMode::None => extra_reserve.stable_words,
-            StableMode::StableAbs { base_word } => {
-                if self.stable_words == 0 && extra_reserve.stable_words == 0 {
-                    0
-                } else {
-                    base_word
-                        .checked_add(self.stable_words)
-                        .and_then(|end| end.checked_add(extra_reserve.stable_words))
-                        .expect("stable reserve overflow")
-                }
-            }
-            StableMode::DynamicFrame => 0,
-        };
-
-        scratch_end.max(stable_end)
-    }
-}
-
-fn build_planner_facts(
-    stack: &FuncStackObjects,
-    scc: &CallGraphSccs,
-    scc_ref: SccRef,
-    is_recursive_scc: bool,
-) -> FxHashMap<StackObjId, ObjFacts> {
-    let mut facts = stack.obj_facts.clone();
-    for call in &stack.call_sites {
-        let is_recursive_call = is_recursive_scc && scc.scc_ref(call.callee) == scc_ref;
-        if !is_recursive_call {
-            continue;
-        }
-        for &obj in &call.live_across_objs {
-            let fact = facts
-                .get_mut(&obj)
-                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
-            fact.live_across_recursive_call = true;
-        }
-        for &obj in &call.callee_visible_objs {
-            let fact = facts
-                .get_mut(&obj)
-                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
-            fact.live_across_recursive_call = true;
-            fact.must_stable = true;
-            fact.stable_reason = super::static_arena_alloc::StableReason::RecursiveVisibility;
-        }
-    }
-    facts
 }
 
 fn abs_addr_for_word(arena_base: u32, word: u32) -> u32 {
@@ -865,18 +735,16 @@ fn abs_addr_for_word(arena_base: u32, word: u32) -> u32 {
 
 #[cfg(debug_assertions)]
 fn verify_program_memory_plan(
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     stacks: &FxHashMap<FuncRef, FuncStackObjects>,
-    scc: &CallGraphSccs,
     plan: &ProgramMemoryPlan,
 ) {
-    for &func in funcs {
+    for &func in schedule.funcs() {
         let Some(func_plan) = plan.funcs.get(&func) else {
             continue;
         };
         let stack = stacks.get(&func).expect("missing stack objects");
-        let scc_ref = scc.scc_ref(func);
-        let is_recursive = scc.scc_info(scc_ref).is_cycle;
+        let is_recursive = schedule.is_recursive(func);
 
         let mut scratch_offsets: FxHashMap<StackObjId, u32> = FxHashMap::default();
         let mut stable_offsets: FxHashMap<StackObjId, u32> = FxHashMap::default();
@@ -904,7 +772,6 @@ fn verify_program_memory_plan(
             let size_words: u32 = call.runs.iter().map(|run| run.len_words).sum();
             stable_subset.push(StackObj {
                 id: call.shadow_obj,
-                kind: StackObjKind::Shadow(InstId::from_u32(0)),
                 size_words,
                 region: LiveRegion::sort_only(0),
                 access_weight: 0,
@@ -912,7 +779,6 @@ fn verify_program_memory_plan(
                 store_count: 0,
             });
         }
-        let _ = &stable_subset;
 
         if !is_recursive {
             for fact in stack.obj_facts.values() {
@@ -982,6 +848,32 @@ fn verify_program_memory_plan(
                             word
                         );
                     }
+                }
+            }
+
+            // The shadow holds saved scratch words for the whole call, so it
+            // must not share words with any stable object the call keeps live.
+            if let Some(preserve) = saved
+                && let Some(&shadow_start) = stable_offsets.get(&preserve.shadow_obj)
+            {
+                let shadow_words: u32 = preserve.runs.iter().map(|run| run.len_words).sum();
+                let shadow_end = shadow_start + shadow_words;
+                for &obj in call
+                    .live_across_objs
+                    .iter()
+                    .chain(&call.callee_visible_objs)
+                {
+                    let Some(&start) = stable_offsets.get(&obj) else {
+                        continue;
+                    };
+                    let end = start + stack.obj_size_words[&obj];
+                    assert!(
+                        end <= shadow_start || shadow_end <= start,
+                        "shadow of call {} in func {} overlaps stable object {}",
+                        call.inst.as_u32(),
+                        func.as_u32(),
+                        obj.as_u32()
+                    );
                 }
             }
         }
@@ -1056,10 +948,10 @@ fn verify_subset_packing(
             let right_end = right_off + right.size_words;
             assert!(
                 left_end <= right_off || right_end <= left_off,
-                "packing overlap in func {}: {:?}@[{left_off},{left_end}) vs {:?}@[{right_off},{right_end})",
+                "packing overlap in func {}: obj{}@[{left_off},{left_end}) vs obj{}@[{right_off},{right_end})",
                 func_ref.as_u32(),
-                left.kind,
-                right.kind,
+                left.id.as_u32(),
+                right.id.as_u32(),
             );
         }
     }

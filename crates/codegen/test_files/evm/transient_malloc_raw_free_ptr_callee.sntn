@@ -1,0 +1,55 @@
+#! evm.config: { opt: 0 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(111333)
+
+target = "evm-ethereum-osaka"
+
+# Raw free-pointer reads allocate behind the malloc lowering's back, so a
+# malloc whose buffer is live across one, locally or in a callee, must advance
+# the free pointer past that buffer.
+
+func public %entry() {
+    block0:
+        mstore 64.i32 4096.i256 i256;
+        v0.*i256 = evm_malloc 32.i256;
+        call %store v0 111.i256;
+        v1.i256 = mload 64.i32 i256;
+        v2.i256 = add v1 32.i256;
+        mstore 64.i32 v2 i256;
+        v3.*i256 = int_to_ptr v1 *i256;
+        mstore v3 222.i256 i256;
+        v4.i256 = mload v0 i256;
+
+        v10.*i256 = evm_malloc 32.i256;
+        mstore v10 333.i256 i256;
+        v11.i256 = call %raw_alloc 32.i256;
+        v12.*i256 = int_to_ptr v11 *i256;
+        mstore v12 444.i256 i256;
+        v13.i256 = mload v10 i256;
+
+        v20.i256 = mul v4 1000.i256;
+        v21.i256 = add v20 v13;
+        mstore 0.i32 v21 i256;
+        evm_return 0.i8 32.i8;
+}
+
+func private %store(v0.*i256, v1.i256) {
+    block0:
+        mstore v0 v1 i256;
+        return;
+}
+
+func private %raw_alloc(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mload 64.i32 i256;
+        v2.i256 = add v1 v0;
+        mstore 64.i32 v2 i256;
+        return v1;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

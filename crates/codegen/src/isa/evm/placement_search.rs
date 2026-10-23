@@ -18,7 +18,7 @@ use super::{
     memory_plan::{CallPreservePlan, STATIC_BASE, SaveRun, WORD_BYTES},
     static_arena_alloc::{
         CallSiteObjects, ExactPackItem, ExactPackWorkspace, FuncStackObjects, LiveRegion,
-        LocalObjIdx, ObjFacts, PackedObject, StableItemIdx, StackObj, StackObjId, StackObjKind,
+        LocalObjIdx, ObjFacts, PackedObject, StableItemIdx, StackObj, StackObjId,
         pack_exact_peak_by, pack_exact_with_offsets_by, pack_objects_presorted,
     },
 };
@@ -1028,7 +1028,6 @@ fn build_shadow_preserve_for_call(
 
     let shadow_obj = StackObj {
         id: StackObjId::new(next_obj_id as usize),
-        kind: StackObjKind::Shadow(call.inst),
         size_words: shadow_words,
         region: LiveRegion::sort_only(call.call_rank),
         access_weight: 0,
@@ -1354,10 +1353,9 @@ mod tests {
         }
     }
 
-    fn stack_obj(id: u32, kind: StackObjKind, size_words: u32, region: LiveRegion) -> StackObj {
+    fn stack_obj(id: u32, size_words: u32, region: LiveRegion) -> StackObj {
         StackObj {
             id: StackObjId::new(id as usize),
-            kind,
             size_words,
             region,
             access_weight: 0,
@@ -1368,26 +1366,11 @@ mod tests {
 
     #[test]
     fn stable_pack_conflicts_shadow_with_callee_visible_objects() {
-        let real0 = stack_obj(
-            1,
-            StackObjKind::Alloca(InstId::from_u32(1)),
-            4,
-            region(0, 0, 2),
-        );
-        let real1 = stack_obj(
-            2,
-            StackObjKind::Alloca(InstId::from_u32(2)),
-            4,
-            region(1, 0, 2),
-        );
+        let real0 = stack_obj(1, 4, region(0, 0, 2));
+        let real1 = stack_obj(2, 4, region(1, 0, 2));
         let shadow = ShadowPackObj {
             call_idx: 0,
-            obj: stack_obj(
-                3,
-                StackObjKind::Shadow(InstId::from_u32(10)),
-                4,
-                LiveRegion::sort_only(10),
-            ),
+            obj: stack_obj(3, 4, LiveRegion::sort_only(10)),
         };
         let sorted_objects = vec![&real0, &real1];
         let mut must_stable = BitSet::default();
@@ -1438,14 +1421,7 @@ mod tests {
         f: impl FnOnce(&PlacementProblem<'_>, &PlacementState),
     ) {
         let objects: Vec<_> = (0..candidate_count)
-            .map(|idx| {
-                stack_obj(
-                    idx as u32,
-                    StackObjKind::Alloca(InstId::from_u32(idx as u32)),
-                    1 + (idx % size_mod) as u32,
-                    region(0, 0, 1),
-                )
-            })
+            .map(|idx| stack_obj(idx as u32, 1 + (idx % size_mod) as u32, region(0, 0, 1)))
             .collect();
         let obj_size_words = objects.iter().map(|obj| (obj.id, obj.size_words)).collect();
         let stack = FuncStackObjects {

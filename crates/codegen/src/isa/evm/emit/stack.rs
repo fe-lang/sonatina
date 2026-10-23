@@ -399,6 +399,15 @@ pub(crate) fn immediate_u32(imm: Immediate) -> Option<u32> {
     Some(u256.low_u32())
 }
 
+/// Splits a call's actions around its continuation push: the prefix runs
+/// before the return address is pushed, the suffix after.
+pub(crate) fn split_at_continuation(actions: &[Action]) -> Option<(&[Action], &[Action])> {
+    let cont_pos = actions
+        .iter()
+        .position(|action| matches!(action, Action::PushContinuationOffset))?;
+    Some((&actions[..cont_pos], &actions[cont_pos + 1..]))
+}
+
 pub(crate) fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {
     let mut out: SmallVec<[Action; 8]> = SmallVec::new();
     for &action in actions {
@@ -723,20 +732,19 @@ pub(crate) fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_layout: Dyn
     push_bytes(ctx, &u32_to_be(frame_layout.frame_bytes()));
     ctx.push(OpCode::ADD);
 
+    // [caller_sp, new_sp]
+    ctx.push(OpCode::DUP1);
+    push_bytes(ctx, &[DYN_SP_SLOT]);
+    ctx.push(OpCode::MSTORE);
+
     // Save the caller's SP in a hidden link slot at the top of the dynamic frame so
     // nested heap clamping cannot permanently shift the caller's local frame base.
-    ctx.push(OpCode::DUP2);
     push_bytes(
         ctx,
         &u32_to_be(frame_layout.caller_link_sp_relative_bytes()),
     );
-    ctx.push(OpCode::DUP3);
-    ctx.push(OpCode::SUB);
-    ctx.push(OpCode::MSTORE);
     ctx.push(OpCode::SWAP1);
-    ctx.push(OpCode::POP);
-
-    push_bytes(ctx, &[DYN_SP_SLOT]);
+    ctx.push(OpCode::SUB);
     ctx.push(OpCode::MSTORE);
 }
 

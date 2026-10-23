@@ -3,7 +3,7 @@ use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    AccessKind, BlockId, Function, InstId, InstSetExt, Module,
+    AccessKind, AccessLoc, BlockId, Function, InstId, InstSetExt, Module, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     isa::{
@@ -33,14 +33,15 @@ use super::{
             PrivateMallocUseAnalysis, malloc_private_uses_are_compatible_with_fixed_base,
         },
         ptr_escape::PtrEscapeSummaries,
+        ptr_provenance::Provenance,
         static_arena_alloc::{
             BlockLiveSegment, LiveRegion, PackedObject, StackObjId, compute_block_order,
             pack_objects_presorted,
         },
     },
     free_ptr_floor::{
-        ProgramFreePtrFloorInput, compute_free_ptr_write_summaries,
-        compute_program_free_ptr_floor_before_malloc,
+        CallFreePtrEffect, ProgramFreePtrFloorInput, compute_call_free_ptr_effects,
+        compute_free_ptr_write_summaries, compute_program_free_ptr_floor_before_malloc,
     },
     heap_state::compute_exact_heap_base_before_malloc,
 };
@@ -64,6 +65,9 @@ pub(crate) struct EvmFuncPlacementPlan {
     pub(crate) mem_plan: memory_plan::SemanticFuncPlan,
     pub(crate) malloc_placements: FxHashMap<InstId, MallocPlacement>,
     pub(crate) free_ptr_floor_before_malloc: FxHashMap<InstId, Option<u32>>,
+    /// Internal returns restore the free pointer the function was entered
+    /// with, releasing its own heap allocations.
+    pub(crate) restores_free_ptr: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +79,10 @@ pub(crate) enum MallocPlacement {
         min_base: u32,
         needs_dyn_sp_clamp: bool,
         update_free_ptr: bool,
+        /// The free-pointer slot still holds what the section entry started
+        /// with (zero, or the entry's initial free pointer), so the base is
+        /// this constant.
+        exact_base: Option<u32>,
     },
 }
 
@@ -168,6 +176,8 @@ pub(crate) fn compute_semantic_memory_placement(
     let final_scratch_reserves =
         final_scratch_reserve_ranges(funcs, &semantic_plan, backend_spill_reserves);
 
+    let (free_ptr_slot_may_be_touched, free_ptr_write_summaries) =
+        compute_program_free_ptr_slot_facts(module, schedule, backend);
     let transient_malloc_call_barriers = malloc_plan::compute_transient_malloc_call_barriers(
         module,
         schedule,
@@ -180,7 +190,7 @@ pub(crate) fn compute_semantic_memory_placement(
         .copied()
         .map(|func| {
             let analysis = expect_func_entry(analyses, func, "pre-analysis");
-            let (malloc_escape_kinds, transient_mallocs) =
+            let (malloc_escape_kinds, transient_mallocs, restores_free_ptr) =
                 module.func_store.view(func, |function| {
                     let escape_kinds = malloc_plan::compute_malloc_escape_kinds_for_function(
                         function,
@@ -195,25 +205,47 @@ pub(crate) fn compute_semantic_memory_placement(
                         &backend.isa,
                         ptr_escape,
                         &analysis.prov,
-                        Some(&transient_malloc_call_barriers),
+                        &transient_malloc_call_barriers,
                         &analysis.inst_liveness,
                     );
-                    (escape_kinds, transient)
+                    // A raw write of the slot, here or in a callee, may have
+                    // allocated what outlives the call; the restore would free it.
+                    let restores_free_ptr =
+                        !free_ptr_write_summaries.get(&func).copied().unwrap_or(true)
+                            && malloc_plan::should_restore_free_ptr_on_internal_returns(
+                                function,
+                                &module.ctx,
+                                &backend.isa,
+                                &analysis.cfg,
+                                ptr_escape,
+                                &analysis.prov,
+                                &transient,
+                            );
+                    (escape_kinds, transient, restores_free_ptr)
                 });
-            (func, malloc_escape_kinds, transient_mallocs)
+            (
+                func,
+                malloc_escape_kinds,
+                transient_mallocs,
+                restores_free_ptr,
+            )
         })
         .collect();
     annotations.sort_unstable_by_key(|(func, ..)| func.as_u32());
-    for (func, malloc_escape_kinds, transient_mallocs) in annotations {
+    let mut free_ptr_restoring_funcs = FxHashSet::default();
+    for (func, malloc_escape_kinds, transient_mallocs, restores_free_ptr) in annotations {
         if let Some(func_plan) = semantic_plan.funcs.get_mut(&func) {
             func_plan.malloc_escape_kinds = malloc_escape_kinds;
             func_plan.transient_mallocs = transient_mallocs;
+        }
+        if restores_free_ptr {
+            free_ptr_restoring_funcs.insert(func);
         }
     }
     let has_dynamic_frames = semantic_plan
         .funcs
         .values()
-        .any(memory_plan::SemanticFuncPlan::uses_dynamic_frame);
+        .any(memory_plan::SemanticFuncPlan::has_dynamic_frame);
     let backend_spill_scratch_reserve_peak = backend_spill_reserves
         .values()
         .map(|reserve| reserve.scratch_words)
@@ -235,23 +267,35 @@ pub(crate) fn compute_semantic_memory_placement(
         })
     });
     let entry_may_have_live_frame = compute_entry_may_have_live_frame(schedule, &semantic_plan);
-    let (free_ptr_slot_may_be_touched, free_ptr_write_summaries) =
-        compute_program_free_ptr_slot_facts(module, schedule, backend);
+    let call_effects = compute_call_free_ptr_effects(
+        module,
+        schedule,
+        analyses,
+        &semantic_plan.funcs,
+        backend.isa.inst_set(),
+        &free_ptr_write_summaries,
+        &free_ptr_restoring_funcs,
+    );
     let mut heap_facts_results: Vec<_> = funcs
         .par_iter()
         .copied()
         .map(|func| {
             let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
             let analysis = expect_func_entry(analyses, func, "pre-analysis");
+            let needs_dyn_sp_clamp = func_plan.has_dynamic_frame()
+                || entry_may_have_live_frame
+                    .get(&func)
+                    .copied()
+                    .unwrap_or(false);
             let facts = module.func_store.view(func, |function| {
                 compute_func_heap_facts(
                     function,
-                    func,
                     &module.ctx,
                     &backend.isa,
                     analysis,
                     func_plan,
-                    &entry_may_have_live_frame,
+                    &call_effects,
+                    needs_dyn_sp_clamp,
                 )
             });
             (func, facts)
@@ -274,17 +318,32 @@ pub(crate) fn compute_semantic_memory_placement(
     let private_static_reserves = private_static_mallocs.backend_spill_reserves();
     semantic_plan.apply_backend_spill_reserves(schedule, &private_static_reserves);
     let return_escape_caller_abs_words =
-        compute_return_escape_caller_clamp_words(schedule, &semantic_plan, &FxHashMap::default());
+        compute_return_escape_caller_clamp_words(schedule, &semantic_plan);
     for (func, return_escape_caller_abs_words) in return_escape_caller_abs_words {
         if let Some(func_plan) = semantic_plan.funcs.get_mut(&func) {
             func_plan.return_escape_caller_abs_words = return_escape_caller_abs_words;
         }
     }
 
+    // The section entry finds the free-pointer slot as the invocation began
+    // (zero, or what `section_entry_free_ptr` stores) only when it runs once
+    // per invocation: an entry the section can enter again, as an include
+    // root, through a call, or along a branch back to its entry block, may
+    // find a live heap.
+    let entry_cfg = &expect_func_entry(analyses, section.entry, "pre-analysis").cfg;
+    let entry_reentered = section.includes.contains(&section.entry)
+        || entry_cfg
+            .entry()
+            .is_some_and(|block| entry_cfg.pred_num_of(block) != 0)
+        || schedule
+            .funcs()
+            .iter()
+            .any(|&func| schedule.call_graph.callee_of(func).contains(&section.entry));
     let placement_rules = MallocPlacementRules {
         isa: &backend.isa,
         module: &module.ctx,
         section_entry: section.entry,
+        entry_runs_once: !entry_reentered,
         has_persistent_mallocs,
         free_ptr_slot_may_be_touched,
         private_static_mallocs: &private_static_mallocs,
@@ -321,13 +380,12 @@ pub(crate) fn compute_semantic_memory_placement(
     }
     semantic_plan.set_arena_base(arena_base);
 
-    let mut malloc_bounds = heap_plan::compute_semantic_malloc_future_abs_words_with_extra(
+    let mut malloc_bounds = heap_plan::compute_semantic_malloc_future_abs_words(
         module,
         schedule,
         &semantic_plan,
         analyses,
         &backend.isa,
-        &FxHashMap::default(),
     );
     for (&func, &reserve) in backend_spill_reserves {
         if let Some(bounds) = malloc_bounds.get_mut(&func)
@@ -351,6 +409,36 @@ pub(crate) fn compute_semantic_memory_placement(
         }
     }
 
+    let min_base = |func: FuncRef, inst: InstId| {
+        malloc_min_base(
+            expect_func_entry(&semantic_plan.funcs, func, "semantic plan"),
+            semantic_plan.global_dyn_base,
+            backend_spill_scratch_reserve_peak,
+            inst,
+        )
+    };
+    // Starting the heap above every heap malloc's minimum base once, at the
+    // section entry, replaces a clamp at each malloc. Dynamic frames share
+    // the region above the global base, so sections with them keep clamping.
+    // The store must run once, before any allocation, so a re-entered entry
+    // keeps clamping. Code that accesses the slot (MSIZE counts) could
+    // observe the store on a path that allocates nothing, so such sections
+    // keep clamping too.
+    let section_entry_free_ptr = (has_heap_mallocs
+        && !has_dynamic_frames
+        && !entry_reentered
+        && !free_ptr_slot_may_be_touched)
+        .then(|| {
+            malloc_rules
+                .iter()
+                .flat_map(|(&func, rules)| {
+                    rules
+                        .iter()
+                        .filter(|(_, rule)| matches!(rule, MallocPlacementRule::Heap { .. }))
+                        .map(move |(&inst, _)| min_base(func, inst))
+                })
+                .fold(semantic_plan.global_dyn_base, u32::max)
+        });
     let malloc_placements: FxHashMap<_, _> = funcs
         .iter()
         .copied()
@@ -360,21 +448,22 @@ pub(crate) fn compute_semantic_memory_placement(
             let malloc_placements = malloc_rules[&func]
                 .iter()
                 .map(|(&inst, &rule)| {
-                    let min_base = malloc_min_base(
-                        func_plan,
-                        semantic_plan.global_dyn_base,
-                        backend_spill_scratch_reserve_peak,
-                        inst,
-                    );
+                    let min_base = min_base(func, inst);
                     let placement = match rule {
                         MallocPlacementRule::MinBase => MallocPlacement::Fixed { base: min_base },
                         MallocPlacementRule::PrivateStatic { word } => MallocPlacement::Fixed {
                             base: func_plan.abs_addr_for_word(word),
                         },
-                        MallocPlacementRule::Heap { update_free_ptr } => MallocPlacement::Heap {
+                        MallocPlacementRule::Heap {
+                            update_free_ptr,
+                            fresh_free_ptr,
+                        } => MallocPlacement::Heap {
                             min_base,
                             needs_dyn_sp_clamp,
                             update_free_ptr,
+                            exact_base: fresh_free_ptr.then(|| {
+                                section_entry_free_ptr.map_or(min_base, |free| free.max(min_base))
+                            }),
                         },
                     };
                     (inst, placement)
@@ -383,37 +472,6 @@ pub(crate) fn compute_semantic_memory_placement(
             (func, malloc_placements)
         })
         .collect();
-    // Starting the heap above every heap malloc's minimum base once, at the
-    // section entry, replaces a clamp at each malloc. Dynamic frames share
-    // the region above the global base, so sections with them keep clamping.
-    // The store must run once, before any allocation, so an entry the section
-    // can enter again, as an include root, through a call, or along a branch
-    // back to the entry block that holds the store, keeps clamping.
-    // Code that accesses the slot (MSIZE counts) could observe the store on a
-    // path that allocates nothing, so such sections keep clamping too.
-    let entry_cfg = &expect_func_entry(analyses, section.entry, "pre-analysis").cfg;
-    let entry_reentered = section.includes.contains(&section.entry)
-        || entry_cfg
-            .entry()
-            .is_some_and(|block| entry_cfg.pred_num_of(block) != 0)
-        || schedule
-            .funcs()
-            .iter()
-            .any(|&func| schedule.call_graph.callee_of(func).contains(&section.entry));
-    let section_entry_free_ptr = (has_heap_mallocs
-        && !has_dynamic_frames
-        && !entry_reentered
-        && !free_ptr_slot_may_be_touched)
-        .then(|| {
-            malloc_placements
-                .values()
-                .flat_map(FxHashMap::values)
-                .filter_map(|placement| match placement {
-                    MallocPlacement::Heap { min_base, .. } => Some(*min_base),
-                    MallocPlacement::Fixed { .. } => None,
-                })
-                .fold(semantic_plan.global_dyn_base, u32::max)
-        });
     let free_ptr_floor_before_malloc =
         compute_program_free_ptr_floor_before_malloc(ProgramFreePtrFloorInput {
             module,
@@ -424,7 +482,7 @@ pub(crate) fn compute_semantic_memory_placement(
             analyses,
             source_is: backend.isa.inst_set(),
             malloc_placements: &malloc_placements,
-            free_ptr_write_summaries: &free_ptr_write_summaries,
+            call_effects: &call_effects,
         });
     let func_placements = funcs
         .iter()
@@ -446,6 +504,7 @@ pub(crate) fn compute_semantic_memory_placement(
                     mem_plan: func_plan.clone(),
                     malloc_placements,
                     free_ptr_floor_before_malloc,
+                    restores_free_ptr: free_ptr_restoring_funcs.contains(&func),
                 },
             )
         })
@@ -472,32 +531,29 @@ pub(crate) struct FuncHeapFacts {
 
 fn compute_func_heap_facts(
     function: &Function,
-    func: FuncRef,
     module: &ModuleCtx,
     isa: &Evm,
     analysis: &FuncPreAnalysis,
     func_plan: &memory_plan::SemanticFuncPlan,
-    entry_may_have_live_frame: &FxHashMap<FuncRef, bool>,
+    call_effects: &FxHashMap<FuncRef, CallFreePtrEffect>,
+    needs_dyn_sp_clamp: bool,
 ) -> FuncHeapFacts {
-    let needs_dyn_sp_clamp = func_plan.uses_dynamic_frame()
-        || entry_may_have_live_frame
-            .get(&func)
-            .copied()
-            .unwrap_or(false);
     let exact_heap_base_before_malloc = compute_exact_heap_base_before_malloc(
         function,
         isa,
         &analysis.cfg,
         func_plan,
+        call_effects,
         !needs_dyn_sp_clamp,
     );
-    let terminal_private_mallocs = TerminalPrivateMallocAnalysis::new(
+    let terminal_private_mallocs = TerminalPrivateMallocAnalysis {
         function,
         module,
         isa,
-        &analysis.cfg,
-        &exact_heap_base_before_malloc,
-    )
+        cfg: &analysis.cfg,
+        prov: &analysis.prov.value,
+        exact_heap_base_before_malloc: &exact_heap_base_before_malloc,
+    }
     .compute();
     FuncHeapFacts {
         exact_heap_base_before_malloc,
@@ -516,13 +572,19 @@ enum MallocPlacementRule {
     /// Fixed in the function's private static malloc words.
     PrivateStatic { word: u32 },
     /// Allocated from the free pointer.
-    Heap { update_free_ptr: bool },
+    Heap {
+        update_free_ptr: bool,
+        fresh_free_ptr: bool,
+    },
 }
 
 struct MallocPlacementRules<'a> {
     isa: &'a Evm,
     module: &'a ModuleCtx,
     section_entry: FuncRef,
+    /// The section entry runs once per invocation, before anything writes
+    /// the free-pointer slot.
+    entry_runs_once: bool,
     has_persistent_mallocs: bool,
     free_ptr_slot_may_be_touched: bool,
     private_static_mallocs: &'a PrivateStaticMallocProgramPlan,
@@ -566,11 +628,15 @@ impl MallocPlacementRules<'_> {
                                 inst,
                                 exact_heap_base,
                             )));
+                // An entry that runs once has not written the free-pointer
+                // slot since it started, so the heap base is a known constant.
+                let fresh_free_ptr = exact_heap_base
+                    && self.entry_runs_once
+                    && self.section_entry == func
+                    && function.arg_values.is_empty();
                 let fixed_by_exact_entry_rule = !fixed_by_terminal_or_program_rule
                     && transient
-                    && exact_heap_base
-                    && self.section_entry == func
-                    && function.arg_values.is_empty()
+                    && fresh_free_ptr
                     && malloc_private_uses_are_compatible_with_fixed_base(
                         function,
                         self.module,
@@ -593,6 +659,7 @@ impl MallocPlacementRules<'_> {
                 } else {
                     MallocPlacementRule::Heap {
                         update_free_ptr: !transient,
+                        fresh_free_ptr,
                     }
                 };
                 out.insert(inst, rule);
@@ -858,47 +925,37 @@ fn private_static_malloc_live_region(
     })
 }
 
+/// Finds transient mallocs whose buffer only feeds the halting payload, so
+/// they can sit at their minimum base regardless of other live heap memory.
+/// Everything after such a malloc writes memory only through its buffer or
+/// through immediate addresses, then halts reading the same.
+///
+/// Immediate addresses stay clear of the buffer: a range is either reserved
+/// below the arena or is a terminal payload written after every buffer write.
+/// Any other address may reach a live heap object or frame the buffer
+/// overlaps.
 struct TerminalPrivateMallocAnalysis<'a> {
     function: &'a Function,
     module: &'a ModuleCtx,
     isa: &'a Evm,
     cfg: &'a ControlFlowGraph,
+    prov: &'a SecondaryMap<ValueId, Provenance>,
     exact_heap_base_before_malloc: &'a FxHashMap<InstId, bool>,
-    terminal_private_blocks: SecondaryMap<BlockId, bool>,
 }
 
-impl<'a> TerminalPrivateMallocAnalysis<'a> {
-    fn new(
-        function: &'a Function,
-        module: &'a ModuleCtx,
-        isa: &'a Evm,
-        cfg: &'a ControlFlowGraph,
-        exact_heap_base_before_malloc: &'a FxHashMap<InstId, bool>,
-    ) -> Self {
-        let mut terminal_private_blocks = SecondaryMap::new();
-        for block in function.layout.iter_block() {
-            let _ = &mut terminal_private_blocks[block];
-        }
-        Self {
-            function,
-            module,
-            isa,
-            cfg,
-            exact_heap_base_before_malloc,
-            terminal_private_blocks,
-        }
-    }
-
-    fn compute(mut self) -> FxHashSet<InstId> {
-        self.compute_terminal_private_blocks();
-
+impl TerminalPrivateMallocAnalysis<'_> {
+    fn compute(&self) -> FxHashSet<InstId> {
         let mut out = FxHashSet::default();
         for block in self.function.layout.iter_block() {
             for inst in self.function.layout.iter_inst(block) {
                 if matches!(self.resolve(inst), EvmInstKind::EvmMalloc(_))
-                    && self
-                        .suffix_is_terminal_private(block, self.function.layout.next_inst_of(inst))
                     && self.malloc_is_private(inst)
+                    && self.suffix_is_terminal_private(
+                        &self.terminal_private_blocks(inst),
+                        inst,
+                        block,
+                        self.function.layout.next_inst_of(inst),
+                    )
                 {
                     out.insert(inst);
                 }
@@ -908,75 +965,72 @@ impl<'a> TerminalPrivateMallocAnalysis<'a> {
         out
     }
 
-    fn compute_terminal_private_blocks(&mut self) {
+    fn terminal_private_blocks(&self, malloc: InstId) -> SecondaryMap<BlockId, bool> {
+        let mut blocks = SecondaryMap::new();
         let mut changed = true;
         while changed {
             changed = false;
             for block in self.function.layout.iter_block() {
-                let next = self.block_is_terminal_private(block);
-                changed |= self.terminal_private_blocks[block] != next;
-                self.terminal_private_blocks[block] = next;
+                let first = self.function.layout.first_inst_of(block);
+                let next = self.suffix_is_terminal_private(&blocks, malloc, block, first);
+                changed |= blocks[block] != next;
+                blocks[block] = next;
             }
         }
+        blocks
     }
 
-    fn block_is_terminal_private(&self, block: BlockId) -> bool {
-        for inst in self.function.layout.iter_inst(block) {
-            if self.inst_is_evm_terminal(inst) {
-                return true;
-            }
-            if self.function.dfg.inst(inst).is_terminator() {
-                return self.successors_are_terminal_private(block);
-            }
-            if !self.inst_allows_terminal_private_prefix(inst) {
-                return false;
-            }
+    fn suffix_is_terminal_private(
+        &self,
+        blocks: &SecondaryMap<BlockId, bool>,
+        malloc: InstId,
+        block: BlockId,
+        mut cursor: Option<InstId>,
+    ) -> bool {
+        while let Some(inst) = cursor {
+            let (addr, len) = match self.resolve(inst) {
+                EvmInstKind::EvmReturn(ret) => (*ret.addr(), *ret.len()),
+                EvmInstKind::EvmRevert(revert) => (*revert.addr(), *revert.len()),
+                _ if self.function.dfg.inst(inst).is_terminator() => {
+                    let mut succs = self.cfg.succs_of(block);
+                    return succs
+                        .next()
+                        .is_some_and(|first| blocks[*first] && succs.all(|succ| blocks[*succ]));
+                }
+                _ if self.inst_writes_privately(inst, malloc) => {
+                    cursor = self.function.layout.next_inst_of(inst);
+                    continue;
+                }
+                _ => return false,
+            };
+            return value_imm_u32(self.function, len) == Some(0)
+                || self.addr_is_private(addr, malloc);
         }
-
-        self.successors_are_terminal_private(block)
+        false
     }
 
-    fn successors_are_terminal_private(&self, block: BlockId) -> bool {
-        let mut succs = self.cfg.succs_of(block);
-        let Some(first) = succs.next() else {
-            return false;
-        };
-        self.terminal_private_blocks[*first]
-            && succs.all(|succ| self.terminal_private_blocks[*succ])
-    }
-
-    fn inst_is_evm_terminal(&self, inst: InstId) -> bool {
-        matches!(
-            self.resolve(inst),
-            EvmInstKind::EvmReturn(_) | EvmInstKind::EvmRevert(_)
-        )
-    }
-
-    fn inst_allows_terminal_private_prefix(&self, inst: InstId) -> bool {
+    fn inst_writes_privately(&self, inst: InstId, malloc: InstId) -> bool {
         let effects = self.function.dfg.effects(inst);
         self.function.dfg.call_info(inst).is_none()
             && effects.other.is_empty()
-            && effects
-                .accesses
-                .iter()
-                .all(|access| access.kind == AccessKind::Write && access.space == MEMORY)
+            && effects.accesses.iter().all(|access| {
+                access.kind == AccessKind::Write
+                    && access.space == MEMORY
+                    && match &access.loc {
+                        AccessLoc::LinearExact { addr, .. }
+                        | AccessLoc::LinearRange { addr, .. } => {
+                            self.addr_is_private(*addr, malloc)
+                        }
+                        AccessLoc::LinearExactImm { .. } => true,
+                        AccessLoc::WholeSpace
+                        | AccessLoc::Unknown
+                        | AccessLoc::KeyedExact { .. } => false,
+                    }
+            })
     }
 
-    fn suffix_is_terminal_private(&self, block: BlockId, mut cursor: Option<InstId>) -> bool {
-        while let Some(inst) = cursor {
-            if self.inst_is_evm_terminal(inst) {
-                return true;
-            }
-            if self.function.dfg.inst(inst).is_terminator() {
-                return self.successors_are_terminal_private(block);
-            }
-            if !self.inst_allows_terminal_private_prefix(inst) {
-                return false;
-            }
-            cursor = self.function.layout.next_inst_of(inst);
-        }
-
-        self.successors_are_terminal_private(block)
+    fn addr_is_private(&self, addr: ValueId, malloc: InstId) -> bool {
+        self.function.dfg.value_is_imm(addr) || self.prov[addr].is_within_malloc(malloc)
     }
 
     fn malloc_is_private(&self, inst: InstId) -> bool {
@@ -1057,7 +1111,7 @@ fn compute_entry_may_have_live_frame(
             semantic_plan
                 .funcs
                 .get(func)
-                .is_some_and(memory_plan::SemanticFuncPlan::uses_dynamic_frame)
+                .is_some_and(memory_plan::SemanticFuncPlan::has_dynamic_frame)
         })
     };
 

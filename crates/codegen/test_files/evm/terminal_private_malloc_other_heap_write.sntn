@@ -1,0 +1,28 @@
+#! evm.config: { vcode: false, opt: 0 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(7)
+
+target = "evm-ethereum-osaka"
+
+# `v1` only feeds the halting payload, but the write through `v0` after it
+# reaches another live heap object. Fixing `v1` at its minimum base would put
+# it on `v0` and return 9. The dynamic size keeps `v0` on the heap.
+
+func public %entry() {
+    block0:
+        v10.i256 = evm_calldata_size;
+        v11.i256 = add v10 32.i256;
+        v0.*i256 = evm_malloc v11;
+        v1.*i256 = evm_malloc 32.i256;
+        mstore v1 7.i256 i256;
+        mstore v0 9.i256 i256;
+        v2.i256 = ptr_to_int v1 i256;
+        evm_return v2 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

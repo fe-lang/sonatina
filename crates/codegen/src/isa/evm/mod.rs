@@ -46,7 +46,7 @@ pub(crate) use memory_plan::{
     DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan, ObjLoc, STATIC_BASE, WORD_BYTES,
 };
 pub(crate) use opcode::OpCode;
-pub(crate) use prepare::{EvmFunctionPlan, EvmSectionPlan, prepare_free_ptr_restore};
+pub(crate) use prepare::{EvmFunctionPlan, EvmSectionPlan};
 pub(crate) use ptr_escape::{PtrEscapeSummaries, compute_ptr_escape_summaries};
 #[cfg(test)]
 pub(crate) use sonatina_ir::isa::evm::Evm;

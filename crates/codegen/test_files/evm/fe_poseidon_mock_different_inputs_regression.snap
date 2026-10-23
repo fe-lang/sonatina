@@ -1,14 +1,14 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 1937
+assertion_line: 2136
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1937 bytes
-  total: 1937 bytes
+  section runtime: 1940 bytes
+  total: 1940 bytes
 
 functions:
   mem: global_dyn_base=0x100 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=3
@@ -16,7 +16,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   sigma_full: ir_blocks=1 ir_insts=15 vcode_ops=57 fixups=0 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
-  mix: ir_blocks=13 ir_insts=46 vcode_ops=94 fixups=8 imm_bytes=21
+  mix: ir_blocks=13 ir_insts=47 vcode_ops=96 fixups=8 imm_bytes=22
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   poseidon_mock: ir_blocks=15 ir_insts=56 vcode_ops=162 fixups=19 imm_bytes=29
     mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
@@ -24,7 +24,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=42244 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=21244
+  case ok: calldata_len=0 success reason=Return gas_used=42364 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=21364
 
 
 --------------- DEBUG ---------------
@@ -226,100 +226,102 @@ sigma_full:
 mix:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v5.i256 = evm_mload v4;
+    PUSH1 0x40 (64)  // v7.i256 = evm_mload v5;
     MLOAD
-    PUSH1 0xff (255)  // v10.i256 = gt v5 v8;
+    PUSH1 0xff (255)  // v12.i256 = gt v7 v10;
     DUP2
     GT
-    PUSH1 block9  // br v10 block13 block8;
+    PUSH1 block9  // br v12 block13 block8;
     JUMPI
   block8:
     POP  // jump block9;
     PUSH2 0x100 (256)
   block9:
     JUMPDEST
-    PUSH1 0x60 (96)  // v16.i256 = add v12 v13;
+    PUSH1 0x60 (96)  // v18.i256 = add v13 v16;
     DUP2
     ADD
-    PUSH1 0x40 (64)  // evm_mstore v4 v16;
+    PUSH1 0x40 (64)  // evm_mstore v5 v18;
     MSTORE
-    PUSH0 0x0 (0)  // v18.i256 = sym_addr $__fe_const_data_1;
-    PUSH0 0x0 (0)  // v20.i256 = sym_size $__fe_const_data_1;
-    SWAP1  // evm_code_copy v12 v18 v20;
+    PUSH0 0x0 (0)  // v20.i256 = sym_addr $__fe_const_data_1;
+    PUSH0 0x0 (0)  // v22.i256 = sym_size $__fe_const_data_1;
+    SWAP1  // evm_code_copy v13 v20 v22;
     DUP3
     CODECOPY
-    PUSH0 0x0 (0)  // v22.i256 = sym_addr $__fe_const_data_2;
-    PUSH0 0x0 (0)  // v26.i256 = sym_size $__fe_const_data_2;
+    PUSH0 0x0 (0)  // v26.i256 = sym_addr $__fe_const_data_2;
+    PUSH0 0x0 (0)  // v27.i256 = sym_size $__fe_const_data_2;
     DUP3  // jump block2;
     PUSH0
   block2:
     JUMPDEST
-    PUSH0  // jump block6;
+    DUP6  // jump block6;
+    PUSH0
   block6:
     JUMPDEST
-    DUP3  // v27.i256 = evm_mload v2;
+    DUP4  // v61.i256 = evm_mload v2;
     MLOAD
-    PUSH1 0x40 (64)  // v61.i256 = evm_mload v4;
+    PUSH1 0x40 (64)  // v28.i256 = evm_mload v5;
     MLOAD
-    PUSH1 0xff (255)  // v28.i256 = gt v61 v8;
+    PUSH1 0xff (255)  // v29.i256 = gt v28 v10;
     DUP2
     GT
-    PUSH1 block12  // br v28 block15 block11;
+    PUSH1 block12  // br v29 block15 block11;
     JUMPI
   block11:
     POP  // jump block12;
     PUSH2 0x100 (256)
   block12:
     JUMPDEST
-    DUP6  // evm_code_copy v29 v22 v26;
-    DUP8
+    DUP7  // evm_code_copy v30 v26 v27;
+    DUP9
     DUP3
     CODECOPY
-    PUSH1 0x60 (96)  // v30.i256 = mul v1 v13;
-    DUP5
+    PUSH1 0x60 (96)  // v31.i256 = mul v1 v16;
+    DUP6
     MUL
-    ADD  // v31.i256 = add v29 v30;
-    DUP3  // v33.i256 = shl v59 v3;
+    ADD  // v32.i256 = add v30 v31;
+    DUP3  // v34.i256 = shl v59 v3;
     PUSH1 0x5 (5)
     SHL
-    DUP1  // v34.i256 = add v31 v33;
-    SWAP2
-    ADD
-    MLOAD  // v36.i256 = evm_mload v34;
-    SWAP1  // v38.i256 = add v0 v33;
-    DUP10
-    ADD
-    MLOAD  // v40.i256 = evm_mload v38;
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v42.i256 = evm_mul_mod v36 v40 v41;
+    ADD  // v36.i256 = add v32 v34;
+    MLOAD  // v37.i256 = evm_mload v36;
+    DUP4  // v38.i256 = evm_mload v4;
+    MLOAD
+    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v41.i256 = evm_mul_mod v37 v38 v40;
     SWAP2
     MULMOD
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v43.i256 = evm_add_mod v27 v42 v41;
+    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v42.i256 = evm_add_mod v61 v41 v40;
     SWAP2
     ADDMOD
-    DUP4  // evm_mstore v2 v43;
+    DUP5  // evm_mstore v2 v42;
     MSTORE
-    PUSH1 0x1 (1)  // v47.i256 = add v3 v46;
+    PUSH1 0x1 (1)  // v46.i256 = add v3 v43;
     ADD
-    PUSH1 0x3 (3)  // v49.i256 = lt v47 v48;
+    PUSH1 0x3 (3)  // v48.i256 = lt v46 v47;
     DUP2
     LT
-    PUSH1 block6  // br v49 block16 block3;
+    SWAP2  // v49.i256 = add v4 v33;
+    PUSH1 0x20 (32)
+    ADD
+    SWAP2  // br v48 block16 block3;
+    PUSH1 block6
     JUMPI
   block3:
-    POP  // v52.i256 = add v1 v46;
+    POP  // v52.i256 = add v1 v43;
+    POP
     PUSH1 0x1 (1)
     ADD
-    PUSH1 0x3 (3)  // v54.i256 = lt v52 v48;
+    PUSH1 0x3 (3)  // v54.i256 = lt v52 v47;
     DUP2
     LT
-    SWAP2  // v57.i256 = add v2 v32;
+    SWAP2  // v57.i256 = add v2 v33;
     PUSH1 0x20 (32)
     ADD
     SWAP2  // br v54 block14 block4;
     PUSH1 block2
     JUMPI
   block4:
-    POP  // return v12;
+    POP  // return v13;
     POP
     POP
     POP

@@ -1,0 +1,34 @@
+#! evm.config: { vcode: false, opt: 0 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(42)
+
+target = "evm-ethereum-osaka"
+
+# `v2` is the alloca's address carried through an `i256` call result. The
+# malloc must stay above the alloca while `v2` is still read.
+
+func private %fwd(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %entry() {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 42.i256 i256;
+        v1.i256 = ptr_to_int v0 i256;
+        v2.i256 = call %fwd v1;
+        v3.*i256 = evm_malloc 32.i256;
+        mstore v3 99.i256 i256;
+        v5.*i256 = int_to_ptr v2 *i256;
+        v4.i256 = mload v5 i256;
+        mstore 0.i32 v4 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

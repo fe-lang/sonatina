@@ -1,0 +1,49 @@
+#! evm.config: { opt: 0 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(1)
+
+target = "evm-ethereum-osaka"
+
+# Calls that leave the free pointer untouched keep the fresh entry's heap base
+# exact, but these callees move it: `%set_slot` writes it and `%keep` returns a
+# persistent allocation. Each later malloc must start past the moved free
+# pointer.
+
+func private %set_slot(v0.i256) {
+    block0:
+        mstore 64.i32 v0 i256;
+        return;
+}
+
+func private %keep() -> *i256 {
+    block0:
+        v0.*i256 = evm_malloc 64.i256;
+        mstore v0 5.i256 i256;
+        return v0;
+}
+
+func public %entry() {
+    block0:
+        call %set_slot 4096.i256;
+        v0.*i256 = evm_malloc 32.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        v2.i1 = eq v1 4096.i256;
+
+        v3.*i256 = call %keep;
+        v4.*i256 = evm_malloc 32.i256;
+        mstore v4 7.i256 i256;
+        v5.i256 = mload v3 i256;
+        v6.i1 = eq v5 5.i256;
+
+        v7.i1 = and v2 v6;
+        v8.i256 = zext v7 i256;
+        mstore 0.i32 v8 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

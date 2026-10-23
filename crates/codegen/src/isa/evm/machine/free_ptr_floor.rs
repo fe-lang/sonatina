@@ -8,7 +8,11 @@ use sonatina_ir::{
 use std::iter;
 
 use crate::{
-    isa::evm::{FREE_PTR_SLOT, WORD_BYTES, memory_plan::FuncPreAnalysis, prepare::value_imm_u32},
+    isa::evm::{
+        FREE_PTR_SLOT, WORD_BYTES,
+        memory_plan::{FuncPreAnalysis, SemanticFuncPlan, expect_func_entry},
+        prepare::{blocks_reaching_return, value_imm_u32},
+    },
     module_analysis::CallGraphSchedule,
 };
 
@@ -60,6 +64,86 @@ pub(crate) fn compute_free_ptr_write_summaries(
     )
 }
 
+/// What a call does to the free pointer, as its caller sees on return.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CallFreePtrEffect {
+    /// Leaves it where it was: the callee restores it, or neither advances
+    /// nor writes it.
+    Keeps,
+    /// Only advances it, through compiler-managed allocations.
+    Advances,
+    /// May write it directly.
+    MayWrite,
+}
+
+/// The effect of calling each function on the free pointer. A function
+/// advances it when a persistent malloc, or a call that advances it, lies on
+/// a path that returns, unless the function restores the free pointer it was
+/// entered with.
+pub(crate) fn compute_call_free_ptr_effects(
+    module: &Module,
+    schedule: &CallGraphSchedule,
+    analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
+    semantic_funcs: &FxHashMap<FuncRef, SemanticFuncPlan>,
+    source_is: &EvmInstSet,
+    write_summaries: &FxHashMap<FuncRef, bool>,
+    restoring: &FxHashSet<FuncRef>,
+) -> FxHashMap<FuncRef, CallFreePtrEffect> {
+    let mut advancing: FxHashMap<FuncRef, bool> =
+        schedule.funcs().iter().map(|&func| (func, false)).collect();
+    for &scc in schedule.topo.iter().rev() {
+        let members = schedule.members(scc);
+        loop {
+            let mut changed = false;
+            for &func in members {
+                if restoring.contains(&func) || advancing[&func] {
+                    continue;
+                }
+                let transient_mallocs =
+                    &expect_func_entry(semantic_funcs, func, "semantic plan").transient_mallocs;
+                let cfg = &expect_func_entry(analyses, func, "pre-analysis").cfg;
+                let advances = module.func_store.view(func, |function| {
+                    let returning = blocks_reaching_return(function, cfg);
+                    function.layout.iter_block().any(|block| {
+                        returning.contains(&block)
+                            && function.layout.iter_inst(block).any(|inst| {
+                                match source_is.resolve_inst(function.dfg.inst(inst)) {
+                                    EvmInstKind::EvmMalloc(_) => !transient_mallocs.contains(&inst),
+                                    EvmInstKind::Call(call) => {
+                                        advancing.get(call.callee()).copied().unwrap_or(true)
+                                    }
+                                    _ => false,
+                                }
+                            })
+                    })
+                });
+                if advances {
+                    advancing.insert(func, true);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+    advancing
+        .into_iter()
+        .map(|(func, advances)| {
+            let effect = if restoring.contains(&func) {
+                CallFreePtrEffect::Keeps
+            } else if write_summaries.get(&func).copied().unwrap_or(true) {
+                CallFreePtrEffect::MayWrite
+            } else if advances {
+                CallFreePtrEffect::Advances
+            } else {
+                CallFreePtrEffect::Keeps
+            };
+            (func, effect)
+        })
+        .collect()
+}
+
 pub(crate) struct ProgramFreePtrFloorInput<'a> {
     pub(crate) module: &'a Module,
     pub(crate) funcs: &'a [FuncRef],
@@ -70,7 +154,7 @@ pub(crate) struct ProgramFreePtrFloorInput<'a> {
     pub(crate) analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
     pub(crate) source_is: &'a EvmInstSet,
     pub(crate) malloc_placements: &'a FxHashMap<FuncRef, FxHashMap<InstId, MallocPlacement>>,
-    pub(crate) free_ptr_write_summaries: &'a FxHashMap<FuncRef, bool>,
+    pub(crate) call_effects: &'a FxHashMap<FuncRef, CallFreePtrEffect>,
 }
 
 pub(crate) fn compute_program_free_ptr_floor_before_malloc(
@@ -85,7 +169,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
         analyses,
         source_is,
         malloc_placements,
-        free_ptr_write_summaries,
+        call_effects,
     } = input;
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let exit_floor_summaries = compute_exit_floor_summaries(
@@ -94,7 +178,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
         analyses,
         source_is,
         malloc_placements,
-        free_ptr_write_summaries,
+        call_effects,
     );
     let mut entry_floors: FxHashMap<FuncRef, Option<FreePtrFloor>> =
         funcs.iter().copied().map(|func| (func, None)).collect();
@@ -125,7 +209,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
                     analysis: &analyses[&func],
                     source_is,
                     malloc_placements,
-                    free_ptr_write_summaries,
+                    call_effects,
                     exit_floor_summaries: &exit_floor_summaries,
                 }
                 .compute(function, entry_floor)
@@ -165,7 +249,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
                     analysis: &analyses[&func],
                     source_is,
                     malloc_placements,
-                    free_ptr_write_summaries,
+                    call_effects,
                     exit_floor_summaries: &exit_floor_summaries,
                 }
                 .compute(function, entry_floor)
@@ -182,7 +266,7 @@ fn compute_exit_floor_summaries(
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     source_is: &EvmInstSet,
     malloc_placements: &FxHashMap<FuncRef, FxHashMap<InstId, MallocPlacement>>,
-    free_ptr_write_summaries: &FxHashMap<FuncRef, bool>,
+    call_effects: &FxHashMap<FuncRef, CallFreePtrEffect>,
 ) -> FxHashMap<FuncRef, Option<u32>> {
     let mut summaries: FxHashMap<FuncRef, Option<u32>> =
         funcs.iter().copied().map(|func| (func, None)).collect();
@@ -199,7 +283,7 @@ fn compute_exit_floor_summaries(
                     analysis: &analyses[&func],
                     source_is,
                     malloc_placements,
-                    free_ptr_write_summaries,
+                    call_effects,
                     exit_floor_summaries: &summaries,
                 }
                 .compute(function, FreePtrFloor::Unknown)
@@ -226,7 +310,7 @@ struct FuncFreePtrFloorCtx<'a> {
     analysis: &'a FuncPreAnalysis,
     source_is: &'a EvmInstSet,
     malloc_placements: &'a FxHashMap<InstId, MallocPlacement>,
-    free_ptr_write_summaries: &'a FxHashMap<FuncRef, bool>,
+    call_effects: &'a FxHashMap<FuncRef, CallFreePtrEffect>,
     exit_floor_summaries: &'a FxHashMap<FuncRef, Option<u32>>,
 }
 
@@ -239,7 +323,7 @@ impl FuncFreePtrFloorCtx<'_> {
             module: self.module,
             source_is: self.source_is,
             malloc_placements: self.malloc_placements,
-            free_ptr_write_summaries: self.free_ptr_write_summaries,
+            call_effects: self.call_effects,
             exit_floor_summaries: self.exit_floor_summaries,
         };
         let transfer = |inst, floor| transfer_ctx.transfer_inst(inst, floor);
@@ -308,7 +392,7 @@ struct TransferCtx<'a> {
     module: &'a ModuleCtx,
     source_is: &'a EvmInstSet,
     malloc_placements: &'a FxHashMap<InstId, MallocPlacement>,
-    free_ptr_write_summaries: &'a FxHashMap<FuncRef, bool>,
+    call_effects: &'a FxHashMap<FuncRef, CallFreePtrEffect>,
     exit_floor_summaries: &'a FxHashMap<FuncRef, Option<u32>>,
 }
 
@@ -327,23 +411,25 @@ impl TransferCtx<'_> {
                     floor = floor.establish_min(min_base);
                 }
             }
-            EvmInstKind::Call(call) => {
-                if self
-                    .free_ptr_write_summaries
-                    .get(call.callee())
-                    .copied()
-                    .unwrap_or(true)
-                {
-                    floor = FreePtrFloor::Unknown;
-                } else if let Some(exit_floor) = self
-                    .exit_floor_summaries
-                    .get(call.callee())
-                    .copied()
-                    .flatten()
-                {
-                    floor = floor.establish_min(exit_floor);
+            EvmInstKind::Call(call) => match self
+                .call_effects
+                .get(call.callee())
+                .copied()
+                .unwrap_or(CallFreePtrEffect::MayWrite)
+            {
+                CallFreePtrEffect::Keeps => {}
+                CallFreePtrEffect::Advances => {
+                    if let Some(exit_floor) = self
+                        .exit_floor_summaries
+                        .get(call.callee())
+                        .copied()
+                        .flatten()
+                    {
+                        floor = floor.establish_min(exit_floor);
+                    }
                 }
-            }
+                CallFreePtrEffect::MayWrite => floor = FreePtrFloor::Unknown,
+            },
             _ => {
                 if let Some(stored_floor) = self.exact_free_ptr_store_floor(inst) {
                     floor = stored_floor.map_or(FreePtrFloor::Unknown, FreePtrFloor::Known);

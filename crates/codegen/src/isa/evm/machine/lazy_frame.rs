@@ -13,7 +13,9 @@ use crate::{
 
 use super::module::FuncMachineMap;
 use crate::isa::evm::{
-    MachineFuncPlan, ObjLoc, emit::fold_stack_actions, ptr_provenance::Provenance,
+    MachineFuncPlan, ObjLoc,
+    emit::{fold_stack_actions, split_at_continuation},
+    ptr_provenance::Provenance,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -21,7 +23,6 @@ pub(crate) enum FrameSite {
     BlockEntry(BlockId),
     EnterFunction,
     PreInst(InstId),
-    Inst(InstId),
     PostInst(InstId),
 }
 
@@ -79,13 +80,13 @@ impl LazyFramePlan {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FrameSummary {
     pub(crate) lowering: Option<LazyFramePlan>,
-    pub(crate) full_body_active: bool,
-    active_pre_insts: FxHashSet<InstId>,
+    full_body_active: bool,
+    frame_active_calls: FxHashSet<InstId>,
 }
 
 impl FrameSummary {
-    pub(crate) fn local_frame_active_before_inst(&self, inst: InstId) -> bool {
-        self.full_body_active || self.active_pre_insts.contains(&inst)
+    pub(crate) fn frame_active_at_call(&self, call: InstId) -> bool {
+        self.full_body_active || self.frame_active_calls.contains(&call)
     }
 }
 
@@ -129,10 +130,11 @@ struct PointOrderTable {
     inst_order: FxHashMap<InstId, u32>,
 }
 
-struct RootUseDepCtx<'a> {
-    reachable_returns: &'a FxHashMap<BlockId, Vec<(BlockId, InstId)>>,
-    rooted: &'a FxHashSet<ValueId>,
+/// Collects distinct dependency points, ordered within their blocks.
+struct DepPoints<'a> {
     order: &'a PointOrderTable,
+    points: Vec<DepPoint>,
+    seen: FxHashSet<(FrameInjectionPoint, FrameInjectionPoint)>,
 }
 
 /// Roots every machine value that may address a dynamic-frame alloca. Pointer
@@ -191,35 +193,20 @@ pub(crate) fn compute_frame_summary(
         return FrameSummary::default();
     }
 
-    let Some(plan) = compute_lazy_frame_plan_inner(function, alloc, roots) else {
-        return FrameSummary {
+    compute_lazy_frame_plan_inner(function, alloc, roots)
+        .and_then(|plan| {
+            let frame_active_calls = simulate_lazy_frame(function, alloc, &plan)?;
+            Some(FrameSummary {
+                lowering: Some(plan),
+                full_body_active: false,
+                frame_active_calls,
+            })
+        })
+        .unwrap_or_else(|| FrameSummary {
             lowering: None,
             full_body_active: true,
-            active_pre_insts: FxHashSet::default(),
-        };
-    };
-
-    if validate_lazy_frame_activity(function, alloc, &plan).is_none() {
-        return FrameSummary {
-            lowering: None,
-            full_body_active: true,
-            active_pre_insts: FxHashSet::default(),
-        };
-    };
-
-    let Some(active_pre_insts) = compute_active_pre_insts(function, alloc, &plan) else {
-        return FrameSummary {
-            lowering: Some(plan),
-            full_body_active: true,
-            active_pre_insts: FxHashSet::default(),
-        };
-    };
-
-    FrameSummary {
-        lowering: Some(plan),
-        full_body_active: false,
-        active_pre_insts,
-    }
+            frame_active_calls: FxHashSet::default(),
+        })
 }
 
 fn compute_lazy_frame_plan_inner(
@@ -295,7 +282,11 @@ fn compute_lazy_frame_plan_inner(
     Some(LazyFramePlan { enter, exits })
 }
 
-fn compute_active_pre_insts(
+/// Replays `plan` over exactly the code emission runs (see `emit/insn.rs`), in
+/// emission order. Returns the calls made with the frame entered, or `None`
+/// when a frame access runs outside the frame, a return runs inside it, or a
+/// block is reached both inside and outside it.
+fn simulate_lazy_frame(
     function: &Function,
     alloc: &dyn Allocator,
     plan: &LazyFramePlan,
@@ -303,274 +294,143 @@ fn compute_active_pre_insts(
     let mut cfg = ControlFlowGraph::default();
     cfg.compute(function);
     let entry_block = function.layout.entry_block()?;
-    let mut entry_active = false;
-    apply_enter_function_state(function, alloc, plan, &mut entry_active);
-    let mut active_at_entry: FxHashMap<BlockId, bool> = FxHashMap::default();
-    active_at_entry.insert(entry_block, entry_active);
-    let mut worklist = vec![entry_block];
-    let mut active_pre_insts = FxHashSet::default();
     let machine_isa = sonatina_ir::isa::evm::EvmMachine::new(function.dfg.ctx.triple);
+    let mut sim = FrameActivity {
+        plan,
+        active: false,
+    };
+    sim.site(
+        FrameSite::EnterFunction,
+        fold_stack_actions(&alloc.enter_function(function))
+            .into_iter()
+            .enumerate(),
+    )?;
+    let mut active_at_entry = FxHashMap::from_iter([(entry_block, sim.active)]);
+    let mut worklist = vec![entry_block];
+    let mut frame_active_calls = FxHashSet::default();
 
     while let Some(block) = worklist.pop() {
-        let mut active = *active_at_entry
-            .get(&block)
-            .unwrap_or_else(|| panic!("missing active state for block {}", block.as_u32()));
-        apply_site_state(plan, FrameSite::BlockEntry(block), &mut active);
+        sim.active = active_at_entry[&block];
+        sim.before_site(FrameSite::BlockEntry(block));
 
         for inst in function.layout.iter_inst(block) {
             let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            apply_site_state(plan, FrameSite::PreInst(inst), &mut active);
-
-            match data {
-                EvmMachineInstKind::Call(_) => {
-                    if let Some((prefix, suffix, prefix_len)) =
-                        split_call_actions(alloc.pre_inst(inst).clone())
-                    {
-                        apply_actions_state(
-                            plan,
-                            FrameSite::PreInst(inst),
-                            &prefix,
-                            0,
-                            &mut active,
-                        );
-                        apply_actions_state(
-                            plan,
-                            FrameSite::PreInst(inst),
-                            &suffix,
-                            prefix_len,
-                            &mut active,
-                        );
-                    } else {
-                        apply_actions_state(
-                            plan,
-                            FrameSite::PreInst(inst),
-                            alloc.pre_inst(inst),
-                            0,
-                            &mut active,
-                        );
-                    }
-                }
-                EvmMachineInstKind::BrTable(br) => {
-                    // Emit replays `FrameSite::PreInst` from action index 0 for the base
-                    // pre-actions *and* again for every case's compare prep, so an injection
-                    // point planned inside the base actions would fire once per case. Bail to
-                    // the always-active frame whenever the base actions touch the frame, exactly
-                    // as for frame actions inside a case.
-                    if actions_touch_frame(alloc.pre_inst(inst)) {
-                        return None;
-                    }
-                    apply_actions_state(
-                        plan,
-                        FrameSite::PreInst(inst),
-                        alloc.pre_inst(inst),
-                        0,
-                        &mut active,
-                    );
-                    for (case_idx, _) in br.table().iter().enumerate() {
-                        let actions = alloc.br_table_case(inst, case_idx);
-                        if actions_touch_frame(actions) {
-                            return None;
-                        }
-                    }
-                }
-                _ => {
-                    apply_actions_state(
-                        plan,
-                        FrameSite::PreInst(inst),
-                        alloc.pre_inst(inst),
-                        0,
-                        &mut active,
-                    );
-                }
+            if matches!(data, EvmMachineInstKind::Phi(_)) {
+                continue;
             }
-
-            apply_after_site_state(plan, FrameSite::PreInst(inst), &mut active);
-            apply_site_state(plan, FrameSite::Inst(inst), &mut active);
-            if matches!(data, EvmMachineInstKind::Call(_)) && active {
-                active_pre_insts.insert(inst);
-            }
-            apply_after_site_state(plan, FrameSite::Inst(inst), &mut active);
-
-            apply_site_state(plan, FrameSite::PostInst(inst), &mut active);
-            apply_actions_state(
-                plan,
-                FrameSite::PostInst(inst),
-                alloc.post_inst(inst),
-                0,
-                &mut active,
-            );
-            apply_after_site_state(plan, FrameSite::PostInst(inst), &mut active);
-        }
-
-        for succ in cfg.succs_of(block) {
-            let succ = *succ;
-            if let Some(prev) = active_at_entry.get(&succ) {
-                if *prev != active {
-                    return None;
-                }
-            } else {
-                active_at_entry.insert(succ, active);
-                worklist.push(succ);
-            }
-        }
-    }
-
-    Some(active_pre_insts)
-}
-
-fn validate_lazy_frame_activity(
-    function: &Function,
-    alloc: &dyn Allocator,
-    plan: &LazyFramePlan,
-) -> Option<()> {
-    let mut cfg = ControlFlowGraph::default();
-    cfg.compute(function);
-    let entry_block = function.layout.entry_block()?;
-    let mut entry_active = false;
-    let mut covered = apply_enter_function_state(function, alloc, plan, &mut entry_active);
-    let mut active_at_entry: FxHashMap<BlockId, bool> = FxHashMap::default();
-    active_at_entry.insert(entry_block, entry_active);
-    let mut worklist = vec![entry_block];
-
-    while let Some(block) = worklist.pop() {
-        let mut active = *active_at_entry
-            .get(&block)
-            .unwrap_or_else(|| panic!("missing active state for block {}", block.as_u32()));
-        apply_site_state(plan, FrameSite::BlockEntry(block), &mut active);
-
-        for inst in function.layout.iter_inst(block) {
-            apply_site_state(plan, FrameSite::PreInst(inst), &mut active);
-
-            if let Some((prefix, suffix, prefix_len)) =
-                split_call_actions(alloc.pre_inst(inst).clone())
+            sim.site(FrameSite::PreInst(inst), pre_site_actions(alloc, inst))?;
+            if let EvmMachineInstKind::BrTable(br) = &data
+                && !sim.active
+                && (0..br.table().len())
+                    .any(|case| actions_touch_frame(alloc.br_table_case(inst, case)))
             {
-                covered &=
-                    apply_actions_state(plan, FrameSite::PreInst(inst), &prefix, 0, &mut active);
-                covered &= apply_actions_state(
-                    plan,
-                    FrameSite::PreInst(inst),
-                    &suffix,
-                    prefix_len,
-                    &mut active,
-                );
-            } else {
-                covered &= apply_actions_state(
-                    plan,
-                    FrameSite::PreInst(inst),
-                    alloc.pre_inst(inst),
-                    0,
-                    &mut active,
-                );
-            }
-
-            apply_after_site_state(plan, FrameSite::PreInst(inst), &mut active);
-            apply_site_state(plan, FrameSite::Inst(inst), &mut active);
-            if function.dfg.is_return(inst) && active {
                 return None;
             }
-            apply_after_site_state(plan, FrameSite::Inst(inst), &mut active);
-
-            apply_site_state(plan, FrameSite::PostInst(inst), &mut active);
-            covered &= apply_actions_state(
-                plan,
-                FrameSite::PostInst(inst),
-                alloc.post_inst(inst),
-                0,
-                &mut active,
-            );
-            apply_after_site_state(plan, FrameSite::PostInst(inst), &mut active);
+            if function.dfg.is_return(inst) && sim.active {
+                return None;
+            }
+            if matches!(data, EvmMachineInstKind::Call(_)) && sim.active {
+                frame_active_calls.insert(inst);
+            }
+            if emits_post_site(alloc, inst, &data) {
+                sim.site(
+                    FrameSite::PostInst(inst),
+                    fold_stack_actions(alloc.post_inst(inst))
+                        .into_iter()
+                        .enumerate(),
+                )?;
+            }
         }
 
-        for succ in cfg.succs_of(block) {
-            let succ = *succ;
-            if let Some(prev) = active_at_entry.get(&succ) {
-                if *prev != active {
+        for &succ in cfg.succs_of(block) {
+            if let Some(&prev) = active_at_entry.get(&succ) {
+                if prev != sim.active {
                     return None;
                 }
             } else {
-                active_at_entry.insert(succ, active);
+                active_at_entry.insert(succ, sim.active);
                 worklist.push(succ);
             }
         }
     }
 
-    // Every frame slot access must run inside the frame; otherwise it would
-    // address the caller's frame through the restored dynamic SP.
-    covered.then_some(())
+    Some(frame_active_calls)
 }
 
-/// Applies the plan's transitions for the function prologue, returning whether
-/// its frame-touching actions run while the frame is active.
-fn apply_enter_function_state(
-    function: &Function,
-    alloc: &dyn Allocator,
-    plan: &LazyFramePlan,
-    active: &mut bool,
-) -> bool {
-    apply_site_state(plan, FrameSite::EnterFunction, active);
-    let covered = apply_actions_state(
-        plan,
-        FrameSite::EnterFunction,
-        &alloc.enter_function(function),
-        0,
-        active,
-    );
-    apply_after_site_state(plan, FrameSite::EnterFunction, active);
-    covered
+/// Whether the frame is entered as emission runs a plan's transitions.
+struct FrameActivity<'a> {
+    plan: &'a LazyFramePlan,
+    active: bool,
 }
 
-fn split_call_actions(
-    mut actions: smallvec::SmallVec<[Action; 2]>,
-) -> Option<(Vec<Action>, Vec<Action>, usize)> {
-    let cont_pos = actions
-        .iter()
-        .position(|action| matches!(action, Action::PushContinuationOffset))?;
-    let suffix: Vec<Action> = actions.drain(cont_pos + 1..).collect();
-    let marker = actions.remove(cont_pos);
-    debug_assert_eq!(marker, Action::PushContinuationOffset);
-    let prefix = actions.into_iter().collect::<Vec<_>>();
-    let prefix_len = fold_stack_actions(&prefix).len();
-    Some((prefix, suffix, prefix_len))
-}
-
-fn apply_site_state(plan: &LazyFramePlan, site: FrameSite, active: &mut bool) {
-    if plan.enter_before_site(site) {
-        *active = true;
-    }
-    if plan.exit_before_site(site) {
-        *active = false;
-    }
-}
-
-fn apply_after_site_state(plan: &LazyFramePlan, site: FrameSite, active: &mut bool) {
-    if plan.exit_after_site(site) {
-        *active = false;
-    }
-}
-
-/// Applies the plan's transitions around `actions`, returning whether every
-/// frame-touching action runs while the frame is active.
-fn apply_actions_state(
-    plan: &LazyFramePlan,
-    site: FrameSite,
-    actions: &[Action],
-    action_index_offset: usize,
-    active: &mut bool,
-) -> bool {
-    let mut covered = true;
-    for (index, action) in fold_stack_actions(actions).iter().enumerate() {
-        let index = action_index_offset
-            .checked_add(index)
-            .expect("lazy frame action index overflow");
-        if plan.enter_before_action(site, index) {
-            *active = true;
+impl FrameActivity<'_> {
+    fn before_site(&mut self, site: FrameSite) {
+        if self.plan.enter_before_site(site) {
+            self.active = true;
         }
-        covered &= *active || !action_touches_frame(action);
-        if plan.exit_after_action(site, index) {
-            *active = false;
+        if self.plan.exit_before_site(site) {
+            self.active = false;
         }
     }
-    covered
+
+    /// Runs a site's transitions and actions, failing if a frame access runs
+    /// outside the frame: it would address the caller's frame through the
+    /// restored dynamic SP.
+    fn site(
+        &mut self,
+        site: FrameSite,
+        actions: impl IntoIterator<Item = (usize, Action)>,
+    ) -> Option<()> {
+        self.before_site(site);
+        for (index, action) in actions {
+            if self.plan.enter_before_action(site, index) {
+                self.active = true;
+            }
+            if !self.active && action_touches_frame(&action) {
+                return None;
+            }
+            if self.plan.exit_after_action(site, index) {
+                self.active = false;
+            }
+        }
+        if self.plan.exit_after_site(site) {
+            self.active = false;
+        }
+        Some(())
+    }
+}
+
+/// The folded actions emission runs at `inst`'s pre-instruction site, numbered
+/// as plans address them: a call's actions resume numbering after its
+/// continuation push.
+fn pre_site_actions(alloc: &dyn Allocator, inst: InstId) -> Vec<(usize, Action)> {
+    let actions = alloc.pre_inst(inst);
+    match split_at_continuation(actions) {
+        Some((prefix, suffix)) => fold_stack_actions(prefix)
+            .into_iter()
+            .chain(fold_stack_actions(suffix))
+            .enumerate()
+            .collect(),
+        None => fold_stack_actions(actions)
+            .into_iter()
+            .enumerate()
+            .collect(),
+    }
+}
+
+/// Whether emission runs `inst`'s post-instruction site. No code follows a
+/// terminator or a call without a continuation, and phis emit nothing.
+fn emits_post_site(alloc: &dyn Allocator, inst: InstId, data: &EvmMachineInstKind) -> bool {
+    match data {
+        EvmMachineInstKind::Phi(_)
+        | EvmMachineInstKind::Jump(_)
+        | EvmMachineInstKind::Br(_)
+        | EvmMachineInstKind::BrTable(_)
+        | EvmMachineInstKind::Unreachable(_)
+        | EvmMachineInstKind::Return(_) => false,
+        EvmMachineInstKind::Call(_) => split_at_continuation(alloc.pre_inst(inst)).is_some(),
+        _ => true,
+    }
 }
 
 fn collect_dep_points(
@@ -581,185 +441,96 @@ fn collect_dep_points(
 ) -> Option<Vec<DepPoint>> {
     let reachable_returns = compute_reachable_returns(function, cfg);
     let order = PointOrderTable::new(function)?;
-    let root_use = RootUseDepCtx {
-        reachable_returns: &reachable_returns,
-        rooted: &roots.rooted_values,
+    let mut deps = DepPoints {
         order: &order,
+        points: Vec::new(),
+        seen: FxHashSet::default(),
     };
-    let mut out = Vec::new();
-    let mut seen = FxHashSet::default();
 
-    let entry_block = function.layout.entry_block()?;
-    collect_action_dep_points(
-        &mut out,
-        &mut seen,
-        &order,
-        entry_block,
+    deps.push_actions(
+        function.layout.entry_block()?,
         FrameSite::EnterFunction,
-        &alloc.enter_function(function),
-        0,
+        fold_stack_actions(&alloc.enter_function(function))
+            .into_iter()
+            .enumerate(),
     );
 
     let machine_isa = sonatina_ir::isa::evm::EvmMachine::new(function.dfg.ctx.triple);
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
-
-            match &data {
-                EvmMachineInstKind::Call(_) => {
-                    if let Some((prefix, suffix, prefix_len)) =
-                        split_call_actions(alloc.pre_inst(inst).clone())
-                    {
-                        collect_action_dep_points(
-                            &mut out,
-                            &mut seen,
-                            &order,
-                            block,
-                            FrameSite::PreInst(inst),
-                            &prefix,
-                            0,
-                        );
-                        collect_action_dep_points(
-                            &mut out,
-                            &mut seen,
-                            &order,
-                            block,
-                            FrameSite::PreInst(inst),
-                            &suffix,
-                            prefix_len,
-                        );
-                    } else {
-                        collect_action_dep_points(
-                            &mut out,
-                            &mut seen,
-                            &order,
-                            block,
-                            FrameSite::PreInst(inst),
-                            alloc.pre_inst(inst),
-                            0,
-                        );
-                    }
-                }
-                EvmMachineInstKind::BrTable(br) => {
-                    // See `compute_active_pre_insts`: base pre-actions that touch the frame make
-                    // the lazy plan invalid, because emit replays their action indexes per case.
-                    if actions_touch_frame(alloc.pre_inst(inst)) {
-                        return None;
-                    }
-                    collect_action_dep_points(
-                        &mut out,
-                        &mut seen,
-                        &order,
-                        block,
-                        FrameSite::PreInst(inst),
-                        alloc.pre_inst(inst),
-                        0,
-                    );
-                    for (case_idx, _) in br.table().iter().enumerate() {
-                        let actions = alloc.br_table_case(inst, case_idx);
-                        if actions_touch_frame(actions) {
-                            return None;
-                        }
-                    }
-                }
-                _ => collect_action_dep_points(
-                    &mut out,
-                    &mut seen,
-                    &order,
-                    block,
-                    FrameSite::PreInst(inst),
-                    alloc.pre_inst(inst),
-                    0,
-                ),
+            // Phis emit no code, so their values need the frame only where
+            // their inputs are defined and their results used.
+            if matches!(data, EvmMachineInstKind::Phi(_)) {
+                continue;
+            }
+            // Emission runs case compares without transitions of their own.
+            if let EvmMachineInstKind::BrTable(br) = &data
+                && (0..br.table().len())
+                    .any(|case| actions_touch_frame(alloc.br_table_case(inst, case)))
+            {
+                return None;
             }
 
+            let pre = FrameSite::PreInst(inst);
+            deps.push_actions(block, pre, pre_site_actions(alloc, inst));
+
+            let post_site = emits_post_site(alloc, inst, &data);
+            // A call without a continuation never returns, so the frame it
+            // uses stays entered: its post site, where the exit would go, is
+            // never emitted.
+            let inst_exit = if post_site || matches!(data, EvmMachineInstKind::Call(_)) {
+                FrameInjectionPoint::BeforeSite(FrameSite::PostInst(inst))
+            } else {
+                FrameInjectionPoint::AfterSite(pre)
+            };
             if roots.root_def_insts.contains(&inst) {
-                push_dep_point(
-                    &mut out,
-                    &mut seen,
-                    &order,
+                deps.push(block, FrameInjectionPoint::BeforeSite(pre), inst_exit);
+            }
+
+            let rooted_operands: FxHashSet<ValueId> = function
+                .dfg
+                .inst(inst)
+                .collect_values()
+                .into_iter()
+                .filter(|value| roots.rooted_values.contains(value))
+                .collect();
+            if !rooted_operands.is_empty() && !is_alias_preserving_root_use(&data) {
+                deps.push(block, FrameInjectionPoint::BeforeSite(pre), inst_exit);
+                if is_escape_like_root_use(function, inst, &data, &rooted_operands) {
+                    for &(ret_block, ret) in reachable_returns.get(&block).into_iter().flatten() {
+                        let ret = FrameSite::PreInst(ret);
+                        deps.push(
+                            ret_block,
+                            FrameInjectionPoint::BeforeSite(ret),
+                            FrameInjectionPoint::AfterSite(ret),
+                        );
+                    }
+                }
+            }
+
+            if post_site {
+                deps.push_actions(
                     block,
-                    FrameInjectionPoint::BeforeSite(FrameSite::PreInst(inst)),
-                    FrameInjectionPoint::BeforeSite(FrameSite::PostInst(inst)),
+                    FrameSite::PostInst(inst),
+                    fold_stack_actions(alloc.post_inst(inst))
+                        .into_iter()
+                        .enumerate(),
                 );
             }
-
-            collect_root_use_dep_points(
-                function, &root_use, block, inst, &data, &mut out, &mut seen,
-            );
-
-            collect_action_dep_points(
-                &mut out,
-                &mut seen,
-                &order,
-                block,
-                FrameSite::PostInst(inst),
-                alloc.post_inst(inst),
-                0,
-            );
         }
     }
-    Some(out)
-}
-
-fn collect_root_use_dep_points(
-    function: &Function,
-    root_use: &RootUseDepCtx<'_>,
-    block: BlockId,
-    inst: InstId,
-    data: &EvmMachineInstKind,
-    out: &mut Vec<DepPoint>,
-    seen: &mut FxHashSet<(FrameInjectionPoint, FrameInjectionPoint)>,
-) {
-    let rooted_operands: FxHashSet<ValueId> = function
-        .dfg
-        .inst(inst)
-        .collect_values()
-        .into_iter()
-        .filter(|value| root_use.rooted.contains(value))
-        .collect();
-    if rooted_operands.is_empty() || is_alias_preserving_root_use(function, inst, data) {
-        return;
-    }
-
-    if !function.dfg.is_return(inst) {
-        push_dep_point(
-            out,
-            seen,
-            root_use.order,
-            block,
-            FrameInjectionPoint::BeforeSite(FrameSite::PreInst(inst)),
-            FrameInjectionPoint::BeforeSite(FrameSite::PostInst(inst)),
-        );
-    }
-
-    if is_escape_like_root_use(function, inst, data, &rooted_operands) {
-        for &(ret_block, ret_inst) in root_use.reachable_returns.get(&block).into_iter().flatten() {
-            push_dep_point(
-                out,
-                seen,
-                root_use.order,
-                ret_block,
-                FrameInjectionPoint::BeforeSite(FrameSite::PreInst(ret_inst)),
-                FrameInjectionPoint::AfterSite(FrameSite::PreInst(ret_inst)),
-            );
-        }
-    }
+    Some(deps.points)
 }
 
 /// These uses need no frame themselves: their results are rooted too (or, for
 /// lowered geps, feed a rooted result), so the accesses through them carry the
 /// dependency.
-fn is_alias_preserving_root_use(
-    function: &Function,
-    inst: InstId,
-    data: &EvmMachineInstKind,
-) -> bool {
-    function.dfg.is_phi(inst)
-        || matches!(
-            data,
-            EvmMachineInstKind::Add(_) | EvmMachineInstKind::Sub(_)
-        )
+fn is_alias_preserving_root_use(data: &EvmMachineInstKind) -> bool {
+    matches!(
+        data,
+        EvmMachineInstKind::Add(_) | EvmMachineInstKind::Sub(_)
+    )
 }
 
 fn is_escape_like_root_use(
@@ -815,33 +586,6 @@ fn compute_reachable_returns(
     out
 }
 
-fn collect_action_dep_points(
-    out: &mut Vec<DepPoint>,
-    seen: &mut FxHashSet<(FrameInjectionPoint, FrameInjectionPoint)>,
-    order: &PointOrderTable,
-    block: BlockId,
-    site: FrameSite,
-    actions: &[Action],
-    action_index_offset: usize,
-) {
-    let folded = fold_stack_actions(actions);
-    for (index, action) in folded.iter().enumerate() {
-        if action_touches_frame(action) {
-            let action_index = action_index_offset
-                .checked_add(index)
-                .expect("frame action index overflow");
-            push_dep_point(
-                out,
-                seen,
-                order,
-                block,
-                FrameInjectionPoint::BeforeAction { site, action_index },
-                FrameInjectionPoint::AfterAction { site, action_index },
-            );
-        }
-    }
-}
-
 /// Frame slot accesses address the frame through the current dynamic SP, so
 /// they must run while the frame is entered.
 fn action_touches_frame(action: &Action) -> bool {
@@ -855,26 +599,40 @@ fn actions_touch_frame(actions: &[Action]) -> bool {
     fold_stack_actions(actions).iter().any(action_touches_frame)
 }
 
-fn push_dep_point(
-    out: &mut Vec<DepPoint>,
-    seen: &mut FxHashSet<(FrameInjectionPoint, FrameInjectionPoint)>,
-    order: &PointOrderTable,
-    block: BlockId,
-    enter: FrameInjectionPoint,
-    exit: FrameInjectionPoint,
-) {
-    if !seen.insert((enter, exit)) {
-        return;
+impl DepPoints<'_> {
+    fn push(&mut self, block: BlockId, enter: FrameInjectionPoint, exit: FrameInjectionPoint) {
+        if !self.seen.insert((enter, exit)) {
+            return;
+        }
+        let ordered = |point| OrderedPoint {
+            order: self.order.key(block, point),
+            point,
+        };
+        self.points.push(DepPoint {
+            block,
+            enter: ordered(enter),
+            exit: ordered(exit),
+        });
     }
-    let ordered = |point| OrderedPoint {
-        order: order.key(block, point),
-        point,
-    };
-    out.push(DepPoint {
-        block,
-        enter: ordered(enter),
-        exit: ordered(exit),
-    });
+
+    /// Frame-touching actions need the frame from just before to just after
+    /// themselves.
+    fn push_actions(
+        &mut self,
+        block: BlockId,
+        site: FrameSite,
+        actions: impl IntoIterator<Item = (usize, Action)>,
+    ) {
+        for (action_index, action) in actions {
+            if action_touches_frame(&action) {
+                self.push(
+                    block,
+                    FrameInjectionPoint::BeforeAction { site, action_index },
+                    FrameInjectionPoint::AfterAction { site, action_index },
+                );
+            }
+        }
+    }
 }
 
 fn earliest_point_in_block(points: &[DepPoint], block: BlockId) -> Option<FrameInjectionPoint> {
@@ -964,8 +722,7 @@ impl PointOrderTable {
                 site_base
             }
             FrameSite::PreInst(inst) => self.inst_site_rank(inst, site_base, 0),
-            FrameSite::Inst(inst) => self.inst_site_rank(inst, site_base, 1),
-            FrameSite::PostInst(inst) => self.inst_site_rank(inst, site_base, 2),
+            FrameSite::PostInst(inst) => self.inst_site_rank(inst, site_base, 1),
         }
     }
 
@@ -978,7 +735,7 @@ impl PointOrderTable {
         site_base
             .checked_add(1)
             .and_then(|rank| {
-                rank.checked_add(inst_rank.checked_mul(3).expect("site rank overflow"))
+                rank.checked_add(inst_rank.checked_mul(2).expect("site rank overflow"))
             })
             .and_then(|rank| rank.checked_add(offset))
             .expect("site rank overflow")
@@ -1136,7 +893,7 @@ block2:
                 }],
                 "the frame must be left after the final reload, not before it"
             );
-            assert!(validate_lazy_frame_activity(function, &alloc, &plan).is_some());
+            assert!(simulate_lazy_frame(function, &alloc, &plan).is_some());
         });
     }
 
@@ -1158,7 +915,7 @@ block2:
                     load_inst,
                 ))],
             };
-            assert!(validate_lazy_frame_activity(function, &alloc, &plan).is_none());
+            assert!(simulate_lazy_frame(function, &alloc, &plan).is_none());
         });
     }
 
@@ -1230,7 +987,7 @@ block4:
                     assert!(plan.exit_before_site(FrameSite::BlockEntry(returns[1])));
                 }
                 assert_eq!(
-                    validate_lazy_frame_activity(function, &alloc, &plan).is_none(),
+                    simulate_lazy_frame(function, &alloc, &plan).is_none(),
                     shared_return
                 );
                 let mem_plan = MachineFuncPlan {
@@ -1269,7 +1026,7 @@ block4:
                 },
                 exits: Vec::new(),
             };
-            assert!(validate_lazy_frame_activity(function, &alloc, &plan).is_none());
+            assert!(simulate_lazy_frame(function, &alloc, &plan).is_none());
 
             let ret = function
                 .layout
@@ -1277,7 +1034,7 @@ block4:
                 .expect("return exists");
             plan.exits
                 .push(FrameInjectionPoint::AfterSite(FrameSite::PreInst(ret)));
-            assert!(validate_lazy_frame_activity(function, &alloc, &plan).is_some());
+            assert!(simulate_lazy_frame(function, &alloc, &plan).is_some());
         });
     }
 
@@ -1319,14 +1076,68 @@ block0:
                 }]
             );
             assert!(
-                validate_lazy_frame_activity(function, &alloc, &plan).is_some(),
+                simulate_lazy_frame(function, &alloc, &plan).is_some(),
                 "an enter in the prologue makes the body's frame accesses active"
             );
         });
     }
 
     #[test]
-    fn br_table_frame_actions_abort_lazy_frame_dependency_collection() {
+    fn lazy_frame_exits_before_a_terminator_with_a_rooted_operand() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %dispatch(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    br_table v1 block3 (0.i256 block1) (11.i256 block2);
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+
+block3:
+    return 3.i256;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+        parsed.module.func_store.view(func_ref, |function| {
+            let root = parsed.debug.value(func_ref, "v1").expect("v1 exists");
+            let root_def = function.dfg.value_inst(root).expect("v1 is defined");
+            let term = function
+                .layout
+                .last_inst_of(function.layout.inst_block(root_def))
+                .expect("block0 has a terminator");
+            let mut roots = MachineFrameRoots::default();
+            roots.root_def_insts.insert(root_def);
+            roots.rooted_values.insert(root);
+            let mut alloc = TestAlloc::for_function(function);
+            alloc.cases[term] = vec![Actions::new(); 2];
+
+            let mut plan = compute_lazy_frame_plan_inner(function, &alloc, &roots)
+                .expect("rooted values should produce a lazy frame plan");
+            assert!(plan.enter_before_site(FrameSite::PreInst(root_def)));
+            assert_eq!(
+                plan.exits,
+                vec![FrameInjectionPoint::AfterSite(FrameSite::PreInst(term))],
+                "no code runs after a terminator, so the frame is left before it"
+            );
+            assert!(simulate_lazy_frame(function, &alloc, &plan).is_some());
+
+            plan.exits = vec![FrameInjectionPoint::BeforeSite(FrameSite::PostInst(term))];
+            assert!(
+                simulate_lazy_frame(function, &alloc, &plan).is_none(),
+                "an exit after a terminator is never emitted"
+            );
+        });
+    }
+
+    #[test]
+    fn br_table_case_frame_actions_abort_lazy_frame_dependency_collection() {
         const SRC: &str = r#"
 target = "evm-ethereum-osaka"
 
@@ -1384,10 +1195,13 @@ block3:
             let mut base_action_alloc = TestAlloc::for_function(function);
             base_action_alloc.pre[term].push(Action::MemLoadFrameSlot(0));
             base_action_alloc.cases[term] = vec![Actions::new(); case_count];
-            assert!(
-                collect_dep_points(function, &cfg, &base_action_alloc, &roots).is_none(),
-                "frame-touching br_table base actions must abort dependency collection"
-            );
+            let base_dep_points = collect_dep_points(function, &cfg, &base_action_alloc, &roots)
+                .expect("br_table base actions run once, so they can carry transitions");
+            assert!(base_dep_points.iter().any(|point| point.enter.point
+                == FrameInjectionPoint::BeforeAction {
+                    site: FrameSite::PreInst(term),
+                    action_index: 0,
+                }));
 
             let mut case_action_alloc = TestAlloc::for_function(function);
             case_action_alloc.cases[term] = vec![Actions::new(); case_count];

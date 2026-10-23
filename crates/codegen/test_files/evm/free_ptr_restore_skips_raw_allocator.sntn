@@ -1,0 +1,54 @@
+#! evm.config: { opt: 0 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(5)
+
+target = "evm-ethereum-osaka"
+
+# `%f` has a persistent malloc (live across another malloc) and returns, as
+# an integer, a buffer a raw allocator bumped the free pointer past. Restoring
+# the free pointer on return would free that buffer while the caller still
+# uses it.
+
+func public %entry() {
+    block0:
+        mstore 64.i32 512.i256 i256;
+        v0.i256 = call %f;
+        v1.*i256 = evm_malloc 32.i256;
+        v2.*i256 = evm_malloc 32.i256;
+        mstore v1 9.i256 i256;
+        mstore v2 9.i256 i256;
+        v3.*i256 = int_to_ptr v0 *i256;
+        v4.i256 = mload v3 i256;
+        mstore 0.i32 v4 i256;
+        evm_return 0.i8 32.i8;
+}
+
+func private %f() -> i256 {
+    block0:
+        v0.*i256 = evm_malloc 32.i256;
+        mstore v0 5.i256 i256;
+        v5.*i256 = evm_malloc 32.i256;
+        mstore v5 1.i256 i256;
+        v6.i256 = mload v5 i256;
+        v1.i256 = call %raw_alloc 32.i256;
+        v2.*i256 = int_to_ptr v1 *i256;
+        v3.i256 = mload v0 i256;
+        v4.i256 = mul v3 v6;
+        mstore v2 v4 i256;
+        return v1;
+}
+
+func private %raw_alloc(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mload 64.i32 i256;
+        v2.i256 = add v1 v0;
+        mstore 64.i32 v2 i256;
+        return v1;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

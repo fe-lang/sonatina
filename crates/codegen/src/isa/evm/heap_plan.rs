@@ -15,20 +15,21 @@ use sonatina_ir::{
 use super::{
     immediate_u32,
     memory_plan::{
-        BackendSpillReserve, FuncPreAnalysis, ObjLoc, ProgramMemoryPlan, SemanticFuncPlan,
-        WORD_BYTES, compute_abs_clobber_words_with_extra, expect_func_entry,
+        FuncPreAnalysis, ObjLoc, ProgramMemoryPlan, SemanticFuncPlan, WORD_BYTES,
+        compute_abs_clobber_words, expect_func_entry,
     },
-    ptr_provenance::Provenance,
+    ptr_escape::PtrEscapeSummaries,
+    ptr_provenance::{Provenance, ProvenanceInfo, compute_value_provenance},
+    static_arena_alloc::alloca_size_words,
 };
 use crate::{liveness::InstLiveness, module_analysis::CallGraphSchedule};
 
-pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
+pub(crate) fn compute_semantic_malloc_future_abs_words(
     module: &Module,
     schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     isa: &Evm,
-    extra_clobber_words: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, FxHashMap<InstId, u32>> {
     compute_malloc_future_abs_words_with_analysis(
         module,
@@ -36,14 +37,33 @@ pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
         plan,
         analyses,
         isa,
-        extra_clobber_words,
         |analysis| FutureBoundsAnalysis {
             cfg: &analysis.cfg,
             inst_liveness: &analysis.inst_liveness,
             canonicalize: &analysis.value_aliases,
-            prov_conservative: &analysis.prov_conservative_value,
+            prov: &analysis.heap_bound_prov,
         },
     )
+}
+
+/// Value provenance for heap bounds: the origins found with all-conservative
+/// callee summaries, which hold regardless of callee escape behavior, plus
+/// those the real summaries find. The conservative model alone loses
+/// addresses that flow through integer-typed call results, such as a callee
+/// returning an `i256` argument, which would let a malloc overlap the
+/// allocation it still points at.
+pub(crate) fn compute_heap_bound_provenance(
+    function: &Function,
+    module: &ModuleCtx,
+    isa: &Evm,
+    prov: &ProvenanceInfo,
+) -> SecondaryMap<ValueId, Provenance> {
+    let mut heap_bound_prov =
+        compute_value_provenance(function, module, isa, &PtrEscapeSummaries::conservative());
+    for value in function.dfg.value_ids() {
+        heap_bound_prov[value].union_with(&prov.value[value]);
+    }
+    heap_bound_prov
 }
 
 fn compute_malloc_future_abs_words_with_analysis<A>(
@@ -52,14 +72,12 @@ fn compute_malloc_future_abs_words_with_analysis<A>(
     plan: &ProgramMemoryPlan,
     analyses: &FxHashMap<FuncRef, A>,
     isa: &Evm,
-    extra_clobber_words: &FxHashMap<FuncRef, BackendSpillReserve>,
     analysis_view: impl Fn(&A) -> FutureBoundsAnalysis<'_> + Sync,
 ) -> FxHashMap<FuncRef, FxHashMap<InstId, u32>>
 where
     A: Sync,
 {
-    let abs_clobber_words =
-        compute_abs_clobber_words_with_extra(schedule, plan, extra_clobber_words);
+    let abs_clobber_words = compute_abs_clobber_words(schedule, plan);
     let mut results: Vec<_> = schedule
         .funcs()
         .par_iter()
@@ -95,9 +113,7 @@ struct FutureBoundsAnalysis<'a> {
     cfg: &'a ControlFlowGraph,
     inst_liveness: &'a InstLiveness,
     canonicalize: &'a SecondaryMap<ValueId, Option<ValueId>>,
-    /// Deliberately computed with all-conservative callee summaries: heap
-    /// bounds must hold regardless of callee escape behavior.
-    prov_conservative: &'a SecondaryMap<ValueId, Provenance>,
+    prov: &'a SecondaryMap<ValueId, Provenance>,
 }
 
 struct FutureBoundsCtx<'a> {
@@ -114,7 +130,7 @@ fn compute_future_bounds_for_func(
     ctx: &FutureBoundsCtx<'_>,
 ) -> FxHashMap<InstId, u32> {
     let cfg = ctx.analysis.cfg;
-    let prov = ctx.analysis.prov_conservative;
+    let prov = ctx.analysis.prov;
 
     let mut alloca_end_words: FxHashMap<InstId, u32> = FxHashMap::default();
     for (&inst, &loc) in &ctx.func_plan.alloca_loc {
@@ -126,12 +142,7 @@ fn compute_future_bounds_for_func(
         let Some(base_word) = absolute_base_word_for_loc(ctx.func_plan, loc) else {
             continue;
         };
-        let size_bytes: u32 = ctx
-            .isa
-            .type_layout()
-            .size_of(*alloca.ty(), ctx.module)
-            .expect("alloca has invalid type") as u32;
-        let size_words = size_bytes.div_ceil(WORD_BYTES);
+        let size_words = alloca_size_words(ctx.isa, ctx.module, *alloca.ty());
         let end_words = base_word
             .checked_add(size_words)
             .expect("alloca end words overflow");
@@ -566,12 +577,11 @@ block0:
             &plan,
             &analyses,
             &isa,
-            &FxHashMap::default(),
             |analysis| FutureBoundsAnalysis {
                 cfg: &analysis.cfg,
                 inst_liveness: &analysis.inst_liveness,
                 canonicalize: &analysis.value_aliases,
-                prov_conservative: &analysis.prov_conservative,
+                prov: &analysis.prov_conservative,
             },
         );
 
@@ -646,12 +656,11 @@ block0:
             &plan,
             &analyses,
             &isa,
-            &FxHashMap::default(),
             |analysis| FutureBoundsAnalysis {
                 cfg: &analysis.cfg,
                 inst_liveness: &analysis.inst_liveness,
                 canonicalize: &analysis.value_aliases,
-                prov_conservative: &analysis.prov_conservative,
+                prov: &analysis.prov_conservative,
             },
         );
 

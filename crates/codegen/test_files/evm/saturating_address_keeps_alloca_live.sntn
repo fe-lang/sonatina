@@ -1,0 +1,31 @@
+#! evm.config: { opt: 0 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(111)
+
+target = "evm-ethereum-osaka"
+
+# `v2` addresses `v0`'s object through a saturating add, so the object stays
+# live until `v6` reads it: `v3` must not take its slot.
+
+func public %entry() {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 111.i256 i256;
+        v1.i256 = ptr_to_int v0 i256;
+        v2.i256 = evm_uaddsat v1 0.i256 i32;
+        v3.*i256 = alloca i256;
+        mstore v3 222.i256 i256;
+        v4.i256 = mload v3 i256;
+        v6.i256 = mload v2 i256;
+        v7.i256 = mul v4 0.i256;
+        v8.i256 = add v6 v7;
+        mstore 0.i32 v8 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

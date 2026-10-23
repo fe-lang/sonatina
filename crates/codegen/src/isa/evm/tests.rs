@@ -40,12 +40,13 @@ use self::{
         final_spills::compute_malloc_spill_bounds,
         module::FuncMachineMap,
         placement::{
-            EvmMemoryPlacementPlan, MemoryPlacementSection, compute_semantic_memory_placement,
+            EvmMemoryPlacementPlan, MallocPlacement, MemoryPlacementSection,
+            compute_semantic_memory_placement,
         },
     },
     memory_plan::{
         ArenaCostModel, BackendSpillPlan, BackendSpillReserve, DYN_SP_SLOT, ProgramMemoryPlan,
-        compute_abs_clobber_words_with_extra, compute_semantic_program_memory_plan,
+        compute_abs_clobber_words, compute_semantic_program_memory_plan,
     },
     prepare::compute_return_escape_caller_clamp_words,
 };
@@ -138,19 +139,15 @@ fn compute_test_pre_analysis(
         &backend.isa,
         ptr_escape,
     );
-    let prov_conservative_value = crate::isa::evm::ptr_provenance::compute_value_provenance(
-        function,
-        module,
-        &backend.isa,
-        &PtrEscapeSummaries::conservative(),
-    );
+    let heap_bound_prov =
+        super::heap_plan::compute_heap_bound_provenance(function, module, &backend.isa, &prov);
     memory_plan::FuncPreAnalysis {
         block_order: dom.rpo().to_owned(),
         value_aliases: backend.compute_high_evm_value_aliases(function, module),
         cfg,
         inst_liveness,
         prov,
-        prov_conservative_value,
+        heap_bound_prov,
     }
 }
 
@@ -196,18 +193,92 @@ fn free_ptr_restore_preserves_heap_published_by_a_callee() {
     ))
     .expect("module parses");
     let backend = osaka_backend();
-    let summaries =
-        compute_ptr_escape_summaries(&parsed.module, &parsed.module.funcs(), &backend.isa);
-    let forward = find_func(&parsed.module, "forward");
-    parsed.module.func_store.modify(forward, |function| {
-        let before = function.layout.iter_all_insts().count();
-        prepare_free_ptr_restore(function, &parsed.module.ctx, &backend, &summaries);
-        let after = function.layout.iter_all_insts().count();
-        assert_eq!(
-            before, after,
-            "callee's published allocation prevents heap restoration"
-        );
-    });
+    let entry = find_func(&parsed.module, "entry");
+    let placement = compute_test_memory_placement(&parsed.module, &backend, entry, &[]);
+    assert!(
+        !placement.funcs[&find_func(&parsed.module, "forward")].restores_free_ptr,
+        "callee's published allocation prevents heap restoration"
+    );
+}
+
+#[test]
+fn free_ptr_restore_follows_final_transient_mallocs() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %fill(v0.*i256) {
+block0:
+    mstore v0 1.i256 i256;
+    return;
+}
+
+func private %scratch() {
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    mstore v0 2.i256 i256;
+    return;
+}
+
+func private %transient() -> i256 {
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    call %fill v0;
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+func private %persistent() -> i256 {
+block0:
+    v0.*i256 = evm_malloc 32.i256;
+    call %fill v0;
+    call %scratch;
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+func private %reverting(v0.i1) -> i256 {
+block0:
+    br v0 block1 block2;
+block1:
+    v1.*i256 = evm_malloc 32.i256;
+    call %scratch;
+    mstore v1 3.i256 i256;
+    v2.i256 = ptr_to_int v1 i256;
+    evm_revert v2 32.i256;
+block2:
+    return 4.i256;
+}
+
+func public %entry(v0.i1) {
+block0:
+    v1.i256 = call %transient;
+    v2.i256 = call %persistent;
+    v3.i256 = call %reverting v0;
+    v4.i256 = add v1 v2;
+    v5.i256 = add v4 v3;
+    mstore 0.i256 v5 i256;
+    evm_return 0.i256 32.i256;
+}
+"#,
+    )
+    .expect("module parses");
+    let backend = osaka_backend();
+    let entry = find_func(&parsed.module, "entry");
+    let placement = compute_test_memory_placement(&parsed.module, &backend, entry, &[]);
+    let restores = |name| placement.funcs[&find_func(&parsed.module, name)].restores_free_ptr;
+    assert!(
+        !restores("transient"),
+        "a call that cannot allocate leaves the buffer transient, with nothing to release"
+    );
+    assert!(
+        restores("persistent"),
+        "an allocating call makes the buffer persistent, released on return"
+    );
+    assert!(
+        !restores("reverting"),
+        "a persistent buffer that no return follows needs no release"
+    );
 }
 
 fn first_memory_op(lowered: &LoweredFunction<OpCode>) -> Option<u8> {
@@ -862,6 +933,76 @@ object @Contract {
 }
 
 #[test]
+fn frameless_recursion_needs_no_dyn_sp() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %count(v0.i256) -> i256 {
+block0:
+    v1.i1 = is_zero v0;
+    br v1 block1 block2;
+block1:
+    return 0.i256;
+block2:
+    v2.i256 = sub v0 1.i256;
+    v3.i256 = call %count v2;
+    v4.i256 = add v3 1.i256;
+    return v4;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %count 3.i256;
+    v1.*i256 = evm_malloc 32.i256;
+    mstore v1 v0 i256;
+    v2.i256 = ptr_to_int v1 i256;
+    evm_return v2 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let entry = find_func(&parsed.module, "entry");
+    let count = find_func(&parsed.module, "count");
+    let backend = osaka_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(
+            &parsed.module,
+            &[entry, count],
+            entry,
+        ))
+        .expect("prepare should succeed");
+    let count_plan = prepared
+        .function_plan(count)
+        .expect("missing function plan");
+    assert!(count_plan.mem_plan.uses_dynamic_frame());
+    assert!(!count_plan.mem_plan.has_dynamic_frame());
+    for func in [entry, count] {
+        let plan = prepared.function_plan(func).expect("missing function plan");
+        assert_eq!(plan.dyn_sp_plan.entry_init, None);
+        assert!(plan.dyn_sp_plan.frontier_init_calls.is_empty());
+        assert!(plan.dyn_sp_plan.checked_frontier_init_calls.is_empty());
+        let lowered = backend
+            .lower_function(&prepared, func)
+            .expect("function lowers");
+        assert!(
+            !contains_subsequence(
+                &lowered_bytes(&lowered),
+                &[OpCode::PUSH1 as u8, DYN_SP_SLOT, OpCode::MLOAD as u8]
+            ),
+            "no frame is ever pushed, so nothing reads the dynamic SP"
+        );
+    }
+}
+
+#[test]
 fn recursive_entry_without_live_frame_initializes_dyn_sp_directly() {
     let parsed = parse_module(
         r#"
@@ -1338,13 +1479,15 @@ block3:
 
 #[test]
 fn private_memzero_uses_fixed_buffer_only_with_bounded_accesses() {
+    // The parameter keeps the entry's free pointer from being known fresh, so
+    // only the fixed-buffer rule can turn the heap base into a constant.
     for (offset, len, fixed) in [(0, 64, true), (32, 32, true), (32, 64, false)] {
         let dumped = prepared_func_dump(
             &format!(
                 r#"
 target = "evm-ethereum-osaka"
 
-func public %entry() -> i256 {{
+func public %entry(v9.i256) -> i256 {{
 block0:
     v0.*i8 = evm_malloc 64.i256;
     v1.i256 = ptr_to_int v0 i256;
@@ -1487,11 +1630,12 @@ block4:
 
 #[test]
 fn terminal_private_malloc_keeps_heap_base_when_pointer_value_escapes_in_payload() {
+    // The parameter keeps the entry's free pointer from being known fresh.
     let dumped = prepared_func_dump(
         r#"
 target = "evm-ethereum-osaka"
 
-func public %entry() {
+func public %entry(v9.i256) {
 block0:
     v0.*i8 = evm_malloc 32.i256;
     v1.i256 = ptr_to_int v0 i256;
@@ -1883,36 +2027,11 @@ block0:
 
     let mk = ctx.names["mk"];
     let main = ctx.names["main"];
-    let abs_clobber_words = compute_abs_clobber_words_with_extra(
-        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
-        &ctx.plan,
-        &FxHashMap::default(),
-    );
-    let clamp_words = compute_return_escape_caller_clamp_words(
-        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
-        &ctx.plan,
-        &FxHashMap::default(),
-    );
-    let main_clobber_words = abs_clobber_words[&main];
+    let schedule = crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs);
+    let abs_clobber_words = compute_abs_clobber_words(&schedule, &ctx.plan);
+    let clamp_words = compute_return_escape_caller_clamp_words(&schedule, &ctx.plan);
 
-    assert_eq!(clamp_words[&mk], main_clobber_words);
-
-    let extra_reserve = BackendSpillReserve {
-        scratch_words: 3,
-        stable_words: 0,
-    };
-    let extra_main_clobber_words = main_clobber_words
-        .checked_add(extra_reserve.scratch_words)
-        .expect("test clobber overflow");
-    let mut extra_clobber_words = FxHashMap::default();
-    extra_clobber_words.insert(main, extra_reserve);
-    let clamp_words = compute_return_escape_caller_clamp_words(
-        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
-        &ctx.plan,
-        &extra_clobber_words,
-    );
-
-    assert_eq!(clamp_words[&mk], extra_main_clobber_words);
+    assert_eq!(clamp_words[&mk], abs_clobber_words[&main]);
 }
 
 #[test]
@@ -2371,6 +2490,80 @@ block0:
         );
         // The probe's malloc needs no clamp exactly when the entry stores the floor.
         assert_eq!(floors, [placement.section_entry_free_ptr], "{name}");
+    }
+}
+
+#[test]
+fn section_entry_malloc_base_is_constant_only_when_entered_once() {
+    for (name, access, caller, included, exact) in [
+        ("plain", "", "", false, true),
+        // The slot read keeps the entry from storing a free pointer, so the
+        // base is the zero memory starts with, clamped to the minimum.
+        (
+            "slot_read",
+            "v3.i256 = mload 64.i256 i256;\n    evm_sstore 0.i256 v3;",
+            "",
+            false,
+            true,
+        ),
+        (
+            "called",
+            "",
+            "func public %alt() {\nblock0:\n    call %entry;\n    evm_stop;\n}",
+            false,
+            false,
+        ),
+        ("included", "", "", true, false),
+        (
+            "loop_header",
+            "v3.i256 = evm_sload 0.i256;\n    evm_sstore 0.i256 1.i256;\n    v4.i1 = eq v3 0.i256;\n    br v4 block0 block1;\nblock1:",
+            "",
+            false,
+            false,
+        ),
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %probe() -> i256 {{
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}}
+func public %entry() {{
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = call %probe;
+    {access}
+    evm_mstore 0.i256 v1;
+    evm_mstore 32.i256 v2;
+    evm_return 0.i256 64.i256;
+}}
+{caller}
+"#
+        );
+        let module = parse_module(&source).expect("module parses").module;
+        let backend = osaka_backend();
+        let entry = find_func(&module, "entry");
+        let includes = if included { vec![entry] } else { Vec::new() };
+        let placement = compute_test_memory_placement(&module, &backend, entry, &includes);
+        let [
+            &MallocPlacement::Heap {
+                min_base,
+                exact_base,
+                ..
+            },
+        ] = placement.funcs[&entry]
+            .malloc_placements
+            .values()
+            .collect::<Vec<_>>()[..]
+        else {
+            panic!("{name}: expected one heap malloc in the entry");
+        };
+        let expected = exact.then(|| placement.section_entry_free_ptr.unwrap_or(min_base));
+        assert_eq!(exact_base, expected, "{name}");
     }
 }
 

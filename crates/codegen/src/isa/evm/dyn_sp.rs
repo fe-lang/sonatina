@@ -78,7 +78,7 @@ pub(crate) fn compute_machine_dyn_sp_plan(
             .any(|func| {
                 mem_plans
                     .get(&func)
-                    .is_some_and(MachineFuncPlan::uses_dynamic_frame)
+                    .is_some_and(MachineFuncPlan::has_dynamic_frame)
             })
         {
             ready_sccs.insert(scc_ref);
@@ -109,7 +109,7 @@ pub(crate) fn compute_machine_dyn_sp_plan(
                             continue;
                         }
 
-                        let edge_state = if caller_summary.local_frame_active_before_inst(inst) {
+                        let edge_state = if caller_summary.frame_active_at_call(inst) {
                             EntryFrameState::live()
                         } else {
                             caller_state
@@ -175,7 +175,7 @@ pub(crate) fn compute_machine_dyn_sp_plan(
                     let callee_scc = schedule.sccs.scc_ref(callee);
                     if caller_scc == callee_scc
                         || !ready_sccs.contains(&callee_scc)
-                        || caller_summary.local_frame_active_before_inst(inst)
+                        || caller_summary.frame_active_at_call(inst)
                     {
                         continue;
                     }

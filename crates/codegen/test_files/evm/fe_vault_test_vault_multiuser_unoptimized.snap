@@ -1,18 +1,19 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2136
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_vault_test_vault_multiuser_unoptimized.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2815 bytes
-  total: 2815 bytes
+  section runtime: 2785 bytes
+  total: 2785 bytes
 
 object: Vault
-  section init: 699 bytes
-  section runtime: 681 bytes
-  total: 1380 bytes
+  section init: 660 bytes
+  section runtime: 642 bytes
+  total: 1302 bytes
 
 object: VaultUser
   section init: 700 bytes
@@ -53,7 +54,7 @@ functions:
     mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=397661 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=376661
+  case ok: calldata_len=0 success reason=Return gas_used=389320 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=368320
 
 
 --------------- DEBUG ---------------

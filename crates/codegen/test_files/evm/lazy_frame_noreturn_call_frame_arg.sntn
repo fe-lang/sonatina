@@ -1,0 +1,62 @@
+#! evm.config: { opt: 0 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(101)
+
+target = "evm-ethereum-osaka"
+
+# `%f`'s last frame use is the frame address it passes to `%fail`, which never
+# returns. The frame must stay entered across that call: `%fail` allocates
+# from the dynamic SP before reading through the address.
+
+func public %f(v0.i256) -> i256 {
+    block0:
+        v1.i1 = eq v0 0.i256;
+        br v1 block1 block2;
+
+    block1:
+        return 0.i256;
+
+    block2:
+        v2.*i256 = alloca i256;
+        v3.i256 = add v0 100.i256;
+        mstore v2 v3 i256;
+        v4.i256 = sub v0 1.i256;
+        v5.i256 = call %f v4;
+        call %fail v2;
+        unreachable;
+}
+
+func private %fail(v0.*i256) {
+    block0:
+        v20.i256 = evm_calldata_size;
+        v21.i256 = add v20 128.i256;
+        v1.*i256 = evm_malloc v21;
+        v2.i256 = ptr_to_int v1 i256;
+        mstore v1 777.i256 i256;
+        v3.i256 = add v2 32.i256;
+        v4.*i256 = int_to_ptr v3 *i256;
+        mstore v4 777.i256 i256;
+        v5.i256 = add v2 64.i256;
+        v6.*i256 = int_to_ptr v5 *i256;
+        mstore v6 777.i256 i256;
+        v7.i256 = add v2 96.i256;
+        v8.*i256 = int_to_ptr v7 *i256;
+        mstore v8 777.i256 i256;
+        v10.i256 = mload v0 i256;
+        mstore v1 v10 i256;
+        evm_return v2 32.i256;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = call %f 1.i256;
+        mstore 0.i32 v0 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

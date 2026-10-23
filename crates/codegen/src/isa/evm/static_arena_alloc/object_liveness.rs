@@ -7,7 +7,7 @@ use sonatina_ir::{
     isa::{Isa, evm::Evm},
 };
 
-use crate::bitset::BitSet;
+use crate::{bitset::BitSet, liveness::InstLiveness};
 
 use super::{CallSiteObjects, LocalObjIdx, Provenance, StackObjId, StackObjectInput};
 
@@ -211,6 +211,7 @@ pub(super) struct ComputeCtx<'a, 'b> {
     pub(super) analysis: &'a StackObjectInput<'a>,
     pub(super) isa: &'a Evm,
     pub(super) prov: &'a SecondaryMap<ValueId, Provenance>,
+    pub(super) inst_liveness: &'a InstLiveness,
     pub(super) spill_local_by_value: &'a SecondaryMap<ValueId, Option<LocalObjIdx>>,
     pub(super) alloca_local_by_inst: &'a FxHashMap<InstId, LocalObjIdx>,
     pub(super) closure: &'a AllocaClosureCtx<'b>,
@@ -324,6 +325,31 @@ impl ComputeCtx<'_, '_> {
             }
         }
     }
+
+    /// Whether an earlier execution of the re-executed `alloca` may still be
+    /// reached after it runs again. Every execution reuses one static slot, so
+    /// such an alloca must not end its object's lifetime.
+    fn prior_alloca_execution_may_be_used(
+        &self,
+        function: &Function,
+        alloca: InstId,
+        available: &BitSet<InstId>,
+    ) -> bool {
+        // Memory may hold the earlier address for a later load.
+        !self.closure.unknown.is_empty()
+            || self
+                .closure
+                .edges
+                .values()
+                .any(|children| children.contains(&alloca))
+            // So may any value live across the alloca other than its new address.
+            || self
+                .inst_liveness
+                .live_out(alloca)
+                .iter()
+                .filter(|value| !function.dfg.inst_results(alloca).contains(value))
+                .any(|value| self.expand_values([value], available).allocas.contains(&alloca))
+    }
 }
 
 fn build_object_event_index(
@@ -337,9 +363,8 @@ fn build_object_event_index(
     for &block in block_order {
         let mut available = availability.incoming[block].clone();
         for inst in function.layout.iter_inst(block) {
-            if ctx.alloca_ids.contains_key(&inst) {
-                available.insert(inst);
-            }
+            // An alloca already available before it runs is re-executed.
+            let reexecuted_alloca = ctx.alloca_ids.contains_key(&inst) && !available.insert(inst);
             let resolved = ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst));
             if let EvmInstKind::Phi(phi) = resolved {
                 for &result in function.dfg.inst_results(inst) {
@@ -375,6 +400,8 @@ fn build_object_event_index(
 
             if matches!(resolved, EvmInstKind::Alloca(_))
                 && let Some(&local_idx) = ctx.alloca_local_by_inst.get(&inst)
+                && !(reexecuted_alloca
+                    && ctx.prior_alloca_execution_may_be_used(function, inst, &available))
             {
                 events.local_defs[inst].insert(local_idx);
             }
@@ -666,7 +693,6 @@ pub(super) fn compute_regions_and_calls(
             call_sites.push(CallSiteObjects {
                 inst,
                 call_rank: events.boundary_rank(block, events.inst_index_in_block[&inst]),
-                callee: *call.callee(),
                 result_count: u8::try_from(function.dfg.inst_results(inst).len())
                     .expect("call result count too large"),
                 live_across_objs,
