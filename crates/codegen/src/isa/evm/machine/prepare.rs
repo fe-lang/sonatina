@@ -1,4 +1,3 @@
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{Module, cfg::ControlFlowGraph, isa::evm::EvmMachine, module::FuncRef};
 use std::sync::Mutex;
@@ -98,10 +97,8 @@ pub(crate) fn prepare_machine_stackify_analyses(
             .as_ref()
             .unwrap_or(&scratch_arena_effects);
 
-        let mut scc_results: Vec<_> = components
-            .par_iter()
-            .copied()
-            .map(|func| {
+        let mut scc_results: Vec<_> =
+            sonatina_ir::parallel::map(&module.func_store, components, |&func| {
                 let mut search_cache = search_caches.lock().unwrap().take(func);
                 let analysis = module.func_store.modify(func, |function| {
                     prepare_machine_stackify_analysis(
@@ -123,8 +120,7 @@ pub(crate) fn prepare_machine_stackify_analyses(
                     .object_spills()
                     .any(|(value, _)| !analysis.stable_final_spill_values.contains(value));
                 (func, analysis, uses_scratch_spills, may_use_arena_spills)
-            })
-            .collect();
+            });
         scc_results.sort_unstable_by_key(|(func, ..)| func.as_u32());
 
         let mut scc_uses_scratch_spills = false;
@@ -245,19 +241,15 @@ fn compute_local_machine_scratch_clobbers(
     funcs: &[FuncRef],
     machine_isa: &EvmMachine,
 ) -> FxHashSet<FuncRef> {
-    let mut local: Vec<_> = funcs
-        .par_iter()
-        .copied()
-        .filter(|&func| {
-            module.func_store.view(func, |function| {
-                function.layout.iter_block().any(|block| {
-                    function.layout.iter_inst(block).any(|inst| {
-                        fixed_slots::machine_inst_is_fixed_slot_clobber(function, machine_isa, inst)
-                    })
+    let mut local: Vec<_> = sonatina_ir::parallel::filter(&module.func_store, funcs, |&func| {
+        module.func_store.view(func, |function| {
+            function.layout.iter_block().any(|block| {
+                function.layout.iter_inst(block).any(|inst| {
+                    fixed_slots::machine_inst_is_fixed_slot_clobber(function, machine_isa, inst)
                 })
             })
         })
-        .collect();
+    });
     local.sort_unstable_by_key(|func| func.as_u32());
     local.into_iter().collect()
 }

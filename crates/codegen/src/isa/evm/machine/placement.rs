@@ -1,5 +1,4 @@
 use cranelift_entity::{EntityRef, SecondaryMap};
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
@@ -185,52 +184,48 @@ pub(crate) fn compute_semantic_memory_placement(
         &backend.isa,
     );
 
-    let mut annotations: Vec<_> = funcs
-        .par_iter()
-        .copied()
-        .map(|func| {
-            let analysis = expect_func_entry(analyses, func, "pre-analysis");
-            let (malloc_escape_kinds, transient_mallocs, restores_free_ptr) =
-                module.func_store.view(func, |function| {
-                    let escape_kinds = malloc_plan::compute_malloc_escape_kinds_for_function(
-                        function,
-                        &module.ctx,
-                        &backend.isa,
-                        ptr_escape,
-                        &analysis.prov,
-                    );
-                    let transient = malloc_plan::compute_transient_mallocs(
-                        function,
-                        &module.ctx,
-                        &backend.isa,
-                        ptr_escape,
-                        &analysis.prov,
-                        &transient_malloc_call_barriers,
-                        &analysis.inst_liveness,
-                    );
-                    // A raw write of the slot, here or in a callee, may have
-                    // allocated what outlives the call; the restore would free it.
-                    let restores_free_ptr =
-                        !free_ptr_write_summaries.get(&func).copied().unwrap_or(true)
-                            && malloc_plan::should_restore_free_ptr_on_internal_returns(
-                                function,
-                                &module.ctx,
-                                &backend.isa,
-                                &analysis.cfg,
-                                ptr_escape,
-                                &analysis.prov,
-                                &transient,
-                            );
-                    (escape_kinds, transient, restores_free_ptr)
-                });
-            (
-                func,
-                malloc_escape_kinds,
-                transient_mallocs,
-                restores_free_ptr,
-            )
-        })
-        .collect();
+    let mut annotations: Vec<_> = sonatina_ir::parallel::map(&module.func_store, funcs, |&func| {
+        let analysis = expect_func_entry(analyses, func, "pre-analysis");
+        let (malloc_escape_kinds, transient_mallocs, restores_free_ptr) =
+            module.func_store.view(func, |function| {
+                let escape_kinds = malloc_plan::compute_malloc_escape_kinds_for_function(
+                    function,
+                    &module.ctx,
+                    &backend.isa,
+                    ptr_escape,
+                    &analysis.prov,
+                );
+                let transient = malloc_plan::compute_transient_mallocs(
+                    function,
+                    &module.ctx,
+                    &backend.isa,
+                    ptr_escape,
+                    &analysis.prov,
+                    &transient_malloc_call_barriers,
+                    &analysis.inst_liveness,
+                );
+                // A raw write of the slot, here or in a callee, may have
+                // allocated what outlives the call; the restore would free it.
+                let restores_free_ptr =
+                    !free_ptr_write_summaries.get(&func).copied().unwrap_or(true)
+                        && malloc_plan::should_restore_free_ptr_on_internal_returns(
+                            function,
+                            &module.ctx,
+                            &backend.isa,
+                            &analysis.cfg,
+                            ptr_escape,
+                            &analysis.prov,
+                            &transient,
+                        );
+                (escape_kinds, transient, restores_free_ptr)
+            });
+        (
+            func,
+            malloc_escape_kinds,
+            transient_mallocs,
+            restores_free_ptr,
+        )
+    });
     annotations.sort_unstable_by_key(|(func, ..)| func.as_u32());
     let mut free_ptr_restoring_funcs = FxHashSet::default();
     for (func, malloc_escape_kinds, transient_mallocs, restores_free_ptr) in annotations {
@@ -276,10 +271,8 @@ pub(crate) fn compute_semantic_memory_placement(
         &free_ptr_write_summaries,
         &free_ptr_restoring_funcs,
     );
-    let mut heap_facts_results: Vec<_> = funcs
-        .par_iter()
-        .copied()
-        .map(|func| {
+    let mut heap_facts_results: Vec<_> =
+        sonatina_ir::parallel::map(&module.func_store, funcs, |&func| {
             let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
             let analysis = expect_func_entry(analyses, func, "pre-analysis");
             let needs_dyn_sp_clamp = func_plan.has_dynamic_frame()
@@ -299,8 +292,7 @@ pub(crate) fn compute_semantic_memory_placement(
                 )
             });
             (func, facts)
-        })
-        .collect();
+        });
     heap_facts_results.sort_unstable_by_key(|(func, _)| func.as_u32());
     let heap_facts: FxHashMap<FuncRef, FuncHeapFacts> = heap_facts_results.into_iter().collect();
 

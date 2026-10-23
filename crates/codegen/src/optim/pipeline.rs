@@ -11,7 +11,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use sonatina_ir::{
     ControlFlowGraph, Function,
     module::{FuncRef, Module},
@@ -727,7 +726,7 @@ fn run_module_pass(
         }
     };
     match funcs {
-        Some(funcs) => funcs.par_iter().copied().for_each(|func_ref| {
+        Some(funcs) => sonatina_ir::parallel::for_each(&module.func_store, funcs, |&func_ref| {
             module
                 .func_store
                 .modify(func_ref, |func| run_on(func_ref, func));
