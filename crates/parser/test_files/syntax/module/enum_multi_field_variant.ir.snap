@@ -1,0 +1,12 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/enum_multi_field_variant.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @entry = {[i256; 4], @slot};
+type @slot = enum {
+    #Empty,
+    #Full(i256, i1),
+    #Pair([i256; 2], *i8, i1),
+};

@@ -1,0 +1,65 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/enum_multi_field_variant.sntn
+---
+module "target = "evm-ethereum-osaka"
+
+type @slot = enum {
+    #Empty,
+    #Full(i256, i1),
+    #Pair([i256; 2], *i8, i1),
+};
+
+type @entry = { [i256; 4], @slot };
+"
+  target_triple "evm-ethereum-osaka"
+  enum_declaration "type @slot = enum {
+      #Empty,
+      #Full(i256, i1),
+      #Pair([i256; 2], *i8, i1),
+  };"
+    struct_identifier "@slot"
+      struct_name "slot"
+    enum_variant_list "#Empty,
+        #Full(i256, i1),
+        #Pair([i256; 2], *i8, i1),
+    "
+      enum_variant "#Empty"
+        variant_identifier "#Empty"
+          variant_name "Empty"
+      enum_variant "#Full(i256, i1)"
+        variant_identifier "#Full"
+          variant_name "Full"
+        enum_variant_fields "(i256, i1)"
+          type_name "i256"
+            primitive_type "i256"
+          type_name "i1"
+            primitive_type "i1"
+      enum_variant "#Pair([i256; 2], *i8, i1)"
+        variant_identifier "#Pair"
+          variant_name "Pair"
+        enum_variant_fields "([i256; 2], *i8, i1)"
+          type_name "[i256; 2]"
+            array_type "[i256; 2]"
+              type_name "i256"
+                primitive_type "i256"
+              array_size "2"
+          type_name "*i8"
+            ptr_type "*i8"
+              type_name "i8"
+                primitive_type "i8"
+          type_name "i1"
+            primitive_type "i1"
+  struct_declaration "type @entry = { [i256; 4], @slot };"
+    struct_identifier "@entry"
+      struct_name "entry"
+    normal_field_list "{ [i256; 4], @slot }"
+      type_name "[i256; 4]"
+        array_type "[i256; 4]"
+          type_name "i256"
+            primitive_type "i256"
+          array_size "4"
+      type_name "@slot"
+        struct_identifier "@slot"
+          struct_name "slot"
+  EOI ""
