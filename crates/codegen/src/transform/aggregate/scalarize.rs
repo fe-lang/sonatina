@@ -217,8 +217,14 @@ impl AggregateScalarize {
             &const_paths,
         );
         let scalarizable = loop {
-            let scalarizable =
-                self.compute_scalarizable_aggregates(func, &module, &projection_of, &[], &[]);
+            let scalarizable = self.compute_scalarizable_aggregates(
+                func,
+                &module,
+                &projection_of,
+                &const_paths,
+                &[],
+                &[],
+            );
             let changed = self.filter_promotable_roots(
                 func,
                 &module,
@@ -310,6 +316,14 @@ impl AggregateScalarize {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
+                self.rewrite_scalarizable_const_load(
+                    func,
+                    &module,
+                    inst,
+                    &scalarizable,
+                    &const_paths,
+                    &mut scalarized_agg,
+                );
                 self.rewrite_scalarizable_insert_extract(
                     func,
                     &module,
@@ -1026,10 +1040,12 @@ impl AggregateScalarize {
             .zip(candidate_results)
             .filter_map(|(&value, &candidate)| candidate.then_some(value))
             .collect();
+        let const_paths = analyze_const_paths(func, &collect_constref_value_tys(func));
         let scalarizable = self.compute_scalarizable_aggregates(
             func,
             func.ctx(),
             &ExactProjectionMap::default(),
+            &const_paths,
             &substituted,
             &[],
         );
@@ -1047,10 +1063,12 @@ impl AggregateScalarize {
         func: &Function,
         scalarizable_returns: &[bool],
     ) -> SecondaryMap<ValueId, bool> {
+        let const_paths = analyze_const_paths(func, &collect_constref_value_tys(func));
         self.compute_scalarizable_aggregates(
             func,
             func.ctx(),
             &ExactProjectionMap::default(),
+            &const_paths,
             &[],
             scalarizable_returns,
         )
@@ -1061,6 +1079,7 @@ impl AggregateScalarize {
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         projection_of: &ExactProjectionMap,
+        const_paths: &ConstPathAnalysis,
         substituted_values: &[ValueId],
         scalarizable_returns: &[bool],
     ) -> SecondaryMap<ValueId, bool> {
@@ -1096,6 +1115,11 @@ impl AggregateScalarize {
                             func.dfg.value_ty(*bitcast.from()),
                             ty,
                         )
+                    } else if let Some(load) = func.dfg.downcast::<&data::ConstLoad>(*inst) {
+                        shape::is_supported_scalar_shape_ty(module, ty)
+                            && self
+                                .const_init_leaf_imms(func, module, *load.object(), ty, const_paths)
+                                .is_some()
                     } else if let Some(mload) = func.dfg.downcast::<&data::Mload>(*inst) {
                         projection_of.get(*mload.addr()).is_some_and(|projection| {
                             self.projection_load_has_full_rewrite_plan(
@@ -1189,6 +1213,8 @@ impl AggregateScalarize {
                     {
                         return false;
                     }
+                    true
+                } else if func.dfg.downcast::<&data::ConstLoad>(*inst).is_some() {
                     true
                 } else if let Some(enum_make) = func.dfg.downcast::<&data::EnumMake>(*inst) {
                     let result_ty = func.dfg.value_ty(value);
@@ -1898,6 +1924,36 @@ impl AggregateScalarize {
         let replacement = bitcast_before_inst(func, inst, *source, src_leaf.ty, result_ty);
         func.dfg.change_to_alias(result, replacement);
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+    }
+
+    fn rewrite_scalarizable_const_load(
+        &mut self,
+        func: &mut Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        inst: InstId,
+        scalarizable: &SecondaryMap<ValueId, bool>,
+        const_paths: &ConstPathAnalysis,
+        scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
+    ) {
+        let Some(load) = func.dfg.downcast::<&data::ConstLoad>(inst).cloned() else {
+            return;
+        };
+        let Some(result) = func.dfg.inst_result(inst) else {
+            return;
+        };
+        if !scalarizable[result] {
+            return;
+        }
+        let ty = func.dfg.value_ty(result);
+        let Some(imms) = self.const_init_leaf_imms(func, module, *load.object(), ty, const_paths)
+        else {
+            return;
+        };
+        scalarized_agg[result] = Some(
+            imms.into_iter()
+                .map(|imm| func.dfg.make_imm_value(imm))
+                .collect(),
+        );
     }
 
     fn rewrite_scalarizable_insert_extract(
@@ -3874,6 +3930,37 @@ func private %f(v0.i256, v1.i256) -> i256 {
     }
 
     #[test]
+    fn scalarize_splits_const_load_phi_web_into_immediates() {
+        let dumped = scalarize_verified(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 2] $pair = [11, 22];
+
+func private %f(v0.i1) -> i256 {
+    block0:
+        v1.constref<[i256; 2]> = const.ref $pair;
+        v2.[i256; 2] = const.load v1;
+        br v0 block1 block2;
+    block1:
+        v3.[i256; 2] = insert_value v2 1.i256 9.i256;
+        jump block2;
+    block2:
+        v4.[i256; 2] = phi (v2 block0) (v3 block1);
+        v5.i256 = extract_value v4 1.i256;
+        return v5;
+}
+"#,
+        );
+
+        assert!(!dumped.contains("[i256; 2] = phi"), "{dumped}");
+        assert!(
+            dumped.contains("phi (22.i256 block0) (9.i256 block1)"),
+            "{dumped}"
+        );
+    }
+
+    #[test]
     fn scalarize_promotes_obj_init_const_root() {
         let module = parse_test_module(
             r#"
@@ -4708,8 +4795,14 @@ block0:
             let const_paths = analyze_const_paths(func, &collect_constref_value_tys(func));
             let (_, projections) =
                 pass.find_promotable_roots(func, &module.ctx, None, None, None, &const_paths);
-            let scalarizable =
-                pass.compute_scalarizable_aggregates(func, &module.ctx, &projections, &[], &[]);
+            let scalarizable = pass.compute_scalarizable_aggregates(
+                func,
+                &module.ctx,
+                &projections,
+                &const_paths,
+                &[],
+                &[],
+            );
             for (name, value, expected) in values {
                 assert_eq!(scalarizable[value], expected, "{name}");
             }

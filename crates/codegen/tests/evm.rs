@@ -1551,18 +1551,43 @@ object @Contract { section runtime { entry %entry; } }
 
 #[test]
 fn nested_const_indices_execute_at_all_optimization_levels() {
-    let mut source = include_str!("../test_files/const_data/nested_indices.sntn").to_string();
+    assert_const_data_cases(
+        include_str!("../test_files/const_data/nested_indices.sntn"),
+        &[
+            ("static_index", false, [11, 11]),
+            ("dynamic_index", true, [42, 11]),
+            ("affine_index", true, [42, 11]),
+            ("reordered_blocks", true, [42, 11]),
+            ("nested_rows", true, [162, 161]),
+            ("init_pair", true, [99, 42]),
+            ("static_init_pair", false, [99, 99]),
+            ("load_escaped_index", true, [42, 11]),
+        ],
+    );
+}
+
+#[test]
+fn aggregate_const_loads_execute_at_all_optimization_levels() {
+    assert_const_data_cases(
+        include_str!("../test_files/const_data/aggregate_loads.sntn"),
+        &[
+            ("store_whole", true, [6, 7]),
+            ("store_row", true, [12, 22]),
+            ("store_zeros", true, [0, 5]),
+            ("value_phi", true, [20, 23]),
+            ("by_value", true, [23, 43]),
+            ("returned", true, [11, 21]),
+            ("struct_field", true, [300, 301]),
+            ("struct_store", true, [100, 200]),
+        ],
+    );
+}
+
+/// Calls each named function, with the calldata index when it takes one, and
+/// checks its result for indices 0 and 1 at every optimization level.
+fn assert_const_data_cases(functions: &str, cases: &[(&str, bool, [u64; 2])]) {
+    let mut source = functions.to_string();
     source.push_str("\nfunc public %entry() {\nblock0:\nv0.i256 = evm_calldata_load 0.i256;\n");
-    let cases = [
-        ("static_index", false, [11, 11]),
-        ("dynamic_index", true, [42, 11]),
-        ("affine_index", true, [42, 11]),
-        ("reordered_blocks", true, [42, 11]),
-        ("nested_rows", true, [162, 161]),
-        ("init_pair", true, [99, 42]),
-        ("static_init_pair", false, [99, 99]),
-        ("load_escaped_index", true, [42, 11]),
-    ];
     for (index, (name, takes_index, _)) in cases.iter().enumerate() {
         let result = index + 1;
         let offset = index * 32;
@@ -1579,7 +1604,7 @@ fn nested_const_indices_execute_at_all_optimization_levels() {
         verify_module_or_panic(&module, &config);
         let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
         verify_module_or_panic(compiler.optimize(), &config);
-        let artifacts = compiler.compile().expect("nested indices should compile");
+        let artifacts = compiler.compile().expect("const data cases should compile");
         let runtime = artifacts[0]
             .sections
             .iter()
@@ -1596,10 +1621,10 @@ fn nested_const_indices_execute_at_all_optimization_levels() {
                 panic!("{level:?}, input={input}: {result:?}");
             };
             assert_eq!(actual.len(), size);
-            for (bytes, (name, _, expected)) in actual.as_chunks::<32>().0.iter().zip(&cases) {
+            for (bytes, (name, _, expected)) in actual.as_chunks::<32>().0.iter().zip(cases) {
                 assert_eq!(
                     *bytes,
-                    IrU256::from(expected[input] as u64).to_big_endian(),
+                    IrU256::from(expected[input]).to_big_endian(),
                     "{level:?}, input={input}, {name}"
                 );
             }

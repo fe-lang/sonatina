@@ -1774,6 +1774,37 @@ func private %ok_obj(v0.i32) -> unit {
 }
 
 #[test]
+fn aggregate_const_loads_verify() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i8, [i256; 2] };
+
+global private const [@pair; 2] $pairs = [{1, [2, 3]}, {4, [5, 6]}];
+
+func private %whole(v0.i256) -> i256 {
+    block0:
+        v1.constref<[@pair; 2]> = const.ref $pairs;
+        v2.[@pair; 2] = const.load v1;
+        v3.constref<@pair> = const.index v1 v0;
+        v4.@pair = const.load v3;
+        v5.[i256; 2] = extract_value v4 1.i256;
+        v6.i256 = extract_value v5 0.i256;
+        return v6;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        report.is_ok(),
+        "expected aggregate const loads to verify, got {report}"
+    );
+}
+
+#[test]
 fn function_pointer_types_and_get_function_ptr_verify() {
     let src = r#"
 target = "evm-ethereum-london"

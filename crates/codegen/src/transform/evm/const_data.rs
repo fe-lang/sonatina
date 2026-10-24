@@ -445,7 +445,15 @@ impl ConstDataLower {
         info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
         if let Some(load) = func.dfg.downcast::<&data::ConstLoad>(inst).cloned() {
-            return self.rewrite_const_load(module, func, inst, *load.object(), info);
+            let result = func
+                .dfg
+                .inst_result(inst)
+                .expect("const.load must have a result");
+            return if func.dfg.value_ty(result).is_integral() {
+                self.rewrite_const_load(module, func, inst, *load.object(), info)
+            } else {
+                self.rewrite_aggregate_const_load(module, func, inst, *load.object(), info)
+            };
         }
         if let Some(init) = func.dfg.downcast::<&data::ObjInitConst>(inst).cloned() {
             return self.rewrite_obj_init_const(module, func, inst, init, info);
@@ -644,6 +652,60 @@ impl ConstDataLower {
         true
     }
 
+    /// Stores of an aggregate load copy the const data straight into their
+    /// objects. Any other use reads a copy in a fresh object.
+    fn rewrite_aggregate_const_load(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        inst: InstId,
+        source: ValueId,
+        info: &mut ConstRewriteInfo<'_>,
+    ) -> bool {
+        let result = func
+            .dfg
+            .inst_result(inst)
+            .expect("const.load must have a result");
+        let users: Vec<_> = func
+            .dfg
+            .users(result)
+            .copied()
+            .filter(|&user| func.layout.is_inst_inserted(user))
+            .collect();
+        let mut used_as_value = false;
+        for user in users {
+            if let Some(store) = func.dfg.downcast::<&data::ObjStore>(user).cloned()
+                && *store.value() == result
+            {
+                self.emit_obj_init_const(module, func, user, *store.object(), source, info);
+                remove_inst(func, user);
+            } else {
+                used_as_value = true;
+            }
+        }
+        if !used_as_value {
+            remove_inst(func, inst);
+            return true;
+        }
+
+        let ty = func.dfg.value_ty(result);
+        let object = insert_before_one(
+            func,
+            inst,
+            data::ObjAlloc::new_unchecked(func.inst_set(), ty),
+            ty.to_obj_ref(func.ctx()),
+        );
+        self.emit_obj_init_const(module, func, inst, object, source, info);
+        let loaded = insert_before_one(
+            func,
+            inst,
+            data::ObjLoad::new_unchecked(func.inst_set(), object),
+            ty,
+        );
+        info.replace_with_alias(func, inst, loaded);
+        true
+    }
+
     fn rewrite_obj_init_const(
         &mut self,
         module: &Module,
@@ -652,56 +714,60 @@ impl ConstDataLower {
         init: data::ObjInitConst,
         info: &ConstRewriteInfo<'_>,
     ) -> bool {
-        let value = *init.value();
+        self.emit_obj_init_const(module, func, inst, *init.object(), *init.value(), info);
+        remove_inst(func, inst);
+        true
+    }
+
+    fn emit_obj_init_const(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        before: InstId,
+        object: ValueId,
+        source: ValueId,
+        info: &ConstRewriteInfo<'_>,
+    ) {
         let source_ty = info
             .constref_value_tys
-            .get(&value)
+            .get(&source)
             .copied()
             .unwrap_or_else(|| {
                 panic!(
-                    "unsupported obj.init.const source at inst {}",
-                    inst.as_u32()
+                    "unsupported const object source at inst {}",
+                    before.as_u32()
                 )
             });
-        if let Some(path) = info.path(value) {
+        if let Some(path) = info.path(source) {
             if let Some((ty, subtree_init)) =
                 eval_const_path_subtree(&module.ctx, &path, |value| func.dfg.value_imm(value))
             {
                 debug_assert_eq!(ty, path.ty);
-                self.emit_known_obj_init(module, func, inst, *init.object(), &path, &subtree_init);
+                self.emit_known_obj_init(module, func, before, object, &path, &subtree_init);
             } else {
-                let addr = self.materialize_const_path_addr(module, func, inst, &path);
+                let addr = self.materialize_const_path_addr(module, func, before, &path);
                 if !path.ty.is_integral()
                     && let Some(copy_len_bytes) = word_blob_copy_len_bytes(func.ctx(), path.ty)
                 {
                     emit_obj_init_from_codecopy(
                         func,
-                        inst,
-                        *init.object(),
+                        before,
+                        object,
                         path.ty,
                         addr,
                         copy_len_bytes,
                     );
                 } else {
-                    emit_obj_init_from_addr(func, inst, *init.object(), path.ty, addr);
+                    emit_obj_init_from_addr(func, before, object, path.ty, addr);
                 }
             }
         } else if !source_ty.is_integral()
             && let Some(copy_len_bytes) = word_blob_copy_len_bytes(func.ctx(), source_ty)
         {
-            emit_obj_init_from_codecopy(
-                func,
-                inst,
-                *init.object(),
-                source_ty,
-                value,
-                copy_len_bytes,
-            );
+            emit_obj_init_from_codecopy(func, before, object, source_ty, source, copy_len_bytes);
         } else {
-            emit_obj_init_from_addr(func, inst, *init.object(), source_ty, value);
+            emit_obj_init_from_addr(func, before, object, source_ty, source);
         }
-        remove_inst(func, inst);
-        true
     }
 
     fn emit_known_obj_init(

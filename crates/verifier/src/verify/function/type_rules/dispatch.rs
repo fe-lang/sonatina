@@ -1170,13 +1170,7 @@ impl VerifyInst for data::ConstLoad {
             ));
             return;
         };
-        if !value_ty.is_integral() {
-            verifier.emit(Diagnostic::error(
-                DiagnosticCode::InstOperandTypeMismatch,
-                "const.load currently only supports scalar integral leaf types",
-                location.clone(),
-            ));
-        }
+        validate_const_data_ty(verifier, value_ty, location.clone(), "const.load");
         verifier.expect_result_ty(inst_id, value_ty, location);
     }
 }

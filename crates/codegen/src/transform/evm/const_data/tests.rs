@@ -1017,6 +1017,69 @@ func private %entry() -> i256 {
     assert!(!dumped.contains("const."));
 }
 
+fn lowered_entry(src: &str) -> String {
+    let parsed = parse(src);
+    ConstDataLower::default().run(&parsed.module);
+    let entry = find_func_ref(&parsed, "entry");
+    parsed
+        .module
+        .func_store
+        .view(entry, |func| FuncWriter::new(entry, func).dump_string())
+}
+
+#[test]
+fn aggregate_const_load_store_copies_const_data_into_object() {
+    let dumped = lowered_entry(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 5] $value = [0, 0, 0, 0, 0];
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v1.constref<[i256; 5]> = const.ref $value;
+        v2.[i256; 5] = const.load v1;
+        obj.store v0 v2;
+        v3.objref<i256> = obj.index v0 1.i8;
+        v4.i256 = obj.load v3;
+        return v4;
+}
+"#,
+    );
+
+    assert!(dumped.contains("evm_code_size"), "{dumped}");
+    assert!(dumped.contains("evm_code_copy"), "{dumped}");
+    assert_eq!(dumped.matches("obj.alloc").count(), 1, "{dumped}");
+    assert!(!dumped.contains("obj.store"), "{dumped}");
+    assert!(!dumped.contains("const."), "{dumped}");
+}
+
+#[test]
+fn aggregate_const_load_value_use_reads_initialized_object() {
+    let dumped = lowered_entry(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 2] $value = [11, 22];
+
+func private %entry() -> [i256; 2] {
+    block0:
+        v0.constref<[i256; 2]> = const.ref $value;
+        v1.[i256; 2] = const.load v0;
+        v2.objref<[i256; 2]> = obj.alloc [i256; 2];
+        obj.store v2 v1;
+        return v1;
+}
+"#,
+    );
+
+    assert_eq!(dumped.matches("obj.alloc").count(), 2, "{dumped}");
+    assert_eq!(dumped.matches("obj.store").count(), 4, "{dumped}");
+    assert!(dumped.contains("obj.load"), "{dumped}");
+    assert!(!dumped.contains("const."), "{dumped}");
+}
+
 #[test]
 fn dynamic_const_load_object_compile_keeps_synthesized_blob_data_reachable() {
     let parsed = parse(
