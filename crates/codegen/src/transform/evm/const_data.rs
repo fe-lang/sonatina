@@ -25,7 +25,7 @@ use crate::{
         collect_constref_value_tys, const_path_steps, eval_const_path_domain_immediate,
         eval_const_path_dynamic_domain_immediates, eval_const_path_subtree,
     },
-    transform::aggregate::shape,
+    transform::aggregate::{scalarize::MAX_SCALARIZABLE_VALUE_LEAVES, shape},
     type_rewrite::{TypeRewrite, rewrite_compound_type_default, rewrite_function_type_uses},
 };
 
@@ -40,8 +40,8 @@ use encoding::{
 };
 use lookup::{can_emit_dynamic_values_lookup, emit_dynamic_values_lookup};
 use object_init::{
-    emit_obj_init, emit_obj_init_from_addr, emit_obj_init_from_codecopy, emit_obj_splat_fill,
-    emit_obj_zero_fill, gep_word_offset,
+    emit_const_value, emit_obj_init, emit_obj_init_from_addr, emit_obj_init_from_codecopy,
+    emit_obj_splat_fill, emit_obj_zero_fill, gep_word_offset,
 };
 
 struct ConstRewriteInfo<'a> {
@@ -110,13 +110,13 @@ struct ConstLoadRowGroup {
 }
 
 #[derive(Clone, Copy)]
-struct ObjInitConstSubtree<'a> {
+struct ConstInitSubtree<'a> {
     source: GlobalVariableRef,
     ty: Type,
     init: &'a GvInitializer,
 }
 
-impl<'a> ObjInitConstSubtree<'a> {
+impl<'a> ConstInitSubtree<'a> {
     fn child(self, ty: Type, init: &'a GvInitializer) -> Self {
         Self {
             source: self.source,
@@ -455,9 +455,6 @@ impl ConstDataLower {
                 self.rewrite_aggregate_const_load(module, func, inst, *load.object(), info)
             };
         }
-        if let Some(init) = func.dfg.downcast::<&data::ObjInitConst>(inst).cloned() {
-            return self.rewrite_obj_init_const(module, func, inst, init, info);
-        }
         false
     }
 
@@ -653,7 +650,8 @@ impl ConstDataLower {
     }
 
     /// Stores of an aggregate load copy the const data straight into their
-    /// objects. Any other use reads a copy in a fresh object.
+    /// objects. Other uses take a known value small enough to scalarize as
+    /// immediates, and anything else from a fresh object.
     fn rewrite_aggregate_const_load(
         &mut self,
         module: &Module,
@@ -689,6 +687,16 @@ impl ConstDataLower {
         }
 
         let ty = func.dfg.value_ty(result);
+        if const_leaf_count(func.ctx(), ty)
+            .is_some_and(|leaves| leaves as usize <= MAX_SCALARIZABLE_VALUE_LEAVES)
+            && let Some(path) = info.path(source)
+            && let Some((_, init)) =
+                eval_const_path_subtree(&module.ctx, &path, |value| func.dfg.value_imm(value))
+        {
+            let value = emit_const_value(func, inst, ty, &init);
+            info.replace_with_alias(func, inst, value);
+            return true;
+        }
         let object = insert_before_one(
             func,
             inst,
@@ -703,19 +711,6 @@ impl ConstDataLower {
             ty,
         );
         info.replace_with_alias(func, inst, loaded);
-        true
-    }
-
-    fn rewrite_obj_init_const(
-        &mut self,
-        module: &Module,
-        func: &mut Function,
-        inst: InstId,
-        init: data::ObjInitConst,
-        info: &ConstRewriteInfo<'_>,
-    ) -> bool {
-        self.emit_obj_init_const(module, func, inst, *init.object(), *init.value(), info);
-        remove_inst(func, inst);
         true
     }
 
@@ -784,7 +779,7 @@ impl ConstDataLower {
             func,
             before,
             object,
-            ObjInitConstSubtree {
+            ConstInitSubtree {
                 source: path.global,
                 ty: path.ty,
                 init,
@@ -798,7 +793,7 @@ impl ConstDataLower {
         func: &mut Function,
         before: InstId,
         object: ValueId,
-        subtree: ObjInitConstSubtree<'_>,
+        subtree: ConstInitSubtree<'_>,
     ) {
         let ty = subtree.ty;
         let init = subtree.init;
@@ -825,7 +820,7 @@ impl ConstDataLower {
         }
 
         let Some(bytes) = encode_runtime_object_const_bytes(&module.ctx, ty, init) else {
-            panic!("unsupported runtime-object encoding for obj.init.const type {ty:?}");
+            panic!("unsupported runtime-object encoding for const object type {ty:?}");
         };
         let blob = self.bytes_blob_global(module, subtree.source, bytes);
         let addr = insert_before_one(
@@ -845,7 +840,7 @@ impl ConstDataLower {
         func: &mut Function,
         before: InstId,
         object: ValueId,
-        subtree: ObjInitConstSubtree<'_>,
+        subtree: ConstInitSubtree<'_>,
     ) -> bool {
         let ty = subtree.ty;
         let init = subtree.init;
@@ -1406,7 +1401,6 @@ fn assert_no_const_ops(func: &Function) {
                 || func.dfg.downcast::<&data::ConstProj>(inst).is_some()
                 || func.dfg.downcast::<&data::ConstIndex>(inst).is_some()
                 || func.dfg.downcast::<&data::ConstLoad>(inst).is_some()
-                || func.dfg.downcast::<&data::ObjInitConst>(inst).is_some()
             {
                 panic!(
                     "const-data lowering invariant violated: high-level const instruction remained in function"

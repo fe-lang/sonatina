@@ -1804,7 +1804,13 @@ fn object_and_constant_indices_accept_narrow_integers() {
         data::ObjAlloc::new(instructions, array_type),
         object_array_ref_type,
     );
-    function_builder.insert_inst_no_result(data::ObjInitConst::new(instructions, object, constant));
+    let constant_array =
+        function_builder.insert_inst(data::ConstLoad::new(instructions, constant), array_type);
+    function_builder.insert_inst_no_result(data::ObjStore::new(
+        instructions,
+        object,
+        constant_array,
+    ));
     let object_element = function_builder.insert_inst(
         data::ObjIndex::new(instructions, object, index),
         object_element_ref_type,

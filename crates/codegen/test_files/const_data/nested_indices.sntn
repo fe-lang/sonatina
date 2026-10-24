@@ -97,7 +97,8 @@ func private %init_pair(v0.i256) -> i256 {
         v4.constref<[[i256; 2]; 6]> = const.ref $pairs;
         v5.constref<[i256; 2]> = const.index v4 v3;
         v6.objref<[i256; 2]> = obj.alloc [i256; 2];
-        obj.init.const v6 v5;
+        v9.[i256; 2] = const.load v5;
+        obj.store v6 v9;
         v7.objref<i256> = obj.index v6 1.i256;
         v8.i256 = obj.load v7;
         return v8;
@@ -111,7 +112,8 @@ func private %static_init_pair() -> i256 {
         v3.constref<[[i256; 2]; 6]> = const.ref $pairs;
         v4.constref<[i256; 2]> = const.index v3 v2;
         v5.objref<[i256; 2]> = obj.alloc [i256; 2];
-        obj.init.const v5 v4;
+        v8.[i256; 2] = const.load v4;
+        obj.store v5 v8;
         v6.objref<i256> = obj.index v5 1.i256;
         v7.i256 = obj.load v6;
         return v7;

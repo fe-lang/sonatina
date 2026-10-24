@@ -669,16 +669,6 @@ fn compute_summary_for_func(
                     continue;
                 }
 
-                if let Some(init) = function.dfg.downcast::<&data::ObjInitConst>(inst) {
-                    record_write(
-                        &mut summary,
-                        &mut root_captures,
-                        effect_provenance,
-                        *init.object(),
-                    );
-                    continue;
-                }
-
                 if let Some(enum_set_tag) = function.dfg.downcast::<&data::EnumSetTag>(inst) {
                     record_enum_tag_write(
                         &mut summary,
@@ -919,11 +909,6 @@ fn apply_inst_capture_transfer(
                 *obj_store.object(),
                 *obj_store.value(),
             );
-        }
-        Some(CaptureRelevantInst::ObjInitConst(init)) => {
-            // Verified const data cannot contain references. Its actual subtree
-            // overwrite removes old named containment only with exact coverage.
-            kill_capture_access(root_captures, effect_provenance, *init.object(), None);
         }
         Some(CaptureRelevantInst::EnumSetTag(enum_set_tag)) => {
             kill_capture_access(

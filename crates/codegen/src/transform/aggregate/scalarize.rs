@@ -35,7 +35,7 @@ type LeafValues = SmallVec<[ValueId; 4]>;
 // The current EVM backend remains correct for scalarized aggregates up to 16 leaves,
 // but wider scalar webs can miscompile during optimized lowering. Keep those aggregates
 // in their original object/aggregate form until the backend can preserve wider live sets.
-const MAX_SCALARIZABLE_VALUE_LEAVES: usize = 16;
+pub(crate) const MAX_SCALARIZABLE_VALUE_LEAVES: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum RootKind {
@@ -50,7 +50,6 @@ enum RootUseKind {
     SameProjection { result: ValueId, allow_dead: bool },
     LoadView { ty: Type },
     StoreView { ty: Type },
-    ConstInit { value: ValueId },
     EnumTagRead { ty: Type },
     EnumMutation,
     DeadUse,
@@ -208,14 +207,8 @@ impl AggregateScalarize {
         let constref_value_tys = collect_constref_value_tys(func);
         let const_paths = analyze_const_paths(func, &constref_value_tys);
 
-        let (mut promoted_roots, mut projection_of) = self.find_promotable_roots(
-            func,
-            &module,
-            local_object_args,
-            object_effects,
-            callers,
-            &const_paths,
-        );
+        let (mut promoted_roots, mut projection_of) =
+            self.find_promotable_roots(func, &module, local_object_args, object_effects, callers);
         let scalarizable = loop {
             let scalarizable = self.compute_scalarizable_aggregates(
                 func,
@@ -298,7 +291,6 @@ impl AggregateScalarize {
                     &projection_of,
                     &promoted_by_root,
                     &scalarizable,
-                    &const_paths,
                     &mut scalarized_agg,
                     &mut ssa,
                     &mut modified_leaves,
@@ -537,7 +529,6 @@ impl AggregateScalarize {
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
         object_effects: Option<&ObjectEffectSummaryMap>,
         callers: Option<&FunctionArgInvariance>,
-        const_paths: &ConstPathAnalysis,
     ) -> (Vec<PromotableRoot>, ExactProjectionMap) {
         let mut promoted = Vec::new();
 
@@ -643,13 +634,7 @@ impl AggregateScalarize {
             &mut snapshot,
         );
         for (root_value, root_kind, shape_data) in candidate_roots {
-            if !self.root_use_chain_is_promotable(
-                func,
-                module,
-                root_value,
-                facts.complete(),
-                const_paths,
-            ) {
+            if !self.root_use_chain_is_promotable(func, module, root_value, facts.complete()) {
                 continue;
             }
             let incoming = if matches!(root_kind, RootKind::Arg { .. }) {
@@ -697,7 +682,6 @@ impl AggregateScalarize {
         module: &sonatina_ir::module::ModuleCtx,
         root_value: ValueId,
         provenance: CompleteProvenance<'_>,
-        const_paths: &ConstPathAnalysis,
     ) -> bool {
         let mut dead_use_cache = FxHashMap::default();
         let root = RootValue::new(root_value);
@@ -758,17 +742,6 @@ impl AggregateScalarize {
                     }
                     RootUseKind::StoreView { ty } | RootUseKind::EnumTagRead { ty } => {
                         if !self.projection_slice_can_view_as(module, projection.slice, ty) {
-                            return false;
-                        }
-                    }
-                    RootUseKind::ConstInit { value } => {
-                        if !self.obj_init_const_has_full_rewrite_plan(
-                            func,
-                            module,
-                            projection.slice,
-                            value,
-                            const_paths,
-                        ) {
                             return false;
                         }
                     }
@@ -847,10 +820,6 @@ impl AggregateScalarize {
                         .dfg
                         .downcast::<&data::Mstore>(user)
                         .is_some_and(|mstore| *mstore.addr() == value)
-                    || func
-                        .dfg
-                        .downcast::<&data::ObjInitConst>(user)
-                        .is_some_and(|init| *init.object() == value)
                     || func
                         .dfg
                         .downcast::<&data::EnumSetTag>(user)
@@ -1524,7 +1493,6 @@ impl AggregateScalarize {
         projection_of: &ExactProjectionMap,
         promoted_by_root: &FxHashMap<ValueId, PromotableRoot>,
         scalarizable: &SecondaryMap<ValueId, bool>,
-        const_paths: &ConstPathAnalysis,
         scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
         ssa: &mut SsaBuilder,
         modified_leaves: &mut FxHashMap<ValueId, FxHashSet<usize>>,
@@ -1737,46 +1705,6 @@ impl AggregateScalarize {
                 projection.root_value.value(),
                 tag_leaf_idx..tag_leaf_idx + tag_slice.leaf_count,
             );
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-            return;
-        }
-
-        if let Some(init) = func.dfg.downcast::<&data::ObjInitConst>(inst).cloned() {
-            let Some(projection) = projection_of.get(*init.object()) else {
-                return;
-            };
-            let Some(promoted) = promoted_by_root.get(&projection.root_value.value()) else {
-                return;
-            };
-            let ty = projection.slice.ty;
-            let Some(payload_imms) =
-                self.const_init_leaf_imms(func, module, *init.value(), ty, const_paths)
-            else {
-                return;
-            };
-            let Some(view_leaf_tys) = self.projection_view_leaf_tys(module, ty) else {
-                return;
-            };
-            let leaf_range = projection.slice.first_leaf
-                ..projection.slice.first_leaf + projection.slice.leaf_count;
-            let underlying_leaves = &promoted.shape.leaves[leaf_range.clone()];
-            if payload_imms.len() != projection.slice.leaf_count
-                || view_leaf_tys.len() != underlying_leaves.len()
-            {
-                return;
-            }
-            for (i, ((imm, view_ty), underlying_leaf)) in payload_imms
-                .into_iter()
-                .zip(view_leaf_tys)
-                .zip(underlying_leaves.iter())
-                .enumerate()
-            {
-                let var = promoted.leaf_vars[projection.slice.first_leaf + i];
-                let value = func.dfg.make_imm_value(imm);
-                let stored = bitcast_before_inst(func, inst, value, view_ty, underlying_leaf.ty);
-                ssa.def_var(var, stored, block);
-            }
-            record_modified_leaves(modified_leaves, projection.root_value.value(), leaf_range);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return;
         }
@@ -2543,20 +2471,6 @@ impl AggregateScalarize {
             && shape::is_leaf_reifiable_ty(module, view_ty)
     }
 
-    fn obj_init_const_has_full_rewrite_plan(
-        &mut self,
-        func: &Function,
-        module: &sonatina_ir::module::ModuleCtx,
-        slice: shape::AggregateSlice,
-        value: ValueId,
-        const_paths: &ConstPathAnalysis,
-    ) -> bool {
-        self.projection_slice_can_view_as(module, slice, slice.ty)
-            && self
-                .const_init_leaf_imms(func, module, value, slice.ty, const_paths)
-                .is_some()
-    }
-
     fn const_init_leaf_imms(
         &mut self,
         func: &Function,
@@ -2945,18 +2859,6 @@ impl AggregateScalarize {
                         func.dfg.value_ty(*obj_store.value()),
                     ));
                 }
-                if let Some(init) = func.dfg.downcast::<&data::ObjInitConst>(inst)
-                    && let Some(projection) = projection_of.get(*init.object())
-                    && promoted_by_root.contains_key(&projection.root_value.value())
-                {
-                    return Some(format!(
-                        "obj.init.const at block {} inst {} on promoted root {} to object {}",
-                        block.as_u32(),
-                        inst.as_u32(),
-                        projection.root_value.value().as_u32(),
-                        init.object().as_u32(),
-                    ));
-                }
             }
         }
         None
@@ -3236,14 +3138,6 @@ fn classify_root_use(
     {
         return RootUseKind::StoreView {
             ty: func.dfg.value_ty(*obj_store.value()),
-        };
-    }
-
-    if let Some(init) = downcast::<&data::ObjInitConst>(is, inst)
-        && *init.object() == ptr
-    {
-        return RootUseKind::ConstInit {
-            value: *init.value(),
         };
     }
 
@@ -3961,7 +3855,7 @@ func private %f(v0.i1) -> i256 {
     }
 
     #[test]
-    fn scalarize_promotes_obj_init_const_root() {
+    fn scalarize_promotes_const_load_store_root() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -3974,7 +3868,8 @@ func private %f() -> i256 {
     block0:
         v0.objref<@pair> = obj.alloc @pair;
         v1.constref<@pair> = const.ref $pair;
-        obj.init.const v0 v1;
+        v4.@pair = const.load v1;
+        obj.store v0 v4;
         v2.@pair = obj.load v0;
         v3.i256 = extract_value v2 1.i8;
         return v3;
@@ -3990,13 +3885,13 @@ func private %f() -> i256 {
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
             assert_no_promoted_aggregate_artifacts(func, &ctx);
-            assert!(!dumped.contains("obj.init.const"), "{dumped}");
+            assert!(!dumped.contains("obj.store"), "{dumped}");
             assert!(dumped.contains("return 22.i256;"), "{dumped}");
         });
     }
 
     #[test]
-    fn scalarize_promotes_projected_scalar_obj_init_const() {
+    fn scalarize_promotes_projected_scalar_const_load_store() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -4010,7 +3905,8 @@ func private %f() -> i256 {
         v0.objref<@pair> = obj.alloc @pair;
         v1.objref<i256> = obj.proj v0 1.i8;
         v2.constref<i256> = const.ref $field;
-        obj.init.const v1 v2;
+        v5.i256 = const.load v2;
+        obj.store v1 v5;
         v3.@pair = obj.load v0;
         v4.i256 = extract_value v3 1.i8;
         return v4;
@@ -4026,13 +3922,13 @@ func private %f() -> i256 {
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
             assert_no_promoted_aggregate_artifacts(func, &ctx);
-            assert!(!dumped.contains("obj.init.const"), "{dumped}");
-            assert!(dumped.contains("return 22.i256;"), "{dumped}");
+            assert!(!dumped.contains("obj.store"), "{dumped}");
+            assert!(dumped.contains("return v3;"), "{dumped}");
         });
     }
 
     #[test]
-    fn scalarize_promotes_nested_obj_init_const_root() {
+    fn scalarize_promotes_nested_const_load_store_root() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -4046,7 +3942,8 @@ func private %f() -> i256 {
     block0:
         v0.objref<@outer> = obj.alloc @outer;
         v1.constref<@outer> = const.ref $outer;
-        obj.init.const v0 v1;
+        v5.@outer = const.load v1;
+        obj.store v0 v5;
         v2.@outer = obj.load v0;
         v3.[i256; 2] = extract_value v2 1.i8;
         v4.i256 = extract_value v3 0.i8;
@@ -4063,13 +3960,13 @@ func private %f() -> i256 {
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
             assert_no_promoted_aggregate_artifacts(func, &ctx);
-            assert!(!dumped.contains("obj.init.const"), "{dumped}");
+            assert!(!dumped.contains("obj.store"), "{dumped}");
             assert!(dumped.contains("return 22.i256;"), "{dumped}");
         });
     }
 
     #[test]
-    fn scalarize_skips_dynamic_obj_init_const_source() {
+    fn scalarize_promotes_dynamic_const_load_store() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -4083,7 +3980,8 @@ func private %f(v0.i256) -> i256 {
         v1.constref<[@pair; 2]> = const.ref $pairs;
         v2.constref<@pair> = const.index v1 v0;
         v3.objref<@pair> = obj.alloc @pair;
-        obj.init.const v3 v2;
+        v6.@pair = const.load v2;
+        obj.store v3 v6;
         v4.@pair = obj.load v3;
         v5.i256 = extract_value v4 1.i8;
         return v5;
@@ -4097,8 +3995,8 @@ func private %f(v0.i256) -> i256 {
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
-            assert!(dumped.contains("obj.init.const"), "{dumped}");
-            assert!(dumped.contains("obj.load"), "{dumped}");
+            assert!(!dumped.contains("obj."), "{dumped}");
+            assert!(dumped.contains("extract_value v4 1.i256"), "{dumped}");
         });
     }
 
@@ -4793,8 +4691,7 @@ block0:
             .collect();
             let mut pass = AggregateScalarize::default();
             let const_paths = analyze_const_paths(func, &collect_constref_value_tys(func));
-            let (_, projections) =
-                pass.find_promotable_roots(func, &module.ctx, None, None, None, &const_paths);
+            let (_, projections) = pass.find_promotable_roots(func, &module.ctx, None, None, None);
             let scalarizable = pass.compute_scalarizable_aggregates(
                 func,
                 &module.ctx,

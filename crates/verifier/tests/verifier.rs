@@ -707,13 +707,13 @@ func public %entry(v0.i256, v1.i256) -> i256 {
 }
 
 #[test]
-fn obj_init_const_rejects_pointer_payloads() {
+fn const_load_rejects_pointer_payloads() {
     let src = r#"
 target = "evm-ethereum-london"
 
-func private %bad(v0.objref<*i256>, v1.constref<*i256>) -> unit {
+func private %bad(v0.constref<*i256>) -> unit {
     block0:
-        obj.init.const v0 v1;
+        v1.*i256 = const.load v0;
         return;
 }
 "#;
@@ -726,20 +726,20 @@ func private %bad(v0.objref<*i256>, v1.constref<*i256>) -> unit {
     assert!(
         has_message(
             &report,
-            "obj.init.const does not support pointer-typed const data"
+            "const.load does not support pointer-typed const data"
         ),
         "expected pointer payload diagnostic, got {report}"
     );
 }
 
 #[test]
-fn obj_init_const_rejects_reference_payloads() {
+fn const_load_rejects_reference_payloads() {
     let src = r#"
 target = "evm-ethereum-london"
 
-func private %bad(v0.objref<objref<i256>>, v1.constref<objref<i256>>) -> unit {
+func private %bad(v0.constref<objref<i256>>) -> unit {
     block0:
-        obj.init.const v0 v1;
+        v1.objref<i256> = const.load v0;
         return;
 }
 "#;
@@ -752,14 +752,14 @@ func private %bad(v0.objref<objref<i256>>, v1.constref<objref<i256>>) -> unit {
     assert!(
         has_message(
             &report,
-            "obj.init.const does not support reference or enum-tag const data"
+            "const.load does not support reference or enum-tag const data"
         ),
         "expected reference payload diagnostic, got {report}"
     );
 }
 
 #[test]
-fn obj_init_const_rejects_enum_tag_payloads() {
+fn const_load_rejects_enum_tag_payloads() {
     let src = r#"
 target = "evm-ethereum-osaka"
 
@@ -768,9 +768,9 @@ type @OptionI256 = enum {
     #Some(i256),
 };
 
-func private %bad(v0.objref<enumtag(@OptionI256)>, v1.constref<enumtag(@OptionI256)>) -> unit {
+func private %bad(v0.constref<enumtag(@OptionI256)>) -> unit {
     block0:
-        obj.init.const v0 v1;
+        v1.enumtag(@OptionI256) = const.load v0;
         return;
 }
 "#;
@@ -783,7 +783,7 @@ func private %bad(v0.objref<enumtag(@OptionI256)>, v1.constref<enumtag(@OptionI2
     assert!(
         has_message(
             &report,
-            "obj.init.const does not support reference or enum-tag const data"
+            "const.load does not support reference or enum-tag const data"
         ),
         "expected enum-tag payload diagnostic, got {report}"
     );
@@ -2641,7 +2641,7 @@ block0:
 fn enum_field_proofs_preserve_disjoint_payload_writes() {
     for write in [
         "obj.store v3 42.i256;",
-        "v5.constref<i256> = const.ref $word;\n    obj.init.const v3 v5;",
+        "v5.constref<i256> = const.ref $word;\n    v6.i256 = const.load v5;\n    obj.store v3 v6;",
         "v5.objref<@Choice> = enum.assert_variant_ref v1 #Some;\n    v6.objref<i256> = enum.proj v5 #Some 1.i256;\n    obj.store v6 42.i256;",
     ] {
         let source = format!(
@@ -2701,7 +2701,7 @@ fn enum_initialization_proofs_distinguish_objects_and_fields() {
     for (object, field, proven) in [(0, 0, true), (0, 1, false), (1, 0, false), (1, 1, false)] {
         for initialize in [
             "obj.store v2 42.i256;",
-            "v6.constref<i256> = const.ref $word;\n    obj.init.const v2 v6;",
+            "v6.constref<i256> = const.ref $word;\n    v7.i256 = const.load v6;\n    obj.store v2 v7;",
         ] {
             let source = format!(
                 r#"

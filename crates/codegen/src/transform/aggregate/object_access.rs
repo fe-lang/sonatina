@@ -420,13 +420,6 @@ impl ObjectAccessFacts {
                     self.reachable_access(*store.value()),
                 ));
             }
-        } else if let Some(init) = func.dfg.downcast::<&data::ObjInitConst>(inst) {
-            self.typed_write(
-                &mut effects,
-                *init.object(),
-                None,
-                ObjectInitializationSource::Intrinsic,
-            );
         } else if let Some(store) = func.dfg.downcast::<&data::EnumSetTag>(inst) {
             effects
                 .unreadable

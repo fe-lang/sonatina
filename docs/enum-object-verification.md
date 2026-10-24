@@ -52,9 +52,9 @@ acquire initialized fields merely because the old variant was complete.
 `Some -> None -> Some` resurrection is outside the required acceptance envelope.
 Today's separate physical payload slots do not establish such an IR guarantee.
 
-`enum.write_variant` writes the selected fields and tag. `obj.store` and
-`obj.init.const` write the destination subtree. Their initialization effects
-come from the written value's shape. Their reference-containment effects follow
+`enum.write_variant` writes the selected fields and tag. `obj.store` writes the
+destination subtree. Its initialization effects come from the written value's
+shape. Write reference-containment effects follow
 the actual overwrite footprint: a tag write does not erase inactive reference
 bytes. Loss of logical readability alone cannot remove a may-containment edge.
 
@@ -142,7 +142,7 @@ An unsupported producer yields unknown local provenance, not an empty view.
 | `enum.assert_variant_ref` | Refine current object state; preserve identity and existing ancestor guards. |
 | `obj.load` | Query the cell read; copy value state and stored reference views. |
 | `enum.get_tag` | Query ancestor guards and tag readability; create a saved tag observation. It does not demand the enum's payload. |
-| `obj.store`, `obj.init.const` | Transfer value state into the written subtree; update reference cells. |
+| `obj.store` | Transfer value state into the written subtree; update reference cells. |
 | `enum.set_tag`, `enum.write_variant` | Apply tag and selected-payload effects with distinct write footprints. |
 | `insert_value`, `extract_value` | Transport the selected immutable child, including guarded references. |
 | `enum.make`, `enum.extract` | Construct/query immutable enum state; transport references within selected payloads. |

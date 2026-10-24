@@ -1602,23 +1602,6 @@ fn translate_function(
                         value_map.insert(result, addr);
                     }
                 }
-                NativeInstKind::ObjInitConst(obj_init_const) => {
-                    let object = resolve_value(
-                        function,
-                        *obj_init_const.object(),
-                        &value_map,
-                        &mut builder,
-                    )?;
-                    let value =
-                        resolve_value(function, *obj_init_const.value(), &value_map, &mut builder)?;
-                    let object_ty = function.dfg.value_ty(*obj_init_const.object());
-                    copy_bytes(
-                        value,
-                        object,
-                        referenced_value_storage_size(object_ty, &module.ctx)?,
-                        &mut builder,
-                    );
-                }
                 NativeInstKind::ObjProj(obj_proj) => {
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let addr = translate_aggregate_projection(
