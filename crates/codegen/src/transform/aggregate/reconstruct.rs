@@ -81,113 +81,32 @@ impl<'a> AggregateValueReconstructor<'a> {
             .runtime_leaves(func.ctx(), source_ty)?
             .len();
         if source_first_runtime_leaf == 0 && source_runtime_leaf_count == source_leaf_count {
+            // A tag can span every runtime leaf of its enum, but it is the
+            // enum's first child, not a bitcast view of the whole value.
+            if shape::enum_tag_ty(source_ty) == Some(result_ty) {
+                return self.lookup_immediate_child_value(func, inst, source, source_ty, 0);
+            }
             return self.cast_aggregate_view_value(func, inst, source, source_ty, result_ty);
         }
 
-        if let Some(child_idx) =
-            immediate_child_index_for_slice(func.ctx(), source_ty, source_slice)
-        {
-            let child_ty = shape::aggregate_child_ty(func.ctx(), source_ty, child_idx)?;
-            let child_value =
-                self.lookup_immediate_child_value(func, inst, source, source_ty, child_idx)?;
-            return self.cast_aggregate_view_value(func, inst, child_value, child_ty, result_ty);
-        }
-
-        if !shape::is_supported_scalar_shape_ty(func.ctx(), result_ty) {
-            let child_count = shape::aggregate_child_count(func.ctx(), source_ty)?;
-            for idx in 0..child_count {
-                let idx = u32::try_from(idx).ok()?;
-                let child_slice = shape::aggregate_slice_for_index(func.ctx(), source_ty, idx)?;
-                let (child_first_runtime_leaf, child_runtime_leaf_count) =
-                    shape::runtime_leaf_range_for_slice(func.ctx(), source_ty, child_slice)?;
-                if source_first_runtime_leaf < child_first_runtime_leaf
-                    || source_first_runtime_leaf + source_runtime_leaf_count
-                        > child_first_runtime_leaf + child_runtime_leaf_count
-                {
-                    continue;
-                }
-
-                let child_value =
-                    self.lookup_immediate_child_value(func, inst, source, source_ty, idx)?;
-                let nested_slice = shape::aggregate_slice_for_runtime_leaf_range(
-                    func.ctx(),
-                    child_slice.ty,
-                    source_first_runtime_leaf - child_first_runtime_leaf,
-                    source_runtime_leaf_count,
-                )?;
-                return self.rebuild(
-                    func,
-                    inst,
-                    child_value,
-                    child_slice.ty,
-                    nested_slice,
-                    result_ty,
-                );
-            }
-            return None;
-        }
-
-        if matches!(
-            result_ty.resolve_compound(func.ctx()),
-            Some(CompoundType::Enum(_))
-        ) {
-            let module = func.ctx().clone();
-            let shape = self.layout_cache.shape(&module, result_ty)?;
-            let mut leaves = SmallVec::<[ValueId; 4]>::new();
-            let mut next_runtime_leaf = source_first_runtime_leaf;
-            for leaf in &shape.leaves {
-                if leaf.size_bytes == 0 {
-                    leaves.push(func.dfg.make_undef_value(leaf.ty));
-                    continue;
-                }
-
-                let source_child_slice = shape::aggregate_slice_for_runtime_leaf_range(
-                    &module,
-                    source_ty,
-                    next_runtime_leaf,
-                    1,
-                )?;
-                leaves.push(self.rebuild(
-                    func,
-                    inst,
-                    source,
-                    source_ty,
-                    source_child_slice,
-                    leaf.ty,
-                )?);
-                next_runtime_leaf = next_runtime_leaf.checked_add(1)?;
-            }
-            return rebuild_scalar_shape_from_leaf_values(func, inst, &module, result_ty, &leaves);
-        }
-
-        let child_count = shape::aggregate_child_count(func.ctx(), result_ty)?;
-        let mut rebuilt = func.dfg.make_undef_value(result_ty);
-        for idx in 0..child_count {
-            let idx = u32::try_from(idx).ok()?;
-            let child_slice = shape::aggregate_slice_for_index(func.ctx(), result_ty, idx)?;
-            let (child_first_runtime_leaf, child_runtime_leaf_count) =
-                shape::runtime_leaf_range_for_slice(func.ctx(), result_ty, child_slice)?;
-            let child_value = if child_runtime_leaf_count == 0 {
-                func.dfg.make_undef_value(child_slice.ty)
-            } else {
-                let source_child_slice = shape::aggregate_slice_for_runtime_leaf_range(
-                    func.ctx(),
-                    source_ty,
-                    source_first_runtime_leaf + child_first_runtime_leaf,
-                    child_runtime_leaf_count,
-                )?;
-                self.rebuild(
-                    func,
-                    inst,
-                    source,
-                    source_ty,
-                    source_child_slice,
-                    child_slice.ty,
-                )?
-            };
-            rebuilt = insert_value_before_inst(func, inst, rebuilt, idx, child_value, result_ty);
-        }
-        Some(rebuilt)
+        // A strict sub-slice lies within one child: descend to it rather than
+        // rebuilding it from its leaves.
+        let (child_idx, child_slice) =
+            self.layout_cache
+                .child_containing_slice(func.ctx(), source_ty, source_slice)?;
+        let child_value =
+            self.lookup_immediate_child_value(func, inst, source, source_ty, child_idx)?;
+        self.rebuild(
+            func,
+            inst,
+            child_value,
+            child_slice.ty,
+            shape::AggregateSlice {
+                first_leaf: source_slice.first_leaf - child_slice.first_leaf,
+                ..source_slice
+            },
+            result_ty,
+        )
     }
 
     fn lookup_immediate_child_value(
@@ -457,22 +376,6 @@ fn resolve_known_enum_variant(
 
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
     matches!(func.dfg.value(value), Value::Undef { .. })
-}
-
-fn immediate_child_index_for_slice(
-    module: &sonatina_ir::module::ModuleCtx,
-    agg_ty: Type,
-    slice: shape::AggregateSlice,
-) -> Option<u32> {
-    let child_count = shape::aggregate_child_count(module, agg_ty)?;
-    (0..child_count).find_map(|idx| {
-        let idx_u32 = u32::try_from(idx).ok()?;
-        let child = shape::aggregate_slice_for_index(module, agg_ty, idx_u32)?;
-        (child.first_leaf == slice.first_leaf
-            && child.leaf_count == slice.leaf_count
-            && child.ty == slice.ty)
-            .then_some(idx_u32)
-    })
 }
 
 fn enum_child_value_from_source(
