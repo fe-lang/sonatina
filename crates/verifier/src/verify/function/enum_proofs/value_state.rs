@@ -394,10 +394,16 @@ impl ValueState {
         }
     }
 
+    /// Whether joining this state with itself is known to return it. A scalar
+    /// has no children or implicit payloads, so its self-join always does.
+    fn joins_to_itself(&self) -> bool {
+        !matches!(self.ty, Type::Compound(_)) || self.0.self_join_identity.load(Ordering::Relaxed)
+    }
+
     pub fn join(&self, ctx: &ModuleCtx, other: &Self) -> Self {
         debug_assert_eq!(self.ty, other.ty);
         let same = Arc::ptr_eq(&self.0, &other.0);
-        if same && self.0.self_join_identity.load(Ordering::Relaxed) {
+        if same && self.joins_to_itself() {
             return self.clone();
         }
         let mut result = self.clone();
@@ -419,12 +425,25 @@ impl ValueState {
             data.tags = tags;
             data.references = references;
         }
-        let mut keys: BTreeSet<_> = self
-            .children
-            .keys()
-            .chain(other.children.keys())
-            .copied()
-            .collect();
+        // A child equal on both sides that joins to itself also merges its own
+        // references unchanged, so it is already the result's child. Fixpoint
+        // passes re-derive equal children in new allocations, and joins of
+        // large aggregates usually differ in a few; walk both sorted maps
+        // together rather than looking up every step.
+        let mut keys = Vec::new();
+        let mut theirs = other.children.iter().peekable();
+        for (&step, a) in &self.children {
+            while let Some((&their, _)) = theirs.next_if(|&(&their, _)| their < step) {
+                keys.push(their);
+            }
+            if theirs
+                .next_if(|&(&their, _)| their == step)
+                .is_none_or(|(_, b)| a != b || !a.joins_to_itself())
+            {
+                keys.push(step);
+            }
+        }
+        keys.extend(theirs.map(|(&step, _)| step));
         if let Some(CompoundType::Enum(enumeration)) = self.ty.resolve_compound(ctx) {
             keys.extend(
                 enumeration
@@ -437,6 +456,9 @@ impl ValueState {
                             .iter()
                             .enumerate()
                             .map(move |(i, _)| Step::Payload(v as u32, i))
+                    })
+                    .filter(|step| {
+                        !self.children.contains_key(step) && !other.children.contains_key(step)
                     }),
             );
         }
@@ -698,6 +720,52 @@ block0:
         });
         assert!(!reference.0.self_join_identity.load(Ordering::Relaxed));
         assert!(!reference.references.unknown);
+    }
+
+    #[test]
+    fn join_walks_both_children_and_keeps_equal_unshared_ones() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %entry(v0.[i256; 8]) {
+block0:
+ return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+        let cell = |index| Step::Index(Index::Constant(index));
+        // Each side builds its own cells, as a fixpoint pass re-deriving an
+        // insert chain does: equal children, distinct allocations.
+        let build = |cells: &[(usize, bool)]| {
+            let mut value = ValueState::new(ty, false);
+            for &(index, complete) in cells {
+                value.insert_child(cell(index), ValueState::new(Type::I256, complete));
+            }
+            value
+        };
+        let ours = build(&[(0, true), (2, true), (4, true), (6, false)]);
+        let theirs = build(&[(1, true), (2, true), (4, false), (6, false), (7, true)]);
+        let joined = ours.join(ctx, &theirs);
+
+        for index in [2, 6] {
+            assert!(ptr::eq(
+                ours.children.get(&cell(index)).unwrap(),
+                joined.children.get(&cell(index)).unwrap()
+            ));
+        }
+        assert_eq!(
+            joined.children.keys().copied().collect::<Vec<_>>(),
+            [0, 1, 2, 4, 6, 7].map(cell)
+        );
+        // Cells absent on one side join with its incomplete default.
+        for index in [0, 1, 4, 6, 7] {
+            assert!(!joined.child(ctx, cell(index)).complete);
+        }
+        assert!(joined.child(ctx, cell(2)).complete);
+        assert_eq!(joined, theirs.join(ctx, &ours));
     }
 
     #[test]

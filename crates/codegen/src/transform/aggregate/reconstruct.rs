@@ -24,6 +24,8 @@ impl<'a> AggregateValueReconstructor<'a> {
         Self { layout_cache }
     }
 
+    /// Rebuilds `source_slice` of `source` as a `result_ty` value before
+    /// `inst`. A failed rebuild removes every instruction it inserted.
     pub(crate) fn rebuild_slice(
         &mut self,
         func: &mut Function,
@@ -33,134 +35,63 @@ impl<'a> AggregateValueReconstructor<'a> {
         source_slice: shape::AggregateSlice,
         result_ty: Type,
     ) -> Option<ValueId> {
-        if source_slice.leaf_count == 0 {
+        // Every rebuilt instruction is inserted immediately before `inst`.
+        let before = func.layout.prev_inst_of(inst);
+        let rebuilt = self.rebuild(func, inst, source, source_ty, source_slice, result_ty);
+        if rebuilt.is_none() {
+            let mut inserted = Vec::new();
+            while let Some(prev) = func.layout.prev_inst_of(inst)
+                && Some(prev) != before
+            {
+                func.layout.remove_inst(prev);
+                inserted.push(prev);
+            }
+            func.erase_insts(&inserted);
+        }
+        rebuilt
+    }
+
+    fn rebuild(
+        &mut self,
+        func: &mut Function,
+        inst: InstId,
+        source: ValueId,
+        source_ty: Type,
+        source_slice: shape::AggregateSlice,
+        result_ty: Type,
+    ) -> Option<ValueId> {
+        if source_slice.leaf_count == 0 || is_explicit_undef(func, source) {
             return Some(func.dfg.make_undef_value(result_ty));
         }
-        if !shape::is_supported_scalar_shape_ty(func.ctx(), source_ty) {
+        if source_slice.ty == source_ty {
             return self.cast_aggregate_view_value(func, inst, source, source_ty, result_ty);
         }
-        if is_explicit_undef(func, source) {
-            return Some(func.dfg.make_undef_value(result_ty));
-        }
-
-        let (source_first_runtime_leaf, source_runtime_leaf_count) =
+        let (_, source_runtime_leaf_count) =
             shape::runtime_leaf_range_for_slice(func.ctx(), source_ty, source_slice)?;
         if source_runtime_leaf_count == 0 {
             return Some(func.dfg.make_undef_value(result_ty));
         }
 
-        let source_leaf_count = self
-            .layout_cache
-            .runtime_leaves(func.ctx(), source_ty)?
-            .len();
-        if source_first_runtime_leaf == 0 && source_runtime_leaf_count == source_leaf_count {
-            return self.cast_aggregate_view_value(func, inst, source, source_ty, result_ty);
-        }
-
-        if let Some(child_idx) =
-            immediate_child_index_for_slice(func.ctx(), source_ty, source_slice)
-        {
-            let child_ty = shape::aggregate_child_ty(func.ctx(), source_ty, child_idx)?;
-            let child_value =
-                self.lookup_immediate_child_value(func, inst, source, source_ty, child_idx)?;
-            return self.cast_aggregate_view_value(func, inst, child_value, child_ty, result_ty);
-        }
-
-        if !shape::is_supported_scalar_shape_ty(func.ctx(), result_ty) {
-            let child_count = shape::aggregate_child_count(func.ctx(), source_ty)?;
-            for idx in 0..child_count {
-                let idx = u32::try_from(idx).ok()?;
-                let child_slice = shape::aggregate_slice_for_index(func.ctx(), source_ty, idx)?;
-                let (child_first_runtime_leaf, child_runtime_leaf_count) =
-                    shape::runtime_leaf_range_for_slice(func.ctx(), source_ty, child_slice)?;
-                if source_first_runtime_leaf < child_first_runtime_leaf
-                    || source_first_runtime_leaf + source_runtime_leaf_count
-                        > child_first_runtime_leaf + child_runtime_leaf_count
-                {
-                    continue;
-                }
-
-                let child_value =
-                    self.lookup_immediate_child_value(func, inst, source, source_ty, idx)?;
-                let nested_slice = shape::aggregate_slice_for_runtime_leaf_range(
-                    func.ctx(),
-                    child_slice.ty,
-                    source_first_runtime_leaf - child_first_runtime_leaf,
-                    source_runtime_leaf_count,
-                )?;
-                return self.rebuild_slice(
-                    func,
-                    inst,
-                    child_value,
-                    child_slice.ty,
-                    nested_slice,
-                    result_ty,
-                );
-            }
-            return None;
-        }
-
-        if matches!(
-            result_ty.resolve_compound(func.ctx()),
-            Some(CompoundType::Enum(_))
-        ) {
-            let module = func.ctx().clone();
-            let shape = self.layout_cache.shape(&module, result_ty)?;
-            let mut leaves = SmallVec::<[ValueId; 4]>::new();
-            let mut next_runtime_leaf = source_first_runtime_leaf;
-            for leaf in &shape.leaves {
-                if leaf.size_bytes == 0 {
-                    leaves.push(func.dfg.make_undef_value(leaf.ty));
-                    continue;
-                }
-
-                let source_child_slice = shape::aggregate_slice_for_runtime_leaf_range(
-                    &module,
-                    source_ty,
-                    next_runtime_leaf,
-                    1,
-                )?;
-                leaves.push(self.rebuild_slice(
-                    func,
-                    inst,
-                    source,
-                    source_ty,
-                    source_child_slice,
-                    leaf.ty,
-                )?);
-                next_runtime_leaf = next_runtime_leaf.checked_add(1)?;
-            }
-            return rebuild_scalar_shape_from_leaf_values(func, inst, &module, result_ty, &leaves);
-        }
-
-        let child_count = shape::aggregate_child_count(func.ctx(), result_ty)?;
-        let mut rebuilt = func.dfg.make_undef_value(result_ty);
-        for idx in 0..child_count {
-            let idx = u32::try_from(idx).ok()?;
-            let child_slice = shape::aggregate_slice_for_index(func.ctx(), result_ty, idx)?;
-            let (child_first_runtime_leaf, child_runtime_leaf_count) =
-                shape::runtime_leaf_range_for_slice(func.ctx(), result_ty, child_slice)?;
-            let child_value = if child_runtime_leaf_count == 0 {
-                func.dfg.make_undef_value(child_slice.ty)
-            } else {
-                let source_child_slice = shape::aggregate_slice_for_runtime_leaf_range(
-                    func.ctx(),
-                    source_ty,
-                    source_first_runtime_leaf + child_first_runtime_leaf,
-                    child_runtime_leaf_count,
-                )?;
-                self.rebuild_slice(
-                    func,
-                    inst,
-                    source,
-                    source_ty,
-                    source_child_slice,
-                    child_slice.ty,
-                )?
-            };
-            rebuilt = insert_value_before_inst(func, inst, rebuilt, idx, child_value, result_ty);
-        }
-        Some(rebuilt)
+        // Any other slice is a node inside one child, even one spanning the
+        // whole value such as a sole field or a fieldless enum's tag: descend
+        // to it rather than rebuilding it from its leaves. A load that wraps
+        // the stored value is not inside it and stays unforwarded.
+        let (child_idx, child_slice) =
+            self.layout_cache
+                .child_containing_slice(func.ctx(), source_ty, source_slice)?;
+        let child_value =
+            self.lookup_immediate_child_value(func, inst, source, source_ty, child_idx)?;
+        self.rebuild(
+            func,
+            inst,
+            child_value,
+            child_slice.ty,
+            shape::AggregateSlice {
+                first_leaf: source_slice.first_leaf - child_slice.first_leaf,
+                ..source_slice
+            },
+            result_ty,
+        )
     }
 
     fn lookup_immediate_child_value(
@@ -213,7 +144,7 @@ impl<'a> AggregateValueReconstructor<'a> {
                     aggregate_ty,
                     shape::aggregate_slice_for_index(func.ctx(), aggregate_ty, target_idx)?,
                 )?;
-                return self.rebuild_slice(func, inst, source, source_ty, source_slice, child_ty);
+                return self.rebuild(func, inst, source, source_ty, source_slice, child_ty);
             }
         }
 
@@ -430,22 +361,6 @@ fn resolve_known_enum_variant(
 
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
     matches!(func.dfg.value(value), Value::Undef { .. })
-}
-
-fn immediate_child_index_for_slice(
-    module: &sonatina_ir::module::ModuleCtx,
-    agg_ty: Type,
-    slice: shape::AggregateSlice,
-) -> Option<u32> {
-    let child_count = shape::aggregate_child_count(module, agg_ty)?;
-    (0..child_count).find_map(|idx| {
-        let idx_u32 = u32::try_from(idx).ok()?;
-        let child = shape::aggregate_slice_for_index(module, agg_ty, idx_u32)?;
-        (child.first_leaf == slice.first_leaf
-            && child.leaf_count == slice.leaf_count
-            && child.ty == slice.ty)
-            .then_some(idx_u32)
-    })
 }
 
 fn enum_child_value_from_source(
@@ -1005,6 +920,49 @@ block0:
                 rebuild_scalar_shape_from_leaf_values(func, ret, &module_ctx, enum_ty, &leaves)
                     .is_none()
             );
+        });
+    }
+
+    #[test]
+    fn failed_nested_rebuild_removes_inserted_insts() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @slot = enum {
+    #Empty,
+    #Full(i256, i1),
+};
+type @entry = { [i256; 2], @slot };
+
+func private %f(v0.[@entry; 2]) -> i256 {
+block0:
+    return 0.i256;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+
+        module.func_store.modify(func_ref, |func| {
+            let entry_block = func.layout.entry_block().unwrap();
+            let ret = func.layout.last_inst_of(entry_block).unwrap();
+            let arg = func.arg_values[0];
+            let entries = func.dfg.value_ty(arg);
+            // The payload of an opaque enum value cannot be extracted, but the
+            // array and struct levels above it can.
+            let payload = shape::aggregate_slice_for_path(func.ctx(), entries, &[1, 1, 1]).unwrap();
+            assert_eq!(payload.ty, Type::I256);
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            assert!(
+                AggregateValueReconstructor::new(&mut layout_cache)
+                    .rebuild_slice(func, ret, arg, entries, payload, Type::I256)
+                    .is_none()
+            );
+            assert_eq!(
+                func.layout.iter_inst(entry_block).collect::<Vec<_>>(),
+                [ret]
+            );
+            assert_eq!(func.dfg.users_num(arg), 0);
         });
     }
 }

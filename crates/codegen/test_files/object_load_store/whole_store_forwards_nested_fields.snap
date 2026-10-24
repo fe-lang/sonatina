@@ -1,0 +1,71 @@
+---
+source: crates/codegen/tests/object_load_store.rs
+input_file: test_files/object_load_store/whole_store_forwards_nested_fields.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @entry = {[i256; 2], @mode, @slot};
+type @table = {[@entry; 2], i256};
+type @wrap = {@slot};
+type @mode = enum {
+    #Off,
+    #On,
+};
+type @slot = enum {
+    #Empty,
+    #Full(i256, i1),
+};
+
+func private %nested_enum_fields(v0.@table) -> @slot {
+    block0:
+        v15.[@entry; 2] = extract_value v0 0.i256;
+        v17.@entry = extract_value v15 1.i256;
+        v18.@mode = extract_value v17 1.i256;
+        v19.enumtag(@mode) = enum.tag v18;
+        br_table v19 block2 (0.enumtag(@mode) block1);
+
+    block1:
+        v20.[@entry; 2] = extract_value v0 0.i256;
+        v21.@entry = extract_value v20 1.i256;
+        v23.@slot = extract_value v21 2.i256;
+        return v23;
+
+    block2:
+        v9.@slot = enum.make @slot #Empty;
+        return v9;
+}
+
+func private %nested_struct(v0.@table) -> @entry {
+    block0:
+        v7.[@entry; 2] = extract_value v0 0.i256;
+        v8.@entry = extract_value v7 0.i256;
+        return v8;
+}
+
+func private %opaque_payload_field(v0.@table) -> i256 {
+    block0:
+        v1.objref<@table> = obj.alloc @table;
+        obj.store v1 v0;
+        v2.objref<[@entry; 2]> = obj.proj v1 0.i8;
+        v3.objref<@entry> = obj.index v2 0.i8;
+        v4.objref<@slot> = obj.proj v3 2.i8;
+        v5.objref<@slot> = enum.assert_variant_ref v4 #Full;
+        v6.objref<i256> = enum.proj v5 #Full 0.i8;
+        v7.i256 = obj.load v6;
+        return v7;
+}
+
+func private %sole_enum_field(v0.@wrap) -> @slot {
+    block0:
+        v6.@slot = extract_value v0 0.i256;
+        return v6;
+}
+
+func private %wrapper_of_stored_enum(v0.@slot) -> @wrap {
+    block0:
+        v1.objref<@wrap> = obj.alloc @wrap;
+        v2.objref<@slot> = obj.proj v1 0.i8;
+        obj.store v2 v0;
+        v3.@wrap = obj.load v1;
+        return v3;
+}

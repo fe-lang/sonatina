@@ -324,12 +324,13 @@ impl ObjectLoadStore {
                 return Some(value);
             }
 
-            let source_slice = shape::aggregate_slice_for_leaf_range(
-                func.ctx(),
-                available_slice.ty,
-                slice.first_leaf - available_slice.first_leaf,
-                slice.leaf_count,
-            )?;
+            // Keep the load's type: a leaf range alone cannot tell a stored value
+            // from a sole field or a fieldless enum's tag that spans it.
+            let source_slice = shape::AggregateSlice {
+                ty: slice.ty,
+                first_leaf: slice.first_leaf - available_slice.first_leaf,
+                leaf_count: slice.leaf_count,
+            };
             if let Some(rebuilt) = AggregateValueReconstructor::new(&mut self.layout_cache)
                 .rebuild_slice(
                     func,

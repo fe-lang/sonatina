@@ -1,0 +1,75 @@
+target = "evm-ethereum-osaka"
+
+type @mode = enum {
+    #Off,
+    #On,
+};
+type @slot = enum {
+    #Empty,
+    #Full(i256, i1),
+};
+type @entry = { [i256; 2], @mode, @slot };
+type @table = { [@entry; 2], i256 };
+type @wrap = { @slot };
+
+func private %nested_enum_fields(v0.@table) -> @slot {
+block0:
+    v1.objref<@table> = obj.alloc @table;
+    obj.store v1 v0;
+    v2.objref<[@entry; 2]> = obj.proj v1 0.i8;
+    v3.objref<@entry> = obj.index v2 1.i8;
+    v4.objref<@mode> = obj.proj v3 1.i8;
+    v5.enumtag(@mode) = enum.get_tag v4;
+    br_table v5 block2 (0.enumtag(@mode) block1);
+
+block1:
+    v6.objref<@slot> = obj.proj v3 2.i8;
+    v7.@slot = obj.load v6;
+    return v7;
+
+block2:
+    v8.@mode = obj.load v4;
+    v9.@slot = enum.make @slot #Empty;
+    return v9;
+}
+
+func private %nested_struct(v0.@table) -> @entry {
+block0:
+    v1.objref<@table> = obj.alloc @table;
+    obj.store v1 v0;
+    v2.objref<[@entry; 2]> = obj.proj v1 0.i8;
+    v3.objref<@entry> = obj.index v2 0.i8;
+    v4.@entry = obj.load v3;
+    return v4;
+}
+
+func private %opaque_payload_field(v0.@table) -> i256 {
+block0:
+    v1.objref<@table> = obj.alloc @table;
+    obj.store v1 v0;
+    v2.objref<[@entry; 2]> = obj.proj v1 0.i8;
+    v3.objref<@entry> = obj.index v2 0.i8;
+    v4.objref<@slot> = obj.proj v3 2.i8;
+    v5.objref<@slot> = enum.assert_variant_ref v4 #Full;
+    v6.objref<i256> = enum.proj v5 #Full 0.i8;
+    v7.i256 = obj.load v6;
+    return v7;
+}
+
+func private %sole_enum_field(v0.@wrap) -> @slot {
+block0:
+    v1.objref<@wrap> = obj.alloc @wrap;
+    obj.store v1 v0;
+    v2.objref<@slot> = obj.proj v1 0.i8;
+    v3.@slot = obj.load v2;
+    return v3;
+}
+
+func private %wrapper_of_stored_enum(v0.@slot) -> @wrap {
+block0:
+    v1.objref<@wrap> = obj.alloc @wrap;
+    v2.objref<@slot> = obj.proj v1 0.i8;
+    obj.store v2 v0;
+    v3.@wrap = obj.load v1;
+    return v3;
+}

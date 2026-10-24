@@ -28,7 +28,7 @@ enum_declaration         =  { "type" ~ struct_identifier ~ "=" ~ "enum" ~ "{" ~ 
 enum_variant_list        = ${ (NEWLINE* ~ enum_variant_line ~ "," )* ~ NEWLINE* ~ enum_variant_line? }
 enum_variant_line        = _{ WHITESPACE* ~ enum_variant ~ WHITESPACE* }
 enum_variant             =  { variant_identifier ~ enum_variant_fields? }
-enum_variant_fields      =  { "(" ~ type_list ~ ")" }
+enum_variant_fields      = !{ "(" ~ type_list ~ ")" }
 struct_identifier        = ${ "@" ~ struct_name }
 struct_fields            = _{ normal_field_list | packed_field_list }
 normal_field_list        =  { "{" ~ type_list ~ "}" }

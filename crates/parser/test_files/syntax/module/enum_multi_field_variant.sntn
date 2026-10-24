@@ -1,0 +1,9 @@
+target = "evm-ethereum-osaka"
+
+type @slot = enum {
+    #Empty,
+    #Full(i256, i1),
+    #Pair([i256; 2], *i8, i1),
+};
+
+type @entry = { [i256; 4], @slot };
