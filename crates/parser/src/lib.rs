@@ -1207,7 +1207,8 @@ func private %ops() -> i256 {
         v2.constref<i256> = const.index v1 0.i8;
         v3.i256 = const.load v2;
         v4.objref<@pair> = obj.alloc @pair;
-        obj.init.const v4 v0;
+        v5.@pair = const.load v0;
+        obj.store v4 v5;
         return v3;
 }
 "#;
@@ -1220,7 +1221,8 @@ func private %ops() -> i256 {
         assert!(printed.contains("const.proj v0 1.i8"), "{printed}");
         assert!(printed.contains("const.index v1 0.i8"), "{printed}");
         assert!(printed.contains("const.load v2"), "{printed}");
-        assert!(printed.contains("obj.init.const v4 v0"), "{printed}");
+        assert!(printed.contains("v5.@pair = const.load v0"), "{printed}");
+        assert!(printed.contains("obj.store v4 v5"), "{printed}");
     }
 
     #[test]

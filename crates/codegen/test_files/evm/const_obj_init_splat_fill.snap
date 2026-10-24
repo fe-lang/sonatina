@@ -81,15 +81,15 @@ load_splat_object:
     PUSH1 0x7 (7)  // evm_mstore v0 v1;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_mcopy v2 v0 v2;
+    PUSH1 0x20 (32)  // evm_mcopy v4 v0 v4;
     PUSH0
     DUP2
     MCOPY
-    PUSH1 0x40 (64)  // evm_mcopy 64.i256 v0 64.i256;
+    PUSH1 0x40 (64)  // evm_mcopy v3 v0 v3;
     PUSH0
     DUP2
     MCOPY
-    PUSH1 0x20 (32)  // evm_mcopy 128.i256 v0 v2;
+    PUSH1 0x20 (32)  // evm_mcopy 128.i256 v0 v4;
     PUSH0
     PUSH1 0x80 (128)
     MCOPY

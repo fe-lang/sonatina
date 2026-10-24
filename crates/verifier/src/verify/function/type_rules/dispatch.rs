@@ -1170,13 +1170,7 @@ impl VerifyInst for data::ConstLoad {
             ));
             return;
         };
-        if !value_ty.is_integral() {
-            verifier.emit(Diagnostic::error(
-                DiagnosticCode::InstOperandTypeMismatch,
-                "const.load currently only supports scalar integral leaf types",
-                location.clone(),
-            ));
-        }
+        validate_const_data_ty(verifier, value_ty, location.clone(), "const.load");
         verifier.expect_result_ty(inst_id, value_ty, location);
     }
 }
@@ -1371,46 +1365,6 @@ impl VerifyInst for data::ObjStore {
                     location.clone(),
                 )
                 .with_note(format!("expected {:?}, found {:?}", expected_ty, value_ty)),
-            );
-        }
-        verifier.expect_no_result(inst_id, location);
-    }
-}
-
-impl VerifyInst for data::ObjInitConst {
-    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
-        let location = verifier.inst_location(inst_id);
-        let Some(object_ty) = verifier.value_ty(*self.object()) else {
-            return;
-        };
-        let Some(expected_ty) = verifier.objref_ty(object_ty) else {
-            verifier.emit(Diagnostic::error(
-                DiagnosticCode::InstOperandTypeMismatch,
-                "obj.init.const destination must be an object reference",
-                location.clone(),
-            ));
-            return;
-        };
-        let Some(value_ty) = verifier.value_ty(*self.value()) else {
-            return;
-        };
-        let Some(actual_ty) = verifier.constref_ty(value_ty) else {
-            verifier.emit(Diagnostic::error(
-                DiagnosticCode::InstOperandTypeMismatch,
-                "obj.init.const source must be a const reference",
-                location.clone(),
-            ));
-            return;
-        };
-        validate_const_data_ty(verifier, actual_ty, location.clone(), "obj.init.const");
-        if actual_ty != expected_ty {
-            verifier.emit(
-                Diagnostic::error(
-                    DiagnosticCode::InstOperandTypeMismatch,
-                    "obj.init.const source and destination types must match",
-                    location.clone(),
-                )
-                .with_note(format!("expected {:?}, found {:?}", expected_ty, actual_ty)),
             );
         }
         verifier.expect_no_result(inst_id, location);

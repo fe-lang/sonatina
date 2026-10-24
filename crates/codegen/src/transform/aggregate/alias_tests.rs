@@ -303,7 +303,7 @@ block0:
 fn aliased_scalar_and_constant_writes_invalidate_captured_reference_origins() {
     for write in [
         "obj.store v1 0.i256;",
-        "v4.constref<i256> = const.ref $zero;\n    obj.init.const v1 v4;",
+        "v4.constref<i256> = const.ref $zero;\n    v5.i256 = const.load v4;\n    obj.store v1 v5;",
     ] {
         let module = verified_module(&format!(
             r#"
@@ -405,7 +405,7 @@ block0:
 fn scalar_and_constant_sibling_writes_preserve_captured_origins() {
     for write in [
         "obj.store v2 0.i256;",
-        "v4.constref<i256> = const.ref $zero;\n    obj.init.const v2 v4;",
+        "v4.constref<i256> = const.ref $zero;\n    v6.i256 = const.load v4;\n    obj.store v2 v6;",
     ] {
         let module = verified_module(&format!(
             r#"
@@ -605,7 +605,8 @@ func private %initialize(v0.objref<@Pair>) {
 block0:
     v1.objref<i256> = obj.proj v0 1.i8;
     v2.constref<i256> = const.ref $answer;
-    obj.init.const v1 v2;
+    v3.i256 = const.load v2;
+    obj.store v1 v3;
     return;
 }
 "#,

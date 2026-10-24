@@ -80,19 +80,13 @@ fn static_initializers_preserve_native_contents_padding_and_alignment() {
         let const_reader = if ty == "*i8" {
             String::new()
         } else {
-            let load = if ty.starts_with('i') {
-                format!("v2.{ty} = const.load v1;\n    mstore v0 v2 {ty};")
-            } else {
-                format!(
-                    "v2.objref<{ty}> = obj.alloc {ty};\n    obj.init.const v2 v1;\n    v3.{ty} = obj.load v2;\n    mstore v0 v3 {ty};"
-                )
-            };
             format!(
                 r#"
 func public %via_const(v0.*{ty}) {{
 block0:
     v1.constref<{ty}> = const.ref $data;
-    {load}
+    v2.{ty} = const.load v1;
+    mstore v0 v2 {ty};
     return;
 }}
 "#

@@ -211,14 +211,6 @@ pub struct ObjStore {
     value: ValueId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(side_effect(super::SideEffect::Write))]
-#[inst(text = "obj.init.const")]
-pub struct ObjInitConst {
-    object: ValueId,
-    value: ValueId,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(arity(at_least(2)))]
 #[inst(text = "enum.make")]

@@ -1451,7 +1451,10 @@ fn undefined_reference_strict_uses_are_reported() {
             "enum.write_variant undef.objref<@E> #Some (1.i256);",
             &[UNDEFINED],
         ),
-        ("obj.init.const undef.objref<@P> v8;", &[UNDEFINED]),
+        (
+            "v9.@P = const.load v8;\n obj.store undef.objref<@P> v9;",
+            &[UNDEFINED],
+        ),
         (
             "v9.*@E = obj.materialize.stack undef.objref<@E>;",
             &[UNDEFINED],

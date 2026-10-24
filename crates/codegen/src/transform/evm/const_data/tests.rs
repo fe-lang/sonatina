@@ -715,7 +715,7 @@ func private %entry(v0.i256) -> i256 {
 }
 
 #[test]
-fn obj_init_const_small_aggregate_lowers_to_stores() {
+fn const_load_store_small_aggregate_lowers_to_stores() {
     let parsed = parse(
         r#"
 target = "evm-ethereum-osaka"
@@ -726,7 +726,8 @@ func private %entry() -> i256 {
     block0:
         v0.objref<[i256; 2]> = obj.alloc [i256; 2];
         v1.constref<[i256; 2]> = const.ref $arr;
-        obj.init.const v0 v1;
+        v4.[i256; 2] = const.load v1;
+        obj.store v0 v4;
         v2.objref<i256> = obj.index v0 1.i8;
         v3.i256 = obj.load v2;
         return v3;
@@ -741,7 +742,6 @@ func private %entry() -> i256 {
         .module
         .func_store
         .view(entry, |func| FuncWriter::new(entry, func).dump_string());
-    assert!(!dumped.contains("obj.init.const"));
     assert!(dumped.contains("obj.store"));
     assert!(!dumped.contains("obj.materialize.stack"));
     assert!(!dumped.contains("evm_code_copy"));
@@ -750,7 +750,7 @@ func private %entry() -> i256 {
 }
 
 #[test]
-fn obj_init_const_small_narrow_aggregate_lowers_to_store() {
+fn const_load_store_small_narrow_aggregate_lowers_to_store() {
     let parsed = parse(
         r#"
 target = "evm-ethereum-osaka"
@@ -761,7 +761,8 @@ func private %entry() -> i256 {
     block0:
         v0.objref<[i8; 1]> = obj.alloc [i8; 1];
         v1.constref<[i8; 1]> = const.ref $arr;
-        obj.init.const v0 v1;
+        v2.[i8; 1] = const.load v1;
+        obj.store v0 v2;
         return 0.i256;
 }
 "#,
@@ -781,7 +782,7 @@ func private %entry() -> i256 {
 }
 
 #[test]
-fn obj_init_const_bulk_codecopy_zero_extends_nested_narrow_words() {
+fn const_load_store_bulk_codecopy_zero_extends_nested_narrow_words() {
     let parsed = parse(
         r#"
 target = "evm-ethereum-osaka"
@@ -795,7 +796,8 @@ func private %entry() -> i256 {
     block0:
         v0.objref<@outer> = obj.alloc @outer;
         v1.constref<@outer> = const.ref $value;
-        obj.init.const v0 v1;
+        v2.@outer = const.load v1;
+        obj.store v0 v2;
         return 0.i256;
 }
 "#,
@@ -832,7 +834,7 @@ func private %entry() -> i256 {
 }
 
 #[test]
-fn obj_init_const_zero_aggregate_lowers_to_zero_fill_without_blob() {
+fn const_load_store_zero_aggregate_lowers_to_zero_fill_without_blob() {
     let parsed = parse(
         r#"
 target = "evm-ethereum-osaka"
@@ -843,7 +845,8 @@ func private %entry() -> i256 {
     block0:
         v0.objref<[i256; 5]> = obj.alloc [i256; 5];
         v1.constref<[i256; 5]> = const.ref $value;
-        obj.init.const v0 v1;
+        v2.[i256; 5] = const.load v1;
+        obj.store v0 v2;
         return 0.i256;
 }
 "#,
@@ -867,7 +870,7 @@ func private %entry() -> i256 {
 }
 
 #[test]
-fn obj_init_const_splat_aggregate_lowers_to_mcopy_fill_without_blob() {
+fn const_load_store_splat_aggregate_lowers_to_mcopy_fill_without_blob() {
     let parsed = parse(
         r#"
 target = "evm-ethereum-osaka"
@@ -878,7 +881,8 @@ func private %entry() -> i256 {
     block0:
         v0.objref<[i256; 5]> = obj.alloc [i256; 5];
         v1.constref<[i256; 5]> = const.ref $value;
-        obj.init.const v0 v1;
+        v2.[i256; 5] = const.load v1;
+        obj.store v0 v2;
         return 0.i256;
 }
 "#,
@@ -903,7 +907,7 @@ func private %entry() -> i256 {
 }
 
 #[test]
-fn obj_init_const_mixed_aggregate_lowers_to_split_strategies() {
+fn const_load_store_mixed_aggregate_lowers_to_split_strategies() {
     let parsed = parse(
         r#"
 target = "evm-ethereum-osaka"
@@ -916,7 +920,8 @@ func private %entry() -> i256 {
     block0:
         v0.objref<@mixed> = obj.alloc @mixed;
         v1.constref<@mixed> = const.ref $value;
-        obj.init.const v0 v1;
+        v2.@mixed = const.load v1;
+        obj.store v0 v2;
         return 0.i256;
 }
 "#,
@@ -936,11 +941,10 @@ func private %entry() -> i256 {
         global_symbols_with_prefix(&parsed, "__sonatina_const_words_").len(),
         1
     );
-    assert!(!dumped.contains("obj.init.const"));
 }
 
 #[test]
-fn obj_init_const_scalar_phi_same_path_uses_immediate_store_despite_layout_order() {
+fn const_load_store_scalar_phi_same_path_uses_immediate_store_despite_layout_order() {
     let parsed = parse(
         r#"
 target = "evm-ethereum-osaka"
@@ -954,7 +958,8 @@ func private %entry() -> i256 {
     block3:
         v2.objref<i256> = obj.alloc i256;
         v3.constref<i256> = phi (v0 block1) (v1 block2);
-        obj.init.const v2 v3;
+        v5.i256 = const.load v3;
+        obj.store v2 v5;
         v4.i256 = obj.load v2;
         return v4;
 
@@ -976,7 +981,6 @@ func private %entry() -> i256 {
         .module
         .func_store
         .view(entry, |func| FuncWriter::new(entry, func).dump_string());
-    assert!(!dumped.contains("obj.init.const"));
     assert!(dumped.contains("obj.store"));
     assert!(!dumped.contains("obj.materialize.stack"));
     assert!(!dumped.contains("evm_code_copy"));
@@ -985,7 +989,7 @@ func private %entry() -> i256 {
 }
 
 #[test]
-fn obj_init_const_scalar_lowers_to_obj_store() {
+fn const_load_store_scalar_lowers_to_obj_store() {
     let parsed = parse(
         r#"
 target = "evm-ethereum-osaka"
@@ -996,7 +1000,8 @@ func private %entry() -> i256 {
     block0:
         v0.objref<i256> = obj.alloc i256;
         v1.constref<i256> = const.ref $value;
-        obj.init.const v0 v1;
+        v3.i256 = const.load v1;
+        obj.store v0 v3;
         v2.i256 = obj.load v0;
         return v2;
 }
@@ -1010,11 +1015,74 @@ func private %entry() -> i256 {
         .module
         .func_store
         .view(entry, |func| FuncWriter::new(entry, func).dump_string());
-    assert!(!dumped.contains("obj.init.const"));
     assert!(dumped.contains("obj.store"));
     assert!(!dumped.contains("obj.materialize.stack"));
     assert!(!dumped.contains("evm_code_copy"));
     assert!(!dumped.contains("const."));
+}
+
+#[test]
+fn aggregate_const_load_small_value_use_lowers_to_immediates() {
+    let parsed = parse(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 2] $value = [11, 22];
+
+func private %entry() -> [i256; 2] {
+    block0:
+        v0.constref<[i256; 2]> = const.ref $value;
+        v1.[i256; 2] = const.load v0;
+        v2.objref<[i256; 2]> = obj.alloc [i256; 2];
+        obj.store v2 v1;
+        return v1;
+}
+"#,
+    );
+
+    ConstDataLower::default().run(&parsed.module);
+
+    let entry = find_func_ref(&parsed, "entry");
+    let dumped = parsed
+        .module
+        .func_store
+        .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+    assert_eq!(dumped.matches("obj.alloc").count(), 1, "{dumped}");
+    assert_eq!(dumped.matches("obj.store").count(), 2, "{dumped}");
+    assert!(dumped.contains("insert_value v"), "{dumped}");
+    assert!(dumped.contains("1.i64 22.i256"), "{dumped}");
+    assert!(!dumped.contains("const."), "{dumped}");
+}
+
+#[test]
+fn aggregate_const_load_value_use_reads_initialized_object() {
+    let parsed = parse(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 17] $value = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+
+func private %entry() -> [i256; 17] {
+    block0:
+        v0.constref<[i256; 17]> = const.ref $value;
+        v1.[i256; 17] = const.load v0;
+        return v1;
+}
+"#,
+    );
+
+    ConstDataLower::default().run(&parsed.module);
+
+    let entry = find_func_ref(&parsed, "entry");
+    let dumped = parsed
+        .module
+        .func_store
+        .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+    assert!(dumped.contains("obj.alloc"), "{dumped}");
+    assert!(dumped.contains("evm_code_copy"), "{dumped}");
+    assert!(dumped.contains("obj.load"), "{dumped}");
+    assert!(!dumped.contains("insert_value"), "{dumped}");
+    assert!(!dumped.contains("const."), "{dumped}");
 }
 
 #[test]

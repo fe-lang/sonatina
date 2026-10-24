@@ -13,7 +13,8 @@ func public %entry() {
     block0:
         v0.objref<@mixed> = obj.alloc @mixed;
         v1.constref<@mixed> = const.ref $value;
-        obj.init.const v0 v1;
+        v12.@mixed = const.load v1;
+        obj.store v0 v12;
         v2.objref<i256> = obj.proj v0 0.i8;
         v3.i256 = obj.load v2;
         v4.objref<[i256; 5]> = obj.proj v0 1.i8;

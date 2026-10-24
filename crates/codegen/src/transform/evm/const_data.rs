@@ -25,7 +25,7 @@ use crate::{
         collect_constref_value_tys, const_path_steps, eval_const_path_domain_immediate,
         eval_const_path_dynamic_domain_immediates, eval_const_path_subtree,
     },
-    transform::aggregate::shape,
+    transform::aggregate::{scalarize::MAX_SCALARIZABLE_VALUE_LEAVES, shape},
     type_rewrite::{TypeRewrite, rewrite_compound_type_default, rewrite_function_type_uses},
 };
 
@@ -40,8 +40,8 @@ use encoding::{
 };
 use lookup::{can_emit_dynamic_values_lookup, emit_dynamic_values_lookup};
 use object_init::{
-    emit_obj_init, emit_obj_init_from_addr, emit_obj_init_from_codecopy, emit_obj_splat_fill,
-    emit_obj_zero_fill, gep_word_offset,
+    emit_const_value, emit_obj_init, emit_obj_init_from_addr, emit_obj_init_from_codecopy,
+    emit_obj_splat_fill, emit_obj_zero_fill, gep_word_offset,
 };
 
 struct ConstRewriteInfo<'a> {
@@ -110,13 +110,13 @@ struct ConstLoadRowGroup {
 }
 
 #[derive(Clone, Copy)]
-struct ObjInitConstSubtree<'a> {
+struct ConstInitSubtree<'a> {
     source: GlobalVariableRef,
     ty: Type,
     init: &'a GvInitializer,
 }
 
-impl<'a> ObjInitConstSubtree<'a> {
+impl<'a> ConstInitSubtree<'a> {
     fn child(self, ty: Type, init: &'a GvInitializer) -> Self {
         Self {
             source: self.source,
@@ -445,10 +445,15 @@ impl ConstDataLower {
         info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
         if let Some(load) = func.dfg.downcast::<&data::ConstLoad>(inst).cloned() {
-            return self.rewrite_const_load(module, func, inst, *load.object(), info);
-        }
-        if let Some(init) = func.dfg.downcast::<&data::ObjInitConst>(inst).cloned() {
-            return self.rewrite_obj_init_const(module, func, inst, init, info);
+            let result = func
+                .dfg
+                .inst_result(inst)
+                .expect("const.load must have a result");
+            return if func.dfg.value_ty(result).is_integral() {
+                self.rewrite_const_load(module, func, inst, *load.object(), info)
+            } else {
+                self.rewrite_aggregate_const_load(module, func, inst, *load.object(), info)
+            };
         }
         false
     }
@@ -644,64 +649,120 @@ impl ConstDataLower {
         true
     }
 
-    fn rewrite_obj_init_const(
+    /// Stores of an aggregate load copy the const data straight into their
+    /// objects. Other uses take a known value small enough to scalarize as
+    /// immediates, and anything else from a fresh object.
+    fn rewrite_aggregate_const_load(
         &mut self,
         module: &Module,
         func: &mut Function,
         inst: InstId,
-        init: data::ObjInitConst,
-        info: &ConstRewriteInfo<'_>,
+        source: ValueId,
+        info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
-        let value = *init.value();
+        let result = func
+            .dfg
+            .inst_result(inst)
+            .expect("const.load must have a result");
+        let users: Vec<_> = func
+            .dfg
+            .users(result)
+            .copied()
+            .filter(|&user| func.layout.is_inst_inserted(user))
+            .collect();
+        let mut used_as_value = false;
+        for user in users {
+            if let Some(store) = func.dfg.downcast::<&data::ObjStore>(user).cloned()
+                && *store.value() == result
+            {
+                self.emit_obj_init_const(module, func, user, *store.object(), source, info);
+                remove_inst(func, user);
+            } else {
+                used_as_value = true;
+            }
+        }
+        if !used_as_value {
+            remove_inst(func, inst);
+            return true;
+        }
+
+        let ty = func.dfg.value_ty(result);
+        if const_leaf_count(func.ctx(), ty)
+            .is_some_and(|leaves| leaves as usize <= MAX_SCALARIZABLE_VALUE_LEAVES)
+            && let Some(path) = info.path(source)
+            && let Some((_, init)) =
+                eval_const_path_subtree(&module.ctx, &path, |value| func.dfg.value_imm(value))
+        {
+            let value = emit_const_value(func, inst, ty, &init);
+            info.replace_with_alias(func, inst, value);
+            return true;
+        }
+        let object = insert_before_one(
+            func,
+            inst,
+            data::ObjAlloc::new_unchecked(func.inst_set(), ty),
+            ty.to_obj_ref(func.ctx()),
+        );
+        self.emit_obj_init_const(module, func, inst, object, source, info);
+        let loaded = insert_before_one(
+            func,
+            inst,
+            data::ObjLoad::new_unchecked(func.inst_set(), object),
+            ty,
+        );
+        info.replace_with_alias(func, inst, loaded);
+        true
+    }
+
+    fn emit_obj_init_const(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        before: InstId,
+        object: ValueId,
+        source: ValueId,
+        info: &ConstRewriteInfo<'_>,
+    ) {
         let source_ty = info
             .constref_value_tys
-            .get(&value)
+            .get(&source)
             .copied()
             .unwrap_or_else(|| {
                 panic!(
-                    "unsupported obj.init.const source at inst {}",
-                    inst.as_u32()
+                    "unsupported const object source at inst {}",
+                    before.as_u32()
                 )
             });
-        if let Some(path) = info.path(value) {
+        if let Some(path) = info.path(source) {
             if let Some((ty, subtree_init)) =
                 eval_const_path_subtree(&module.ctx, &path, |value| func.dfg.value_imm(value))
             {
                 debug_assert_eq!(ty, path.ty);
-                self.emit_known_obj_init(module, func, inst, *init.object(), &path, &subtree_init);
+                self.emit_known_obj_init(module, func, before, object, &path, &subtree_init);
             } else {
-                let addr = self.materialize_const_path_addr(module, func, inst, &path);
+                let addr = self.materialize_const_path_addr(module, func, before, &path);
                 if !path.ty.is_integral()
                     && let Some(copy_len_bytes) = word_blob_copy_len_bytes(func.ctx(), path.ty)
                 {
                     emit_obj_init_from_codecopy(
                         func,
-                        inst,
-                        *init.object(),
+                        before,
+                        object,
                         path.ty,
                         addr,
                         copy_len_bytes,
                     );
                 } else {
-                    emit_obj_init_from_addr(func, inst, *init.object(), path.ty, addr);
+                    emit_obj_init_from_addr(func, before, object, path.ty, addr);
                 }
             }
         } else if !source_ty.is_integral()
             && let Some(copy_len_bytes) = word_blob_copy_len_bytes(func.ctx(), source_ty)
         {
-            emit_obj_init_from_codecopy(
-                func,
-                inst,
-                *init.object(),
-                source_ty,
-                value,
-                copy_len_bytes,
-            );
+            emit_obj_init_from_codecopy(func, before, object, source_ty, source, copy_len_bytes);
         } else {
-            emit_obj_init_from_addr(func, inst, *init.object(), source_ty, value);
+            emit_obj_init_from_addr(func, before, object, source_ty, source);
         }
-        remove_inst(func, inst);
-        true
     }
 
     fn emit_known_obj_init(
@@ -718,7 +779,7 @@ impl ConstDataLower {
             func,
             before,
             object,
-            ObjInitConstSubtree {
+            ConstInitSubtree {
                 source: path.global,
                 ty: path.ty,
                 init,
@@ -732,7 +793,7 @@ impl ConstDataLower {
         func: &mut Function,
         before: InstId,
         object: ValueId,
-        subtree: ObjInitConstSubtree<'_>,
+        subtree: ConstInitSubtree<'_>,
     ) {
         let ty = subtree.ty;
         let init = subtree.init;
@@ -759,7 +820,7 @@ impl ConstDataLower {
         }
 
         let Some(bytes) = encode_runtime_object_const_bytes(&module.ctx, ty, init) else {
-            panic!("unsupported runtime-object encoding for obj.init.const type {ty:?}");
+            panic!("unsupported runtime-object encoding for const object type {ty:?}");
         };
         let blob = self.bytes_blob_global(module, subtree.source, bytes);
         let addr = insert_before_one(
@@ -779,7 +840,7 @@ impl ConstDataLower {
         func: &mut Function,
         before: InstId,
         object: ValueId,
-        subtree: ObjInitConstSubtree<'_>,
+        subtree: ConstInitSubtree<'_>,
     ) -> bool {
         let ty = subtree.ty;
         let init = subtree.init;
@@ -1340,7 +1401,6 @@ fn assert_no_const_ops(func: &Function) {
                 || func.dfg.downcast::<&data::ConstProj>(inst).is_some()
                 || func.dfg.downcast::<&data::ConstIndex>(inst).is_some()
                 || func.dfg.downcast::<&data::ConstLoad>(inst).is_some()
-                || func.dfg.downcast::<&data::ObjInitConst>(inst).is_some()
             {
                 panic!(
                     "const-data lowering invariant violated: high-level const instruction remained in function"

@@ -69,7 +69,7 @@ load_zero_object:
   block0:
     JUMPDEST
     CODESIZE  // v1.i256 = evm_code_size;
-    PUSH1 0xa0 (160)  // evm_code_copy v0 v1 v2;
+    PUSH1 0xa0 (160)  // evm_code_copy v0 v1 v4;
     SWAP1
     PUSH0
     CODECOPY

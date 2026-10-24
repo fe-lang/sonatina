@@ -691,10 +691,6 @@ impl Walk<'_> {
                 .is_some_and(|store| *store.object() == value)
             || function
                 .dfg
-                .downcast::<&data::ObjInitConst>(self.user)
-                .is_some_and(|init| *init.object() == value)
-            || function
-                .dfg
                 .downcast::<&data::EnumGetTag>(self.user)
                 .is_some_and(|enum_get_tag| *enum_get_tag.object() == value)
             || function
@@ -801,10 +797,6 @@ impl Walk<'_> {
             .dfg
             .downcast::<&data::ObjStore>(self.user)
             .is_some_and(|store| *store.object() == value)
-            || function
-                .dfg
-                .downcast::<&data::ObjInitConst>(self.user)
-                .is_some_and(|init| *init.object() == value)
             || function
                 .dfg
                 .downcast::<&data::EnumGetTag>(self.user)

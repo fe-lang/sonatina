@@ -63,27 +63,27 @@ entry:
     PUSH1 0x1 (1)  // evm_mstore v0 v1;
     PUSH0
     MSTORE
-    CODESIZE  // v4.i256 = evm_code_size;
-    PUSH1 0xa0 (160)  // evm_code_copy v2 v4 v5;
+    CODESIZE  // v3.i256 = evm_code_size;
+    PUSH1 0xa0 (160)  // evm_code_copy v12 v3 v4;
     SWAP1
     PUSH1 0x20 (32)
     CODECOPY
-    PUSH0 0x0 (0)  // v8.i256 = sym_addr $__sonatina_const_words_value_0;
-    PUSH1 0xa0 (160)  // evm_code_copy v6 v8 v5;
+    PUSH0 0x0 (0)  // v7.i256 = sym_addr $__sonatina_const_words_value_0;
+    PUSH1 0xa0 (160)  // evm_code_copy v5 v7 v4;
     SWAP1
     PUSH1 0xc0 (192)
     CODECOPY
-    PUSH0  // v9.i256 = evm_mload v0;
+    PUSH0  // v8.i256 = evm_mload v0;
     MLOAD
     PUSH1 0x60 (96)  // v15.i256 = evm_mload 96.i256;
     MLOAD
     PUSH2 0x100 (256)  // v20.i256 = evm_mload 256.i256;
     MLOAD
-    SWAP2  // v21.i256 = add v9 v15;
+    SWAP2  // v21.i256 = add v8 v15;
     ADD
     ADD  // v22.i256 = add v21 v20;
     PUSH0  // evm_mstore v0 v22;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v0 v2;
+    PUSH1 0x20 (32)  // evm_return v0 v12;
     PUSH0
     RETURN

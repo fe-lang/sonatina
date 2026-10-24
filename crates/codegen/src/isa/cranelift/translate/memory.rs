@@ -194,17 +194,6 @@ pub(super) fn stack_slot_data(ty: Type, ctx: &ModuleCtx) -> Result<StackSlotData
     ))
 }
 
-pub(super) fn referenced_value_storage_size(ty: Type, ctx: &ModuleCtx) -> Result<u32, String> {
-    match ty.resolve_compound(ctx) {
-        Some(CompoundType::ObjRef(inner) | CompoundType::ConstRef(inner)) => {
-            value_storage_size(inner, ctx)
-        }
-        _ => Err(format!(
-            "expected object or constant reference type, got {ty:?}"
-        )),
-    }
-}
-
 pub(super) fn aggregate_elem_offset(
     ctx: &ModuleCtx,
     aggregate_ty: Type,

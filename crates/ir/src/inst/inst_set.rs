@@ -79,7 +79,6 @@ define_inst_set_base! {
         data::ObjIndex,
         data::ObjLoad,
         data::ObjStore,
-        data::ObjInitConst,
         data::EnumMake,
         data::EnumTag,
         data::EnumIsVariant,

@@ -70,7 +70,6 @@ pub struct NativeInstSet(
     data::ObjIndex,
     data::ObjLoad,
     data::ObjStore,
-    data::ObjInitConst,
     data::EnumMake,
     data::EnumTag,
     data::EnumIsVariant,

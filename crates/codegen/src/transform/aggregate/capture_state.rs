@@ -24,7 +24,6 @@ pub(crate) trait RootCapturePayload: Copy + Eq + Hash {
 
 pub(crate) enum CaptureRelevantInst<'a> {
     ObjStore(&'a data::ObjStore),
-    ObjInitConst(&'a data::ObjInitConst),
     EnumSetTag(&'a data::EnumSetTag),
     EnumWriteVariant(&'a data::EnumWriteVariant),
     Call,
@@ -37,9 +36,6 @@ pub(crate) fn capture_relevant_inst<'a>(
     let inst_data = function.dfg.inst(inst);
     if let Some(obj_store) = downcast::<&data::ObjStore>(function.inst_set(), inst_data) {
         return Some(CaptureRelevantInst::ObjStore(obj_store));
-    }
-    if let Some(init) = downcast::<&data::ObjInitConst>(function.inst_set(), inst_data) {
-        return Some(CaptureRelevantInst::ObjInitConst(init));
     }
     if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(function.inst_set(), inst_data) {
         return Some(CaptureRelevantInst::EnumSetTag(enum_set_tag));

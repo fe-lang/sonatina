@@ -1141,12 +1141,6 @@ fn apply_inst_capture_transfer(
                 );
             }
         }
-        Some(CaptureRelevantInst::ObjInitConst(init)) => {
-            // Const data contains no references, but an unrelated incoming
-            // coordinate system may describe bytes of a captured-reference cell.
-            widen_typed_capture_write(root_captures, *init.object(), None, capture_state);
-            kill_capture_access(root_captures, *init.object(), None, capture_state);
-        }
         Some(CaptureRelevantInst::EnumSetTag(enum_set_tag)) => {
             let tag = reference_element_ty(func.ctx(), func.dfg.value_ty(*enum_set_tag.object()))
                 .and_then(|ty| shape::enum_tag_slice(func.ctx(), ty));

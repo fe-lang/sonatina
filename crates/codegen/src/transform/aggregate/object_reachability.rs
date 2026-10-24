@@ -184,8 +184,6 @@ impl ObjectReachability {
         if let Some(store) = downcast::<&data::ObjStore>(is, data) {
             changed |=
                 self.store_references(*store.object(), &self.references[*store.value()].clone());
-        } else if downcast::<&data::ObjInitConst>(is, data).is_some() {
-            // Constant initialization does not publish the destination.
         } else if let Some(store) = downcast::<&data::EnumWriteVariant>(is, data) {
             for value in store.values() {
                 changed |= self.store_references(*store.object(), &self.references[*value].clone());

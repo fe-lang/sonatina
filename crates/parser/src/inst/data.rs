@@ -21,7 +21,6 @@ super::impl_inst_build_common! {ObjProj, build_obj_proj}
 super::impl_inst_build! {ObjIndex, (object: ValueId, index: ValueId)}
 super::impl_inst_build! {ObjLoad, (object: ValueId)}
 super::impl_inst_build! {ObjStore, (object: ValueId, value: ValueId)}
-super::impl_inst_build! {ObjInitConst, (object: ValueId, value: ValueId)}
 super::impl_inst_build_common! {EnumMake, build_enum_make}
 super::impl_inst_build! {EnumTag, (value: ValueId)}
 super::impl_inst_build_common! {EnumIsVariant, build_enum_is_variant}

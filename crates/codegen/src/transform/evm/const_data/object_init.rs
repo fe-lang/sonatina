@@ -22,7 +22,7 @@ pub(super) fn emit_obj_init(
 ) {
     if ty.is_integral() {
         let GvInitializer::Immediate(imm) = init else {
-            panic!("integral obj.init.const source must be immediate");
+            panic!("integral const object source must be immediate");
         };
         let value = func.dfg.make_imm_value(*imm);
         insert_before_no_result(
@@ -52,7 +52,7 @@ pub(super) fn emit_obj_init(
         (Some(CompoundType::Struct(s)), GvInitializer::Struct(fields)) => {
             assert!(
                 !s.packed,
-                "packed structs are unsupported in obj.init.const"
+                "packed structs are unsupported in const object initializers"
             );
             assert_eq!(
                 fields.len(),
@@ -73,13 +73,59 @@ pub(super) fn emit_obj_init(
                 emit_obj_init(func, before, slot, field_ty, field);
             }
         }
-        _ => panic!("unsupported obj.init.const type {ty:?}"),
+        _ => panic!("unsupported const object type {ty:?}"),
     }
+}
+
+/// Builds a const value from immediates.
+pub(super) fn emit_const_value(
+    func: &mut Function,
+    before: InstId,
+    ty: Type,
+    init: &GvInitializer,
+) -> ValueId {
+    if ty.is_integral() {
+        let GvInitializer::Immediate(imm) = init else {
+            panic!("integral const value must be immediate");
+        };
+        return func.dfg.make_imm_value(*imm);
+    }
+
+    let (fields, items): (Vec<_>, _) = match (ty.resolve_compound(func.ctx()), init) {
+        (Some(CompoundType::Array { elem, len }), GvInitializer::Array(items)) => {
+            assert_eq!(items.len(), len, "array initializer length mismatch");
+            (vec![elem; len], items)
+        }
+        (Some(CompoundType::Struct(s)), GvInitializer::Struct(fields)) => {
+            assert!(!s.packed, "packed structs are unsupported in const values");
+            assert_eq!(
+                fields.len(),
+                s.fields.len(),
+                "struct initializer length mismatch"
+            );
+            (s.fields, fields)
+        }
+        _ => panic!("unsupported const value type {ty:?}"),
+    };
+    let mut value = func.dfg.make_undef_value(ty);
+    for (idx, (field_ty, item)) in fields.into_iter().zip(items).enumerate() {
+        let index = func
+            .dfg
+            .make_imm_value(Immediate::I64(i64::try_from(idx).expect("index overflow")));
+        let field = emit_const_value(func, before, field_ty, item);
+        value = insert_before_one(
+            func,
+            before,
+            data::InsertValue::new_unchecked(func.inst_set(), value, index, field),
+            ty,
+        );
+    }
+    value
 }
 
 pub(super) fn emit_obj_zero_fill(func: &mut Function, before: InstId, object: ValueId, ty: Type) {
     let len = shape::runtime_size_bytes(func.ctx(), ty)
-        .expect("zero obj.init.const requires a concrete runtime size");
+        .expect("zero const object init requires a concrete runtime size");
     if len == 0 {
         return;
     }
@@ -231,9 +277,7 @@ fn emit_obj_init_from_addr_with_scratch(
         Some(CompoundType::Array { elem, len }) => {
             let stride = const_leaf_count(func.ctx(), elem)
                 .and_then(|count| count.checked_mul(32))
-                .unwrap_or_else(|| {
-                    panic!("unsupported obj.init.const array element type {elem:?}")
-                });
+                .unwrap_or_else(|| panic!("unsupported const object array element type {elem:?}"));
             for idx in 0..len {
                 let index = func
                     .dfg
@@ -261,7 +305,7 @@ fn emit_obj_init_from_addr_with_scratch(
         Some(CompoundType::Struct(s)) => {
             assert!(
                 !s.packed,
-                "packed structs are unsupported in obj.init.const"
+                "packed structs are unsupported in const object initializers"
             );
             let mut field_offset = 0u32;
             for (idx, field_ty) in s.fields.iter().copied().enumerate() {
@@ -284,12 +328,12 @@ fn emit_obj_init_from_addr_with_scratch(
                         const_leaf_count(func.ctx(), field_ty)
                             .and_then(|count| count.checked_mul(32))
                             .unwrap_or_else(|| {
-                                panic!("unsupported obj.init.const struct field type {field_ty:?}")
+                                panic!("unsupported const object struct field type {field_ty:?}")
                             }),
                     )
                     .expect("const struct field offset overflow");
             }
         }
-        _ => panic!("unsupported obj.init.const type {ty:?}"),
+        _ => panic!("unsupported const object type {ty:?}"),
     }
 }

@@ -196,17 +196,6 @@ pub(super) fn instruction(
         state.write(ctx, &refs, value.ty, false, |target| {
             *target = value.clone()
         });
-    } else if let Some(init) = downcast::<&data::ObjInitConst>(is, inst) {
-        let refs = state.reference(verifier, *init.object());
-        if refs.undefined {
-            return Outcome::Stop(Some(UNDEFINED_REFERENCE));
-        }
-        let ty = verifier
-            .objref_ty(verifier.func.dfg.value_ty(*init.object()))
-            .unwrap();
-        state.write(ctx, &refs, ty, false, |target| {
-            *target = ValueState::new(ty, true)
-        });
     } else if let Some(tag) = downcast::<&data::EnumSetTag>(is, inst) {
         let refs = state.reference(verifier, *tag.object());
         if refs.undefined {

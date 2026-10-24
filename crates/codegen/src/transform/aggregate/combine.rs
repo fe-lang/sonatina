@@ -415,6 +415,14 @@ impl AggregateCombine {
         let Some(result) = func.dfg.inst_result(inst) else {
             return false;
         };
+        if let Some(load) = func
+            .dfg
+            .value_inst(*extract.dest())
+            .and_then(|load| func.dfg.downcast::<&data::ConstLoad>(load))
+            .cloned()
+        {
+            return rewrite_extract_of_const_load(func, inst, &extract, *load.object(), result);
+        }
         let Some(target_idx) = inst_const_index(func, *extract.idx()) else {
             return false;
         };
@@ -1334,6 +1342,61 @@ fn append_non_phi_after_phi_region<I: sonatina_ir::Inst>(
     value
 }
 
+/// A field of loaded const data is a load of that field's data.
+fn rewrite_extract_of_const_load(
+    func: &mut Function,
+    inst: InstId,
+    extract: &data::ExtractValue,
+    source: ValueId,
+    result: ValueId,
+) -> bool {
+    let field_ref_ty = func.dfg.value_ty(result).to_const_ref(func.ctx());
+    let field = if matches!(
+        func.dfg
+            .value_ty(*extract.dest())
+            .resolve_compound(func.ctx()),
+        Some(CompoundType::Array { .. })
+    ) {
+        insert_before_inst(
+            func,
+            inst,
+            data::ConstIndex::new_unchecked(func.inst_set(), source, *extract.idx()),
+            field_ref_ty,
+        )
+    } else {
+        insert_before_inst(
+            func,
+            inst,
+            data::ConstProj::new_unchecked(func.inst_set(), smallvec![source, *extract.idx()]),
+            field_ref_ty,
+        )
+    };
+    let load = data::ConstLoad::new_unchecked(func.inst_set(), field);
+    func.dfg.replace_inst(inst, Box::new(load));
+    true
+}
+
+fn insert_before_inst<I: sonatina_ir::Inst>(
+    func: &mut Function,
+    inst: InstId,
+    inst_data: I,
+    ty: Type,
+) -> ValueId {
+    let loc = func.layout.prev_inst_of(inst).map_or(
+        CursorLocation::BlockTop(func.layout.inst_block(inst)),
+        CursorLocation::At,
+    );
+    let mut cursor = InstInserter::at_location(loc);
+    let new_inst = cursor.insert_inst_data_from(func, inst, inst_data);
+    let value = func.dfg.make_value(Value::Inst {
+        inst: new_inst,
+        result_idx: 0,
+        ty,
+    });
+    cursor.attach_result(func, new_inst, value);
+    value
+}
+
 fn enum_make_of_value(func: &Function, value: ValueId) -> Option<data::EnumMake> {
     let inst = func.dfg.value_inst(value)?;
     func.dfg.downcast::<&data::EnumMake>(inst).cloned()
@@ -1417,6 +1480,38 @@ mod tests {
     use super::*;
     use crate::test_support::{dump_func, lookup_func, parse_test_module};
     use sonatina_ir::inst::control_flow;
+
+    #[test]
+    fn combine_loads_fields_of_const_loads() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @rec = { i8, [i256; 2] };
+
+global private const @rec $rec = {7, [100, 200]};
+
+func private %f(v0.i256) -> i256 {
+block0:
+    v1.constref<@rec> = const.ref $rec;
+    v2.@rec = const.load v1;
+    v3.[i256; 2] = extract_value v2 1.i8;
+    v4.i256 = extract_value v3 v0;
+    return v4;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateCombine::default().run(func);
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(!dumped.contains("extract_value"), "{dumped}");
+        assert!(dumped.contains("const.proj v1 1.i8"), "{dumped}");
+        assert!(dumped.contains("const.index"), "{dumped}");
+        assert!(dumped.contains("v4.i256 = const.load"), "{dumped}");
+    }
 
     #[test]
     fn combine_rewrites_extracts_through_compatible_aggregate_bitcasts() {

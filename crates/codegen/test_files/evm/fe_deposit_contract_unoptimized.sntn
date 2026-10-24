@@ -4356,7 +4356,8 @@ func inline(always) private %std__lib__evm__calldata__impl_CallData_8f43__new_23
     block1:
         v1.constref<@layout_5> = const.ref $const_region_0;
         v2.objref<@layout_5> = obj.alloc @layout_5;
-        obj.init.const v2 v1;
+        v4.@layout_5 = const.load v1;
+        obj.store v2 v4;
         v3.@layout_5 = obj.load v2;
         return v3;
 }
@@ -4394,7 +4395,8 @@ func inline(always) private %std__lib__evm__calldata__impl_CallData_8f43__new_99
     block1:
         v1.constref<@layout_5> = const.ref $const_region_0;
         v2.objref<@layout_5> = obj.alloc @layout_5;
-        obj.init.const v2 v1;
+        v4.@layout_5 = const.load v1;
+        obj.store v2 v4;
         v3.@layout_5 = obj.load v2;
         return v3;
 }
@@ -4432,7 +4434,8 @@ func inline(always) private %std__lib__evm__calldata__impl_CallData_8f43__new_bd
     block1:
         v1.constref<@layout_5> = const.ref $const_region_0;
         v2.objref<@layout_5> = obj.alloc @layout_5;
-        obj.init.const v2 v1;
+        v4.@layout_5 = const.load v1;
+        obj.store v2 v4;
         v3.@layout_5 = obj.load v2;
         return v3;
 }
@@ -4470,7 +4473,8 @@ func inline(always) private %std__lib__evm__calldata__impl_CallData_8f43__new_f5
     block1:
         v1.constref<@layout_5> = const.ref $const_region_0;
         v2.objref<@layout_5> = obj.alloc @layout_5;
-        obj.init.const v2 v1;
+        v4.@layout_5 = const.load v1;
+        obj.store v2 v4;
         v3.@layout_5 = obj.load v2;
         return v3;
 }
