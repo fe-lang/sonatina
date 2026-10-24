@@ -60,37 +60,22 @@ impl<'a> AggregateValueReconstructor<'a> {
         source_slice: shape::AggregateSlice,
         result_ty: Type,
     ) -> Option<ValueId> {
-        if source_slice.leaf_count == 0 {
+        if source_slice.leaf_count == 0 || is_explicit_undef(func, source) {
             return Some(func.dfg.make_undef_value(result_ty));
         }
-        if !shape::is_supported_scalar_shape_ty(func.ctx(), source_ty) {
+        if source_slice.ty == source_ty {
             return self.cast_aggregate_view_value(func, inst, source, source_ty, result_ty);
         }
-        if is_explicit_undef(func, source) {
-            return Some(func.dfg.make_undef_value(result_ty));
-        }
-
-        let (source_first_runtime_leaf, source_runtime_leaf_count) =
+        let (_, source_runtime_leaf_count) =
             shape::runtime_leaf_range_for_slice(func.ctx(), source_ty, source_slice)?;
         if source_runtime_leaf_count == 0 {
             return Some(func.dfg.make_undef_value(result_ty));
         }
 
-        let source_leaf_count = self
-            .layout_cache
-            .runtime_leaves(func.ctx(), source_ty)?
-            .len();
-        if source_first_runtime_leaf == 0 && source_runtime_leaf_count == source_leaf_count {
-            // A tag can span every runtime leaf of its enum, but it is the
-            // enum's first child, not a bitcast view of the whole value.
-            if shape::enum_tag_ty(source_ty) == Some(result_ty) {
-                return self.lookup_immediate_child_value(func, inst, source, source_ty, 0);
-            }
-            return self.cast_aggregate_view_value(func, inst, source, source_ty, result_ty);
-        }
-
-        // A strict sub-slice lies within one child: descend to it rather than
-        // rebuilding it from its leaves.
+        // Any other slice is a node inside one child, even one spanning the
+        // whole value such as a sole field or a fieldless enum's tag: descend
+        // to it rather than rebuilding it from its leaves. A load that wraps
+        // the stored value is not inside it and stays unforwarded.
         let (child_idx, child_slice) =
             self.layout_cache
                 .child_containing_slice(func.ctx(), source_ty, source_slice)?;

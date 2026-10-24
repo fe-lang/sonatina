@@ -10,6 +10,7 @@ type @slot = enum {
 };
 type @entry = { [i256; 2], @mode, @slot };
 type @table = { [@entry; 2], i256 };
+type @wrap = { @slot };
 
 func private %nested_enum_fields(v0.@table) -> @slot {
 block0:
@@ -53,4 +54,22 @@ block0:
     v6.objref<i256> = enum.proj v5 #Full 0.i8;
     v7.i256 = obj.load v6;
     return v7;
+}
+
+func private %sole_enum_field(v0.@wrap) -> @slot {
+block0:
+    v1.objref<@wrap> = obj.alloc @wrap;
+    obj.store v1 v0;
+    v2.objref<@slot> = obj.proj v1 0.i8;
+    v3.@slot = obj.load v2;
+    return v3;
+}
+
+func private %wrapper_of_stored_enum(v0.@slot) -> @wrap {
+block0:
+    v1.objref<@wrap> = obj.alloc @wrap;
+    v2.objref<@slot> = obj.proj v1 0.i8;
+    obj.store v2 v0;
+    v3.@wrap = obj.load v1;
+    return v3;
 }

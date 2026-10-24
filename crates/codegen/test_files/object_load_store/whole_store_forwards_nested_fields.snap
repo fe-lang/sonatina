@@ -6,6 +6,7 @@ target = "evm-ethereum-osaka"
 
 type @entry = {[i256; 2], @mode, @slot};
 type @table = {[@entry; 2], i256};
+type @wrap = {@slot};
 type @mode = enum {
     #Off,
     #On,
@@ -52,4 +53,19 @@ func private %opaque_payload_field(v0.@table) -> i256 {
         v6.objref<i256> = enum.proj v5 #Full 0.i8;
         v7.i256 = obj.load v6;
         return v7;
+}
+
+func private %sole_enum_field(v0.@wrap) -> @slot {
+    block0:
+        v6.@slot = extract_value v0 0.i256;
+        return v6;
+}
+
+func private %wrapper_of_stored_enum(v0.@slot) -> @wrap {
+    block0:
+        v1.objref<@wrap> = obj.alloc @wrap;
+        v2.objref<@slot> = obj.proj v1 0.i8;
+        obj.store v2 v0;
+        v3.@wrap = obj.load v1;
+        return v3;
 }

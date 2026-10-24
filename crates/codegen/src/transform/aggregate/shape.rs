@@ -873,31 +873,6 @@ impl LayoutCtx<'_> {
         Some((first_runtime_leaf, runtime_leaf_count))
     }
 
-    fn aggregate_slice_for_leaf_range(
-        &mut self,
-        root_ty: Type,
-        first_leaf: usize,
-        leaf_count: usize,
-    ) -> Option<AggregateSlice> {
-        if !self.is_supported_scalar_shape_ty(root_ty) {
-            return None;
-        }
-
-        let total_leaf_count = self.flattened_leaf_count(root_ty)?;
-        if first_leaf.checked_add(leaf_count)? > total_leaf_count {
-            return None;
-        }
-        if first_leaf == 0 && leaf_count == total_leaf_count {
-            return Some(AggregateSlice {
-                ty: root_ty,
-                first_leaf: 0,
-                leaf_count,
-            });
-        }
-
-        self.aggregate_slice_for_leaf_range_impl(root_ty, first_leaf, leaf_count, 0)
-    }
-
     fn aggregate_slice_for_runtime_leaf_range(
         &mut self,
         root_ty: Type,
@@ -976,121 +951,6 @@ impl LayoutCtx<'_> {
             Some(CompoundType::Array { elem, .. }) => self.is_leaf_reifiable_ty(*elem),
             Some(CompoundType::Enum(_)) => false,
             _ => true,
-        }
-    }
-
-    fn aggregate_slice_for_leaf_range_impl(
-        &mut self,
-        ty: Type,
-        target_first_leaf: usize,
-        target_leaf_count: usize,
-        base_first_leaf: usize,
-    ) -> Option<AggregateSlice> {
-        match compound_ty(self.types, ty)? {
-            CompoundType::Struct(s) => {
-                if s.packed {
-                    return None;
-                }
-
-                let fields = s.fields.clone();
-                let mut child_first_leaf = base_first_leaf;
-                for field_ty in fields {
-                    let child_leaf_count = self.flattened_leaf_count(field_ty)?;
-                    if child_first_leaf == target_first_leaf
-                        && child_leaf_count == target_leaf_count
-                    {
-                        return Some(AggregateSlice {
-                            ty: field_ty,
-                            first_leaf: target_first_leaf,
-                            leaf_count: target_leaf_count,
-                        });
-                    }
-                    if target_first_leaf >= child_first_leaf
-                        && target_first_leaf + target_leaf_count
-                            <= child_first_leaf + child_leaf_count
-                        && let Some(slice) = self.aggregate_slice_for_leaf_range_impl(
-                            field_ty,
-                            target_first_leaf,
-                            target_leaf_count,
-                            child_first_leaf,
-                        )
-                    {
-                        return Some(slice);
-                    }
-                    child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
-                }
-                None
-            }
-            CompoundType::Array { elem, len } => {
-                let elem = *elem;
-                let elem_leaf_count = self.flattened_leaf_count(elem)?;
-                let mut child_first_leaf = base_first_leaf;
-                for _ in 0..*len {
-                    if child_first_leaf == target_first_leaf && elem_leaf_count == target_leaf_count
-                    {
-                        return Some(AggregateSlice {
-                            ty: elem,
-                            first_leaf: target_first_leaf,
-                            leaf_count: target_leaf_count,
-                        });
-                    }
-                    if target_first_leaf >= child_first_leaf
-                        && target_first_leaf + target_leaf_count
-                            <= child_first_leaf + elem_leaf_count
-                        && let Some(slice) = self.aggregate_slice_for_leaf_range_impl(
-                            elem,
-                            target_first_leaf,
-                            target_leaf_count,
-                            child_first_leaf,
-                        )
-                    {
-                        return Some(slice);
-                    }
-                    child_first_leaf = child_first_leaf.checked_add(elem_leaf_count)?;
-                }
-                None
-            }
-            CompoundType::Enum(data) => {
-                if target_first_leaf == base_first_leaf && target_leaf_count == 1 {
-                    return Some(AggregateSlice {
-                        ty: enum_tag_ty(ty)?,
-                        first_leaf: target_first_leaf,
-                        leaf_count: target_leaf_count,
-                    });
-                }
-
-                let mut child_first_leaf = base_first_leaf.checked_add(1)?;
-                for field_ty in enum_field_tys(data) {
-                    let child_leaf_count = self.flattened_leaf_count(field_ty)?;
-                    if child_first_leaf == target_first_leaf
-                        && child_leaf_count == target_leaf_count
-                    {
-                        return Some(AggregateSlice {
-                            ty: field_ty,
-                            first_leaf: target_first_leaf,
-                            leaf_count: target_leaf_count,
-                        });
-                    }
-                    if target_first_leaf >= child_first_leaf
-                        && target_first_leaf + target_leaf_count
-                            <= child_first_leaf + child_leaf_count
-                        && let Some(slice) = self.aggregate_slice_for_leaf_range_impl(
-                            field_ty,
-                            target_first_leaf,
-                            target_leaf_count,
-                            child_first_leaf,
-                        )
-                    {
-                        return Some(slice);
-                    }
-                    child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
-                }
-                None
-            }
-            CompoundType::Ptr(_)
-            | CompoundType::ObjRef(_)
-            | CompoundType::ConstRef(_)
-            | CompoundType::Func { .. } => None,
         }
     }
 
@@ -1373,17 +1233,6 @@ pub fn aggregate_slice_for_path(
 ) -> Option<AggregateSlice> {
     with_uncached_layout(module, |layout| {
         layout.aggregate_slice_for_path(root_ty, path)
-    })
-}
-
-pub fn aggregate_slice_for_leaf_range(
-    module: &ModuleCtx,
-    root_ty: Type,
-    first_leaf: usize,
-    leaf_count: usize,
-) -> Option<AggregateSlice> {
-    with_uncached_layout(module, |layout| {
-        layout.aggregate_slice_for_leaf_range(root_ty, first_leaf, leaf_count)
     })
 }
 
