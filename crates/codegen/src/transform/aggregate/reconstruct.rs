@@ -24,7 +24,34 @@ impl<'a> AggregateValueReconstructor<'a> {
         Self { layout_cache }
     }
 
+    /// Rebuilds `source_slice` of `source` as a `result_ty` value before
+    /// `inst`. A failed rebuild removes every instruction it inserted.
     pub(crate) fn rebuild_slice(
+        &mut self,
+        func: &mut Function,
+        inst: InstId,
+        source: ValueId,
+        source_ty: Type,
+        source_slice: shape::AggregateSlice,
+        result_ty: Type,
+    ) -> Option<ValueId> {
+        // Every rebuilt instruction is inserted immediately before `inst`.
+        let before = func.layout.prev_inst_of(inst);
+        let rebuilt = self.rebuild(func, inst, source, source_ty, source_slice, result_ty);
+        if rebuilt.is_none() {
+            let mut inserted = Vec::new();
+            while let Some(prev) = func.layout.prev_inst_of(inst)
+                && Some(prev) != before
+            {
+                func.layout.remove_inst(prev);
+                inserted.push(prev);
+            }
+            func.erase_insts(&inserted);
+        }
+        rebuilt
+    }
+
+    fn rebuild(
         &mut self,
         func: &mut Function,
         inst: InstId,
@@ -88,7 +115,7 @@ impl<'a> AggregateValueReconstructor<'a> {
                     source_first_runtime_leaf - child_first_runtime_leaf,
                     source_runtime_leaf_count,
                 )?;
-                return self.rebuild_slice(
+                return self.rebuild(
                     func,
                     inst,
                     child_value,
@@ -120,7 +147,7 @@ impl<'a> AggregateValueReconstructor<'a> {
                     next_runtime_leaf,
                     1,
                 )?;
-                leaves.push(self.rebuild_slice(
+                leaves.push(self.rebuild(
                     func,
                     inst,
                     source,
@@ -149,7 +176,7 @@ impl<'a> AggregateValueReconstructor<'a> {
                     source_first_runtime_leaf + child_first_runtime_leaf,
                     child_runtime_leaf_count,
                 )?;
-                self.rebuild_slice(
+                self.rebuild(
                     func,
                     inst,
                     source,
@@ -213,7 +240,7 @@ impl<'a> AggregateValueReconstructor<'a> {
                     aggregate_ty,
                     shape::aggregate_slice_for_index(func.ctx(), aggregate_ty, target_idx)?,
                 )?;
-                return self.rebuild_slice(func, inst, source, source_ty, source_slice, child_ty);
+                return self.rebuild(func, inst, source, source_ty, source_slice, child_ty);
             }
         }
 
@@ -1005,6 +1032,49 @@ block0:
                 rebuild_scalar_shape_from_leaf_values(func, ret, &module_ctx, enum_ty, &leaves)
                     .is_none()
             );
+        });
+    }
+
+    #[test]
+    fn failed_nested_rebuild_removes_inserted_insts() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @slot = enum {
+    #Empty,
+    #Full(i256, i1),
+};
+type @entry = { [i256; 2], @slot };
+
+func private %f(v0.[@entry; 2]) -> i256 {
+block0:
+    return 0.i256;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+
+        module.func_store.modify(func_ref, |func| {
+            let entry_block = func.layout.entry_block().unwrap();
+            let ret = func.layout.last_inst_of(entry_block).unwrap();
+            let arg = func.arg_values[0];
+            let entries = func.dfg.value_ty(arg);
+            // The payload of an opaque enum value cannot be extracted, but the
+            // array and struct levels above it can.
+            let payload = shape::aggregate_slice_for_path(func.ctx(), entries, &[1, 1, 1]).unwrap();
+            assert_eq!(payload.ty, Type::I256);
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            assert!(
+                AggregateValueReconstructor::new(&mut layout_cache)
+                    .rebuild_slice(func, ret, arg, entries, payload, Type::I256)
+                    .is_none()
+            );
+            assert_eq!(
+                func.layout.iter_inst(entry_block).collect::<Vec<_>>(),
+                [ret]
+            );
+            assert_eq!(func.dfg.users_num(arg), 0);
         });
     }
 }
