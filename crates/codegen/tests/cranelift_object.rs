@@ -354,6 +354,56 @@ block0:
     }
 }
 
+/// The number of relocations in text sections that refer to symbol `name`.
+fn references(bytes: &[u8], name: &str) -> usize {
+    let object = object::File::parse(bytes).unwrap();
+    object
+        .sections()
+        .filter(|section| section.kind() == object::SectionKind::Text)
+        .flat_map(|section| section.relocations())
+        .filter(|(_, relocation)| match relocation.target() {
+            object::RelocationTarget::Symbol(index) => object
+                .symbol_by_index(index)
+                .and_then(|symbol| symbol.name())
+                .is_ok_and(|symbol| symbol.trim_start_matches('_') == name),
+            _ => false,
+        })
+        .count()
+}
+
+#[test]
+fn returned_aggregates_are_built_in_the_return_buffer() {
+    // Each path builds its result in the return buffer, so the only copies
+    // are the four 256-byte field copies.
+    let triple = native_isa(host_architecture()).triple();
+    let source = format!(
+        r#"target = "{triple}"
+type @Pair = {{[i64; 32], [i64; 32]}};
+func private %pair(v0.i1, v1.[i64; 32], v2.[i64; 32]) -> @Pair {{
+block0:
+    br v0 block1 block2;
+block1:
+    v3.@Pair = insert_value undef.@Pair 0.i64 v1;
+    v4.@Pair = insert_value v3 1.i64 v2;
+    return v4;
+block2:
+    v5.@Pair = insert_value undef.@Pair 0.i64 v2;
+    v6.@Pair = insert_value v5 1.i64 v1;
+    return v6;
+}}
+"#
+    );
+    let module = sonatina_parser::parse_module(&source).unwrap().module;
+    let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+    assert!(!report.has_errors(), "{report}");
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = CraneliftObjectBackend::new()
+            .compile_module(&module, &BackendOptions { opt_level: level })
+            .unwrap();
+        assert_eq!(references(artifact.as_bytes(), "memcpy"), 4, "{level:?}");
+    }
+}
+
 #[cfg(feature = "cranelift-jit")]
 #[test]
 #[ignore = "manual release-profile compile/runtime measurement; run with --release --ignored --nocapture"]
