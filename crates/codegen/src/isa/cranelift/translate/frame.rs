@@ -6,7 +6,7 @@ use std::{
 use cranelift_codegen::ir::{self as clif, InstBuilder, StackSlotData, StackSlotKind};
 use cranelift_entity::SecondaryMap;
 use cranelift_frontend::FunctionBuilder;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, ValueId,
     inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
@@ -34,7 +34,8 @@ use super::{uses_indirect_value_representation, value_storage_alignment, value_s
 /// share a slot.
 pub(super) struct FrameSlots {
     slot_of: FxHashMap<ValueId, clif::StackSlot>,
-    continues: FxHashSet<InstId>,
+    /// The `insert_value` continuing each continued source's storage.
+    continuation: FxHashMap<ValueId, InstId>,
 }
 
 impl FrameSlots {
@@ -102,7 +103,7 @@ impl FrameSlots {
                 .into_iter()
                 .map(|(root, class)| (root, slots[slot_of_class[class]]))
                 .collect(),
-            continues: plan.continues,
+            continuation: plan.continuation,
         })
     }
 
@@ -119,9 +120,24 @@ impl FrameSlots {
         Ok(builder.ins().stack_addr(clif::types::I64, *slot, 0))
     }
 
-    /// Whether an `insert_value` writes into its source's storage.
-    pub fn continues_source(&self, inst: InstId) -> bool {
-        self.continues.contains(&inst)
+    /// Whether the `insert_value` `inst` writes into the storage of its
+    /// source `source`.
+    pub fn continues_source(&self, inst: InstId, source: ValueId) -> bool {
+        self.continuation.get(&source) == Some(&inst)
+    }
+
+    /// The `insert_value` chain head `head` and the inserts continuing its
+    /// storage, in order.
+    pub fn insert_chain<'a>(
+        &'a self,
+        function: &'a Function,
+        head: InstId,
+    ) -> impl Iterator<Item = InstId> + 'a {
+        std::iter::successors(Some(head), move |&inst| {
+            self.continuation
+                .get(&function.dfg.inst_result(inst)?)
+                .copied()
+        })
     }
 }
 
@@ -147,7 +163,7 @@ struct Plan {
     classes: Vec<Class>,
     /// Values that own storage, by class.
     roots: Vec<(ValueId, usize)>,
-    continues: FxHashSet<InstId>,
+    continuation: FxHashMap<ValueId, InstId>,
 }
 
 impl Plan {
@@ -173,7 +189,7 @@ impl Plan {
         let mut plan = Self {
             classes: Vec::new(),
             roots: Vec::new(),
-            continues: FxHashSet::default(),
+            continuation: FxHashMap::default(),
         };
         let mut class_of = FxHashMap::<ValueId, usize>::default();
         let mut members: Vec<Vec<ValueId>> = Vec::new();
@@ -203,7 +219,7 @@ impl Plan {
                                 )
                         });
                         if continues {
-                            plan.continues.insert(inst);
+                            plan.continuation.insert(source, inst);
                             let class = class_of[&source];
                             class_of.insert(result, class);
                             members[class].push(result);

@@ -53,8 +53,27 @@ pub(super) fn zero_bytes(
     }
 }
 
-fn is_undef(function: &Function, value: ValueId) -> bool {
+pub(super) fn is_undef(function: &Function, value: ValueId) -> bool {
     matches!(function.dfg.value(value), Value::Undef { .. })
+}
+
+/// Zeroes the bytes of `dst..dst + size` outside the `written` ranges.
+pub(super) fn zero_unwritten(
+    dst: clif::Value,
+    size: u32,
+    mut written: Vec<(u32, u32)>,
+    config: TargetFrontendConfig,
+    builder: &mut FunctionBuilder,
+) {
+    written.sort_unstable();
+    let mut zeroed = 0;
+    for (offset, len) in written.into_iter().chain([(size, 0)]) {
+        if offset > zeroed {
+            let gap = builder.ins().iadd_imm_s(dst, i64::from(zeroed));
+            zero_bytes(gap, offset - zeroed, config, builder);
+        }
+        zeroed = zeroed.max(offset + len);
+    }
 }
 
 /// Writes the `size`-byte contents of `value` to `dst`. Native undef values

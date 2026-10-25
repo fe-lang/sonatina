@@ -455,3 +455,39 @@ block2:
         }
     }
 }
+
+#[test]
+fn nested_insert_chains_zero_their_own_unwritten_fields() {
+    // The inner chain `v3` becomes a field of the outer chain's continuation
+    // `v4`. Only `v3`'s own inserts cover its storage, so it still zeroes
+    // the array it leaves undef.
+    let source = r#"
+type @Inner = {i64, [i64; 20]};
+type @Outer = {i64, i64, @Inner};
+func public %nest(v0.i64, v1.*@Outer) {
+block0:
+    v2.@Outer = insert_value undef.@Outer 0.i64 v0;
+    v3.@Inner = insert_value undef.@Inner 0.i64 v0;
+    v4.@Outer = insert_value v2 2.i64 v3;
+    v5.@Outer = insert_value v4 1.i64 v0;
+    mstore v1 v5 @Outer;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let nest: unsafe extern "C" fn(i64, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("nest").unwrap()) };
+        let mut output = [-1i64; 23];
+        unsafe { nest(9, output.as_mut_ptr()) };
+        let mut expected = [0; 23];
+        expected[..3].copy_from_slice(&[9, 9, 9]);
+        assert_eq!(output, expected, "{level:?}");
+    }
+}
