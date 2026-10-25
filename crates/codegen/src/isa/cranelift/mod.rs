@@ -75,17 +75,28 @@ impl CraneliftObjectBackend {
         is_pic: bool,
     ) -> Result<settings::Builder, CraneliftError> {
         let mut builder = settings::builder();
-        builder
-            .set("opt_level", cranelift_opt_level(options.opt_level))
-            .map_err(|error| CraneliftError::Compilation(error.to_string()))?;
-        builder
-            .set("is_pic", if is_pic { "true" } else { "false" })
-            .map_err(|error| CraneliftError::Compilation(error.to_string()))?;
-        // The native ABI passes i128 scalars directly. Cranelift's x86_64
-        // calling conventions require LLVM ABI extensions for these values.
-        builder
-            .set("enable_llvm_abi_extensions", "true")
-            .map_err(|error| CraneliftError::Compilation(error.to_string()))?;
+        for (name, value) in [
+            ("opt_level", cranelift_opt_level(options.opt_level)),
+            ("is_pic", if is_pic { "true" } else { "false" }),
+            // The native ABI passes i128 scalars directly. Cranelift's x86_64
+            // calling conventions require LLVM ABI extensions for these values.
+            ("enable_llvm_abi_extensions", "true"),
+            // Like Sonatina's own IR checks, Cranelift's verifier runs only
+            // in builds with debug assertions: it can take most of the
+            // backend's time.
+            (
+                "enable_verifier",
+                if cfg!(debug_assertions) {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+        ] {
+            builder
+                .set(name, value)
+                .map_err(|error| CraneliftError::Compilation(error.to_string()))?;
+        }
         Ok(builder)
     }
 
@@ -292,6 +303,16 @@ mod tests {
                 );
                 assert!(flags.enable_llvm_abi_extensions());
             }
+        }
+    }
+
+    #[test]
+    fn cranelift_verifier_runs_with_debug_assertions() {
+        for opt_level in [OptLevel::O0, OptLevel::O2] {
+            let flags = Flags::new(
+                CraneliftObjectBackend::flag_builder(&BackendOptions { opt_level }, true).unwrap(),
+            );
+            assert_eq!(flags.enable_verifier(), cfg!(debug_assertions));
         }
     }
 
