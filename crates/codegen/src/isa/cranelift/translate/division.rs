@@ -1,8 +1,9 @@
-//! Wide unsigned division. Each division site handles a zero divisor, a
-//! smaller numerator and single-limb operands inline, and calls the
-//! module's divider for everything else: Knuth's algorithm D on 64-bit
-//! limbs, with quotient digits from a 128/64-bit division by reciprocal
-//! (Möller and Granlund, "Improved division by invariant integers").
+//! Wide unsigned division. Division sites handle a zero divisor, a smaller
+//! numerator and single-limb operands inline, and modular sites a zero
+//! modulus; everything else calls the module's divider: Knuth's algorithm D
+//! on 64-bit limbs, with quotient digits from a 128/64-bit division by
+//! reciprocal (Möller and Granlund, "Improved division by invariant
+//! integers").
 
 use cranelift_codegen::ir::{
     self as clif, AbiParam, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
@@ -114,7 +115,7 @@ fn signature(clif_module: &impl ClifModule) -> clif::Signature {
 /// The quotient and remainder of unsigned `numerator / divisor`. Division
 /// by zero is undefined in the IR; here it gives an all-ones quotient and
 /// the numerator as remainder.
-pub(super) fn udivrem(
+fn udivrem(
     numerator: Limbs,
     divisor: Limbs,
     call: DividerCall,
