@@ -472,6 +472,20 @@ fn limb_address(
     builder.ins().iadd(base, offset)
 }
 
+/// The divider's operands after normalization by `shift`, the left shift
+/// that sets the divisor's top bit.
+struct Normalized {
+    buffer: clif::Value,
+    /// The numerator's nine normalized limbs in memory.
+    numerator: clif::Value,
+    /// The number of significant numerator limbs.
+    numerator_limbs: clif::Value,
+    divisor: Limbs,
+    reciprocal: clif::Value,
+    shift: clif::Value,
+    inverse: clif::Value,
+}
+
 /// Emits the divider's body (see `Divider`).
 fn build_divider(builder: &mut FunctionBuilder) {
     let flags = MemFlagsData::trusted();
@@ -499,7 +513,26 @@ fn build_divider(builder: &mut FunctionBuilder) {
     };
     let n = count(&divisor, 1, builder);
     let m = count(&numerator, 0, builder);
-    // Normalize both operands by the shift that sets the divisor's top bit.
+    let zero = builder.ins().iconst(I64, 0);
+    // Quotient digits above the computed ones are zero.
+    store_limbs([zero; LIMBS], buffer, 0, flags, builder);
+    store_limbs([zero; LIMBS], buffer, 8 * LIMBS as i32, flags, builder);
+    // A numerator smaller than the divisor is the remainder.
+    let smaller = builder.create_block();
+    let divide = builder.create_block();
+    let below = builder.ins().icmp(IntCC::UnsignedLessThan, m, n);
+    builder.ins().brif(below, smaller, &[], divide, &[]);
+    builder.switch_to_block(smaller);
+    store_limbs(
+        std::array::from_fn(|limb| numerator[limb]),
+        buffer,
+        DIVISOR_OFFSET,
+        flags,
+        builder,
+    );
+    builder.ins().return_(&[]);
+
+    builder.switch_to_block(divide);
     let top = divisor[1..].iter().fold(divisor[0], |top, &limb| {
         let nonzero = builder.ins().icmp_imm_s(IntCC::NotEqual, limb, 0);
         builder.ins().select(nonzero, limb, top)
@@ -517,7 +550,6 @@ fn build_divider(builder: &mut FunctionBuilder) {
         0 => builder.ins().ishl(divisor[0], shift),
         _ => funnel(divisor[limb], divisor[limb - 1], builder),
     });
-    let zero = builder.ins().iconst(I64, 0);
     let normalized_numerator: [clif::Value; NUMERATOR_LIMBS + 1] =
         std::array::from_fn(|limb| match limb {
             0 => builder.ins().ishl(numerator[0], shift),
@@ -526,261 +558,234 @@ fn build_divider(builder: &mut FunctionBuilder) {
                 funnel(high, numerator[limb - 1], builder)
             }
         });
-    let un = builder.create_sized_stack_slot(StackSlotData::new(
+    let slot = builder.create_sized_stack_slot(StackSlotData::new(
         StackSlotKind::ExplicitSlot,
         8 * (NUMERATOR_LIMBS as u32 + 1),
         3,
     ));
-    let un = builder.ins().stack_addr(I64, un, 0);
-    let vn = builder.create_sized_stack_slot(StackSlotData::new(
-        StackSlotKind::ExplicitSlot,
-        8 * LIMBS as u32,
-        3,
-    ));
-    let vn = builder.ins().stack_addr(I64, vn, 0);
+    let normalized = builder.ins().stack_addr(I64, slot, 0);
     for (limb, &value) in normalized_numerator.iter().enumerate() {
-        builder.ins().store(flags, value, un, 8 * limb as i32);
+        builder
+            .ins()
+            .store(flags, value, normalized, 8 * limb as i32);
     }
-    store_limbs(normalized_divisor, vn, 0, flags, builder);
-    // Quotient digits above the computed ones are zero.
-    store_limbs([zero; LIMBS], buffer, 0, flags, builder);
-    store_limbs([zero; LIMBS], buffer, 8 * LIMBS as i32, flags, builder);
-    // The top two normalized divisor limbs.
-    let (divisor_top, divisor_second) = normalized_divisor.iter().enumerate().skip(1).fold(
-        (normalized_divisor[0], normalized_divisor[0]),
-        |(top, second), (limb, &value)| {
-            let nonzero = builder.ins().icmp_imm_s(IntCC::NotEqual, divisor[limb], 0);
-            (
-                builder.ins().select(nonzero, value, top),
-                builder
-                    .ins()
-                    .select(nonzero, normalized_divisor[limb - 1], second),
-            )
+    // The normalized divisor's top limb, whose reciprocal every digit uses.
+    let top = normalized_divisor.iter().zip(&divisor).skip(1).fold(
+        normalized_divisor[0],
+        |top, (&normalized, &limb)| {
+            let nonzero = builder.ins().icmp_imm_s(IntCC::NotEqual, limb, 0);
+            builder.ins().select(nonzero, normalized, top)
         },
     );
-    // A numerator smaller than the divisor is the remainder.
-    let divide = builder.create_block();
-    let finish = builder.create_block();
-    let smaller = builder.ins().icmp(IntCC::UnsignedLessThan, m, n);
-    builder.ins().brif(smaller, finish, &[], divide, &[]);
-    builder.switch_to_block(divide);
-    let reciprocal = reciprocal(divisor_top, builder);
-    let short = builder.create_block();
-    let long = builder.create_block();
-    let single_limb = builder.ins().icmp_imm_s(IntCC::Equal, n, 1);
-    builder.ins().brif(single_limb, short, &[], long, &[]);
-
-    // A one-limb divisor: one digit per numerator limb, from the top.
-    builder.switch_to_block(short);
-    let short_head = builder.create_block();
-    let short_body = builder.create_block();
-    let short_done = builder.create_block();
-    let index = builder.append_block_param(short_head, I64);
-    let remainder = builder.append_block_param(short_head, I64);
-    let done_remainder = builder.append_block_param(short_done, I64);
-    let address = limb_address(un, m, builder);
-    let initial = builder.ins().load(I64, flags, address, 0);
-    builder
-        .ins()
-        .jump(short_head, &[BlockArg::Value(m), BlockArg::Value(initial)]);
-    builder.switch_to_block(short_head);
-    builder.ins().brif(
-        index,
-        short_body,
-        &[],
-        short_done,
-        &[BlockArg::Value(remainder)],
-    );
-    builder.switch_to_block(short_body);
-    let next = builder.ins().iadd_imm_s(index, -1);
-    let address = limb_address(un, next, builder);
-    let limb = builder.ins().load(I64, flags, address, 0);
-    let (digit, remainder) = div2by1(remainder, limb, divisor_top, reciprocal, builder);
-    let address = limb_address(buffer, next, builder);
-    builder.ins().store(flags, digit, address, 0);
-    builder.ins().jump(
-        short_head,
-        &[BlockArg::Value(next), BlockArg::Value(remainder)],
-    );
-    builder.switch_to_block(short_done);
-    let remainder = builder.ins().ushr(done_remainder, shift);
-    store_limbs(
-        [remainder, zero, zero, zero],
+    let operands = Normalized {
         buffer,
-        DIVISOR_OFFSET,
-        flags,
-        builder,
-    );
-    builder.ins().return_(&[]);
+        numerator: normalized,
+        numerator_limbs: m,
+        divisor: normalized_divisor,
+        reciprocal: reciprocal(top, builder),
+        shift,
+        inverse,
+    };
+    // One digit loop per divisor length.
+    for limbs in 1..LIMBS {
+        let this = builder.create_block();
+        let other = builder.create_block();
+        let matches = builder.ins().icmp_imm_s(IntCC::Equal, n, limbs as i64);
+        builder.ins().brif(matches, this, &[], other, &[]);
+        builder.switch_to_block(this);
+        emit_digit_loop(limbs, &operands, builder);
+        builder.switch_to_block(other);
+    }
+    emit_digit_loop(LIMBS, &operands, builder);
+}
 
-    // Algorithm D: quotient digits `j` from `m - n` down to zero.
-    builder.switch_to_block(long);
+/// Emits Knuth's algorithm D for a divisor of exactly `n` limbs: quotient
+/// digits `j` from `m - n` down to zero, each from the window of the
+/// numerator limb `j` below the `n`-limb partial remainder.
+fn emit_digit_loop(n: usize, operands: &Normalized, builder: &mut FunctionBuilder) {
+    let flags = MemFlagsData::trusted();
+    let divisor = &operands.divisor[..n];
+    let divisor_top = divisor[n - 1];
     let head = builder.create_block();
+    let done = builder.create_block();
     let j = builder.append_block_param(head, I64);
-    let first = builder.ins().isub(m, n);
-    builder.ins().jump(head, &[BlockArg::Value(first)]);
+    let remainder: Vec<_> = (0..n)
+        .map(|_| builder.append_block_param(head, I64))
+        .collect();
+    let final_remainder: Vec<_> = (0..n)
+        .map(|_| builder.append_block_param(done, I64))
+        .collect();
+    // The first partial remainder is the numerator's top `n` limbs, up to
+    // the normalization's overflow limb.
+    let first = builder
+        .ins()
+        .iadd_imm_s(operands.numerator_limbs, -(n as i64));
+    let address = limb_address(operands.numerator, first, builder);
+    let initial: Vec<_> = (1..=n)
+        .map(|limb| BlockArg::Value(builder.ins().load(I64, flags, address, 8 * limb as i32)))
+        .collect();
+    builder.ins().jump(
+        head,
+        &[BlockArg::Value(first)]
+            .into_iter()
+            .chain(initial)
+            .collect::<Vec<_>>(),
+    );
 
     builder.switch_to_block(head);
-    let top_index = builder.ins().iadd(j, n);
-    let top_address = limb_address(un, top_index, builder);
-    let u2 = builder.ins().load(I64, flags, top_address, 0);
-    let u1 = builder.ins().load(I64, flags, top_address, -8);
-    let u0 = builder.ins().load(I64, flags, top_address, -16);
-    // The remainder's top limb never exceeds the divisor's; when they are
-    // equal the estimate is the largest digit.
-    let equal = builder
-        .ins()
-        .icmp(IntCC::UnsignedGreaterThanOrEqual, u2, divisor_top);
-    let high = builder.ins().select(equal, zero, u2);
-    let (estimate, estimate_remainder) = div2by1(high, u1, divisor_top, reciprocal, builder);
-    let (sum, sum_overflow) = builder.ins().uadd_overflow(u1, divisor_top);
-    let all_ones = builder.ins().iconst(I64, -1);
-    let digit = builder.ins().select(equal, all_ones, estimate);
-    let remainder = builder.ins().select(equal, sum, estimate_remainder);
-    let remainder_wide = builder.ins().band(equal, sum_overflow);
-    // The estimate exceeds the digit by at most two. Knuth's test against
-    // the second divisor limb lowers it while it is provably too large
-    // (only while the partial remainder fits a limb): the first step leaves
-    // at most one excess, which adding back the divisor fixes, and the
-    // second makes that rare.
-    let divisor_second_wide = builder.ins().uextend(I128, divisor_second);
-    let correct = |digit, remainder, remainder_wide, builder: &mut FunctionBuilder| {
-        let digit_wide = builder.ins().uextend(I128, digit);
-        let product = builder.ins().imul(digit_wide, divisor_second_wide);
-        let bound = builder.ins().iconcat(u0, remainder);
-        let too_large = builder
+    let address = limb_address(operands.numerator, j, builder);
+    let low = builder.ins().load(I64, flags, address, 0);
+    let window: Vec<_> = std::iter::once(low)
+        .chain(remainder.iter().copied())
+        .collect();
+    let join = builder.create_block();
+    let digit_param = builder.append_block_param(join, I64);
+    let next_remainder: Vec<_> = (0..n)
+        .map(|_| builder.append_block_param(join, I64))
+        .collect();
+    if n == 1 {
+        let (digit, remainder) = div2by1(
+            window[1],
+            window[0],
+            divisor_top,
+            operands.reciprocal,
+            builder,
+        );
+        builder
             .ins()
-            .icmp(IntCC::UnsignedGreaterThan, product, bound);
-        let narrow = builder.ins().bxor_imm_s(remainder_wide, 1);
-        let decrement = builder.ins().band(too_large, narrow);
+            .jump(join, &[digit, remainder].map(BlockArg::Value));
+    } else {
+        let (u2, u1, u0) = (window[n], window[n - 1], window[n - 2]);
+        let zero = builder.ins().iconst(I64, 0);
+        // The remainder's top limb never exceeds the divisor's; when they
+        // are equal the estimate is the largest digit.
+        let equal = builder
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, u2, divisor_top);
+        let high = builder.ins().select(equal, zero, u2);
+        let (estimate, estimate_remainder) =
+            div2by1(high, u1, divisor_top, operands.reciprocal, builder);
+        let (sum, sum_overflow) = builder.ins().uadd_overflow(u1, divisor_top);
+        let all_ones = builder.ins().iconst(I64, -1);
+        let digit = builder.ins().select(equal, all_ones, estimate);
+        let rhat = builder.ins().select(equal, sum, estimate_remainder);
+        let rhat_wide = builder.ins().band(equal, sum_overflow);
+        // The estimate exceeds the digit by at most two. Knuth's test
+        // against the second divisor limb lowers it while it is provably
+        // too large (only while the partial remainder fits a limb): the
+        // first step leaves at most one excess, which adding back the
+        // divisor fixes, and the second makes that rare.
+        let divisor_second = builder.ins().uextend(I128, divisor[n - 2]);
+        let correct = |digit, rhat, rhat_wide, builder: &mut FunctionBuilder| {
+            let digit_wide = builder.ins().uextend(I128, digit);
+            let product = builder.ins().imul(digit_wide, divisor_second);
+            let bound = builder.ins().iconcat(u0, rhat);
+            let too_large = builder
+                .ins()
+                .icmp(IntCC::UnsignedGreaterThan, product, bound);
+            let narrow = builder.ins().bxor_imm_s(rhat_wide, 1);
+            let decrement = builder.ins().band(too_large, narrow);
+            let decremented = builder.ins().iadd_imm_s(digit, -1);
+            let (increased, overflow) = builder.ins().uadd_overflow(rhat, divisor_top);
+            let overflow = builder.ins().band(decrement, overflow);
+            (
+                builder.ins().select(decrement, decremented, digit),
+                builder.ins().select(decrement, increased, rhat),
+                builder.ins().bor(rhat_wide, overflow),
+            )
+        };
+        let (digit, rhat, rhat_wide) = correct(digit, rhat, rhat_wide, builder);
+        let (digit, _, _) = correct(digit, rhat, rhat_wide, builder);
+
+        // Subtract `digit * divisor` from the window.
+        let digit_wide = builder.ins().uextend(I128, digit);
+        let mut carry = zero;
+        let mut borrow = zero;
+        let mut difference = Vec::with_capacity(n);
+        for (&limb, &divisor_limb) in window.iter().zip(divisor) {
+            let divisor_limb = builder.ins().uextend(I128, divisor_limb);
+            let product = builder.ins().imul(digit_wide, divisor_limb);
+            let carry_wide = builder.ins().uextend(I128, carry);
+            let product = builder.ins().iadd(product, carry_wide);
+            let (product_low, product_high) = builder.ins().isplit(product);
+            let (limb, borrow_low) = builder.ins().usub_overflow(limb, product_low);
+            let (limb, borrow_in) = builder.ins().usub_overflow(limb, borrow);
+            difference.push(limb);
+            let borrow_out = builder.ins().bor(borrow_low, borrow_in);
+            borrow = builder.ins().uextend(I64, borrow_out);
+            carry = product_high;
+        }
+        let (top, borrow_low) = builder.ins().usub_overflow(u2, carry);
+        let (_, borrow_in) = builder.ins().usub_overflow(top, borrow);
+        let negative = builder.ins().bor(borrow_low, borrow_in);
+        let add_back = builder.create_block();
+        builder.ins().brif(
+            negative,
+            add_back,
+            &[],
+            join,
+            &std::iter::once(digit)
+                .chain(difference.iter().copied())
+                .map(BlockArg::Value)
+                .collect::<Vec<_>>(),
+        );
+
+        // The digit was one too large: add the divisor back. The carry
+        // out clears the window's top limb.
+        builder.switch_to_block(add_back);
+        let mut carry = zero;
+        let mut sum = Vec::with_capacity(n);
+        for (&limb, &divisor_limb) in difference.iter().zip(divisor) {
+            let (limb, carry_low) = builder.ins().uadd_overflow(limb, divisor_limb);
+            let (limb, carry_in) = builder.ins().uadd_overflow(limb, carry);
+            sum.push(limb);
+            let carry_out = builder.ins().bor(carry_low, carry_in);
+            carry = builder.ins().uextend(I64, carry_out);
+        }
         let decremented = builder.ins().iadd_imm_s(digit, -1);
-        let (increased, overflow) = builder.ins().uadd_overflow(remainder, divisor_top);
-        let overflow = builder.ins().band(decrement, overflow);
-        (
-            builder.ins().select(decrement, decremented, digit),
-            builder.ins().select(decrement, increased, remainder),
-            builder.ins().bor(remainder_wide, overflow),
-        )
-    };
-    let (digit, remainder, remainder_wide) = correct(digit, remainder, remainder_wide, builder);
-    let (digit, _, _) = correct(digit, remainder, remainder_wide, builder);
+        builder.ins().jump(
+            join,
+            &std::iter::once(decremented)
+                .chain(sum)
+                .map(BlockArg::Value)
+                .collect::<Vec<_>>(),
+        );
+    }
 
-    // Subtract `digit * divisor` from the remainder limbs `j..=j + n`.
-    let subtract_head = builder.create_block();
-    let subtract_body = builder.create_block();
-    let subtract_done = builder.create_block();
-    let [index, carry, borrow] =
-        std::array::from_fn(|_| builder.append_block_param(subtract_head, I64));
-    let [final_carry, final_borrow] =
-        std::array::from_fn(|_| builder.append_block_param(subtract_done, I64));
-    builder
-        .ins()
-        .jump(subtract_head, &[zero, zero, zero].map(BlockArg::Value));
-    builder.switch_to_block(subtract_head);
-    let more = builder.ins().icmp(IntCC::UnsignedLessThan, index, n);
-    builder.ins().brif(
-        more,
-        subtract_body,
-        &[],
-        subtract_done,
-        &[carry, borrow].map(BlockArg::Value),
-    );
-    builder.switch_to_block(subtract_body);
-    let address = limb_address(vn, index, builder);
-    let divisor_limb = builder.ins().load(I64, flags, address, 0);
-    let position = builder.ins().iadd(index, j);
-    let address = limb_address(un, position, builder);
-    let limb = builder.ins().load(I64, flags, address, 0);
-    let digit_wide = builder.ins().uextend(I128, digit);
-    let divisor_limb = builder.ins().uextend(I128, divisor_limb);
-    let product = builder.ins().imul(digit_wide, divisor_limb);
-    let carry = builder.ins().uextend(I128, carry);
-    let product = builder.ins().iadd(product, carry);
-    let (product_low, product_high) = builder.ins().isplit(product);
-    let (difference, borrow_low) = builder.ins().usub_overflow(limb, product_low);
-    let (difference, borrow_in) = builder.ins().usub_overflow(difference, borrow);
-    builder.ins().store(flags, difference, address, 0);
-    let borrow = builder.ins().bor(borrow_low, borrow_in);
-    let borrow = builder.ins().uextend(I64, borrow);
-    let next = builder.ins().iadd_imm_s(index, 1);
-    builder.ins().jump(
-        subtract_head,
-        &[next, product_high, borrow].map(BlockArg::Value),
-    );
-    builder.switch_to_block(subtract_done);
-    let (difference, borrow_low) = builder.ins().usub_overflow(u2, final_carry);
-    let (difference, borrow_in) = builder.ins().usub_overflow(difference, final_borrow);
-    builder.ins().store(flags, difference, top_address, 0);
-    let negative = builder.ins().bor(borrow_low, borrow_in);
-    let add_back = builder.create_block();
-    let store_digit = builder.create_block();
-    let stored_digit = builder.append_block_param(store_digit, I64);
-    builder.ins().brif(
-        negative,
-        add_back,
-        &[],
-        store_digit,
-        &[BlockArg::Value(digit)],
-    );
-
-    // The digit was one too large: add the divisor back.
-    builder.switch_to_block(add_back);
-    let add_head = builder.create_block();
-    let add_body = builder.create_block();
-    let add_done = builder.create_block();
-    let [index, carry] = std::array::from_fn(|_| builder.append_block_param(add_head, I64));
-    let add_carry = builder.append_block_param(add_done, I64);
-    builder
-        .ins()
-        .jump(add_head, &[zero, zero].map(BlockArg::Value));
-    builder.switch_to_block(add_head);
-    let more = builder.ins().icmp(IntCC::UnsignedLessThan, index, n);
-    builder
-        .ins()
-        .brif(more, add_body, &[], add_done, &[BlockArg::Value(carry)]);
-    builder.switch_to_block(add_body);
-    let address = limb_address(vn, index, builder);
-    let divisor_limb = builder.ins().load(I64, flags, address, 0);
-    let position = builder.ins().iadd(index, j);
-    let address = limb_address(un, position, builder);
-    let limb = builder.ins().load(I64, flags, address, 0);
-    let (sum, carry_low) = builder.ins().uadd_overflow(limb, divisor_limb);
-    let (sum, carry_in) = builder.ins().uadd_overflow(sum, carry);
-    builder.ins().store(flags, sum, address, 0);
-    let carry = builder.ins().bor(carry_low, carry_in);
-    let carry = builder.ins().uextend(I64, carry);
-    let next = builder.ins().iadd_imm_s(index, 1);
-    builder
-        .ins()
-        .jump(add_head, &[next, carry].map(BlockArg::Value));
-    builder.switch_to_block(add_done);
-    let limb = builder.ins().load(I64, flags, top_address, 0);
-    let limb = builder.ins().iadd(limb, add_carry);
-    builder.ins().store(flags, limb, top_address, 0);
-    let decremented = builder.ins().iadd_imm_s(digit, -1);
-    builder
-        .ins()
-        .jump(store_digit, &[BlockArg::Value(decremented)]);
-
-    builder.switch_to_block(store_digit);
-    let address = limb_address(buffer, j, builder);
-    builder.ins().store(flags, stored_digit, address, 0);
+    builder.switch_to_block(join);
+    let address = limb_address(operands.buffer, j, builder);
+    builder.ins().store(flags, digit_param, address, 0);
     let previous = builder.ins().iadd_imm_s(j, -1);
-    builder
-        .ins()
-        .brif(j, head, &[BlockArg::Value(previous)], finish, &[]);
+    let next_args: Vec<_> = next_remainder
+        .iter()
+        .copied()
+        .map(BlockArg::Value)
+        .collect();
+    builder.ins().brif(
+        j,
+        head,
+        &std::iter::once(BlockArg::Value(previous))
+            .chain(next_args.iter().copied())
+            .collect::<Vec<_>>(),
+        done,
+        &next_args,
+    );
 
-    // The remainder is the low limbs of the numerator's storage, still
-    // shifted by the normalization.
-    builder.switch_to_block(finish);
-    let limbs: [clif::Value; LIMBS + 1] =
-        std::array::from_fn(|limb| builder.ins().load(I64, flags, un, 8 * limb as i32));
+    // Undo the normalization of the remainder.
+    builder.switch_to_block(done);
+    let zero = builder.ins().iconst(I64, 0);
     let remainder: Limbs = std::array::from_fn(|limb| {
-        let low = builder.ins().ushr(limbs[limb], shift);
-        let high = builder.ins().ishl_imm_s(limbs[limb + 1], 1);
-        let high = builder.ins().ishl(high, inverse);
+        let Some(&low) = final_remainder.get(limb) else {
+            return zero;
+        };
+        let low = builder.ins().ushr(low, operands.shift);
+        let Some(&high) = final_remainder.get(limb + 1) else {
+            return low;
+        };
+        let high = builder.ins().ishl_imm_s(high, 1);
+        let high = builder.ins().ishl(high, operands.inverse);
         builder.ins().bor(low, high)
     });
-    store_limbs(remainder, buffer, DIVISOR_OFFSET, flags, builder);
+    store_limbs(remainder, operands.buffer, DIVISOR_OFFSET, flags, builder);
     builder.ins().return_(&[]);
 }
