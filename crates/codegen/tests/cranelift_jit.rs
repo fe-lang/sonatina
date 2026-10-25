@@ -8,6 +8,8 @@ mod abi;
 mod casts;
 #[path = "cranelift/globals.rs"]
 mod globals;
+#[path = "cranelift/i256.rs"]
+mod i256;
 #[path = "cranelift/memory.rs"]
 mod memory;
 #[path = "cranelift/object_alias.rs"]

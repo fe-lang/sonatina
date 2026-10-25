@@ -18,10 +18,11 @@ use super::{
     value_storage_size,
 };
 
-/// Stack slots for indirectly represented SSA values.
+/// Stack slots for indirectly represented SSA values: aggregates. (i256
+/// values are four limbs in Cranelift values.)
 ///
-/// A value-producing instruction with an aggregate or `i256` result writes
-/// a snapshot that nothing mutates afterwards. Phis, loads, call results
+/// A value-producing instruction with an aggregate result writes a
+/// snapshot that nothing mutates afterwards. Phis, loads, call results
 /// and the heads of `insert_value` chains own storage. An `insert_value`
 /// that is the sole consumer of an earlier insert in its block continues
 /// that storage, and an extracted aggregate is a view into its base's. A

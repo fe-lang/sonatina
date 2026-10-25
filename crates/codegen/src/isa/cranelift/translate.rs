@@ -5,6 +5,7 @@ mod i256;
 mod memory;
 mod phi;
 mod scalar;
+mod values;
 
 use std::collections::HashMap;
 
@@ -15,7 +16,7 @@ use rustc_hash::FxHashSet;
 
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Linkage as SonatinaLinkage, Module, Type, Value, ValueId,
-    inst::{inst_set::InstSetExt, native::inst_set::NativeInstKind},
+    inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
     module::FuncRef,
 };
@@ -25,7 +26,9 @@ use crate::transform::aggregate::{
     compute_object_effect_summaries, object_abi::native_heap_object_roots,
 };
 
-use self::{abi::*, frame::FrameSlots, globals::*, i256::*, memory::*, phi::Edges, scalar::*};
+use self::{
+    abi::*, frame::FrameSlots, globals::*, i256::*, memory::*, phi::Edges, scalar::*, values::*,
+};
 
 pub(super) fn translate_module(
     module: &Module,
@@ -130,7 +133,8 @@ fn translate_function(
     block_order.reverse();
 
     let mut block_map: HashMap<BlockId, clif::Block> = HashMap::new();
-    let mut value_map: HashMap<ValueId, clif::Value> = HashMap::new();
+    let mut value_map = ValueMap::default();
+    let mut i256_storage = I256Storage::default();
     for &block in &block_order {
         let clif_block = builder.create_block();
         block_map.insert(block, clif_block);
@@ -160,8 +164,14 @@ fn translate_function(
     let arg_offset = if has_sret { 1 } else { 0 };
     for (idx, &arg_value) in function.arg_values.iter().enumerate() {
         let param = builder.block_params(clif_entry)[idx + arg_offset];
-        let param = normalize_scalar(param, function.dfg.value_ty(arg_value), &mut builder);
-        value_map.insert(arg_value, param);
+        let ty = function.dfg.value_ty(arg_value);
+        if ty == Type::I256 {
+            let limbs = i256_storage.incoming(arg_value, param, &mut builder);
+            value_map.insert_limbs(arg_value, limbs);
+        } else {
+            let param = normalize_scalar(param, ty, &mut builder);
+            value_map.insert(arg_value, param);
+        }
     }
 
     // Materialize global addresses in the entry block so they dominate all
@@ -187,7 +197,12 @@ fn translate_function(
                 .inst_result(inst_id)
                 .ok_or("phi has no result")?;
             let ty = function.dfg.value_ty(result);
-            if !uses_indirect_value_representation(&module.ctx, ty) {
+            if ty == Type::I256 {
+                let limbs = std::array::from_fn(|_| {
+                    builder.append_block_param(clif_block, clif::types::I64)
+                });
+                value_map.insert_limbs(result, limbs);
+            } else if !uses_indirect_value_representation(&module.ctx, ty) {
                 let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_type)?;
                 let param = builder.append_block_param(clif_block, clif_ty);
                 value_map.insert(result, param);
@@ -225,297 +240,149 @@ fn translate_function(
 
         for inst_id in function.layout.iter_inst(block) {
             let inst_data = function.dfg.inst(inst_id);
+            let i256_op = translate_i256_op(function, inst_id, &mut value_map, &mut builder)?;
 
             match native_inst_set().resolve_inst(inst_data) {
+                _ if i256_op => {}
                 NativeInstKind::Add(add) => {
-                    let result_val = if function.dfg.value_ty(*add.lhs()) == Type::I256 {
-                        emit_i256_add(function, *add.lhs(), *add.rhs(), &value_map, &mut builder)?
-                    } else {
-                        let lhs = resolve_value(function, *add.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *add.rhs(), &value_map, &mut builder)?;
-                        builder.ins().iadd(lhs, rhs)
-                    };
+                    let lhs = resolve_value(function, *add.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *add.rhs(), &value_map, &mut builder)?;
+                    let result_val = builder.ins().iadd(lhs, rhs);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Sub(sub) => {
-                    let result_val = if function.dfg.value_ty(*sub.lhs()) == Type::I256 {
-                        emit_i256_sub(function, *sub.lhs(), *sub.rhs(), &value_map, &mut builder)?
-                    } else {
-                        let lhs = resolve_value(function, *sub.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *sub.rhs(), &value_map, &mut builder)?;
-                        builder.ins().isub(lhs, rhs)
-                    };
+                    let lhs = resolve_value(function, *sub.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *sub.rhs(), &value_map, &mut builder)?;
+                    let result_val = builder.ins().isub(lhs, rhs);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Mul(mul) => {
-                    let result_val = if function.dfg.value_ty(*mul.lhs()) == Type::I256 {
-                        emit_i256_mul(function, *mul.lhs(), *mul.rhs(), &value_map, &mut builder)?
-                    } else {
-                        let lhs = resolve_value(function, *mul.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *mul.rhs(), &value_map, &mut builder)?;
-                        builder.ins().imul(lhs, rhs)
-                    };
+                    let lhs = resolve_value(function, *mul.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *mul.rhs(), &value_map, &mut builder)?;
+                    let result_val = builder.ins().imul(lhs, rhs);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Neg(neg) => {
-                    let result_val = if function.dfg.value_ty(*neg.arg()) == Type::I256 {
-                        emit_i256_neg(function, *neg.arg(), &value_map, &mut builder)?
-                    } else {
-                        let val = resolve_value(function, *neg.arg(), &value_map, &mut builder)?;
-                        builder.ins().ineg(val)
-                    };
+                    let val = resolve_value(function, *neg.arg(), &value_map, &mut builder)?;
+                    let result_val = builder.ins().ineg(val);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
-                NativeInstKind::Udiv(div) => {
-                    let result_val = if function.dfg.value_ty(*div.lhs()) == Type::I256 {
-                        emit_i256_div_rem(
-                            function,
-                            *div.lhs(),
-                            *div.rhs(),
-                            DivRemKind::Udiv,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs = resolve_value(function, *div.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *div.rhs(), &value_map, &mut builder)?;
-                        emit_scalar_div_rem(
-                            lhs,
-                            rhs,
-                            function.dfg.value_ty(*div.lhs()),
-                            DivRemKind::Udiv,
-                            &mut builder,
-                        )
-                    };
-                    if let Some(result) = function.dfg.inst_result(inst_id) {
-                        value_map.insert(result, result_val);
-                    }
-                }
-                NativeInstKind::Sdiv(div) => {
-                    let result_val = if function.dfg.value_ty(*div.lhs()) == Type::I256 {
-                        emit_i256_div_rem(
-                            function,
-                            *div.lhs(),
-                            *div.rhs(),
-                            DivRemKind::Sdiv,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs = resolve_value(function, *div.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *div.rhs(), &value_map, &mut builder)?;
-                        emit_scalar_div_rem(
-                            lhs,
-                            rhs,
-                            function.dfg.value_ty(*div.lhs()),
-                            DivRemKind::Sdiv,
-                            &mut builder,
-                        )
-                    };
-                    if let Some(result) = function.dfg.inst_result(inst_id) {
-                        value_map.insert(result, result_val);
-                    }
-                }
-                NativeInstKind::Umod(rem) => {
-                    let result_val = if function.dfg.value_ty(*rem.lhs()) == Type::I256 {
-                        emit_i256_div_rem(
-                            function,
-                            *rem.lhs(),
-                            *rem.rhs(),
-                            DivRemKind::Umod,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs = resolve_value(function, *rem.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *rem.rhs(), &value_map, &mut builder)?;
-                        emit_scalar_div_rem(
-                            lhs,
-                            rhs,
-                            function.dfg.value_ty(*rem.lhs()),
-                            DivRemKind::Umod,
-                            &mut builder,
-                        )
-                    };
-                    if let Some(result) = function.dfg.inst_result(inst_id) {
-                        value_map.insert(result, result_val);
-                    }
-                }
-                NativeInstKind::Smod(rem) => {
-                    let result_val = if function.dfg.value_ty(*rem.lhs()) == Type::I256 {
-                        emit_i256_div_rem(
-                            function,
-                            *rem.lhs(),
-                            *rem.rhs(),
-                            DivRemKind::Smod,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs = resolve_value(function, *rem.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *rem.rhs(), &value_map, &mut builder)?;
-                        emit_scalar_div_rem(
-                            lhs,
-                            rhs,
-                            function.dfg.value_ty(*rem.lhs()),
-                            DivRemKind::Smod,
-                            &mut builder,
-                        )
-                    };
-                    if let Some(result) = function.dfg.inst_result(inst_id) {
-                        value_map.insert(result, result_val);
-                    }
-                }
+                NativeInstKind::Udiv(div) => translate_div_rem(
+                    DivRemKind::Udiv,
+                    *div.lhs(),
+                    *div.rhs(),
+                    inst_id,
+                    function,
+                    &mut value_map,
+                    &mut builder,
+                )?,
+                NativeInstKind::Sdiv(div) => translate_div_rem(
+                    DivRemKind::Sdiv,
+                    *div.lhs(),
+                    *div.rhs(),
+                    inst_id,
+                    function,
+                    &mut value_map,
+                    &mut builder,
+                )?,
+                NativeInstKind::Umod(rem) => translate_div_rem(
+                    DivRemKind::Umod,
+                    *rem.lhs(),
+                    *rem.rhs(),
+                    inst_id,
+                    function,
+                    &mut value_map,
+                    &mut builder,
+                )?,
+                NativeInstKind::Smod(rem) => translate_div_rem(
+                    DivRemKind::Smod,
+                    *rem.lhs(),
+                    *rem.rhs(),
+                    inst_id,
+                    function,
+                    &mut value_map,
+                    &mut builder,
+                )?,
                 NativeInstKind::Shl(shl) => {
-                    let result_val = if function.dfg.value_ty(*shl.value()) == Type::I256 {
-                        emit_i256_shift(
-                            function,
-                            *shl.value(),
-                            *shl.bits(),
-                            I256ShiftKind::Shl,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let val = resolve_value(function, *shl.value(), &value_map, &mut builder)?;
-                        let bits = resolve_value(function, *shl.bits(), &value_map, &mut builder)?;
-                        emit_scalar_shift(
-                            val,
-                            bits,
-                            function.dfg.value_ty(*shl.value()),
-                            ScalarShift::Shl,
-                            &mut builder,
-                        )
-                    };
+                    let val = resolve_value(function, *shl.value(), &value_map, &mut builder)?;
+                    let bits = resolve_value(function, *shl.bits(), &value_map, &mut builder)?;
+                    let result_val = emit_scalar_shift(
+                        val,
+                        bits,
+                        function.dfg.value_ty(*shl.value()),
+                        ScalarShift::Shl,
+                        &mut builder,
+                    );
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Shr(shr) => {
-                    let result_val = if function.dfg.value_ty(*shr.value()) == Type::I256 {
-                        emit_i256_shift(
-                            function,
-                            *shr.value(),
-                            *shr.bits(),
-                            I256ShiftKind::Shr,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let val = resolve_value(function, *shr.value(), &value_map, &mut builder)?;
-                        let bits = resolve_value(function, *shr.bits(), &value_map, &mut builder)?;
-                        emit_scalar_shift(
-                            val,
-                            bits,
-                            function.dfg.value_ty(*shr.value()),
-                            ScalarShift::Shr,
-                            &mut builder,
-                        )
-                    };
+                    let val = resolve_value(function, *shr.value(), &value_map, &mut builder)?;
+                    let bits = resolve_value(function, *shr.bits(), &value_map, &mut builder)?;
+                    let result_val = emit_scalar_shift(
+                        val,
+                        bits,
+                        function.dfg.value_ty(*shr.value()),
+                        ScalarShift::Shr,
+                        &mut builder,
+                    );
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Sar(sar) => {
-                    let result_val = if function.dfg.value_ty(*sar.value()) == Type::I256 {
-                        emit_i256_shift(
-                            function,
-                            *sar.value(),
-                            *sar.bits(),
-                            I256ShiftKind::Sar,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let val = resolve_value(function, *sar.value(), &value_map, &mut builder)?;
-                        let bits = resolve_value(function, *sar.bits(), &value_map, &mut builder)?;
-                        emit_scalar_shift(
-                            val,
-                            bits,
-                            function.dfg.value_ty(*sar.value()),
-                            ScalarShift::Sar,
-                            &mut builder,
-                        )
-                    };
+                    let val = resolve_value(function, *sar.value(), &value_map, &mut builder)?;
+                    let bits = resolve_value(function, *sar.bits(), &value_map, &mut builder)?;
+                    let result_val = emit_scalar_shift(
+                        val,
+                        bits,
+                        function.dfg.value_ty(*sar.value()),
+                        ScalarShift::Sar,
+                        &mut builder,
+                    );
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::And(and) => {
-                    let result_val = if function.dfg.value_ty(*and.lhs()) == Type::I256 {
-                        emit_i256_bitwise(
-                            function,
-                            *and.lhs(),
-                            *and.rhs(),
-                            I256BitwiseOp::And,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs = resolve_value(function, *and.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *and.rhs(), &value_map, &mut builder)?;
-                        builder.ins().band(lhs, rhs)
-                    };
+                    let lhs = resolve_value(function, *and.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *and.rhs(), &value_map, &mut builder)?;
+                    let result_val = builder.ins().band(lhs, rhs);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Or(or) => {
-                    let result_val = if function.dfg.value_ty(*or.lhs()) == Type::I256 {
-                        emit_i256_bitwise(
-                            function,
-                            *or.lhs(),
-                            *or.rhs(),
-                            I256BitwiseOp::Or,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs = resolve_value(function, *or.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *or.rhs(), &value_map, &mut builder)?;
-                        builder.ins().bor(lhs, rhs)
-                    };
+                    let lhs = resolve_value(function, *or.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *or.rhs(), &value_map, &mut builder)?;
+                    let result_val = builder.ins().bor(lhs, rhs);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Xor(xor) => {
-                    let result_val = if function.dfg.value_ty(*xor.lhs()) == Type::I256 {
-                        emit_i256_bitwise(
-                            function,
-                            *xor.lhs(),
-                            *xor.rhs(),
-                            I256BitwiseOp::Xor,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs = resolve_value(function, *xor.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *xor.rhs(), &value_map, &mut builder)?;
-                        builder.ins().bxor(lhs, rhs)
-                    };
+                    let lhs = resolve_value(function, *xor.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *xor.rhs(), &value_map, &mut builder)?;
+                    let result_val = builder.ins().bxor(lhs, rhs);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Not(not) => {
-                    let result_val = if function.dfg.value_ty(*not.arg()) == Type::I256 {
-                        emit_i256_not(function, *not.arg(), &value_map, &mut builder)?
+                    let val = resolve_value(function, *not.arg(), &value_map, &mut builder)?;
+                    let result_val = if function.dfg.value_ty(*not.arg()) == Type::I1 {
+                        builder.ins().bxor_imm_s(val, 1)
                     } else {
-                        let val = resolve_value(function, *not.arg(), &value_map, &mut builder)?;
-                        if function.dfg.value_ty(*not.arg()) == Type::I1 {
-                            builder.ins().bxor_imm_s(val, 1)
-                        } else {
-                            builder.ins().bnot(val)
-                        }
+                        builder.ins().bnot(val)
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -524,7 +391,6 @@ fn translate_function(
                 NativeInstKind::Bswap(bswap) => {
                     let arg = *bswap.arg();
                     let result_val = match function.dfg.value_ty(arg) {
-                        Type::I256 => emit_i256_bswap(function, arg, &value_map, &mut builder)?,
                         // A single byte has no order to reverse.
                         Type::I8 => resolve_value(function, arg, &value_map, &mut builder)?,
                         _ => {
@@ -642,20 +508,11 @@ fn translate_function(
                 }
                 NativeInstKind::IsZero(is_zero) => {
                     let val_ty = function.dfg.value_ty(*is_zero.lhs());
-                    let result_val = if val_ty == Type::I256 {
-                        let val =
-                            resolve_value(function, *is_zero.lhs(), &value_map, &mut builder)?;
-                        emit_i256_is_zero(val, &mut builder)
-                    } else {
-                        let val =
-                            resolve_value(function, *is_zero.lhs(), &value_map, &mut builder)?;
-                        let clif_ty =
-                            sonatina_type_to_clif(val_ty, pointer_type).ok_or_else(|| {
-                                format!("unsupported is_zero operand type: {val_ty:?}")
-                            })?;
-                        let zero = scalar_constant(clif_ty, 0, &mut builder);
-                        builder.ins().icmp(IntCC::Equal, val, zero)
-                    };
+                    let val = resolve_value(function, *is_zero.lhs(), &value_map, &mut builder)?;
+                    let clif_ty = sonatina_type_to_clif(val_ty, pointer_type)
+                        .ok_or_else(|| format!("unsupported is_zero operand type: {val_ty:?}"))?;
+                    let zero = scalar_constant(clif_ty, 0, &mut builder);
+                    let result_val = builder.ins().icmp(IntCC::Equal, val, zero);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
@@ -686,52 +543,34 @@ fn translate_function(
                         &mut builder,
                     )?;
                 }
-                NativeInstKind::Sext(sext) => {
-                    let val = resolve_value(function, *sext.from(), &value_map, &mut builder)?;
-                    let to_ty = sonatina_type_to_clif_or_err(*sext.ty(), pointer_type)?;
-                    let result_val = if *sext.ty() == Type::I256 {
-                        materialize_scalar_as_i256(
-                            val,
-                            function.dfg.value_ty(*sext.from()),
-                            true,
-                            &mut builder,
-                        )
-                    } else if function.dfg.value_ty(*sext.from()) == Type::I1 {
-                        bool_to_int_value(val, to_ty, true, &mut builder)
-                    } else {
-                        resize_int_value(val, to_ty, true, &mut builder)
-                    };
-                    if let Some(result) = function.dfg.inst_result(inst_id) {
-                        value_map.insert(result, result_val);
-                    }
-                }
-                NativeInstKind::Zext(zext) => {
-                    let val = resolve_value(function, *zext.from(), &value_map, &mut builder)?;
-                    let to_ty = sonatina_type_to_clif_or_err(*zext.ty(), pointer_type)?;
-                    let result_val = if *zext.ty() == Type::I256 {
-                        materialize_scalar_as_i256(
-                            val,
-                            function.dfg.value_ty(*zext.from()),
-                            false,
-                            &mut builder,
-                        )
-                    } else if function.dfg.value_ty(*zext.from()) == Type::I1 {
-                        bool_to_int_value(val, to_ty, false, &mut builder)
-                    } else {
-                        resize_int_value(val, to_ty, false, &mut builder)
-                    };
-                    if let Some(result) = function.dfg.inst_result(inst_id) {
-                        value_map.insert(result, result_val);
-                    }
-                }
+                NativeInstKind::Sext(sext) => translate_extend(
+                    *sext.from(),
+                    *sext.ty(),
+                    true,
+                    inst_id,
+                    function,
+                    &mut value_map,
+                    pointer_type,
+                    &mut builder,
+                )?,
+                NativeInstKind::Zext(zext) => translate_extend(
+                    *zext.from(),
+                    *zext.ty(),
+                    false,
+                    inst_id,
+                    function,
+                    &mut value_map,
+                    pointer_type,
+                    &mut builder,
+                )?,
                 NativeInstKind::Trunc(trunc) => {
-                    let from_ty = function.dfg.value_ty(*trunc.from());
-                    let val = resolve_value(function, *trunc.from(), &value_map, &mut builder)?;
                     let to_ty = sonatina_type_to_clif_or_err(*trunc.ty(), pointer_type)?;
-                    let result_val = if from_ty == Type::I256 {
-                        // i256 values are pointers — load the target-sized value from the pointer
-                        builder.ins().load(to_ty, MemFlagsData::new(), val, 0)
+                    let result_val = if function.dfg.value_ty(*trunc.from()) == Type::I256 {
+                        let limbs =
+                            resolve_i256(function, *trunc.from(), &value_map, &mut builder)?;
+                        truncate_limbs(limbs, to_ty, &mut builder)
                     } else {
+                        let val = resolve_value(function, *trunc.from(), &value_map, &mut builder)?;
                         resize_int_value(val, to_ty, false, &mut builder)
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
@@ -739,55 +578,84 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::Bitcast(bitcast) => {
-                    let val = resolve_operand(
-                        function,
-                        *bitcast.from(),
-                        &value_map,
-                        target_config,
-                        &mut builder,
-                    )?;
-                    let result_val = translate_bitcast(
-                        val,
-                        function.dfg.value_ty(*bitcast.from()),
-                        *bitcast.ty(),
-                        &module.ctx,
-                        target_config,
-                        &mut builder,
-                    )?;
-                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                    let from_ty = function.dfg.value_ty(*bitcast.from());
+                    let to_ty = *bitcast.ty();
+                    let result = function
+                        .dfg
+                        .inst_result(inst_id)
+                        .ok_or("bitcast has no result")?;
+                    if from_ty == Type::I256 && to_ty == Type::I256 {
+                        let limbs =
+                            resolve_i256(function, *bitcast.from(), &value_map, &mut builder)?;
+                        value_map.insert_limbs(result, limbs);
+                    } else if from_ty == Type::I256 {
+                        // A cast creates a value in storage of its own.
+                        if value_storage_size(to_ty, &module.ctx)? != 32 {
+                            return Err(format!(
+                                "bitcast requires equal-sized types: {from_ty:?} to {to_ty:?}"
+                            ));
+                        }
+                        let limbs =
+                            resolve_i256(function, *bitcast.from(), &value_map, &mut builder)?;
+                        let dest = create_stack_slot_for_type(to_ty, &module.ctx, &mut builder)?;
+                        store_limbs(limbs, dest, 0, MemFlagsData::trusted(), &mut builder);
+                        value_map.insert(result, dest);
+                    } else if to_ty == Type::I256 {
+                        if value_storage_size(from_ty, &module.ctx)? != 32 {
+                            return Err(format!(
+                                "bitcast requires equal-sized types: {from_ty:?} to {to_ty:?}"
+                            ));
+                        }
+                        let source = resolve_operand(
+                            function,
+                            *bitcast.from(),
+                            &value_map,
+                            target_config,
+                            &mut builder,
+                        )?;
+                        let limbs = load_limbs(source, 0, MemFlagsData::new(), &mut builder);
+                        value_map.insert_limbs(result, limbs);
+                    } else {
+                        let val = resolve_operand(
+                            function,
+                            *bitcast.from(),
+                            &value_map,
+                            target_config,
+                            &mut builder,
+                        )?;
+                        let result_val = translate_bitcast(
+                            val,
+                            from_ty,
+                            to_ty,
+                            &module.ctx,
+                            target_config,
+                            &mut builder,
+                        )?;
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::IntToPtr(cast) => {
-                    let val = resolve_value(function, *cast.from(), &value_map, &mut builder)?;
                     let to_ty = sonatina_type_to_clif_or_err(*cast.ty(), pointer_type)?;
-                    let result_val = if function.dfg.value_ty(*cast.from()) == Type::I256 {
-                        let scalar = load_i256_limb(val, 0, &mut builder);
-                        resize_int_value(scalar, to_ty, false, &mut builder)
+                    let val = if function.dfg.value_ty(*cast.from()) == Type::I256 {
+                        resolve_i256(function, *cast.from(), &value_map, &mut builder)?[0]
                     } else {
-                        resize_int_value(val, to_ty, false, &mut builder)
+                        resolve_value(function, *cast.from(), &value_map, &mut builder)?
                     };
+                    let result_val = resize_int_value(val, to_ty, false, &mut builder);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
-                NativeInstKind::PtrToInt(cast) => {
-                    let val = resolve_value(function, *cast.from(), &value_map, &mut builder)?;
-                    let to_ty = sonatina_type_to_clif_or_err(*cast.ty(), pointer_type)?;
-                    let result_val = if *cast.ty() == Type::I256 {
-                        materialize_scalar_as_i256(
-                            val,
-                            function.dfg.value_ty(*cast.from()),
-                            false,
-                            &mut builder,
-                        )
-                    } else {
-                        resize_int_value(val, to_ty, false, &mut builder)
-                    };
-                    if let Some(result) = function.dfg.inst_result(inst_id) {
-                        value_map.insert(result, result_val);
-                    }
-                }
+                NativeInstKind::PtrToInt(cast) => translate_extend(
+                    *cast.from(),
+                    *cast.ty(),
+                    false,
+                    inst_id,
+                    function,
+                    &mut value_map,
+                    pointer_type,
+                    &mut builder,
+                )?,
                 NativeInstKind::Jump(jump) => {
                     edges.jump(block, *jump.dest(), &value_map, &mut builder)?;
                 }
@@ -803,30 +671,27 @@ fn translate_function(
                 }
                 NativeInstKind::BrTable(br_table) => {
                     let scrutinee_id = *br_table.scrutinee();
-                    let scrutinee_ty = function.dfg.value_ty(scrutinee_id);
-                    let scrutinee = if scrutinee_ty == Type::I256 {
-                        resolve_value(function, scrutinee_id, &value_map, &mut builder)?
+                    let cases = br_table.table().iter().map(|&(case, _)| case);
+                    let conditions: Vec<_> = if function.dfg.value_ty(scrutinee_id) == Type::I256 {
+                        let scrutinee =
+                            resolve_i256(function, scrutinee_id, &value_map, &mut builder)?;
+                        cases
+                            .map(|case| {
+                                let case = resolve_i256(function, case, &value_map, &mut builder)?;
+                                Ok(eq(scrutinee, case, &mut builder))
+                            })
+                            .collect::<Result<_, String>>()?
                     } else {
-                        resolve_scalar_value(
+                        let scrutinee = resolve_scalar_value(
                             module,
                             function,
                             scrutinee_id,
                             &value_map,
                             pointer_type,
                             &mut builder,
-                        )?
-                    };
-                    if br_table.table().is_empty() {
-                        let default = br_table
-                            .default()
-                            .ok_or("empty br_table requires a default destination")?;
-                        edges.jump(block, default, &value_map, &mut builder)?;
-                    } else {
-                        for (idx, &(case, dest)) in br_table.table().iter().enumerate() {
-                            let cond = if scrutinee_ty == Type::I256 {
-                                let case = resolve_value(function, case, &value_map, &mut builder)?;
-                                emit_i256_icmp(IntCC::Equal, scrutinee, case, &mut builder)?
-                            } else {
+                        )?;
+                        cases
+                            .map(|case| {
                                 let case = resolve_scalar_value(
                                     module,
                                     function,
@@ -835,8 +700,19 @@ fn translate_function(
                                     pointer_type,
                                     &mut builder,
                                 )?;
-                                builder.ins().icmp(IntCC::Equal, scrutinee, case)
-                            };
+                                Ok(builder.ins().icmp(IntCC::Equal, scrutinee, case))
+                            })
+                            .collect::<Result<_, String>>()?
+                    };
+                    if br_table.table().is_empty() {
+                        let default = br_table
+                            .default()
+                            .ok_or("empty br_table requires a default destination")?;
+                        edges.jump(block, default, &value_map, &mut builder)?;
+                    } else {
+                        for (idx, (&(_, dest), cond)) in
+                            br_table.table().iter().zip(conditions).enumerate()
+                        {
                             let target = edges.target(block, dest, &value_map, &mut builder)?;
                             let next_block = builder.create_block();
                             builder
@@ -863,7 +739,9 @@ fn translate_function(
                         let val_ty = function.dfg.value_ty(*val_id);
                         let storage_ty = indirect_return_storage_type(&module.ctx, val_ty)
                             .ok_or("indirect return value has no storage type")?;
-                        if !frame.in_return_buffer(*val_id) {
+                        if val_ty == Type::I256 {
+                            store_value(function, *val_id, sret, 0, &value_map, &mut builder)?;
+                        } else if !frame.in_return_buffer(*val_id) {
                             store_indirect(
                                 function,
                                 *val_id,
@@ -904,9 +782,12 @@ fn translate_function(
 
                     let mut call_args = Vec::new();
                     let sret_slot = if let Some(storage_ty) = indirect_storage_ty {
+                        let result_ty = function.dfg.value_ty(ir_results[0]);
                         // A constref result's copy of its referent stays
                         // in a slot of its own.
-                        let addr = if storage_ty == function.dfg.value_ty(ir_results[0]) {
+                        let addr = if result_ty == Type::I256 {
+                            i256_storage.result(&mut builder)
+                        } else if storage_ty == result_ty {
                             frame.address(ir_results[0], &mut builder)?
                         } else {
                             let slot = builder
@@ -919,25 +800,32 @@ fn translate_function(
                         None
                     };
 
-                    let args: Result<Vec<_>, _> = call
-                        .args()
-                        .iter()
-                        .map(|value| {
-                            resolve_operand(
+                    let mut i256_args = 0;
+                    for &arg in call.args() {
+                        let value = if function.dfg.value_ty(arg) == Type::I256 {
+                            i256_args += 1;
+                            i256_storage.outgoing(
                                 function,
-                                *value,
+                                arg,
+                                i256_args - 1,
                                 &value_map,
-                                target_config,
                                 &mut builder,
-                            )
-                        })
-                        .collect();
-                    call_args.extend(args?);
+                            )?
+                        } else {
+                            resolve_operand(function, arg, &value_map, target_config, &mut builder)?
+                        };
+                        call_args.push(value);
+                    }
 
                     let clif_call = builder.ins().call(clif_func_ref, &call_args);
                     if let Some(sret_addr) = sret_slot {
-                        if let Some(result) = ir_results.first() {
-                            value_map.insert(*result, sret_addr);
+                        let result = ir_results[0];
+                        if function.dfg.value_ty(result) == Type::I256 {
+                            let limbs =
+                                load_limbs(sret_addr, 0, MemFlagsData::trusted(), &mut builder);
+                            value_map.insert_limbs(result, limbs);
+                        } else {
+                            value_map.insert(result, sret_addr);
                         }
                     } else {
                         let results = builder.inst_results(clif_call);
@@ -947,395 +835,171 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::Uaddo(uaddo) => {
-                    if function.dfg.value_ty(*uaddo.lhs()) == Type::I256 {
-                        let (result_val, overflow) = emit_i256_uaddo(
-                            function,
-                            *uaddo.lhs(),
-                            *uaddo.rhs(),
-                            &value_map,
-                            &mut builder,
-                        )?;
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    } else {
-                        let lhs = resolve_value(function, *uaddo.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *uaddo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = emit_scalar_overflow(
-                            lhs,
-                            rhs,
-                            function.dfg.value_ty(*uaddo.lhs()),
-                            ScalarArithmetic::Add,
-                            false,
-                            &mut builder,
-                        );
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    }
+                    let lhs = resolve_value(function, *uaddo.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *uaddo.rhs(), &value_map, &mut builder)?;
+                    let (result_val, overflow) = emit_scalar_overflow(
+                        lhs,
+                        rhs,
+                        function.dfg.value_ty(*uaddo.lhs()),
+                        ScalarArithmetic::Add,
+                        false,
+                        &mut builder,
+                    );
+                    insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
                 }
                 NativeInstKind::Saddo(saddo) => {
-                    if function.dfg.value_ty(*saddo.lhs()) == Type::I256 {
-                        let (result_val, overflow) = emit_i256_saddo(
-                            function,
-                            *saddo.lhs(),
-                            *saddo.rhs(),
-                            &value_map,
-                            &mut builder,
-                        )?;
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    } else {
-                        let lhs = resolve_value(function, *saddo.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *saddo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = emit_scalar_overflow(
-                            lhs,
-                            rhs,
-                            function.dfg.value_ty(*saddo.lhs()),
-                            ScalarArithmetic::Add,
-                            true,
-                            &mut builder,
-                        );
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    }
+                    let lhs = resolve_value(function, *saddo.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *saddo.rhs(), &value_map, &mut builder)?;
+                    let (result_val, overflow) = emit_scalar_overflow(
+                        lhs,
+                        rhs,
+                        function.dfg.value_ty(*saddo.lhs()),
+                        ScalarArithmetic::Add,
+                        true,
+                        &mut builder,
+                    );
+                    insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
                 }
                 NativeInstKind::Usubo(usubo) => {
-                    if function.dfg.value_ty(*usubo.lhs()) == Type::I256 {
-                        let (result_val, overflow) = emit_i256_usubo(
-                            function,
-                            *usubo.lhs(),
-                            *usubo.rhs(),
-                            &value_map,
-                            &mut builder,
-                        )?;
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    } else {
-                        let lhs = resolve_value(function, *usubo.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *usubo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = emit_scalar_overflow(
-                            lhs,
-                            rhs,
-                            function.dfg.value_ty(*usubo.lhs()),
-                            ScalarArithmetic::Sub,
-                            false,
-                            &mut builder,
-                        );
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    }
+                    let lhs = resolve_value(function, *usubo.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *usubo.rhs(), &value_map, &mut builder)?;
+                    let (result_val, overflow) = emit_scalar_overflow(
+                        lhs,
+                        rhs,
+                        function.dfg.value_ty(*usubo.lhs()),
+                        ScalarArithmetic::Sub,
+                        false,
+                        &mut builder,
+                    );
+                    insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
                 }
                 NativeInstKind::Ssubo(ssubo) => {
-                    if function.dfg.value_ty(*ssubo.lhs()) == Type::I256 {
-                        let (result_val, overflow) = emit_i256_ssubo(
-                            function,
-                            *ssubo.lhs(),
-                            *ssubo.rhs(),
-                            &value_map,
-                            &mut builder,
-                        )?;
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    } else {
-                        let lhs = resolve_value(function, *ssubo.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *ssubo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = emit_scalar_overflow(
-                            lhs,
-                            rhs,
-                            function.dfg.value_ty(*ssubo.lhs()),
-                            ScalarArithmetic::Sub,
-                            true,
-                            &mut builder,
-                        );
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    }
+                    let lhs = resolve_value(function, *ssubo.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *ssubo.rhs(), &value_map, &mut builder)?;
+                    let (result_val, overflow) = emit_scalar_overflow(
+                        lhs,
+                        rhs,
+                        function.dfg.value_ty(*ssubo.lhs()),
+                        ScalarArithmetic::Sub,
+                        true,
+                        &mut builder,
+                    );
+                    insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
                 }
                 NativeInstKind::Umulo(umulo) => {
-                    if function.dfg.value_ty(*umulo.lhs()) == Type::I256 {
-                        let (result_val, overflow) = emit_i256_umulo(
-                            function,
-                            *umulo.lhs(),
-                            *umulo.rhs(),
-                            &value_map,
-                            &mut builder,
-                        )?;
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    } else {
-                        let lhs = resolve_value(function, *umulo.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *umulo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = emit_scalar_overflow(
-                            lhs,
-                            rhs,
-                            function.dfg.value_ty(*umulo.lhs()),
-                            ScalarArithmetic::Mul,
-                            false,
-                            &mut builder,
-                        );
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    }
+                    let lhs = resolve_value(function, *umulo.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *umulo.rhs(), &value_map, &mut builder)?;
+                    let (result_val, overflow) = emit_scalar_overflow(
+                        lhs,
+                        rhs,
+                        function.dfg.value_ty(*umulo.lhs()),
+                        ScalarArithmetic::Mul,
+                        false,
+                        &mut builder,
+                    );
+                    insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
                 }
                 NativeInstKind::Smulo(smulo) => {
-                    if function.dfg.value_ty(*smulo.lhs()) == Type::I256 {
-                        let (result_val, overflow) = emit_i256_smulo(
-                            function,
-                            *smulo.lhs(),
-                            *smulo.rhs(),
-                            &value_map,
-                            &mut builder,
-                        )?;
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    } else {
-                        let lhs = resolve_value(function, *smulo.lhs(), &value_map, &mut builder)?;
-                        let rhs = resolve_value(function, *smulo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = emit_scalar_overflow(
-                            lhs,
-                            rhs,
-                            function.dfg.value_ty(*smulo.lhs()),
-                            ScalarArithmetic::Mul,
-                            true,
-                            &mut builder,
-                        );
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    }
+                    let lhs = resolve_value(function, *smulo.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *smulo.rhs(), &value_map, &mut builder)?;
+                    let (result_val, overflow) = emit_scalar_overflow(
+                        lhs,
+                        rhs,
+                        function.dfg.value_ty(*smulo.lhs()),
+                        ScalarArithmetic::Mul,
+                        true,
+                        &mut builder,
+                    );
+                    insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
                 }
                 NativeInstKind::Snego(snego) => {
-                    if function.dfg.value_ty(*snego.arg()) == Type::I256 {
-                        let (result_val, overflow) =
-                            emit_i256_snego(function, *snego.arg(), &value_map, &mut builder)?;
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    } else {
-                        let val = resolve_value(function, *snego.arg(), &value_map, &mut builder)?;
-                        let ty = builder.func.dfg.value_type(val);
-                        let zero = scalar_constant(ty, 0, &mut builder);
-                        let (result_val, overflow) = emit_scalar_overflow(
-                            zero,
-                            val,
-                            function.dfg.value_ty(*snego.arg()),
-                            ScalarArithmetic::Sub,
-                            true,
-                            &mut builder,
-                        );
-                        insert_clif_results(
-                            function,
-                            inst_id,
-                            [result_val, overflow],
-                            &mut value_map,
-                        );
-                    }
+                    let val = resolve_value(function, *snego.arg(), &value_map, &mut builder)?;
+                    let ty = builder.func.dfg.value_type(val);
+                    let zero = scalar_constant(ty, 0, &mut builder);
+                    let (result_val, overflow) = emit_scalar_overflow(
+                        zero,
+                        val,
+                        function.dfg.value_ty(*snego.arg()),
+                        ScalarArithmetic::Sub,
+                        true,
+                        &mut builder,
+                    );
+                    insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
                 }
                 NativeInstKind::Uaddsat(uaddsat) => {
-                    let result_val = if function.dfg.value_ty(*uaddsat.lhs()) == Type::I256 {
-                        emit_i256_saturating_binary(
-                            function,
-                            *uaddsat.lhs(),
-                            *uaddsat.rhs(),
-                            I256SaturatingOp::Uadd,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs =
-                            resolve_value(function, *uaddsat.lhs(), &value_map, &mut builder)?;
-                        let rhs =
-                            resolve_value(function, *uaddsat.rhs(), &value_map, &mut builder)?;
-                        let (raw, overflow) = builder.ins().uadd_overflow(lhs, rhs);
-                        let max =
-                            unsigned_max_value(builder.func.dfg.value_type(lhs), &mut builder);
-                        builder.ins().select(overflow, max, raw)
-                    };
+                    let lhs = resolve_value(function, *uaddsat.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *uaddsat.rhs(), &value_map, &mut builder)?;
+                    let (raw, overflow) = builder.ins().uadd_overflow(lhs, rhs);
+                    let max = unsigned_max_value(builder.func.dfg.value_type(lhs), &mut builder);
+                    let result_val = builder.ins().select(overflow, max, raw);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Saddsat(saddsat) => {
-                    let result_val = if function.dfg.value_ty(*saddsat.lhs()) == Type::I256 {
-                        emit_i256_saturating_binary(
-                            function,
-                            *saddsat.lhs(),
-                            *saddsat.rhs(),
-                            I256SaturatingOp::Sadd,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs =
-                            resolve_value(function, *saddsat.lhs(), &value_map, &mut builder)?;
-                        let rhs =
-                            resolve_value(function, *saddsat.rhs(), &value_map, &mut builder)?;
-                        let (raw, overflow) = builder.ins().sadd_overflow(lhs, rhs);
-                        let ty = builder.func.dfg.value_type(lhs);
-                        let zero = scalar_constant(ty, 0, &mut builder);
-                        let lhs_neg = builder.ins().icmp(IntCC::SignedLessThan, lhs, zero);
-                        let min = signed_min_value(ty, &mut builder);
-                        let max = signed_max_value(ty, &mut builder);
-                        let sat = builder.ins().select(lhs_neg, min, max);
-                        builder.ins().select(overflow, sat, raw)
-                    };
+                    let lhs = resolve_value(function, *saddsat.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *saddsat.rhs(), &value_map, &mut builder)?;
+                    let (raw, overflow) = builder.ins().sadd_overflow(lhs, rhs);
+                    let ty = builder.func.dfg.value_type(lhs);
+                    let zero = scalar_constant(ty, 0, &mut builder);
+                    let lhs_neg = builder.ins().icmp(IntCC::SignedLessThan, lhs, zero);
+                    let min = signed_min_value(ty, &mut builder);
+                    let max = signed_max_value(ty, &mut builder);
+                    let sat = builder.ins().select(lhs_neg, min, max);
+                    let result_val = builder.ins().select(overflow, sat, raw);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Usubsat(usubsat) => {
-                    let result_val = if function.dfg.value_ty(*usubsat.lhs()) == Type::I256 {
-                        emit_i256_saturating_binary(
-                            function,
-                            *usubsat.lhs(),
-                            *usubsat.rhs(),
-                            I256SaturatingOp::Usub,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs =
-                            resolve_value(function, *usubsat.lhs(), &value_map, &mut builder)?;
-                        let rhs =
-                            resolve_value(function, *usubsat.rhs(), &value_map, &mut builder)?;
-                        let (raw, overflow) = builder.ins().usub_overflow(lhs, rhs);
-                        let ty = builder.func.dfg.value_type(lhs);
-                        let zero = scalar_constant(ty, 0, &mut builder);
-                        builder.ins().select(overflow, zero, raw)
-                    };
+                    let lhs = resolve_value(function, *usubsat.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *usubsat.rhs(), &value_map, &mut builder)?;
+                    let (raw, overflow) = builder.ins().usub_overflow(lhs, rhs);
+                    let ty = builder.func.dfg.value_type(lhs);
+                    let zero = scalar_constant(ty, 0, &mut builder);
+                    let result_val = builder.ins().select(overflow, zero, raw);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Ssubsat(ssubsat) => {
-                    let result_val = if function.dfg.value_ty(*ssubsat.lhs()) == Type::I256 {
-                        emit_i256_saturating_binary(
-                            function,
-                            *ssubsat.lhs(),
-                            *ssubsat.rhs(),
-                            I256SaturatingOp::Ssub,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs =
-                            resolve_value(function, *ssubsat.lhs(), &value_map, &mut builder)?;
-                        let rhs =
-                            resolve_value(function, *ssubsat.rhs(), &value_map, &mut builder)?;
-                        let (raw, overflow) = builder.ins().ssub_overflow(lhs, rhs);
-                        let ty = builder.func.dfg.value_type(lhs);
-                        let zero = scalar_constant(ty, 0, &mut builder);
-                        let lhs_neg = builder.ins().icmp(IntCC::SignedLessThan, lhs, zero);
-                        let min = signed_min_value(ty, &mut builder);
-                        let max = signed_max_value(ty, &mut builder);
-                        let sat = builder.ins().select(lhs_neg, min, max);
-                        builder.ins().select(overflow, sat, raw)
-                    };
+                    let lhs = resolve_value(function, *ssubsat.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *ssubsat.rhs(), &value_map, &mut builder)?;
+                    let (raw, overflow) = builder.ins().ssub_overflow(lhs, rhs);
+                    let ty = builder.func.dfg.value_type(lhs);
+                    let zero = scalar_constant(ty, 0, &mut builder);
+                    let lhs_neg = builder.ins().icmp(IntCC::SignedLessThan, lhs, zero);
+                    let min = signed_min_value(ty, &mut builder);
+                    let max = signed_max_value(ty, &mut builder);
+                    let sat = builder.ins().select(lhs_neg, min, max);
+                    let result_val = builder.ins().select(overflow, sat, raw);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Umulsat(umulsat) => {
-                    let result_val = if function.dfg.value_ty(*umulsat.lhs()) == Type::I256 {
-                        emit_i256_saturating_binary(
-                            function,
-                            *umulsat.lhs(),
-                            *umulsat.rhs(),
-                            I256SaturatingOp::Umul,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs =
-                            resolve_value(function, *umulsat.lhs(), &value_map, &mut builder)?;
-                        let rhs =
-                            resolve_value(function, *umulsat.rhs(), &value_map, &mut builder)?;
-                        let (raw, overflow) =
-                            emit_scalar_mul_overflow(lhs, rhs, false, &mut builder);
-                        let max =
-                            unsigned_max_value(builder.func.dfg.value_type(lhs), &mut builder);
-                        builder.ins().select(overflow, max, raw)
-                    };
+                    let lhs = resolve_value(function, *umulsat.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *umulsat.rhs(), &value_map, &mut builder)?;
+                    let (raw, overflow) = emit_scalar_mul_overflow(lhs, rhs, false, &mut builder);
+                    let max = unsigned_max_value(builder.func.dfg.value_type(lhs), &mut builder);
+                    let result_val = builder.ins().select(overflow, max, raw);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
                 }
                 NativeInstKind::Smulsat(smulsat) => {
-                    let result_val = if function.dfg.value_ty(*smulsat.lhs()) == Type::I256 {
-                        emit_i256_saturating_binary(
-                            function,
-                            *smulsat.lhs(),
-                            *smulsat.rhs(),
-                            I256SaturatingOp::Smul,
-                            &value_map,
-                            &mut builder,
-                        )?
-                    } else {
-                        let lhs =
-                            resolve_value(function, *smulsat.lhs(), &value_map, &mut builder)?;
-                        let rhs =
-                            resolve_value(function, *smulsat.rhs(), &value_map, &mut builder)?;
-                        let (raw, overflow) =
-                            emit_scalar_mul_overflow(lhs, rhs, true, &mut builder);
-                        let ty = builder.func.dfg.value_type(lhs);
-                        let zero = scalar_constant(ty, 0, &mut builder);
-                        let lhs_neg = builder.ins().icmp(IntCC::SignedLessThan, lhs, zero);
-                        let rhs_neg = builder.ins().icmp(IntCC::SignedLessThan, rhs, zero);
-                        let same_sign = builder.ins().icmp(IntCC::Equal, lhs_neg, rhs_neg);
-                        let min = signed_min_value(ty, &mut builder);
-                        let max = signed_max_value(ty, &mut builder);
-                        let sat = builder.ins().select(same_sign, max, min);
-                        builder.ins().select(overflow, sat, raw)
-                    };
+                    let lhs = resolve_value(function, *smulsat.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *smulsat.rhs(), &value_map, &mut builder)?;
+                    let (raw, overflow) = emit_scalar_mul_overflow(lhs, rhs, true, &mut builder);
+                    let ty = builder.func.dfg.value_type(lhs);
+                    let zero = scalar_constant(ty, 0, &mut builder);
+                    let lhs_neg = builder.ins().icmp(IntCC::SignedLessThan, lhs, zero);
+                    let rhs_neg = builder.ins().icmp(IntCC::SignedLessThan, rhs, zero);
+                    let same_sign = builder.ins().icmp(IntCC::Equal, lhs_neg, rhs_neg);
+                    let min = signed_min_value(ty, &mut builder);
+                    let max = signed_max_value(ty, &mut builder);
+                    let sat = builder.ins().select(same_sign, max, min);
+                    let result_val = builder.ins().select(overflow, sat, raw);
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
@@ -1358,9 +1022,15 @@ fn translate_function(
                             );
                             value_map.insert(result, result_addr);
                         } else {
-                            let clif_ty = sonatina_type_to_clif_or_err(result_ty, pointer_type)?;
-                            let loaded = builder.ins().load(clif_ty, MemFlagsData::new(), addr, 0);
-                            value_map.insert(result, loaded);
+                            load_value(
+                                result,
+                                result_ty,
+                                addr,
+                                0,
+                                &mut value_map,
+                                pointer_type,
+                                &mut builder,
+                            )?;
                         }
                     }
                 }
@@ -1386,12 +1056,15 @@ fn translate_function(
                             let addr = builder.ins().iadd_imm_s(base, offset as i64);
                             value_map.insert(result, addr);
                         } else {
-                            let clif_ty = sonatina_type_to_clif_or_err(result_ty, pointer_type)?;
-                            let loaded =
-                                builder
-                                    .ins()
-                                    .load(clif_ty, MemFlagsData::new(), base, offset);
-                            value_map.insert(result, loaded);
+                            load_value(
+                                result,
+                                result_ty,
+                                base,
+                                offset,
+                                &mut value_map,
+                                pointer_type,
+                                &mut builder,
+                            )?;
                         }
                     }
                 }
@@ -1468,11 +1141,14 @@ fn translate_function(
                             &mut builder,
                         )?;
                     } else {
-                        let value =
-                            resolve_value(function, *insert.value(), &value_map, &mut builder)?;
-                        builder
-                            .ins()
-                            .store(MemFlagsData::new(), value, result_addr, offset);
+                        store_value(
+                            function,
+                            *insert.value(),
+                            result_addr,
+                            offset,
+                            &value_map,
+                            &mut builder,
+                        )?;
                     }
                     value_map.insert(result, result_addr);
                 }
@@ -1525,9 +1201,7 @@ fn translate_function(
                             &mut builder,
                         )?;
                     } else {
-                        let val =
-                            resolve_value(function, *mstore.value(), &value_map, &mut builder)?;
-                        builder.ins().store(MemFlagsData::new(), val, addr, 0);
+                        store_value(function, *mstore.value(), addr, 0, &value_map, &mut builder)?;
                     }
                 }
                 NativeInstKind::Memzero(memzero) => {
@@ -1571,9 +1245,15 @@ fn translate_function(
                             );
                             value_map.insert(result, result_addr);
                         } else {
-                            let clif_ty = sonatina_type_to_clif_or_err(result_ty, pointer_type)?;
-                            let loaded = builder.ins().load(clif_ty, MemFlagsData::new(), addr, 0);
-                            value_map.insert(result, loaded);
+                            load_value(
+                                result,
+                                result_ty,
+                                addr,
+                                0,
+                                &mut value_map,
+                                pointer_type,
+                                &mut builder,
+                            )?;
                         }
                     }
                 }
@@ -1601,9 +1281,14 @@ fn translate_function(
                             &mut builder,
                         )?;
                     } else {
-                        let val =
-                            resolve_value(function, *obj_store.value(), &value_map, &mut builder)?;
-                        builder.ins().store(MemFlagsData::new(), val, dest, 0);
+                        store_value(
+                            function,
+                            *obj_store.value(),
+                            dest,
+                            0,
+                            &value_map,
+                            &mut builder,
+                        )?;
                     }
                 }
                 NativeInstKind::ObjAlloc(obj_alloc) => {
@@ -1709,9 +1394,15 @@ fn translate_function(
                         if uses_indirect_value_representation(&module.ctx, result_ty) {
                             value_map.insert(result, addr);
                         } else {
-                            let clif_ty = sonatina_type_to_clif_or_err(result_ty, pointer_type)?;
-                            let loaded = builder.ins().load(clif_ty, MemFlagsData::new(), addr, 0);
-                            value_map.insert(result, loaded);
+                            load_value(
+                                result,
+                                result_ty,
+                                addr,
+                                0,
+                                &mut value_map,
+                                pointer_type,
+                                &mut builder,
+                            )?;
                         }
                     }
                 }
@@ -1757,14 +1448,16 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::MemAllocDynamic(allocate) => {
-                    let size = resolve_value(function, *allocate.size(), &value_map, &mut builder)?;
                     let size = if function.dfg.value_ty(*allocate.size()) == Type::I256 {
-                        let [low, high, upper, top] = load_i256_limbs(size, &mut builder);
+                        let [low, high, upper, top] =
+                            resolve_i256(function, *allocate.size(), &value_map, &mut builder)?;
                         let high = builder.ins().bor(high, upper);
                         let high = builder.ins().bor(high, top);
                         builder.ins().trapnz(high, TrapCode::user(2).unwrap());
                         low
                     } else {
+                        let size =
+                            resolve_value(function, *allocate.size(), &value_map, &mut builder)?;
                         if builder.func.dfg.value_type(size).bits() > pointer_type.bits() {
                             let high = builder
                                 .ins()
@@ -1783,9 +1476,11 @@ fn translate_function(
             // Canonicalize every producer, including loads, casts, and call
             // results. Phi inputs are already canonical on their incoming edges.
             for &result in function.dfg.inst_results(inst_id) {
-                let value = value_map[&result];
-                let value = normalize_scalar(value, function.dfg.value_ty(result), &mut builder);
-                value_map.insert(result, value);
+                let ty = function.dfg.value_ty(result);
+                if ty == Type::I1 {
+                    let value = normalize_scalar(value_map[&result], ty, &mut builder);
+                    value_map.insert(result, value);
+                }
             }
         }
     }
@@ -1855,11 +1550,70 @@ fn heap_allocate(
     Ok(address)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn translate_div_rem(
+    kind: DivRemKind,
+    lhs: ValueId,
+    rhs: ValueId,
+    inst_id: InstId,
+    function: &Function,
+    value_map: &mut ValueMap,
+    builder: &mut FunctionBuilder,
+) -> Result<(), String> {
+    let result = function
+        .dfg
+        .inst_result(inst_id)
+        .ok_or("division has no result")?;
+    let ty = function.dfg.value_ty(lhs);
+    if ty == Type::I256 {
+        let lhs = resolve_i256(function, lhs, value_map, builder)?;
+        let rhs = resolve_i256(function, rhs, value_map, builder)?;
+        value_map.insert_limbs(result, div_rem_limbs(lhs, rhs, kind, builder));
+    } else {
+        let lhs = resolve_value(function, lhs, value_map, builder)?;
+        let rhs = resolve_value(function, rhs, value_map, builder)?;
+        value_map.insert(result, emit_scalar_div_rem(lhs, rhs, ty, kind, builder));
+    }
+    Ok(())
+}
+
+/// Extends `from` to `to`, which may be i256.
+#[allow(clippy::too_many_arguments)]
+fn translate_extend(
+    from: ValueId,
+    to: Type,
+    signed: bool,
+    inst_id: InstId,
+    function: &Function,
+    value_map: &mut ValueMap,
+    pointer_type: clif::Type,
+    builder: &mut FunctionBuilder,
+) -> Result<(), String> {
+    let result = function
+        .dfg
+        .inst_result(inst_id)
+        .ok_or("extension has no result")?;
+    let from_ty = function.dfg.value_ty(from);
+    let value = resolve_value(function, from, value_map, builder)?;
+    if to == Type::I256 {
+        value_map.insert_limbs(result, extend_to_limbs(value, from_ty, signed, builder));
+    } else {
+        let to_ty = sonatina_type_to_clif_or_err(to, pointer_type)?;
+        let extended = if from_ty == Type::I1 {
+            bool_to_int_value(value, to_ty, signed, builder)
+        } else {
+            resize_int_value(value, to_ty, signed, builder)
+        };
+        value_map.insert(result, extended);
+    }
+    Ok(())
+}
+
 fn resolve_scalar_value(
     module: &Module,
     function: &Function,
     value_id: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
+    value_map: &ValueMap,
     pointer_type: clif::Type,
     builder: &mut FunctionBuilder,
 ) -> Result<clif::Value, String> {
@@ -1878,15 +1632,14 @@ fn resolve_scalar_value(
 fn resolve_pointer_sized_value(
     function: &Function,
     value_id: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
+    value_map: &ValueMap,
     pointer_type: clif::Type,
     builder: &mut FunctionBuilder,
 ) -> Result<clif::Value, String> {
-    let val = resolve_value(function, value_id, value_map, builder)?;
     let val = if function.dfg.value_ty(value_id) == Type::I256 {
-        load_i256_limb(val, 0, builder)
+        resolve_i256(function, value_id, value_map, builder)?[0]
     } else {
-        val
+        resolve_value(function, value_id, value_map, builder)?
     };
     Ok(resize_int_value(val, pointer_type, false, builder))
 }
@@ -1896,41 +1649,28 @@ fn translate_icmp(
     cc: IntCC,
     lhs: ValueId,
     rhs: ValueId,
-    inst_id: sonatina_ir::inst::InstId,
+    inst_id: InstId,
     module: &Module,
     function: &Function,
-    value_map: &mut HashMap<ValueId, clif::Value>,
+    value_map: &mut ValueMap,
     pointer_type: clif::Type,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
-    let lhs_ty = function.dfg.value_ty(lhs);
-    let rhs_ty = function.dfg.value_ty(rhs);
-    let result_val = if lhs_ty == Type::I256 || rhs_ty == Type::I256 {
-        if lhs_ty != Type::I256 || rhs_ty != Type::I256 {
-            return Err(format!(
-                "cannot compare mismatched i256 and scalar values: {lhs_ty:?}, {rhs_ty:?}"
-            ));
-        }
-        let lhs_val = resolve_value(function, lhs, value_map, builder)?;
-        let rhs_val = resolve_value(function, rhs, value_map, builder)?;
-        emit_i256_icmp(cc, lhs_val, rhs_val, builder)?
-    } else {
-        let mut lhs_val =
-            resolve_scalar_value(module, function, lhs, value_map, pointer_type, builder)?;
-        let mut rhs_val =
-            resolve_scalar_value(module, function, rhs, value_map, pointer_type, builder)?;
-        if matches!(
-            cc,
-            IntCC::SignedLessThan
-                | IntCC::SignedGreaterThan
-                | IntCC::SignedLessThanOrEqual
-                | IntCC::SignedGreaterThanOrEqual
-        ) {
-            lhs_val = signed_scalar(lhs_val, lhs_ty, builder);
-            rhs_val = signed_scalar(rhs_val, rhs_ty, builder);
-        }
-        builder.ins().icmp(cc, lhs_val, rhs_val)
-    };
+    let mut lhs_val =
+        resolve_scalar_value(module, function, lhs, value_map, pointer_type, builder)?;
+    let mut rhs_val =
+        resolve_scalar_value(module, function, rhs, value_map, pointer_type, builder)?;
+    if matches!(
+        cc,
+        IntCC::SignedLessThan
+            | IntCC::SignedGreaterThan
+            | IntCC::SignedLessThanOrEqual
+            | IntCC::SignedGreaterThanOrEqual
+    ) {
+        lhs_val = signed_scalar(lhs_val, function.dfg.value_ty(lhs), builder);
+        rhs_val = signed_scalar(rhs_val, function.dfg.value_ty(rhs), builder);
+    }
+    let result_val = builder.ins().icmp(cc, lhs_val, rhs_val);
     if let Some(result) = function.dfg.inst_result(inst_id) {
         value_map.insert(result, result_val);
     }

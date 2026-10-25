@@ -2,7 +2,7 @@ use cranelift_codegen::ir::{self as clif, InstBuilder, TrapCode, condcodes::IntC
 use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::Type;
 
-use super::{mul_limbs_full, unsigned_div_rem_i256_limbs};
+use super::{mul_limbs, unsigned_div_rem_limbs};
 
 /// Sonatina's one-bit values use an I8 register, but only bit zero is data.
 pub(super) fn normalize_scalar(
@@ -219,7 +219,7 @@ pub(super) fn emit_scalar_div_rem(
     let (lhs_low, lhs_high) = builder.ins().isplit(numerator);
     let (rhs_low, rhs_high) = builder.ins().isplit(denominator);
     let zero_limb = builder.ins().iconst(clif::types::I64, 0);
-    let (quotient, modulus) = unsigned_div_rem_i256_limbs(
+    let (quotient, modulus) = unsigned_div_rem_limbs(
         [lhs_low, lhs_high, zero_limb, zero_limb],
         [rhs_low, rhs_high, zero_limb, zero_limb],
         128,
@@ -272,7 +272,7 @@ pub(super) fn emit_scalar_mul_overflow(
     let (lhs_low, lhs_high) = builder.ins().isplit(lhs);
     let (rhs_low, rhs_high) = builder.ins().isplit(rhs);
     let [low, high, upper_low, upper_high] =
-        mul_limbs_full(&[lhs_low, lhs_high], &[rhs_low, rhs_high], builder);
+        mul_limbs::<4>(&[lhs_low, lhs_high], &[rhs_low, rhs_high], builder);
     let raw = builder.ins().iconcat(low, high);
     let upper = builder.ins().bor(upper_low, upper_high);
     let mut overflow = builder.ins().icmp_imm_s(IntCC::NotEqual, upper, 0);
