@@ -3,12 +3,18 @@ use cranelift_module::Module as ClifModule;
 use sonatina_ir::{Signature, Type, module::ModuleCtx, types::CompoundType};
 use sonatina_triple::TargetTriple;
 
+/// Whether translated values of `ty` are addresses of their storage.
+/// i256 values are four limbs instead, though passed by reference.
 pub(super) fn uses_indirect_value_representation(ctx: &ModuleCtx, ty: Type) -> bool {
-    ty == Type::I256
-        || matches!(
-            ty.resolve_compound(ctx),
-            Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_))
-        )
+    matches!(
+        ty.resolve_compound(ctx),
+        Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_))
+    )
+}
+
+/// Whether values of `ty` are passed and returned through memory.
+fn passes_by_reference(ctx: &ModuleCtx, ty: Type) -> bool {
+    ty == Type::I256 || uses_indirect_value_representation(ctx, ty)
 }
 
 pub(super) fn returns_indirect(ctx: &ModuleCtx, sig: &Signature) -> bool {
@@ -16,7 +22,7 @@ pub(super) fn returns_indirect(ctx: &ModuleCtx, sig: &Signature) -> bool {
 }
 
 pub(super) fn indirect_return_storage_type(ctx: &ModuleCtx, ty: Type) -> Option<Type> {
-    if uses_indirect_value_representation(ctx, ty) {
+    if passes_by_reference(ctx, ty) {
         Some(ty)
     } else if let Some(CompoundType::ConstRef(inner)) = ty.resolve_compound(ctx) {
         Some(inner)
@@ -103,7 +109,7 @@ pub(super) fn sonatina_type_to_clif(ty: Type, pointer_type: clif::Type) -> Optio
         Type::I32 => Some(clif::types::I32),
         Type::I64 => Some(clif::types::I64),
         Type::I128 => Some(clif::types::I128),
-        // I256 and compound values are represented by native pointers to
+        // I256 and compound values are passed as native pointers to
         // caller- or stack-owned storage.
         Type::I256 | Type::Compound(_) => Some(pointer_type),
         _ => None,

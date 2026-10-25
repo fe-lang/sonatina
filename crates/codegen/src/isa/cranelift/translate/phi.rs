@@ -6,19 +6,21 @@ use cranelift_codegen::{
 };
 use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{
-    BlockId, Function, ValueId,
+    BlockId, Function, Type, ValueId,
     inst::{inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
 };
 
 use super::{
-    aggregate_elem_offset, constant_value_index, copy_bytes, frame::FrameSlots, resolve_value,
-    stack_slot_data, store_indirect, uses_indirect_value_representation, value_storage_size,
+    ValueMap, aggregate_elem_offset, constant_value_index, copy_bytes, frame::FrameSlots,
+    resolve_i256, resolve_value, stack_slot_data, store_indirect,
+    uses_indirect_value_representation, value_storage_size,
 };
 
-/// Lowers CFG edges. Scalar phis receive Cranelift block arguments. Each
-/// aggregate phi owns a slot that its incoming edges copy into, so a phi
-/// costs one copy per edge rather than one block parameter per word.
+/// Lowers CFG edges. Scalar phis receive Cranelift block arguments, and an
+/// i256 phi four, one per limb. Each aggregate phi owns a slot that its
+/// incoming edges copy into, so a phi costs one copy per edge rather than
+/// one block parameter per word.
 pub(super) struct Edges<'a> {
     pub function: &'a Function,
     pub block_map: &'a HashMap<BlockId, clif::Block>,
@@ -40,7 +42,7 @@ impl Edges<'_> {
         &self,
         pred: BlockId,
         succ: BlockId,
-        value_map: &HashMap<ValueId, clif::Value>,
+        value_map: &ValueMap,
         builder: &mut FunctionBuilder,
     ) -> Result<(), String> {
         self.copy_aggregate_inputs(pred, succ, value_map, builder)?;
@@ -53,7 +55,7 @@ impl Edges<'_> {
         &self,
         pred: BlockId,
         succ: BlockId,
-        value_map: &HashMap<ValueId, clif::Value>,
+        value_map: &ValueMap,
         builder: &mut FunctionBuilder,
     ) -> Result<EdgeTarget, String> {
         if self.aggregate_phis(pred, succ).next().is_some() {
@@ -75,7 +77,7 @@ impl Edges<'_> {
         target: EdgeTarget,
         pred: BlockId,
         succ: BlockId,
-        value_map: &HashMap<ValueId, clif::Value>,
+        value_map: &ValueMap,
         builder: &mut FunctionBuilder,
     ) -> Result<(), String> {
         if target.copies {
@@ -118,19 +120,26 @@ impl Edges<'_> {
         uses_indirect_value_representation(self.function.ctx(), self.function.dfg.value_ty(value))
     }
 
+    /// The block arguments of the edge's non-aggregate phis: four limbs
+    /// for an i256 phi, otherwise one value.
     fn scalar_args(
         &self,
         pred: BlockId,
         succ: BlockId,
-        value_map: &HashMap<ValueId, clif::Value>,
+        value_map: &ValueMap,
         builder: &mut FunctionBuilder,
     ) -> Result<Vec<BlockArg>, String> {
-        self.phi_inputs(pred, succ)
-            .filter(|&(phi, _)| !self.is_aggregate(phi))
-            .map(|(_, input)| {
-                resolve_value(self.function, input, value_map, builder).map(BlockArg::Value)
-            })
-            .collect()
+        let mut args = Vec::new();
+        for (phi, input) in self.phi_inputs(pred, succ) {
+            if self.function.dfg.value_ty(phi) == Type::I256 {
+                let limbs = resolve_i256(self.function, input, value_map, builder)?;
+                args.extend(limbs.map(BlockArg::Value));
+            } else if !self.is_aggregate(phi) {
+                let value = resolve_value(self.function, input, value_map, builder)?;
+                args.push(BlockArg::Value(value));
+            }
+        }
+        Ok(args)
     }
 
     /// Runs the edge's aggregate phi copies as one parallel copy. An input
@@ -142,7 +151,7 @@ impl Edges<'_> {
         &self,
         pred: BlockId,
         succ: BlockId,
-        value_map: &HashMap<ValueId, clif::Value>,
+        value_map: &ValueMap,
         builder: &mut FunctionBuilder,
     ) -> Result<(), String> {
         struct Copy {

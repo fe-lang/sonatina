@@ -1,138 +1,256 @@
+//! i256 values as four i64 limbs, least significant first. Limbs live in
+//! Cranelift SSA values; only memory and call boundaries store them.
+
 use std::{cmp::Ordering, collections::HashMap};
 
 use cranelift_codegen::ir::{
-    self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, condcodes::IntCC,
+    self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
+    condcodes::IntCC,
     instructions::BlockArg,
+    types::{I64, I128},
 };
 use cranelift_frontend::FunctionBuilder;
-use sonatina_ir::{Function, Immediate, Type, Value, ValueId, module::ModuleCtx};
-
-use super::{
-    DivRemKind, memory::stack_slot_data, scalar_constant, sonatina_scalar_type_to_clif_or_err,
-    sonatina_type_to_clif_or_err, uses_indirect_value_representation,
+use sonatina_ir::{
+    Function, Type, U256, ValueId,
+    inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
+    isa::native::inst_set as native_inst_set,
 };
 
-const I256_LIMBS: usize = 4;
-const I256_PRODUCT_LIMBS: usize = I256_LIMBS * 2;
-const I256_BITS: i64 = 256;
-const I256_LIMB_BITS: i64 = 64;
+use super::{DivRemKind, ValueMap, resolve_i256, resolve_value, scalar_constant};
+
+pub(super) const LIMBS: usize = 4;
+pub(super) type Limbs = [clif::Value; LIMBS];
+
+const LIMB_BITS: u32 = 64;
 const I256_ALIGN_SHIFT: u8 = 4;
 
-pub(super) fn create_i256_slot(builder: &mut FunctionBuilder) -> clif::Value {
-    let slot = builder.create_sized_stack_slot(StackSlotData::new(
+/// Memory that carries i256 values across calls. An argument is stored
+/// right before its call and a result loaded right after it, so each role
+/// needs only one slot per function.
+#[derive(Default)]
+pub(super) struct I256Storage {
+    /// The caller's storage for each i256 argument, unchanged for the call.
+    incoming: HashMap<ValueId, clif::Value>,
+    outgoing: Vec<clif::StackSlot>,
+    result: Option<clif::StackSlot>,
+}
+
+impl I256Storage {
+    /// Records the caller's storage of argument `value` and loads its limbs.
+    pub fn incoming(
+        &mut self,
+        value: ValueId,
+        address: clif::Value,
+        builder: &mut FunctionBuilder,
+    ) -> Limbs {
+        self.incoming.insert(value, address);
+        load_limbs(address, 0, MemFlagsData::new().with_notrap(), builder)
+    }
+
+    /// The address of storage holding `value` for the `index`th i256
+    /// argument of a call.
+    pub fn outgoing(
+        &mut self,
+        function: &Function,
+        value: ValueId,
+        index: usize,
+        value_map: &ValueMap,
+        builder: &mut FunctionBuilder,
+    ) -> Result<clif::Value, String> {
+        if let Some(&address) = self.incoming.get(&value) {
+            return Ok(address);
+        }
+        let limbs = resolve_i256(function, value, value_map, builder)?;
+        while self.outgoing.len() <= index {
+            let slot = i256_slot(builder);
+            self.outgoing.push(slot);
+        }
+        let address = builder.ins().stack_addr(I64, self.outgoing[index], 0);
+        store_limbs(limbs, address, 0, MemFlagsData::trusted(), builder);
+        Ok(address)
+    }
+
+    /// The address of the return buffer for an i256 call result.
+    pub fn result(&mut self, builder: &mut FunctionBuilder) -> clif::Value {
+        let slot = *self.result.get_or_insert_with(|| i256_slot(builder));
+        builder.ins().stack_addr(I64, slot, 0)
+    }
+}
+
+fn i256_slot(builder: &mut FunctionBuilder) -> clif::StackSlot {
+    builder.create_sized_stack_slot(StackSlotData::new(
         StackSlotKind::ExplicitSlot,
         32,
         I256_ALIGN_SHIFT,
-    ));
-    builder.ins().stack_addr(clif::types::I64, slot, 0)
+    ))
 }
 
-pub(super) fn create_stack_slot_for_type(
-    ty: Type,
-    ctx: &ModuleCtx,
+pub(super) fn constant_limbs(value: U256, builder: &mut FunctionBuilder) -> Limbs {
+    value.0.map(|limb| builder.ins().iconst(I64, limb as i64))
+}
+
+pub(super) fn load_limbs(
+    address: clif::Value,
+    offset: i32,
+    flags: MemFlagsData,
     builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let slot = builder.create_sized_stack_slot(stack_slot_data(ty, ctx)?);
-    Ok(builder.ins().stack_addr(clif::types::I64, slot, 0))
+) -> Limbs {
+    std::array::from_fn(|limb| {
+        builder
+            .ins()
+            .load(I64, flags, address, offset + 8 * limb as i32)
+    })
 }
 
-pub(super) fn load_i256_limb(
-    addr: clif::Value,
-    limb: usize,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    builder.ins().load(
-        clif::types::I64,
-        MemFlagsData::new(),
-        addr,
-        (limb * 8) as i32,
-    )
-}
-
-pub(super) fn store_i256_limb(
-    addr: clif::Value,
-    limb: usize,
-    value: clif::Value,
+pub(super) fn store_limbs(
+    limbs: Limbs,
+    address: clif::Value,
+    offset: i32,
+    flags: MemFlagsData,
     builder: &mut FunctionBuilder,
 ) {
-    builder
-        .ins()
-        .store(MemFlagsData::new(), value, addr, (limb * 8) as i32);
+    for (limb, value) in limbs.into_iter().enumerate() {
+        builder
+            .ins()
+            .store(flags, value, address, offset + 8 * limb as i32);
+    }
 }
 
-pub(super) fn materialize_scalar_as_i256(
+/// Extends a scalar of Sonatina type `source_ty` to i256.
+pub(super) fn extend_to_limbs(
     value: clif::Value,
     source_ty: Type,
     signed: bool,
     builder: &mut FunctionBuilder,
-) -> clif::Value {
-    // Extend to two scalar words before materializing the four-word value.
-    // Reducing directly to I64 would discard the upper half of an I128 input.
-    let wide = if source_ty == Type::I1 {
-        bool_to_int_value(value, clif::types::I128, signed, builder)
-    } else {
-        resize_int_value(value, clif::types::I128, signed, builder)
+) -> Limbs {
+    let fill = |high, builder: &mut FunctionBuilder| {
+        if signed {
+            builder.ins().sshr_imm_s(high, 63)
+        } else {
+            builder.ins().iconst(I64, 0)
+        }
     };
-    let (low, high) = builder.ins().isplit(wide);
-    let fill = if signed {
-        builder.ins().sshr_imm_s(high, 63)
-    } else {
-        builder.ins().iconst(clif::types::I64, 0)
-    };
-    store_i256_limbs([low, high, fill, fill], builder)
-}
-
-pub(super) fn load_i256_limbs(
-    value: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> [clif::Value; I256_LIMBS] {
-    [
-        load_i256_limb(value, 0, builder),
-        load_i256_limb(value, 1, builder),
-        load_i256_limb(value, 2, builder),
-        load_i256_limb(value, 3, builder),
-    ]
-}
-
-pub(super) fn store_i256_limbs(
-    limbs: [clif::Value; I256_LIMBS],
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let result = create_i256_slot(builder);
-    for (limb_idx, limb) in limbs.into_iter().enumerate() {
-        store_i256_limb(result, limb_idx, limb, builder);
+    if builder.func.dfg.value_type(value) == I128 {
+        let (low, high) = builder.ins().isplit(value);
+        let fill = fill(high, builder);
+        return [low, high, fill, fill];
     }
-    result
+    let low = if source_ty == Type::I1 {
+        bool_to_int_value(value, I64, signed, builder)
+    } else {
+        resize_int_value(value, I64, signed, builder)
+    };
+    let fill = fill(low, builder);
+    [low, fill, fill, fill]
 }
 
-pub(super) fn zero_i256_limbs(builder: &mut FunctionBuilder) -> [clif::Value; I256_LIMBS] {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    [zero; I256_LIMBS]
-}
-
-pub(super) fn unsigned_max_i256_limbs(builder: &mut FunctionBuilder) -> [clif::Value; I256_LIMBS] {
-    let all_ones = builder.ins().iconst(clif::types::I64, -1);
-    [all_ones; I256_LIMBS]
-}
-
-pub(super) fn signed_min_i256_limbs(builder: &mut FunctionBuilder) -> [clif::Value; I256_LIMBS] {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let high = builder.ins().iconst(clif::types::I64, i64::MIN);
-    [zero, zero, zero, high]
-}
-
-pub(super) fn signed_max_i256_limbs(builder: &mut FunctionBuilder) -> [clif::Value; I256_LIMBS] {
-    let all_ones = builder.ins().iconst(clif::types::I64, -1);
-    let high = builder.ins().iconst(clif::types::I64, i64::MAX);
-    [all_ones, all_ones, all_ones, high]
-}
-
-pub(super) fn select_i256_limbs(
-    condition: clif::Value,
-    if_true: [clif::Value; I256_LIMBS],
-    if_false: [clif::Value; I256_LIMBS],
+/// The low `to_ty` bits of an i256 value.
+pub(super) fn truncate_limbs(
+    limbs: Limbs,
+    to_ty: clif::Type,
     builder: &mut FunctionBuilder,
-) -> [clif::Value; I256_LIMBS] {
+) -> clif::Value {
+    match to_ty.bits() {
+        128 => builder.ins().iconcat(limbs[0], limbs[1]),
+        64 => limbs[0],
+        _ => builder.ins().ireduce(to_ty, limbs[0]),
+    }
+}
+
+/// The low and high 128-bit halves of an i256 value.
+fn halves(limbs: Limbs, builder: &mut FunctionBuilder) -> (clif::Value, clif::Value) {
+    (
+        builder.ins().iconcat(limbs[0], limbs[1]),
+        builder.ins().iconcat(limbs[2], limbs[3]),
+    )
+}
+
+fn from_halves(low: clif::Value, high: clif::Value, builder: &mut FunctionBuilder) -> Limbs {
+    let (limb0, limb1) = builder.ins().isplit(low);
+    let (limb2, limb3) = builder.ins().isplit(high);
+    [limb0, limb1, limb2, limb3]
+}
+
+fn carry_to_i128(carry: clif::Value, builder: &mut FunctionBuilder) -> clif::Value {
+    let carry = builder.ins().uextend(I64, carry);
+    builder.ins().uextend(I128, carry)
+}
+
+// Cranelift has no carry-in additions for i64, so a 256-bit addition is two
+// i128 additions (add/adc pairs) and an addition of the low half's carry.
+
+fn add(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> Limbs {
+    let (lhs_low, lhs_high) = halves(lhs, builder);
+    let (rhs_low, rhs_high) = halves(rhs, builder);
+    let (low, carry) = builder.ins().uadd_overflow(lhs_low, rhs_low);
+    let high = builder.ins().iadd(lhs_high, rhs_high);
+    let carry = carry_to_i128(carry, builder);
+    let high = builder.ins().iadd(high, carry);
+    from_halves(low, high, builder)
+}
+
+/// The sum and its carry out.
+pub(super) fn add_carry(
+    lhs: Limbs,
+    rhs: Limbs,
+    builder: &mut FunctionBuilder,
+) -> (Limbs, clif::Value) {
+    let (lhs_low, lhs_high) = halves(lhs, builder);
+    let (rhs_low, rhs_high) = halves(rhs, builder);
+    let (low, carry) = builder.ins().uadd_overflow(lhs_low, rhs_low);
+    let (high, high_carry) = builder.ins().uadd_overflow(lhs_high, rhs_high);
+    let carry = carry_to_i128(carry, builder);
+    let (high, carry) = builder.ins().uadd_overflow(high, carry);
+    let carry = builder.ins().bor(high_carry, carry);
+    (from_halves(low, high, builder), carry)
+}
+
+fn sub(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> Limbs {
+    let (lhs_low, lhs_high) = halves(lhs, builder);
+    let (rhs_low, rhs_high) = halves(rhs, builder);
+    let (low, borrow) = builder.ins().usub_overflow(lhs_low, rhs_low);
+    let high = builder.ins().isub(lhs_high, rhs_high);
+    let borrow = carry_to_i128(borrow, builder);
+    let high = builder.ins().isub(high, borrow);
+    from_halves(low, high, builder)
+}
+
+/// The difference and its borrow out.
+pub(super) fn sub_borrow(
+    lhs: Limbs,
+    rhs: Limbs,
+    builder: &mut FunctionBuilder,
+) -> (Limbs, clif::Value) {
+    let (lhs_low, lhs_high) = halves(lhs, builder);
+    let (rhs_low, rhs_high) = halves(rhs, builder);
+    let (low, borrow) = builder.ins().usub_overflow(lhs_low, rhs_low);
+    let (high, high_borrow) = builder.ins().usub_overflow(lhs_high, rhs_high);
+    let borrow = carry_to_i128(borrow, builder);
+    let (high, borrow) = builder.ins().usub_overflow(high, borrow);
+    let borrow = builder.ins().bor(high_borrow, borrow);
+    (from_halves(low, high, builder), borrow)
+}
+
+pub(super) fn neg(value: Limbs, builder: &mut FunctionBuilder) -> Limbs {
+    sub(constant_limbs(U256::zero(), builder), value, builder)
+}
+
+pub(super) fn sign(value: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
+    builder.ins().icmp_imm_s(IntCC::SignedLessThan, value[3], 0)
+}
+
+pub(super) fn abs(value: Limbs, builder: &mut FunctionBuilder) -> Limbs {
+    let negative = sign(value, builder);
+    let negated = neg(value, builder);
+    select(negative, negated, value, builder)
+}
+
+pub(super) fn select(
+    condition: clif::Value,
+    if_true: Limbs,
+    if_false: Limbs,
+    builder: &mut FunctionBuilder,
+) -> Limbs {
     std::array::from_fn(|limb| {
         builder
             .ins()
@@ -140,254 +258,382 @@ pub(super) fn select_i256_limbs(
     })
 }
 
-pub(super) fn bool_xor(
-    lhs: clif::Value,
-    rhs: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let not_rhs = bool_not(rhs, builder);
-    builder.ins().select(lhs, not_rhs, rhs)
+fn any_nonzero(limbs: &[clif::Value], builder: &mut FunctionBuilder) -> clif::Value {
+    let combined = limbs
+        .iter()
+        .copied()
+        .reduce(|lhs, rhs| builder.ins().bor(lhs, rhs))
+        .expect("at least one limb");
+    builder.ins().icmp_imm_s(IntCC::NotEqual, combined, 0)
 }
 
-pub(super) fn bool_eq(
-    lhs: clif::Value,
-    rhs: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let different = bool_xor(lhs, rhs, builder);
-    bool_not(different, builder)
+pub(super) fn is_zero(value: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
+    let nonzero = any_nonzero(&value, builder);
+    bool_not(nonzero, builder)
 }
 
-pub(super) fn i256_sign_bit(
-    limbs: [clif::Value; I256_LIMBS],
+pub(super) fn eq(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
+    let diff: Limbs = std::array::from_fn(|limb| builder.ins().bxor(lhs[limb], rhs[limb]));
+    is_zero(diff, builder)
+}
+
+/// Compares the high halves with `high_cc` and, when they are equal, the
+/// low halves unsigned.
+fn lexicographic_lt(
+    high_cc: IntCC,
+    lhs: Limbs,
+    rhs: Limbs,
     builder: &mut FunctionBuilder,
 ) -> clif::Value {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    builder
+    let (lhs_low, lhs_high) = halves(lhs, builder);
+    let (rhs_low, rhs_high) = halves(rhs, builder);
+    let high_lt = builder.ins().icmp(high_cc, lhs_high, rhs_high);
+    let high_eq = builder.ins().icmp(IntCC::Equal, lhs_high, rhs_high);
+    let low_lt = builder
         .ins()
-        .icmp(IntCC::SignedLessThan, limbs[I256_LIMBS - 1], zero)
+        .icmp(IntCC::UnsignedLessThan, lhs_low, rhs_low);
+    let low_decides = builder.ins().band(high_eq, low_lt);
+    builder.ins().bor(high_lt, low_decides)
 }
 
-pub(super) fn add_i256_limbs(
-    lhs: [clif::Value; I256_LIMBS],
-    rhs: [clif::Value; I256_LIMBS],
-    builder: &mut FunctionBuilder,
-) -> ([clif::Value; I256_LIMBS], clif::Value) {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let one = builder.ins().iconst(clif::types::I64, 1);
-    let mut carry = zero;
-    let mut result = [zero; I256_LIMBS];
-
-    for limb in 0..I256_LIMBS {
-        let (sum, carry_from_sum) = builder.ins().uadd_overflow(lhs[limb], rhs[limb]);
-        let (sum, carry_from_carry) = builder.ins().uadd_overflow(sum, carry);
-        result[limb] = sum;
-        let carry_from_sum = builder.ins().select(carry_from_sum, one, zero);
-        let carry_from_carry = builder.ins().select(carry_from_carry, one, zero);
-        carry = builder.ins().bor(carry_from_sum, carry_from_carry);
-    }
-
-    let overflow = builder.ins().icmp(IntCC::NotEqual, carry, zero);
-    (result, overflow)
+pub(super) fn ult(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
+    lexicographic_lt(IntCC::UnsignedLessThan, lhs, rhs, builder)
 }
 
-pub(super) fn sub_i256_limbs(
-    lhs: [clif::Value; I256_LIMBS],
-    rhs: [clif::Value; I256_LIMBS],
-    builder: &mut FunctionBuilder,
-) -> ([clif::Value; I256_LIMBS], clif::Value) {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let one = builder.ins().iconst(clif::types::I64, 1);
-    let mut borrow = zero;
-    let mut result = [zero; I256_LIMBS];
-
-    for limb in 0..I256_LIMBS {
-        let (diff, borrow_from_diff) = builder.ins().usub_overflow(lhs[limb], rhs[limb]);
-        let (diff, borrow_from_borrow) = builder.ins().usub_overflow(diff, borrow);
-        result[limb] = diff;
-        let borrow_from_diff = builder.ins().select(borrow_from_diff, one, zero);
-        let borrow_from_borrow = builder.ins().select(borrow_from_borrow, one, zero);
-        borrow = builder.ins().bor(borrow_from_diff, borrow_from_borrow);
-    }
-
-    let overflow = builder.ins().icmp(IntCC::NotEqual, borrow, zero);
-    (result, overflow)
-}
-
-pub(super) fn neg_i256_limbs(
-    value: [clif::Value; I256_LIMBS],
-    builder: &mut FunctionBuilder,
-) -> [clif::Value; I256_LIMBS] {
-    sub_i256_limbs(zero_i256_limbs(builder), value, builder).0
-}
-
-pub(super) fn abs_i256_limbs(
-    value: [clif::Value; I256_LIMBS],
-    builder: &mut FunctionBuilder,
-) -> [clif::Value; I256_LIMBS] {
-    let negative = i256_sign_bit(value, builder);
-    let negated = neg_i256_limbs(value, builder);
-    select_i256_limbs(negative, negated, value, builder)
-}
-
-pub(super) fn add_to_wide_limbs(
-    limbs: &mut [clif::Value],
-    start: usize,
-    value: clif::Value,
-    builder: &mut FunctionBuilder,
-) {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let one = builder.ins().iconst(clif::types::I64, 1);
-    let (sum, carry) = builder.ins().uadd_overflow(limbs[start], value);
-    limbs[start] = sum;
-    let mut carry = builder.ins().select(carry, one, zero);
-
-    for limb in &mut limbs[start + 1..] {
-        let (sum, next_carry) = builder.ins().uadd_overflow(*limb, carry);
-        *limb = sum;
-        carry = builder.ins().select(next_carry, one, zero);
+fn icmp(cc: IntCC, lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
+    let (high_cc, lhs, rhs, negate) = match cc {
+        IntCC::Equal => return eq(lhs, rhs, builder),
+        IntCC::NotEqual => {
+            let equal = eq(lhs, rhs, builder);
+            return bool_not(equal, builder);
+        }
+        IntCC::UnsignedLessThan => (IntCC::UnsignedLessThan, lhs, rhs, false),
+        IntCC::UnsignedGreaterThan => (IntCC::UnsignedLessThan, rhs, lhs, false),
+        IntCC::UnsignedLessThanOrEqual => (IntCC::UnsignedLessThan, rhs, lhs, true),
+        IntCC::UnsignedGreaterThanOrEqual => (IntCC::UnsignedLessThan, lhs, rhs, true),
+        IntCC::SignedLessThan => (IntCC::SignedLessThan, lhs, rhs, false),
+        IntCC::SignedGreaterThan => (IntCC::SignedLessThan, rhs, lhs, false),
+        IntCC::SignedLessThanOrEqual => (IntCC::SignedLessThan, rhs, lhs, true),
+        IntCC::SignedGreaterThanOrEqual => (IntCC::SignedLessThan, lhs, rhs, true),
+    };
+    let less = lexicographic_lt(high_cc, lhs, rhs, builder);
+    if negate {
+        bool_not(less, builder)
+    } else {
+        less
     }
 }
 
-pub(super) fn mul_i256_limbs_full(
-    lhs: [clif::Value; I256_LIMBS],
-    rhs: [clif::Value; I256_LIMBS],
-    builder: &mut FunctionBuilder,
-) -> [clif::Value; I256_PRODUCT_LIMBS] {
-    mul_limbs_full(&lhs, &rhs, builder)
-}
-
-pub(super) fn mul_limbs_full<const N: usize>(
+/// The low `N` limbs of the product of two little-endian limb sequences.
+pub(super) fn mul_limbs<const N: usize>(
     lhs: &[clif::Value],
     rhs: &[clif::Value],
     builder: &mut FunctionBuilder,
 ) -> [clif::Value; N] {
-    assert_eq!(N, lhs.len() + rhs.len());
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let mut result = [zero; N];
-
-    for (lhs_idx, &lhs_limb) in lhs.iter().enumerate() {
-        for (rhs_idx, &rhs_limb) in rhs.iter().enumerate() {
-            let result_idx = lhs_idx + rhs_idx;
-            let product_low = builder.ins().imul(lhs_limb, rhs_limb);
-            let product_high = builder.ins().umulhi(lhs_limb, rhs_limb);
-            add_to_wide_limbs(&mut result, result_idx, product_low, builder);
-            add_to_wide_limbs(&mut result, result_idx + 1, product_high, builder);
+    // Schoolbook rows. Each partial sum `lhs[i] * rhs[j] + result + carry`
+    // fits in 128 bits; when the product is truncated, the top limb needs
+    // only the low halves of its partial products.
+    let truncated = N < lhs.len() + rhs.len();
+    let mut result: [Option<clif::Value>; N] = [None; N];
+    for (i, &lhs_limb) in lhs.iter().enumerate() {
+        let mut carry = None;
+        for (j, &rhs_limb) in rhs.iter().enumerate().take(N.saturating_sub(i)) {
+            let k = i + j;
+            if truncated && k == N - 1 {
+                let product = builder.ins().imul(lhs_limb, rhs_limb);
+                let sum = [result[k], carry]
+                    .into_iter()
+                    .flatten()
+                    .fold(product, |sum, addend| builder.ins().iadd(sum, addend));
+                result[k] = Some(sum);
+                carry = None;
+            } else {
+                let lhs_wide = builder.ins().uextend(I128, lhs_limb);
+                let rhs_wide = builder.ins().uextend(I128, rhs_limb);
+                let product = builder.ins().imul(lhs_wide, rhs_wide);
+                let sum = [result[k], carry]
+                    .into_iter()
+                    .flatten()
+                    .fold(product, |sum, addend| {
+                        let addend = builder.ins().uextend(I128, addend);
+                        builder.ins().iadd(sum, addend)
+                    });
+                let (low, high) = builder.ins().isplit(sum);
+                result[k] = Some(low);
+                carry = Some(high);
+            }
+        }
+        if let Some(carry) = carry {
+            result[i + rhs.len()] = Some(carry);
         }
     }
-
-    result
+    result.map(|limb| limb.unwrap_or_else(|| builder.ins().iconst(I64, 0)))
 }
 
-pub(super) fn low_i256_limbs(
-    limbs: [clif::Value; I256_PRODUCT_LIMBS],
-) -> [clif::Value; I256_LIMBS] {
-    [limbs[0], limbs[1], limbs[2], limbs[3]]
+fn low_limbs(product: [clif::Value; 2 * LIMBS]) -> Limbs {
+    std::array::from_fn(|limb| product[limb])
 }
 
-pub(super) fn wide_i256_high_nonzero(
-    limbs: [clif::Value; I256_PRODUCT_LIMBS],
+fn signed_min_limbs(builder: &mut FunctionBuilder) -> Limbs {
+    constant_limbs(U256::one() << 255, builder)
+}
+
+fn signed_max_limbs(builder: &mut FunctionBuilder) -> Limbs {
+    constant_limbs(U256::MAX >> 1, builder)
+}
+
+/// The wrapping signed product and whether it overflowed.
+fn smul_overflow(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> (Limbs, clif::Value) {
+    // The wrapping product is the magnitudes' product with the sign applied.
+    let lhs_negative = sign(lhs, builder);
+    let rhs_negative = sign(rhs, builder);
+    let negative = builder.ins().bxor(lhs_negative, rhs_negative);
+    let lhs_abs = abs(lhs, builder);
+    let rhs_abs = abs(rhs, builder);
+    let product = mul_limbs::<{ 2 * LIMBS }>(&lhs_abs, &rhs_abs, builder);
+    let high_nonzero = any_nonzero(&product[LIMBS..], builder);
+    let magnitude = low_limbs(product);
+    let negative_limit = signed_min_limbs(builder);
+    let positive_limit = signed_max_limbs(builder);
+    let limit = select(negative, negative_limit, positive_limit, builder);
+    let over_limit = ult(limit, magnitude, builder);
+    let overflow = builder.ins().bor(high_nonzero, over_limit);
+    let negated = neg(magnitude, builder);
+    (select(negative, negated, magnitude, builder), overflow)
+}
+
+/// The signed overflow of `result = lhs + rhs`: both operands have the
+/// same sign, which differs from the result's.
+fn sadd_overflow(
+    lhs: Limbs,
+    rhs: Limbs,
+    result: Limbs,
     builder: &mut FunctionBuilder,
 ) -> clif::Value {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let mut result = bool_const(false, builder);
-    for limb in limbs.into_iter().skip(I256_LIMBS) {
-        let nonzero = builder.ins().icmp(IntCC::NotEqual, limb, zero);
-        result = bool_or(result, nonzero, builder);
+    let lhs_changed = builder.ins().bxor(lhs[3], result[3]);
+    let rhs_changed = builder.ins().bxor(rhs[3], result[3]);
+    let both = builder.ins().band(lhs_changed, rhs_changed);
+    builder.ins().icmp_imm_s(IntCC::SignedLessThan, both, 0)
+}
+
+/// The signed overflow of `result = lhs - rhs`: the operands' signs differ
+/// and the result's differs from `lhs`'s.
+fn ssub_overflow(
+    lhs: Limbs,
+    rhs: Limbs,
+    result: Limbs,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    let operands_differ = builder.ins().bxor(lhs[3], rhs[3]);
+    let result_changed = builder.ins().bxor(lhs[3], result[3]);
+    let both = builder.ins().band(operands_differ, result_changed);
+    builder.ins().icmp_imm_s(IntCC::SignedLessThan, both, 0)
+}
+
+/// The saturation bound for a signed overflow toward the sign of `lhs`.
+fn signed_bound(negative: clif::Value, builder: &mut FunctionBuilder) -> Limbs {
+    let min = signed_min_limbs(builder);
+    let max = signed_max_limbs(builder);
+    select(negative, min, max, builder)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ShiftKind {
+    Shl,
+    Shr,
+    Sar,
+}
+
+/// A shift amount: a constant (`None` when at least 256), or a variable
+/// amount with its truncation to 64 bits and whether it is at least 256.
+enum ShiftAmount {
+    Constant(Option<u32>),
+    Variable(clif::Value, clif::Value),
+}
+
+fn shift_amount(
+    function: &Function,
+    bits: ValueId,
+    value_map: &ValueMap,
+    builder: &mut FunctionBuilder,
+) -> Result<ShiftAmount, String> {
+    if let Some(imm) = function.dfg.value_imm(bits) {
+        let amount = imm.zext(Type::I256).as_i256().to_u256();
+        return Ok(ShiftAmount::Constant(
+            (amount < U256::from(256)).then(|| amount.low_u32()),
+        ));
     }
-    result
+    let (amount, high_nonzero) = if function.dfg.value_ty(bits) == Type::I256 {
+        let limbs = resolve_i256(function, bits, value_map, builder)?;
+        (limbs[0], Some(any_nonzero(&limbs[1..], builder)))
+    } else {
+        let raw = resolve_value(function, bits, value_map, builder)?;
+        let raw_ty = builder.func.dfg.value_type(raw);
+        let amount = resize_int_value(raw, I64, false, builder);
+        let high_nonzero = (raw_ty == I128).then(|| {
+            let (_, high) = builder.ins().isplit(raw);
+            builder.ins().icmp_imm_s(IntCC::NotEqual, high, 0)
+        });
+        (amount, high_nonzero)
+    };
+    let too_large = builder
+        .ins()
+        .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, amount, 256);
+    let too_large = match high_nonzero {
+        Some(high_nonzero) => builder.ins().bor(too_large, high_nonzero),
+        None => too_large,
+    };
+    Ok(ShiftAmount::Variable(amount, too_large))
 }
 
-pub(super) fn emit_i256_add(
-    function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
+fn shift(
+    value: Limbs,
+    amount: ShiftAmount,
+    kind: ShiftKind,
     builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let lhs = resolve_value(function, lhs, value_map, builder)?;
-    let rhs = resolve_value(function, rhs, value_map, builder)?;
-    let result = add_i256_limbs(
-        load_i256_limbs(lhs, builder),
-        load_i256_limbs(rhs, builder),
-        builder,
-    )
-    .0;
-    Ok(store_i256_limbs(result, builder))
+) -> Limbs {
+    let zero = builder.ins().iconst(I64, 0);
+    let fill = match kind {
+        ShiftKind::Sar => builder.ins().sshr_imm_s(value[3], 63),
+        ShiftKind::Shl | ShiftKind::Shr => zero,
+    };
+    match amount {
+        ShiftAmount::Constant(None) => [fill; LIMBS],
+        ShiftAmount::Constant(Some(amount)) => {
+            shift_by_constant(value, amount, kind, fill, builder)
+        }
+        ShiftAmount::Variable(amount, too_large) => {
+            let shifted = shift_by_variable(value, amount, kind, fill, builder);
+            std::array::from_fn(|limb| builder.ins().select(too_large, fill, shifted[limb]))
+        }
+    }
 }
 
-pub(super) fn emit_i256_sub(
-    function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
+/// Shifts by `amount < 256` known at translation time: limb moves and
+/// constant funnel shifts.
+fn shift_by_constant(
+    value: Limbs,
+    amount: u32,
+    kind: ShiftKind,
+    fill: clif::Value,
     builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let lhs = resolve_value(function, lhs, value_map, builder)?;
-    let rhs = resolve_value(function, rhs, value_map, builder)?;
-    let result = sub_i256_limbs(
-        load_i256_limbs(lhs, builder),
-        load_i256_limbs(rhs, builder),
-        builder,
-    )
-    .0;
-    Ok(store_i256_limbs(result, builder))
+) -> Limbs {
+    let limb_shift = (amount / LIMB_BITS) as usize;
+    let bits = i64::from(amount % LIMB_BITS);
+    std::array::from_fn(|limb| match kind {
+        ShiftKind::Shl => {
+            let Some(source) = limb.checked_sub(limb_shift) else {
+                return fill;
+            };
+            if bits == 0 {
+                return value[source];
+            }
+            let high = builder.ins().ishl_imm_s(value[source], bits);
+            match source.checked_sub(1) {
+                Some(below) => {
+                    let low = builder
+                        .ins()
+                        .ushr_imm_s(value[below], i64::from(LIMB_BITS) - bits);
+                    builder.ins().bor(high, low)
+                }
+                None => high,
+            }
+        }
+        ShiftKind::Shr | ShiftKind::Sar => {
+            let source = limb + limb_shift;
+            if source >= LIMBS {
+                return fill;
+            }
+            if bits == 0 {
+                return value[source];
+            }
+            if source == LIMBS - 1 {
+                return match kind {
+                    ShiftKind::Sar => builder.ins().sshr_imm_s(value[source], bits),
+                    _ => builder.ins().ushr_imm_s(value[source], bits),
+                };
+            }
+            let low = builder.ins().ushr_imm_s(value[source], bits);
+            let high = builder
+                .ins()
+                .ishl_imm_s(value[source + 1], i64::from(LIMB_BITS) - bits);
+            builder.ins().bor(low, high)
+        }
+    })
 }
 
-pub(super) fn emit_i256_mul(
-    function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
+/// Shifts by a variable amount below 256 (callers handle larger amounts):
+/// a funnel shift of every limb by `amount % 64`, then limb moves by one
+/// and two places selected from the amount's bits 6 and 7.
+fn shift_by_variable(
+    value: Limbs,
+    amount: clif::Value,
+    kind: ShiftKind,
+    fill: clif::Value,
     builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let lhs = resolve_value(function, lhs, value_map, builder)?;
-    let rhs = resolve_value(function, rhs, value_map, builder)?;
-    let result = low_i256_limbs(mul_i256_limbs_full(
-        load_i256_limbs(lhs, builder),
-        load_i256_limbs(rhs, builder),
-        builder,
-    ));
-    Ok(store_i256_limbs(result, builder))
+) -> Limbs {
+    let bits = builder.ins().band_imm_s(amount, 63);
+    // `x >> (64 - bits)` as `(x >> 1) >> (63 - bits)`, which is zero for
+    // `bits == 0`, and likewise for left shifts.
+    let inverse = builder.ins().bxor_imm_s(bits, 63);
+    let funnel: Limbs = std::array::from_fn(|limb| match kind {
+        ShiftKind::Shl => {
+            let high = builder.ins().ishl(value[limb], bits);
+            if limb == 0 {
+                return high;
+            }
+            let low = builder.ins().ushr_imm_s(value[limb - 1], 1);
+            let low = builder.ins().ushr(low, inverse);
+            builder.ins().bor(high, low)
+        }
+        ShiftKind::Shr | ShiftKind::Sar => {
+            if limb == LIMBS - 1 {
+                return match kind {
+                    ShiftKind::Sar => builder.ins().sshr(value[limb], bits),
+                    _ => builder.ins().ushr(value[limb], bits),
+                };
+            }
+            let low = builder.ins().ushr(value[limb], bits);
+            let high = builder.ins().ishl_imm_s(value[limb + 1], 1);
+            let high = builder.ins().ishl(high, inverse);
+            builder.ins().bor(low, high)
+        }
+    });
+    let limb_shift = builder.ins().ushr_imm_s(amount, 6);
+    [1, 2].into_iter().fold(funnel, |limbs, places| {
+        let moves = builder.ins().band_imm_s(limb_shift, places as i64);
+        std::array::from_fn(|limb| {
+            let moved = match kind {
+                ShiftKind::Shl => limb
+                    .checked_sub(places)
+                    .map_or(fill, |source| limbs[source]),
+                ShiftKind::Shr | ShiftKind::Sar => {
+                    limbs.get(limb + places).copied().unwrap_or(fill)
+                }
+            };
+            builder.ins().select(moves, moved, limbs[limb])
+        })
+    })
 }
 
-pub(super) fn emit_i256_neg(
-    function: &Function,
-    value: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let value = resolve_value(function, value, value_map, builder)?;
-    Ok(store_i256_limbs(
-        neg_i256_limbs(load_i256_limbs(value, builder), builder),
-        builder,
-    ))
-}
-
-fn i256_shl_one_with_bit(
-    limbs: [clif::Value; I256_LIMBS],
-    bit: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> [clif::Value; I256_LIMBS] {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let one = builder.ins().iconst(clif::types::I64, 1);
-    let mut carry = builder.ins().select(bit, one, zero);
-    std::array::from_fn(|limb_idx| {
-        let shifted = builder.ins().ishl_imm_s(limbs[limb_idx], 1);
+fn shl_one_with_bit(limbs: Limbs, bit: clif::Value, builder: &mut FunctionBuilder) -> Limbs {
+    let mut carry = builder.ins().uextend(I64, bit);
+    std::array::from_fn(|limb| {
+        let shifted = builder.ins().ishl_imm_s(limbs[limb], 1);
         let result = builder.ins().bor(shifted, carry);
         carry = builder
             .ins()
-            .ushr_imm_s(limbs[limb_idx], I256_LIMB_BITS - 1);
+            .ushr_imm_s(limbs[limb], i64::from(LIMB_BITS) - 1);
         result
     })
 }
 
-pub(super) fn unsigned_div_rem_i256_limbs(
-    numerator: [clif::Value; I256_LIMBS],
-    denominator: [clif::Value; I256_LIMBS],
+pub(super) fn unsigned_div_rem_limbs(
+    numerator: Limbs,
+    denominator: Limbs,
     bits: usize,
     builder: &mut FunctionBuilder,
-) -> ([clif::Value; I256_LIMBS], [clif::Value; I256_LIMBS]) {
+) -> (Limbs, Limbs) {
     debug_assert!(matches!(bits, 128 | 256));
     // Restoring division consumes the numerator from high bit to low bit.
     // Carry quotient/remainder contents through a counted CLIF loop instead
@@ -395,17 +641,17 @@ pub(super) fn unsigned_div_rem_i256_limbs(
     let header = builder.create_block();
     let exit = builder.create_block();
     let [bit, q0, q1, q2, q3, r0, r1, r2, r3] =
-        std::array::from_fn(|_| builder.append_block_param(header, clif::types::I64));
-    let results: [clif::Value; I256_LIMBS * 2] =
-        std::array::from_fn(|_| builder.append_block_param(exit, clif::types::I64));
-    let initial_bit = builder.ins().iconst(clif::types::I64, (bits - 1) as i64);
-    let zero = builder.ins().iconst(clif::types::I64, 0);
+        std::array::from_fn(|_| builder.append_block_param(header, I64));
+    let results: [clif::Value; LIMBS * 2] =
+        std::array::from_fn(|_| builder.append_block_param(exit, I64));
+    let initial_bit = builder.ins().iconst(I64, (bits - 1) as i64);
+    let zero = builder.ins().iconst(I64, 0);
 
     // Avoid the bitwise loop for a zero quotient and for scalar-sized inputs.
     // Signed callers apply this to magnitudes, then restore the result signs.
     let scalar_check = builder.create_block();
     let scalar = builder.create_block();
-    let smaller = emit_i256_unsigned_lt_limbs(numerator, denominator, builder);
+    let smaller = ult(numerator, denominator, builder);
     let [n0, n1, n2, n3] = numerator;
     builder.ins().brif(
         smaller,
@@ -454,14 +700,14 @@ pub(super) fn unsigned_div_rem_i256_limbs(
     let shifted = builder.ins().ushr(limb, shift);
     let next_bit = builder.ins().band_imm_s(shifted, 1);
     let next_bit = builder.ins().icmp_imm_s(IntCC::NotEqual, next_bit, 0);
-    let remainder = i256_shl_one_with_bit([r0, r1, r2, r3], next_bit, builder);
+    let remainder = shl_one_with_bit([r0, r1, r2, r3], next_bit, builder);
     // The shifted remainder cannot overflow: it is at most the numerator
     // prefix consumed so far, which still fits in `bits` bits.
-    let less = emit_i256_unsigned_lt_limbs(remainder, denominator, builder);
+    let less = ult(remainder, denominator, builder);
     let should_subtract = bool_not(less, builder);
-    let subtracted = sub_i256_limbs(remainder, denominator, builder).0;
-    let remainder = select_i256_limbs(should_subtract, subtracted, remainder, builder);
-    let quotient = i256_shl_one_with_bit([q0, q1, q2, q3], should_subtract, builder);
+    let subtracted = sub(remainder, denominator, builder);
+    let remainder = select(should_subtract, subtracted, remainder, builder);
+    let quotient = shl_one_with_bit([q0, q1, q2, q3], should_subtract, builder);
     let next_bit = builder.ins().iadd_imm_s(bit, -1);
     let done = builder.ins().icmp_imm_s(IntCC::Equal, bit, 0);
     let [q0, q1, q2, q3] = quotient;
@@ -479,663 +725,313 @@ pub(super) fn unsigned_div_rem_i256_limbs(
     ([q0, q1, q2, q3], [r0, r1, r2, r3])
 }
 
-pub(super) fn emit_i256_div_rem(
-    function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
+pub(super) fn div_rem_limbs(
+    lhs: Limbs,
+    rhs: Limbs,
     kind: DivRemKind,
-    value_map: &HashMap<ValueId, clif::Value>,
     builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let lhs = load_i256_limbs(resolve_value(function, lhs, value_map, builder)?, builder);
-    let rhs = load_i256_limbs(resolve_value(function, rhs, value_map, builder)?, builder);
-    let result = match kind {
-        DivRemKind::Udiv | DivRemKind::Umod => {
-            let (quotient, remainder) =
-                unsigned_div_rem_i256_limbs(lhs, rhs, I256_BITS as usize, builder);
-            match kind {
-                DivRemKind::Udiv => quotient,
-                DivRemKind::Umod => remainder,
-                DivRemKind::Sdiv | DivRemKind::Smod => unreachable!(),
-            }
-        }
+) -> Limbs {
+    match kind {
+        DivRemKind::Udiv => unsigned_div_rem_limbs(lhs, rhs, 256, builder).0,
+        DivRemKind::Umod => unsigned_div_rem_limbs(lhs, rhs, 256, builder).1,
         DivRemKind::Sdiv | DivRemKind::Smod => {
-            let lhs_negative = i256_sign_bit(lhs, builder);
-            let rhs_negative = i256_sign_bit(rhs, builder);
-            let lhs_abs = abs_i256_limbs(lhs, builder);
-            let rhs_abs = abs_i256_limbs(rhs, builder);
-            let (quotient, remainder) =
-                unsigned_div_rem_i256_limbs(lhs_abs, rhs_abs, I256_BITS as usize, builder);
-            let quotient_negative = bool_xor(lhs_negative, rhs_negative, builder);
-            let quotient = select_i256_limbs(
-                quotient_negative,
-                neg_i256_limbs(quotient, builder),
-                quotient,
-                builder,
-            );
-            let remainder = select_i256_limbs(
-                lhs_negative,
-                neg_i256_limbs(remainder, builder),
-                remainder,
-                builder,
-            );
-            match kind {
-                DivRemKind::Sdiv => quotient,
-                DivRemKind::Smod => remainder,
-                DivRemKind::Udiv | DivRemKind::Umod => unreachable!(),
-            }
+            let lhs_negative = sign(lhs, builder);
+            let rhs_negative = sign(rhs, builder);
+            let lhs_abs = abs(lhs, builder);
+            let rhs_abs = abs(rhs, builder);
+            let (quotient, remainder) = unsigned_div_rem_limbs(lhs_abs, rhs_abs, 256, builder);
+            // The quotient is negative when the signs differ; the remainder
+            // takes the dividend's sign.
+            let (magnitude, negative) = match kind {
+                DivRemKind::Sdiv => (quotient, builder.ins().bxor(lhs_negative, rhs_negative)),
+                _ => (remainder, lhs_negative),
+            };
+            let negated = neg(magnitude, builder);
+            select(negative, negated, magnitude, builder)
         }
-    };
-    Ok(store_i256_limbs(result, builder))
+    }
 }
 
-pub(super) fn emit_i256_uaddo(
+/// Translates `inst` if it is an integer operation on i256 operands other
+/// than division and modular arithmetic.
+pub(super) fn translate_i256_op(
     function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
+    inst: InstId,
+    value_map: &mut ValueMap,
     builder: &mut FunctionBuilder,
-) -> Result<(clif::Value, clif::Value), String> {
-    let lhs = load_i256_limbs(resolve_value(function, lhs, value_map, builder)?, builder);
-    let rhs = load_i256_limbs(resolve_value(function, rhs, value_map, builder)?, builder);
-    let (result, overflow) = add_i256_limbs(lhs, rhs, builder);
-    Ok((store_i256_limbs(result, builder), overflow))
-}
-
-pub(super) fn emit_i256_saddo(
-    function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<(clif::Value, clif::Value), String> {
-    let lhs = load_i256_limbs(resolve_value(function, lhs, value_map, builder)?, builder);
-    let rhs = load_i256_limbs(resolve_value(function, rhs, value_map, builder)?, builder);
-    let (result, _) = add_i256_limbs(lhs, rhs, builder);
-    let lhs_negative = i256_sign_bit(lhs, builder);
-    let rhs_negative = i256_sign_bit(rhs, builder);
-    let result_negative = i256_sign_bit(result, builder);
-    let same_sign = bool_eq(lhs_negative, rhs_negative, builder);
-    let sign_changed = bool_xor(result_negative, lhs_negative, builder);
-    let overflow = bool_and(same_sign, sign_changed, builder);
-    Ok((store_i256_limbs(result, builder), overflow))
-}
-
-pub(super) fn emit_i256_usubo(
-    function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<(clif::Value, clif::Value), String> {
-    let lhs = load_i256_limbs(resolve_value(function, lhs, value_map, builder)?, builder);
-    let rhs = load_i256_limbs(resolve_value(function, rhs, value_map, builder)?, builder);
-    let (result, overflow) = sub_i256_limbs(lhs, rhs, builder);
-    Ok((store_i256_limbs(result, builder), overflow))
-}
-
-pub(super) fn emit_i256_ssubo(
-    function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<(clif::Value, clif::Value), String> {
-    let lhs = load_i256_limbs(resolve_value(function, lhs, value_map, builder)?, builder);
-    let rhs = load_i256_limbs(resolve_value(function, rhs, value_map, builder)?, builder);
-    let (result, _) = sub_i256_limbs(lhs, rhs, builder);
-    let lhs_negative = i256_sign_bit(lhs, builder);
-    let rhs_negative = i256_sign_bit(rhs, builder);
-    let result_negative = i256_sign_bit(result, builder);
-    let different_sign = bool_xor(lhs_negative, rhs_negative, builder);
-    let sign_changed = bool_xor(result_negative, lhs_negative, builder);
-    let overflow = bool_and(different_sign, sign_changed, builder);
-    Ok((store_i256_limbs(result, builder), overflow))
-}
-
-pub(super) fn emit_i256_umulo(
-    function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<(clif::Value, clif::Value), String> {
-    let lhs = load_i256_limbs(resolve_value(function, lhs, value_map, builder)?, builder);
-    let rhs = load_i256_limbs(resolve_value(function, rhs, value_map, builder)?, builder);
-    let product = mul_i256_limbs_full(lhs, rhs, builder);
-    let overflow = wide_i256_high_nonzero(product, builder);
-    Ok((store_i256_limbs(low_i256_limbs(product), builder), overflow))
-}
-
-pub(super) fn emit_i256_smulo(
-    function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<(clif::Value, clif::Value), String> {
-    let lhs = load_i256_limbs(resolve_value(function, lhs, value_map, builder)?, builder);
-    let rhs = load_i256_limbs(resolve_value(function, rhs, value_map, builder)?, builder);
-    let raw = low_i256_limbs(mul_i256_limbs_full(lhs, rhs, builder));
-    let lhs_negative = i256_sign_bit(lhs, builder);
-    let rhs_negative = i256_sign_bit(rhs, builder);
-    let product_negative = bool_xor(lhs_negative, rhs_negative, builder);
-    let abs_product = mul_i256_limbs_full(
-        abs_i256_limbs(lhs, builder),
-        abs_i256_limbs(rhs, builder),
-        builder,
-    );
-    let high_nonzero = wide_i256_high_nonzero(abs_product, builder);
-    let low_abs_product = low_i256_limbs(abs_product);
-    let positive_limit = signed_max_i256_limbs(builder);
-    let negative_limit = signed_min_i256_limbs(builder);
-    let limit = select_i256_limbs(product_negative, negative_limit, positive_limit, builder);
-    let over_limit = emit_i256_unsigned_lt_limbs(limit, low_abs_product, builder);
-    let overflow = bool_or(high_nonzero, over_limit, builder);
-    Ok((store_i256_limbs(raw, builder), overflow))
-}
-
-pub(super) fn emit_i256_snego(
-    function: &Function,
-    value: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<(clif::Value, clif::Value), String> {
-    let value = load_i256_limbs(resolve_value(function, value, value_map, builder)?, builder);
-    let result = neg_i256_limbs(value, builder);
-    let overflow = emit_i256_eq_limbs(value, signed_min_i256_limbs(builder), builder);
-    Ok((store_i256_limbs(result, builder), overflow))
-}
-
-pub(super) enum I256SaturatingOp {
-    Uadd,
-    Sadd,
-    Usub,
-    Ssub,
-    Umul,
-    Smul,
-}
-
-pub(super) fn emit_i256_saturating_binary(
-    function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
-    op: I256SaturatingOp,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let lhs_value = load_i256_limbs(resolve_value(function, lhs, value_map, builder)?, builder);
-    let rhs_value = load_i256_limbs(resolve_value(function, rhs, value_map, builder)?, builder);
-    let (raw, overflow, saturated) = match op {
-        I256SaturatingOp::Uadd => {
-            let (raw, overflow) = add_i256_limbs(lhs_value, rhs_value, builder);
-            (raw, overflow, unsigned_max_i256_limbs(builder))
-        }
-        I256SaturatingOp::Sadd => {
-            let (raw, _) = add_i256_limbs(lhs_value, rhs_value, builder);
-            let lhs_negative = i256_sign_bit(lhs_value, builder);
-            let rhs_negative = i256_sign_bit(rhs_value, builder);
-            let result_negative = i256_sign_bit(raw, builder);
-            let same_sign = bool_eq(lhs_negative, rhs_negative, builder);
-            let sign_changed = bool_xor(result_negative, lhs_negative, builder);
-            let overflow = bool_and(same_sign, sign_changed, builder);
-            let saturated = select_i256_limbs(
-                lhs_negative,
-                signed_min_i256_limbs(builder),
-                signed_max_i256_limbs(builder),
-                builder,
-            );
-            (raw, overflow, saturated)
-        }
-        I256SaturatingOp::Usub => {
-            let (raw, overflow) = sub_i256_limbs(lhs_value, rhs_value, builder);
-            (raw, overflow, zero_i256_limbs(builder))
-        }
-        I256SaturatingOp::Ssub => {
-            let (raw, _) = sub_i256_limbs(lhs_value, rhs_value, builder);
-            let lhs_negative = i256_sign_bit(lhs_value, builder);
-            let rhs_negative = i256_sign_bit(rhs_value, builder);
-            let result_negative = i256_sign_bit(raw, builder);
-            let different_sign = bool_xor(lhs_negative, rhs_negative, builder);
-            let sign_changed = bool_xor(result_negative, lhs_negative, builder);
-            let overflow = bool_and(different_sign, sign_changed, builder);
-            let saturated = select_i256_limbs(
-                lhs_negative,
-                signed_min_i256_limbs(builder),
-                signed_max_i256_limbs(builder),
-                builder,
-            );
-            (raw, overflow, saturated)
-        }
-        I256SaturatingOp::Umul => {
-            let product = mul_i256_limbs_full(lhs_value, rhs_value, builder);
-            (
-                low_i256_limbs(product),
-                wide_i256_high_nonzero(product, builder),
-                unsigned_max_i256_limbs(builder),
-            )
-        }
-        I256SaturatingOp::Smul => {
-            let raw = low_i256_limbs(mul_i256_limbs_full(lhs_value, rhs_value, builder));
-            let lhs_negative = i256_sign_bit(lhs_value, builder);
-            let rhs_negative = i256_sign_bit(rhs_value, builder);
-            let product_negative = bool_xor(lhs_negative, rhs_negative, builder);
-            let abs_product = mul_i256_limbs_full(
-                abs_i256_limbs(lhs_value, builder),
-                abs_i256_limbs(rhs_value, builder),
-                builder,
-            );
-            let high_nonzero = wide_i256_high_nonzero(abs_product, builder);
-            let low_abs_product = low_i256_limbs(abs_product);
-            let limit = select_i256_limbs(
-                product_negative,
-                signed_min_i256_limbs(builder),
-                signed_max_i256_limbs(builder),
-                builder,
-            );
-            let over_limit = emit_i256_unsigned_lt_limbs(limit, low_abs_product, builder);
-            let overflow = bool_or(high_nonzero, over_limit, builder);
-            let saturated = select_i256_limbs(
-                product_negative,
-                signed_min_i256_limbs(builder),
-                signed_max_i256_limbs(builder),
-                builder,
-            );
-            (raw, overflow, saturated)
-        }
-    };
-    Ok(store_i256_limbs(
-        select_i256_limbs(overflow, saturated, raw, builder),
-        builder,
-    ))
-}
-
-pub(super) enum I256BitwiseOp {
-    And,
-    Or,
-    Xor,
-}
-
-pub(super) fn emit_i256_bitwise(
-    function: &Function,
-    lhs: ValueId,
-    rhs: ValueId,
-    op: I256BitwiseOp,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let lhs = resolve_value(function, lhs, value_map, builder)?;
-    let rhs = resolve_value(function, rhs, value_map, builder)?;
-    let result = create_i256_slot(builder);
-
-    for limb in 0..I256_LIMBS {
-        let lhs_limb = load_i256_limb(lhs, limb, builder);
-        let rhs_limb = load_i256_limb(rhs, limb, builder);
-        let value = match op {
-            I256BitwiseOp::And => builder.ins().band(lhs_limb, rhs_limb),
-            I256BitwiseOp::Or => builder.ins().bor(lhs_limb, rhs_limb),
-            I256BitwiseOp::Xor => builder.ins().bxor(lhs_limb, rhs_limb),
+) -> Result<bool, String> {
+    enum Output {
+        Limbs(Limbs),
+        Flag(clif::Value),
+        Overflowing(Limbs, clif::Value),
+    }
+    let dfg = &function.dfg;
+    let wide = |value: &ValueId| dfg.value_ty(*value) == Type::I256;
+    let binary =
+        |lhs: &ValueId, rhs: &ValueId, value_map: &ValueMap, builder: &mut FunctionBuilder| {
+            Ok::<_, String>((
+                resolve_i256(function, *lhs, value_map, builder)?,
+                resolve_i256(function, *rhs, value_map, builder)?,
+            ))
         };
-        store_i256_limb(result, limb, value, builder);
-    }
-
-    Ok(result)
-}
-
-pub(super) fn emit_i256_not(
-    function: &Function,
-    value: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let value = resolve_value(function, value, value_map, builder)?;
-    let result = create_i256_slot(builder);
-
-    for limb in 0..I256_LIMBS {
-        let limb_value = load_i256_limb(value, limb, builder);
-        store_i256_limb(result, limb, builder.ins().bnot(limb_value), builder);
-    }
-
-    Ok(result)
-}
-
-/// Reversing all 32 bytes reverses the limb order and the bytes within each limb.
-pub(super) fn emit_i256_bswap(
-    function: &Function,
-    value: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let value = resolve_value(function, value, value_map, builder)?;
-    let limbs: [clif::Value; I256_LIMBS] =
-        std::array::from_fn(|limb| load_i256_limb(value, limb, builder));
-    let result = create_i256_slot(builder);
-    for (limb, source) in limbs.into_iter().rev().enumerate() {
-        let swapped = builder.ins().bswap(source);
-        store_i256_limb(result, limb, swapped, builder);
-    }
-
-    Ok(result)
-}
-
-pub(super) enum I256ShiftKind {
-    Shl,
-    Shr,
-    Sar,
-}
-
-struct I256ShiftParts {
-    limbs: [clif::Value; I256_LIMBS],
-    limb_shift: clif::Value,
-    bit_shift: clif::Value,
-    inverse_shift: clif::Value,
-    bit_shift_is_zero: clif::Value,
-}
-
-pub(super) fn emit_i256_shift(
-    function: &Function,
-    value: ValueId,
-    bits: ValueId,
-    kind: I256ShiftKind,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let value_addr = resolve_value(function, value, value_map, builder)?;
-    let limbs = [
-        load_i256_limb(value_addr, 0, builder),
-        load_i256_limb(value_addr, 1, builder),
-        load_i256_limb(value_addr, 2, builder),
-        load_i256_limb(value_addr, 3, builder),
-    ];
-    let (shift, too_large) = resolve_i256_shift_amount(function, bits, value_map, builder)?;
-    let result = create_i256_slot(builder);
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let limb_mask = builder.ins().iconst(clif::types::I64, I256_LIMB_BITS - 1);
-    let limb_shift = builder.ins().ushr_imm_s(shift, 6);
-    let bit_shift = builder.ins().band(shift, limb_mask);
-    let bit_shift_is_zero = builder.ins().icmp(IntCC::Equal, bit_shift, zero);
-    let limb_bits = builder.ins().iconst(clif::types::I64, I256_LIMB_BITS);
-    let inverse_shift = builder.ins().isub(limb_bits, bit_shift);
-    let parts = I256ShiftParts {
-        limbs,
-        limb_shift,
-        bit_shift,
-        inverse_shift,
-        bit_shift_is_zero,
+    let compare = |cc: IntCC,
+                   lhs: &ValueId,
+                   rhs: &ValueId,
+                   value_map: &ValueMap,
+                   builder: &mut FunctionBuilder| {
+        if !wide(lhs) || !wide(rhs) {
+            return Err(format!(
+                "cannot compare mismatched i256 and scalar values: {:?}, {:?}",
+                dfg.value_ty(*lhs),
+                dfg.value_ty(*rhs)
+            ));
+        }
+        let (lhs, rhs) = binary(lhs, rhs, value_map, builder)?;
+        Ok(Output::Flag(icmp(cc, lhs, rhs, builder)))
     };
-    let high_limb_is_negative =
-        builder
-            .ins()
-            .icmp(IntCC::SignedLessThan, limbs[I256_LIMBS - 1], zero);
-    let all_ones = builder.ins().iconst(clif::types::I64, -1);
-    let sign_fill = builder.ins().select(high_limb_is_negative, all_ones, zero);
-    let overshift_fill = match kind {
-        I256ShiftKind::Sar => sign_fill,
-        I256ShiftKind::Shl | I256ShiftKind::Shr => zero,
+    let shift_op = |value: &ValueId,
+                    bits: &ValueId,
+                    kind: ShiftKind,
+                    value_map: &ValueMap,
+                    builder: &mut FunctionBuilder| {
+        let value = resolve_i256(function, *value, value_map, builder)?;
+        let amount = shift_amount(function, *bits, value_map, builder)?;
+        Ok::<_, String>(Output::Limbs(shift(value, amount, kind, builder)))
+    };
+    let bitwise = |lhs: &ValueId,
+                   rhs: &ValueId,
+                   op: fn(&mut FunctionBuilder, clif::Value, clif::Value) -> clif::Value,
+                   value_map: &ValueMap,
+                   builder: &mut FunctionBuilder| {
+        let (lhs, rhs) = binary(lhs, rhs, value_map, builder)?;
+        Ok::<_, String>(Output::Limbs(std::array::from_fn(|limb| {
+            op(builder, lhs[limb], rhs[limb])
+        })))
     };
 
-    for result_limb_idx in 0..I256_LIMBS {
-        let shifted = match kind {
-            I256ShiftKind::Shl => emit_i256_shl_limb(result_limb_idx, &parts, builder),
-            I256ShiftKind::Shr => {
-                emit_i256_right_shift_limb(result_limb_idx, &parts, zero, builder)
-            }
-            I256ShiftKind::Sar => {
-                emit_i256_right_shift_limb(result_limb_idx, &parts, sign_fill, builder)
-            }
-        };
-        let shifted = builder.ins().select(too_large, overshift_fill, shifted);
-        store_i256_limb(result, result_limb_idx, shifted, builder);
-    }
-
-    Ok(result)
-}
-
-pub(super) fn resolve_i256_shift_amount(
-    function: &Function,
-    bits: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<(clif::Value, clif::Value), String> {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let max_shift = builder.ins().iconst(clif::types::I64, I256_BITS);
-    let bits_ty = function.dfg.value_ty(bits);
-
-    if bits_ty == Type::I256 {
-        let bits_addr = resolve_value(function, bits, value_map, builder)?;
-        let shift = load_i256_limb(bits_addr, 0, builder);
-        let mut upper_nonzero = bool_const(false, builder);
-        for limb in 1..I256_LIMBS {
-            let limb_value = load_i256_limb(bits_addr, limb, builder);
-            let limb_nonzero = builder.ins().icmp(IntCC::NotEqual, limb_value, zero);
-            upper_nonzero = bool_or(upper_nonzero, limb_nonzero, builder);
+    let output = match native_inst_set().resolve_inst(dfg.inst(inst)) {
+        NativeInstKind::Add(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            Output::Limbs(add(lhs, rhs, builder))
         }
-        let shift_too_large =
-            builder
-                .ins()
-                .icmp(IntCC::UnsignedGreaterThanOrEqual, shift, max_shift);
-        return Ok((shift, bool_or(upper_nonzero, shift_too_large, builder)));
-    }
-
-    let raw = resolve_value(function, bits, value_map, builder)?;
-    let raw_ty = builder.func.dfg.value_type(raw);
-    let shift = resize_int_value(raw, clif::types::I64, false, builder);
-    let shift_too_large = builder
-        .ins()
-        .icmp(IntCC::UnsignedGreaterThanOrEqual, shift, max_shift);
-    if raw_ty.bits() <= I256_LIMB_BITS as u32 {
-        return Ok((shift, shift_too_large));
-    }
-
-    let high_bits = builder.ins().ushr_imm_s(raw, I256_LIMB_BITS);
-    let zero_raw = scalar_constant(raw_ty, 0, builder);
-    let high_bits_nonzero = builder.ins().icmp(IntCC::NotEqual, high_bits, zero_raw);
-    Ok((shift, bool_or(high_bits_nonzero, shift_too_large, builder)))
-}
-
-fn emit_i256_shl_limb(
-    result_limb_idx: usize,
-    parts: &I256ShiftParts,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let mut result = zero;
-
-    for shifted_limb_count in 0..=result_limb_idx {
-        let low_idx = result_limb_idx - shifted_limb_count;
-        let low = builder.ins().ishl(parts.limbs[low_idx], parts.bit_shift);
-        let high = if low_idx > 0 {
-            let high = builder
-                .ins()
-                .ushr(parts.limbs[low_idx - 1], parts.inverse_shift);
-            builder.ins().select(parts.bit_shift_is_zero, zero, high)
-        } else {
-            zero
-        };
-        let combined = builder.ins().bor(low, high);
-        let count = builder
-            .ins()
-            .iconst(clif::types::I64, shifted_limb_count as i64);
-        let matches_count = builder.ins().icmp(IntCC::Equal, parts.limb_shift, count);
-        result = builder.ins().select(matches_count, combined, result);
-    }
-
-    result
-}
-
-fn emit_i256_right_shift_limb(
-    result_limb_idx: usize,
-    parts: &I256ShiftParts,
-    fill: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let mut result = fill;
-
-    for shifted_limb_count in 0..I256_LIMBS {
-        let low_idx = result_limb_idx + shifted_limb_count;
-        let low_source = parts.limbs.get(low_idx).copied().unwrap_or(fill);
-        let high_source = parts.limbs.get(low_idx + 1).copied().unwrap_or(fill);
-        let low = builder.ins().ushr(low_source, parts.bit_shift);
-        let high = builder.ins().ishl(high_source, parts.inverse_shift);
-        let zero = builder.ins().iconst(clif::types::I64, 0);
-        let high = builder.ins().select(parts.bit_shift_is_zero, zero, high);
-        let combined = builder.ins().bor(low, high);
-        let count = builder
-            .ins()
-            .iconst(clif::types::I64, shifted_limb_count as i64);
-        let matches_count = builder.ins().icmp(IntCC::Equal, parts.limb_shift, count);
-        result = builder.ins().select(matches_count, combined, result);
-    }
-
-    result
-}
-
-pub(super) fn bool_const(value: bool, builder: &mut FunctionBuilder) -> clif::Value {
-    let zero = builder.ins().iconst(clif::types::I8, 0);
-    let rhs = builder.ins().iconst(clif::types::I8, (!value) as i64);
-    builder.ins().icmp(IntCC::Equal, zero, rhs)
-}
-
-pub(super) fn bool_not(value: clif::Value, builder: &mut FunctionBuilder) -> clif::Value {
-    let yes = bool_const(true, builder);
-    let no = bool_const(false, builder);
-    builder.ins().select(value, no, yes)
-}
-
-pub(super) fn bool_and(
-    lhs: clif::Value,
-    rhs: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let no = bool_const(false, builder);
-    builder.ins().select(lhs, rhs, no)
-}
-
-pub(super) fn bool_or(
-    lhs: clif::Value,
-    rhs: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let yes = bool_const(true, builder);
-    builder.ins().select(lhs, yes, rhs)
-}
-
-pub(super) fn emit_i256_eq_limbs(
-    lhs: [clif::Value; I256_LIMBS],
-    rhs: [clif::Value; I256_LIMBS],
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let mut result = bool_const(true, builder);
-    for limb in 0..I256_LIMBS {
-        let limbs_equal = builder.ins().icmp(IntCC::Equal, lhs[limb], rhs[limb]);
-        result = bool_and(result, limbs_equal, builder);
-    }
-    result
-}
-
-pub(super) fn emit_i256_eq(
-    lhs: clif::Value,
-    rhs: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    emit_i256_eq_limbs(
-        load_i256_limbs(lhs, builder),
-        load_i256_limbs(rhs, builder),
-        builder,
-    )
-}
-
-pub(super) fn emit_i256_unsigned_lt_limbs(
-    lhs: [clif::Value; I256_LIMBS],
-    rhs: [clif::Value; I256_LIMBS],
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let mut result = bool_const(false, builder);
-    let mut equal_prefix = bool_const(true, builder);
-    for limb in (0..I256_LIMBS).rev() {
-        let limb_lt = builder
-            .ins()
-            .icmp(IntCC::UnsignedLessThan, lhs[limb], rhs[limb]);
-        let limb_eq = builder.ins().icmp(IntCC::Equal, lhs[limb], rhs[limb]);
-        result = builder.ins().select(equal_prefix, limb_lt, result);
-        equal_prefix = bool_and(equal_prefix, limb_eq, builder);
-    }
-    result
-}
-
-pub(super) fn emit_i256_unsigned_lt(
-    lhs: clif::Value,
-    rhs: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    emit_i256_unsigned_lt_limbs(
-        load_i256_limbs(lhs, builder),
-        load_i256_limbs(rhs, builder),
-        builder,
-    )
-}
-
-pub(super) fn emit_i256_signed_lt(
-    lhs: clif::Value,
-    rhs: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let lhs_high = load_i256_limb(lhs, 3, builder);
-    let rhs_high = load_i256_limb(rhs, 3, builder);
-    let high_lt = builder
-        .ins()
-        .icmp(IntCC::SignedLessThan, lhs_high, rhs_high);
-    let high_eq = builder.ins().icmp(IntCC::Equal, lhs_high, rhs_high);
-    let lower_lt = emit_i256_unsigned_lt(lhs, rhs, builder);
-    let equal_high_lower_lt = bool_and(high_eq, lower_lt, builder);
-    bool_or(high_lt, equal_high_lower_lt, builder)
-}
-
-pub(super) fn emit_i256_icmp(
-    cc: IntCC,
-    lhs: clif::Value,
-    rhs: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let result = match cc {
-        IntCC::Equal => emit_i256_eq(lhs, rhs, builder),
-        IntCC::NotEqual => {
-            let equal = emit_i256_eq(lhs, rhs, builder);
-            bool_not(equal, builder)
+        NativeInstKind::Sub(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            Output::Limbs(sub(lhs, rhs, builder))
         }
-        IntCC::UnsignedLessThan => emit_i256_unsigned_lt(lhs, rhs, builder),
-        IntCC::UnsignedGreaterThan => emit_i256_unsigned_lt(rhs, lhs, builder),
-        IntCC::UnsignedLessThanOrEqual => {
-            let greater = emit_i256_unsigned_lt(rhs, lhs, builder);
-            bool_not(greater, builder)
+        NativeInstKind::Mul(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            Output::Limbs(mul_limbs::<LIMBS>(&lhs, &rhs, builder))
         }
-        IntCC::UnsignedGreaterThanOrEqual => {
-            let less = emit_i256_unsigned_lt(lhs, rhs, builder);
-            bool_not(less, builder)
+        NativeInstKind::Neg(op) if wide(op.arg()) => {
+            let value = resolve_i256(function, *op.arg(), value_map, builder)?;
+            Output::Limbs(neg(value, builder))
         }
-        IntCC::SignedLessThan => emit_i256_signed_lt(lhs, rhs, builder),
-        IntCC::SignedGreaterThan => emit_i256_signed_lt(rhs, lhs, builder),
-        IntCC::SignedLessThanOrEqual => {
-            let greater = emit_i256_signed_lt(rhs, lhs, builder);
-            bool_not(greater, builder)
+        NativeInstKind::Shl(op) if wide(op.value()) => {
+            shift_op(op.value(), op.bits(), ShiftKind::Shl, value_map, builder)?
         }
-        IntCC::SignedGreaterThanOrEqual => {
-            let less = emit_i256_signed_lt(lhs, rhs, builder);
-            bool_not(less, builder)
+        NativeInstKind::Shr(op) if wide(op.value()) => {
+            shift_op(op.value(), op.bits(), ShiftKind::Shr, value_map, builder)?
         }
+        NativeInstKind::Sar(op) if wide(op.value()) => {
+            shift_op(op.value(), op.bits(), ShiftKind::Sar, value_map, builder)?
+        }
+        NativeInstKind::And(op) if wide(op.lhs()) => bitwise(
+            op.lhs(),
+            op.rhs(),
+            |builder, lhs, rhs| builder.ins().band(lhs, rhs),
+            value_map,
+            builder,
+        )?,
+        NativeInstKind::Or(op) if wide(op.lhs()) => bitwise(
+            op.lhs(),
+            op.rhs(),
+            |builder, lhs, rhs| builder.ins().bor(lhs, rhs),
+            value_map,
+            builder,
+        )?,
+        NativeInstKind::Xor(op) if wide(op.lhs()) => bitwise(
+            op.lhs(),
+            op.rhs(),
+            |builder, lhs, rhs| builder.ins().bxor(lhs, rhs),
+            value_map,
+            builder,
+        )?,
+        NativeInstKind::Not(op) if wide(op.arg()) => {
+            let value = resolve_i256(function, *op.arg(), value_map, builder)?;
+            Output::Limbs(value.map(|limb| builder.ins().bnot(limb)))
+        }
+        // Reversing all 32 bytes reverses the limb order and the bytes
+        // within each limb.
+        NativeInstKind::Bswap(op) if wide(op.arg()) => {
+            let value = resolve_i256(function, *op.arg(), value_map, builder)?;
+            Output::Limbs(std::array::from_fn(|limb| {
+                builder.ins().bswap(value[LIMBS - 1 - limb])
+            }))
+        }
+        NativeInstKind::Lt(op) if wide(op.lhs()) || wide(op.rhs()) => compare(
+            IntCC::UnsignedLessThan,
+            op.lhs(),
+            op.rhs(),
+            value_map,
+            builder,
+        )?,
+        NativeInstKind::Gt(op) if wide(op.lhs()) || wide(op.rhs()) => compare(
+            IntCC::UnsignedGreaterThan,
+            op.lhs(),
+            op.rhs(),
+            value_map,
+            builder,
+        )?,
+        NativeInstKind::Le(op) if wide(op.lhs()) || wide(op.rhs()) => compare(
+            IntCC::UnsignedLessThanOrEqual,
+            op.lhs(),
+            op.rhs(),
+            value_map,
+            builder,
+        )?,
+        NativeInstKind::Ge(op) if wide(op.lhs()) || wide(op.rhs()) => compare(
+            IntCC::UnsignedGreaterThanOrEqual,
+            op.lhs(),
+            op.rhs(),
+            value_map,
+            builder,
+        )?,
+        NativeInstKind::Slt(op) if wide(op.lhs()) || wide(op.rhs()) => compare(
+            IntCC::SignedLessThan,
+            op.lhs(),
+            op.rhs(),
+            value_map,
+            builder,
+        )?,
+        NativeInstKind::Sgt(op) if wide(op.lhs()) || wide(op.rhs()) => compare(
+            IntCC::SignedGreaterThan,
+            op.lhs(),
+            op.rhs(),
+            value_map,
+            builder,
+        )?,
+        NativeInstKind::Sle(op) if wide(op.lhs()) || wide(op.rhs()) => compare(
+            IntCC::SignedLessThanOrEqual,
+            op.lhs(),
+            op.rhs(),
+            value_map,
+            builder,
+        )?,
+        NativeInstKind::Sge(op) if wide(op.lhs()) || wide(op.rhs()) => compare(
+            IntCC::SignedGreaterThanOrEqual,
+            op.lhs(),
+            op.rhs(),
+            value_map,
+            builder,
+        )?,
+        NativeInstKind::Eq(op) if wide(op.lhs()) || wide(op.rhs()) => {
+            compare(IntCC::Equal, op.lhs(), op.rhs(), value_map, builder)?
+        }
+        NativeInstKind::Ne(op) if wide(op.lhs()) || wide(op.rhs()) => {
+            compare(IntCC::NotEqual, op.lhs(), op.rhs(), value_map, builder)?
+        }
+        NativeInstKind::IsZero(op) if wide(op.lhs()) => {
+            let value = resolve_i256(function, *op.lhs(), value_map, builder)?;
+            Output::Flag(is_zero(value, builder))
+        }
+        NativeInstKind::Uaddo(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let (sum, carry) = add_carry(lhs, rhs, builder);
+            Output::Overflowing(sum, carry)
+        }
+        NativeInstKind::Saddo(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let sum = add(lhs, rhs, builder);
+            Output::Overflowing(sum, sadd_overflow(lhs, rhs, sum, builder))
+        }
+        NativeInstKind::Usubo(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let (difference, borrow) = sub_borrow(lhs, rhs, builder);
+            Output::Overflowing(difference, borrow)
+        }
+        NativeInstKind::Ssubo(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let difference = sub(lhs, rhs, builder);
+            Output::Overflowing(difference, ssub_overflow(lhs, rhs, difference, builder))
+        }
+        NativeInstKind::Umulo(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let product = mul_limbs::<{ 2 * LIMBS }>(&lhs, &rhs, builder);
+            let overflow = any_nonzero(&product[LIMBS..], builder);
+            Output::Overflowing(low_limbs(product), overflow)
+        }
+        NativeInstKind::Smulo(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let (product, overflow) = smul_overflow(lhs, rhs, builder);
+            Output::Overflowing(product, overflow)
+        }
+        NativeInstKind::Snego(op) if wide(op.arg()) => {
+            let value = resolve_i256(function, *op.arg(), value_map, builder)?;
+            let min = signed_min_limbs(builder);
+            let overflow = eq(value, min, builder);
+            Output::Overflowing(neg(value, builder), overflow)
+        }
+        NativeInstKind::Uaddsat(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let (sum, carry) = add_carry(lhs, rhs, builder);
+            let max = constant_limbs(U256::MAX, builder);
+            Output::Limbs(select(carry, max, sum, builder))
+        }
+        NativeInstKind::Saddsat(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let sum = add(lhs, rhs, builder);
+            let overflow = sadd_overflow(lhs, rhs, sum, builder);
+            let lhs_negative = sign(lhs, builder);
+            let bound = signed_bound(lhs_negative, builder);
+            Output::Limbs(select(overflow, bound, sum, builder))
+        }
+        NativeInstKind::Usubsat(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let (difference, borrow) = sub_borrow(lhs, rhs, builder);
+            let zero = constant_limbs(U256::zero(), builder);
+            Output::Limbs(select(borrow, zero, difference, builder))
+        }
+        NativeInstKind::Ssubsat(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let difference = sub(lhs, rhs, builder);
+            let overflow = ssub_overflow(lhs, rhs, difference, builder);
+            let lhs_negative = sign(lhs, builder);
+            let bound = signed_bound(lhs_negative, builder);
+            Output::Limbs(select(overflow, bound, difference, builder))
+        }
+        NativeInstKind::Umulsat(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let product = mul_limbs::<{ 2 * LIMBS }>(&lhs, &rhs, builder);
+            let overflow = any_nonzero(&product[LIMBS..], builder);
+            let max = constant_limbs(U256::MAX, builder);
+            Output::Limbs(select(overflow, max, low_limbs(product), builder))
+        }
+        NativeInstKind::Smulsat(op) if wide(op.lhs()) => {
+            let (lhs, rhs) = binary(op.lhs(), op.rhs(), value_map, builder)?;
+            let (product, overflow) = smul_overflow(lhs, rhs, builder);
+            let lhs_negative = sign(lhs, builder);
+            let rhs_negative = sign(rhs, builder);
+            let negative = builder.ins().bxor(lhs_negative, rhs_negative);
+            let bound = signed_bound(negative, builder);
+            Output::Limbs(select(overflow, bound, product, builder))
+        }
+        _ => return Ok(false),
     };
-    Ok(result)
+    let results = dfg.inst_results(inst);
+    match output {
+        Output::Limbs(limbs) => value_map.insert_limbs(results[0], limbs),
+        Output::Flag(flag) => value_map.insert(results[0], flag),
+        Output::Overflowing(limbs, overflow) => {
+            value_map.insert_limbs(results[0], limbs);
+            value_map.insert(results[1], overflow);
+        }
+    }
+    Ok(true)
 }
 
-pub(super) fn emit_i256_is_zero(value: clif::Value, builder: &mut FunctionBuilder) -> clif::Value {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let mut result = bool_const(true, builder);
-    for limb in 0..4 {
-        let limb = load_i256_limb(value, limb, builder);
-        let limb_is_zero = builder.ins().icmp(IntCC::Equal, limb, zero);
-        result = bool_and(result, limb_is_zero, builder);
-    }
-    result
+/// Booleans are canonical i8 zero or one.
+fn bool_not(value: clif::Value, builder: &mut FunctionBuilder) -> clif::Value {
+    builder.ins().bxor_imm_s(value, 1)
 }
 
 pub(super) fn resize_int_value(
@@ -1162,98 +1058,4 @@ pub(super) fn bool_to_int_value(
     let zero = scalar_constant(to_ty, 0, builder);
     let set = scalar_constant(to_ty, if signed { -1 } else { 1 }, builder);
     builder.ins().select(value, set, zero)
-}
-
-pub(super) fn insert_clif_results(
-    function: &Function,
-    inst_id: sonatina_ir::inst::InstId,
-    values: impl IntoIterator<Item = clif::Value>,
-    value_map: &mut HashMap<ValueId, clif::Value>,
-) {
-    for (ir_result, clif_result) in function.dfg.inst_results(inst_id).iter().zip(values) {
-        value_map.insert(*ir_result, clif_result);
-    }
-}
-
-pub(super) fn resolve_value(
-    function: &Function,
-    value_id: ValueId,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    if let Some(&clif_val) = value_map.get(&value_id) {
-        return Ok(clif_val);
-    }
-    let value = function.dfg.value(value_id);
-    match value {
-        Value::Immediate { imm, ty } => match imm {
-            Immediate::I128(value) => Ok(scalar_constant(clif::types::I128, *value, builder)),
-            Immediate::I256(value) => Ok(emit_i256_immediate(value, builder)),
-            _ => {
-                let clif_ty = sonatina_scalar_type_to_clif_or_err(*ty)?;
-                let i64_val = imm_to_i64(imm)?;
-                let val = builder.ins().iconst(clif_ty, i64_val);
-                Ok(val)
-            }
-        },
-        // This is a backend choice for surviving undef values, not an IR
-        // promise that optimizations must preserve zero.
-        Value::Undef { ty: Type::I256 } => Ok(store_i256_limbs(zero_i256_limbs(builder), builder)),
-        Value::Undef { ty } => {
-            let ctx = function.ctx();
-            if uses_indirect_value_representation(ctx, *ty) {
-                // Aggregate consumers zero their destination (`store_indirect`)
-                // or a slot of their own (`resolve_operand`).
-                return Err(format!(
-                    "undef aggregate v{} needs a storage-aware consumer",
-                    value_id.0
-                ));
-            }
-            let pointer_ty = sonatina_scalar_type_to_clif_or_err(ctx.type_layout.pointer_repl())?;
-            let clif_ty = sonatina_type_to_clif_or_err(*ty, pointer_ty)?;
-            Ok(scalar_constant(clif_ty, 0, builder))
-        }
-        Value::Global { gv, .. } => Err(format!(
-            "unresolved global address {gv:?} at v{}",
-            value_id.0
-        )),
-        Value::Arg { .. } | Value::Inst { .. } => {
-            Err(format!("unresolved SSA value v{}: {value:?}", value_id.0))
-        }
-    }
-}
-
-pub(super) fn imm_to_i64(imm: &Immediate) -> Result<i64, String> {
-    match imm {
-        Immediate::I1(b) => Ok(*b as i64),
-        Immediate::I8(v) => Ok(*v as i64),
-        Immediate::I16(v) => Ok(*v as i64),
-        Immediate::I32(v) => Ok(*v as i64),
-        Immediate::I64(v) => Ok(*v),
-        _ => Err(format!("unsupported immediate type for cranelift: {imm:?}")),
-    }
-}
-
-pub(super) fn emit_i256_immediate(
-    imm: &sonatina_ir::I256,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let slot = builder.create_sized_stack_slot(StackSlotData::new(
-        StackSlotKind::ExplicitSlot,
-        32,
-        I256_ALIGN_SHIFT,
-    ));
-    let addr = builder.ins().stack_addr(clif::types::I64, slot, 0);
-
-    let u256 = imm.to_u256();
-    let bytes = u256.to_little_endian();
-    for i in 0..4 {
-        let limb = u64::from_le_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
-        let val = builder.ins().iconst(clif::types::I64, limb as i64);
-        builder
-            .ins()
-            .store(MemFlagsData::new(), val, addr, (i * 8) as i32);
-    }
-
-    addr
 }
