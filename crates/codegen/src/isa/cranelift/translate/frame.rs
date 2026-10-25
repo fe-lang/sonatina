@@ -13,7 +13,10 @@ use sonatina_ir::{
     isa::native::inst_set as native_inst_set,
 };
 
-use super::{uses_indirect_value_representation, value_storage_alignment, value_storage_size};
+use super::{
+    INLINE_MEMORY_BYTES, uses_indirect_value_representation, value_storage_alignment,
+    value_storage_size,
+};
 
 /// Stack slots for indirectly represented SSA values.
 ///
@@ -33,6 +36,11 @@ use super::{uses_indirect_value_representation, value_storage_alignment, value_s
 /// translation's block order, so two classes live at a common point never
 /// share a slot.
 ///
+/// A load whose only use copies it, later in its block with no state
+/// change in between, owns no storage: the consumer copies straight from
+/// the load's source. A store may overlap that source, so it consumes only
+/// a load small enough to copy inline, reading every word before writing.
+///
 /// A returned class can live in the function's return buffer instead, so
 /// that its `return` copies nothing. The buffer is caller storage distinct
 /// from every argument, and holds classes with disjoint ranges. A `return`
@@ -46,6 +54,7 @@ pub(super) struct FrameSlots {
     in_return_buffer: FxHashSet<ValueId>,
     /// The `insert_value` continuing each continued source's storage.
     continuation: FxHashMap<ValueId, InstId>,
+    forwarded: FxHashSet<ValueId>,
 }
 
 impl FrameSlots {
@@ -148,7 +157,13 @@ impl FrameSlots {
                 })
                 .collect(),
             continuation: plan.continuation,
+            forwarded: plan.forwarded,
         })
+    }
+
+    /// Whether a load leaves its result in memory for its consumer.
+    pub fn forwards(&self, load: ValueId) -> bool {
+        self.forwarded.contains(&load)
     }
 
     /// The address of the storage of a value that owns storage.
@@ -223,6 +238,7 @@ struct Plan {
     /// Values that own storage, by class.
     roots: Vec<(ValueId, usize)>,
     continuation: FxHashMap<ValueId, InstId>,
+    forwarded: FxHashSet<ValueId>,
 }
 
 impl Plan {
@@ -250,6 +266,7 @@ impl Plan {
             members: Vec::new(),
             roots: Vec::new(),
             continuation: FxHashMap::default(),
+            forwarded: FxHashSet::default(),
         };
         let mut class_of = FxHashMap::<ValueId, usize>::default();
         for &block in block_order {
@@ -264,6 +281,12 @@ impl Plan {
                 }
                 let class = match native_inst_set().resolve_inst(dfg.inst(inst)) {
                     NativeInstKind::Phi(_) => Some(block_start),
+                    NativeInstKind::Mload(_) | NativeInstKind::ObjLoad(_)
+                        if copied_once(function, inst, result)? =>
+                    {
+                        plan.forwarded.insert(result);
+                        None
+                    }
                     NativeInstKind::Mload(_)
                     | NativeInstKind::ObjLoad(_)
                     | NativeInstKind::Call(_) => Some(position[inst]),
@@ -366,6 +389,32 @@ impl Plan {
         }
         Ok(plan)
     }
+}
+
+/// Whether the only use of the load `inst` copies its result later in the
+/// same block, with no instruction in between that may change state.
+fn copied_once(function: &Function, inst: InstId, result: ValueId) -> Result<bool, String> {
+    let dfg = &function.dfg;
+    let mut users = dfg.users(result);
+    let (Some(&user), None) = (users.next(), users.next()) else {
+        return Ok(false);
+    };
+    let inline = value_storage_size(dfg.value_ty(result), function.ctx())? <= INLINE_MEMORY_BYTES;
+    let copies = match native_inst_set().resolve_inst(dfg.inst(user)) {
+        // A chain head copies its source, and every insert copies its field.
+        NativeInstKind::InsertValue(_) => true,
+        NativeInstKind::Mstore(store) => *store.addr() != result && inline,
+        NativeInstKind::ObjStore(store) => *store.object() != result && inline,
+        NativeInstKind::Return(_) => true,
+        _ => false,
+    };
+    Ok(copies
+        && function.layout.inst_block(user) == function.layout.inst_block(inst)
+        && std::iter::successors(function.layout.next_inst_of(inst), |&next| {
+            function.layout.next_inst_of(next)
+        })
+        .take_while(|&next| next != user)
+        .all(|next| !dfg.may_mutate_state(next)))
 }
 
 /// Live range construction over the translation's block order.
