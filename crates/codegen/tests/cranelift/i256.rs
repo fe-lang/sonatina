@@ -102,8 +102,12 @@ fn bytes(value: U256) -> [u8; 32] {
     value.to_little_endian()
 }
 
-fn compile(body: &str, level: OptLevel) -> sonatina_codegen::isa::cranelift::CraneliftJitArtifact {
-    let source = format!(
+const LEVELS: &[OptLevel] = &[OptLevel::O0, OptLevel::O2];
+
+/// A function `%apply` that loads `v4`, `v5` and `v6` through its first
+/// three arguments and runs `body`, which stores its result through `v3`.
+fn apply_source(body: &str) -> String {
+    format!(
         "func public %apply(v0.*i256, v1.*i256, v2.*i256, v3.*i256) -> i8 {{
 block0:
     v4.i256 = mload v0 i256;
@@ -112,30 +116,30 @@ block0:
 {body}
 }}
 "
-    );
-    Compile::new(
-        parse_verified_native_module(&source),
-        CraneliftJitBackend::new(),
     )
-    .with_opt_level(level)
-    .compile()
-    .unwrap_or_else(|errors| panic!("{body}\n{errors:?}"))
 }
 
 /// Runs `body` on every `(a, b, c)` case and compares its stored result
 /// and returned flag with `expected`.
 fn check(body: &str, cases: &[[U256; 3]], expected: impl Fn([U256; 3]) -> (U256, bool)) {
-    check_at(&[OptLevel::O0, OptLevel::O2], body, cases, expected);
+    check_at(LEVELS, &apply_source(body), cases, expected);
 }
 
+/// Runs the `%apply` of module `source` at each of `levels`.
 fn check_at(
     levels: &[OptLevel],
-    body: &str,
+    source: &str,
     cases: &[[U256; 3]],
     expected: impl Fn([U256; 3]) -> (U256, bool),
 ) {
     for &level in levels {
-        let artifact = compile(body, level);
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{source}\n{errors:?}"));
         let apply: Apply =
             unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
         for &case in cases {
@@ -146,9 +150,13 @@ fn check_at(
             assert_eq!(
                 U256::from_little_endian(&result),
                 value,
-                "{body}\n{level:?} {case:x?}"
+                "{source}\n{level:?} {case:x?}"
             );
-            assert_eq!(flag, u8::from(expected_flag), "{body}\n{level:?} {case:x?}");
+            assert_eq!(
+                flag,
+                u8::from(expected_flag),
+                "{source}\n{level:?} {case:x?}"
+            );
         }
     }
 }
@@ -356,13 +364,13 @@ fn i256_shifts_match_reference_for_variable_and_constant_amounts() {
             let levels: &[OptLevel] = if amount > U256::from(u64::MAX) {
                 &[OptLevel::O0]
             } else {
-                &[OptLevel::O0, OptLevel::O2]
+                LEVELS
             };
             check_at(
                 levels,
-                &format!(
+                &apply_source(&format!(
                     "    v7.i256 = {op} 0x{amount:x}.i256 v4;\n    mstore v3 v7 i256;\n    return 0.i8;"
-                ),
+                )),
                 &pairs(&values, &[U256::zero()]),
                 |[value, _, _]| (shifted(op, value, amount), false),
             );
@@ -678,4 +686,217 @@ block0:
             }
         }
     }
+}
+
+#[test]
+fn i256_modular_arithmetic_carries_through_loop_phis() {
+    let body = "    jump block1;
+block1:
+    v10.i256 = phi (v4 block0) (v13 block1);
+    v11.i64 = phi (0.i64 block0) (v14 block1);
+    v12.i256 = evm_mul_mod v10 v5 v6;
+    v13.i256 = evm_add_mod v12 v10 v6;
+    v14.i64 = add v11 1.i64;
+    v15.i1 = lt v14 4.i64;
+    br v15 block1 block2;
+block2:
+    mstore v3 v13 i256;
+    return 0.i8;";
+    let values = operands();
+    let moduli = moduli();
+    let cases: Vec<_> = values
+        .iter()
+        .zip(values.iter().rev())
+        .flat_map(|(&a, &b)| moduli.iter().map(move |&m| [a, b, m]))
+        .collect();
+    check(body, &cases, |[a, b, m]| {
+        let mut acc = a;
+        for _ in 0..4 {
+            acc = modular(modular(acc, b, m, true), acc, m, false);
+        }
+        (acc, false)
+    });
+}
+
+#[test]
+fn i256_values_cross_loop_carried_aggregates() {
+    // `v12` is extracted from the phi before the back edge copies the
+    // updated pair into it, and is read after the loop.
+    let body = "    v7.@Pair = insert_value undef.@Pair 0.i64 v4;
+    v8.@Pair = insert_value v7 1.i64 v5;
+    jump block1;
+block1:
+    v10.@Pair = phi (v8 block0) (v16 block1);
+    v11.i64 = phi (0.i64 block0) (v17 block1);
+    v12.i256 = extract_value v10 0.i64;
+    v13.i256 = extract_value v10 1.i64;
+    v14.i256 = add v12 v13;
+    v15.@Pair = insert_value v10 0.i64 v13;
+    v16.@Pair = insert_value v15 1.i64 v14;
+    v17.i64 = add v11 1.i64;
+    v18.i1 = lt v17 5.i64;
+    br v18 block1 block2;
+block2:
+    v19.i256 = extract_value v16 0.i64;
+    v20.i256 = mul v19 v6;
+    v21.i256 = sub v20 v14;
+    v22.i256 = add v21 v12;
+    mstore v3 v22 i256;
+    return 0.i8;";
+    let values = operands();
+    let cases: Vec<_> = values
+        .iter()
+        .zip(values.iter().rev())
+        .zip(values.iter().skip(5).cycle())
+        .map(|((&a, &b), &c)| [a, b, c])
+        .collect();
+    check_at(
+        LEVELS,
+        &format!("type @Pair = {{i256, i256}};\n{}", apply_source(body)),
+        &cases,
+        |[a, b, c]| {
+            let (mut x, mut y, mut previous) = (a, b, U256::zero());
+            for _ in 0..5 {
+                previous = x;
+                (x, y) = (y, x.overflowing_add(y).0);
+            }
+            let product = x.overflowing_mul(c).0;
+            (
+                product.overflowing_sub(y).0.overflowing_add(previous).0,
+                false,
+            )
+        },
+    );
+}
+
+#[test]
+fn i256_bitcasts_to_and_from_limb_arrays() {
+    // `v7` keeps its limbs after `v10` and `v11` replace two of them.
+    let body = "    v7.[i64; 4] = bitcast v4 [i64; 4];
+    v8.i64 = extract_value v7 0.i64;
+    v9.i64 = extract_value v7 3.i64;
+    v10.[i64; 4] = insert_value v7 0.i64 v9;
+    v11.[i64; 4] = insert_value v10 3.i64 v8;
+    v12.i256 = bitcast v11 i256;
+    v13.i256 = add v12 v5;
+    v14.i64 = extract_value v7 3.i64;
+    v15.i256 = zext v14 i256;
+    v16.i256 = xor v13 v15;
+    mstore v3 v16 i256;
+    return 0.i8;";
+    let values = operands();
+    check(body, &pairs(&values, &values[..12]), |[a, b, _]| {
+        let mut limbs: [u64; 4] = std::array::from_fn(|limb| (a >> (64 * limb)).low_u64());
+        let top = limbs[3];
+        limbs.swap(0, 3);
+        (word(limbs).overflowing_add(b).0 ^ U256::from(top), false)
+    });
+}
+
+#[test]
+fn br_table_dispatches_on_i256_scrutinees() {
+    let max = U256::MAX;
+    let high = U256::one() << 64;
+    let body = format!(
+        "    br_table v4 block4 (0.i256 block1) (0x{high:x}.i256 block2) (0x{max:x}.i256 block3) (0x{min:x}.i256 block1);
+block1:
+    jump block5;
+block2:
+    v7.i256 = add v5 1.i256;
+    jump block5;
+block3:
+    v8.i256 = mul v5 v6;
+    jump block5;
+block4:
+    jump block5;
+block5:
+    v9.i256 = phi (v5 block1) (v7 block2) (v8 block3) (v6 block4);
+    mstore v3 v9 i256;
+    return 0.i8;",
+        min = signed_min(),
+    );
+    let mut scrutinees = vec![
+        U256::zero(),
+        U256::one(),
+        high,
+        high + 1,
+        high - 1,
+        U256::one() << 128,
+        max,
+        max - 1,
+        signed_min(),
+        signed_min() + 1,
+    ];
+    scrutinees.extend(operands().into_iter().step_by(4));
+    let values = operands();
+    let cases: Vec<_> = scrutinees
+        .iter()
+        .flat_map(|&a| {
+            values
+                .iter()
+                .step_by(9)
+                .map(move |&b| [a, b, b.overflowing_add(U256::from(5)).0])
+        })
+        .collect();
+    check(&body, &cases, |[a, b, c]| {
+        let result = if a.is_zero() || a == signed_min() {
+            b
+        } else if a == high {
+            b.overflowing_add(U256::one()).0
+        } else if a == max {
+            b.overflowing_mul(c).0
+        } else {
+            c
+        };
+        (result, false)
+    });
+}
+
+#[test]
+fn forwarded_i256_arguments_do_not_alias_their_source_memory() {
+    // `%outer` and `%middle` forward their incoming arguments while every
+    // level writes through `v0`, the memory `%apply` loaded `v4` from.
+    let source = "
+func inline(never) private %leaf(v0.i256, v1.*i256) -> i256 {
+block0:
+    mstore v1 7.i256 i256;
+    v2.i256 = mload v1 i256;
+    v3.i256 = sub v0 v2;
+    return v3;
+}
+func inline(never) private %middle(v0.i256, v1.i256, v2.*i256) -> i256 {
+block0:
+    mstore v2 v1 i256;
+    v3.i256 = call %leaf v0 v2;
+    v4.i256 = call %leaf v1 v2;
+    v5.i256 = add v3 v4;
+    v6.i256 = add v5 v0;
+    return v6;
+}
+func inline(never) private %outer(v0.i256, v1.i256, v2.*i256) -> i256 {
+block0:
+    v3.i256 = call %middle v1 v0 v2;
+    v4.i256 = mload v2 i256;
+    v5.i256 = add v3 v4;
+    v6.i256 = add v5 v1;
+    return v6;
+}
+func public %apply(v0.*i256, v1.*i256, v2.*i256, v3.*i256) -> i8 {
+block0:
+    v4.i256 = mload v0 i256;
+    v5.i256 = mload v1 i256;
+    v6.i256 = call %outer v4 v5 v0;
+    v7.i256 = mload v0 i256;
+    v8.i256 = add v6 v7;
+    v9.i256 = add v8 v4;
+    mstore v3 v9 i256;
+    return 0.i8;
+}
+";
+    let values = operands();
+    check_at(LEVELS, source, &pairs(&values, &values), |[a, b, _]| {
+        let two_a = a.overflowing_add(a).0;
+        let three_b = b.overflowing_mul(U256::from(3)).0;
+        (two_a.overflowing_add(three_b).0, false)
+    });
 }
