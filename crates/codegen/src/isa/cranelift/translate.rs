@@ -1,4 +1,5 @@
 mod abi;
+mod division;
 mod frame;
 mod globals;
 mod i256;
@@ -22,7 +23,15 @@ use sonatina_ir::{
 use sonatina_triple::TargetTriple;
 
 use self::{
-    abi::*, frame::FrameSlots, globals::*, i256::*, memory::*, phi::Edges, scalar::*, values::*,
+    abi::*,
+    division::{Divider, div_rem, div_rem_i128},
+    frame::FrameSlots,
+    globals::*,
+    i256::*,
+    memory::*,
+    phi::Edges,
+    scalar::*,
+    values::*,
 };
 
 pub(super) fn translate_module(
@@ -34,6 +43,7 @@ pub(super) fn translate_module(
     let data_ids = define_globals(&module.ctx, clif_module)?;
 
     let funcs = module.funcs();
+    let mut divider = Divider::default();
 
     for &func_ref in &funcs {
         let (name, sig) = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
@@ -62,12 +72,14 @@ pub(super) fn translate_module(
                 if function.layout.entry_block().is_none() {
                     return Ok(false);
                 }
+                divider.start_function();
                 translate_function(
                     module,
                     function,
                     func_ref,
                     &func_id_map,
                     &data_ids,
+                    &mut divider,
                     clif_module,
                 )?;
                 Ok(true)
@@ -82,6 +94,7 @@ pub(super) fn translate_module(
             }
         }
     }
+    divider.define(clif_module)?;
 
     Ok(defined_func_map)
 }
@@ -98,12 +111,14 @@ fn translate_linkage(linkage: SonatinaLinkage) -> Linkage {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn translate_function(
     module: &Module,
     function: &Function,
     func_ref: FuncRef,
     func_id_map: &HashMap<FuncRef, FuncId>,
     data_ids: &GlobalDataMap,
+    divider: &mut Divider,
     clif_module: &mut impl ClifModule,
 ) -> Result<(), String> {
     let target_config = clif_module.target_config();
@@ -273,6 +288,8 @@ fn translate_function(
                     inst_id,
                     function,
                     &mut value_map,
+                    divider,
+                    clif_module,
                     &mut builder,
                 )?,
                 NativeInstKind::Sdiv(div) => translate_div_rem(
@@ -282,6 +299,8 @@ fn translate_function(
                     inst_id,
                     function,
                     &mut value_map,
+                    divider,
+                    clif_module,
                     &mut builder,
                 )?,
                 NativeInstKind::Umod(rem) => translate_div_rem(
@@ -291,6 +310,8 @@ fn translate_function(
                     inst_id,
                     function,
                     &mut value_map,
+                    divider,
+                    clif_module,
                     &mut builder,
                 )?,
                 NativeInstKind::Smod(rem) => translate_div_rem(
@@ -300,6 +321,8 @@ fn translate_function(
                     inst_id,
                     function,
                     &mut value_map,
+                    divider,
+                    clif_module,
                     &mut builder,
                 )?,
                 NativeInstKind::Shl(shl) => {
@@ -1527,6 +1550,8 @@ fn heap_allocate(
     Ok(address)
 }
 
+/// Translates a division or remainder. Cranelift divides only up to 64
+/// bits; wider operands use the module's divider.
 #[allow(clippy::too_many_arguments)]
 fn translate_div_rem(
     kind: DivRemKind,
@@ -1535,21 +1560,32 @@ fn translate_div_rem(
     inst_id: InstId,
     function: &Function,
     value_map: &mut ValueMap,
+    divider: &mut Divider,
+    clif_module: &mut impl ClifModule,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
     let result = function
         .dfg
         .inst_result(inst_id)
         .ok_or("division has no result")?;
-    let ty = function.dfg.value_ty(lhs);
-    if ty == Type::I256 {
-        let lhs = resolve_i256(function, lhs, value_map, builder)?;
-        let rhs = resolve_i256(function, rhs, value_map, builder)?;
-        value_map.insert_limbs(result, div_rem_limbs(lhs, rhs, kind, builder));
-    } else {
-        let lhs = resolve_value(function, lhs, value_map, builder)?;
-        let rhs = resolve_value(function, rhs, value_map, builder)?;
-        value_map.insert(result, emit_scalar_div_rem(lhs, rhs, ty, kind, builder));
+    match function.dfg.value_ty(lhs) {
+        Type::I256 => {
+            let lhs = resolve_i256(function, lhs, value_map, builder)?;
+            let rhs = resolve_i256(function, rhs, value_map, builder)?;
+            let call = divider.call(clif_module, builder)?;
+            value_map.insert_limbs(result, div_rem(kind, lhs, rhs, call, builder));
+        }
+        Type::I128 => {
+            let lhs = resolve_value(function, lhs, value_map, builder)?;
+            let rhs = resolve_value(function, rhs, value_map, builder)?;
+            let call = divider.call(clif_module, builder)?;
+            value_map.insert(result, div_rem_i128(kind, lhs, rhs, call, builder));
+        }
+        ty => {
+            let lhs = resolve_value(function, lhs, value_map, builder)?;
+            let rhs = resolve_value(function, rhs, value_map, builder)?;
+            value_map.insert(result, emit_scalar_div_rem(lhs, rhs, ty, kind, builder));
+        }
     }
     Ok(())
 }

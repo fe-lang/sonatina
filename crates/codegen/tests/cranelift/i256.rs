@@ -507,3 +507,54 @@ block2:
         }
     }
 }
+
+#[test]
+fn i256_division_reaches_every_divider_step() {
+    // The first cases need the divisor added back (Hacker's Delight's
+    // `divmnu` patterns at 64-bit digits). Limbs drawn from boundary values
+    // and random words also reach a top remainder limb equal to the
+    // divisor's and both estimate corrections.
+    let zero = U256::zero();
+    let mut cases = vec![
+        [
+            word([0, 0, 1 << 63, (1 << 63) - 1]),
+            word([1, 0, 1 << 63, 0]),
+            zero,
+        ],
+        [word([3, 0, 1 << 63, 0]), word([1, 0, 1 << 61, 0]), zero],
+        [
+            word([0, 0, 1 << 47, (1 << 47) - 1]),
+            word([1, 0, 1 << 47, 0]),
+            zero,
+        ],
+    ];
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let boundaries = [0, u64::MAX, 1 << 63, (1 << 63) - 1, 1];
+    while cases.len() < 20_000 {
+        let mut limb = || {
+            let choice = next();
+            if choice % 2 == 0 {
+                boundaries[(choice >> 1) as usize % boundaries.len()]
+            } else {
+                next()
+            }
+        };
+        let numerator = word([limb(), limb(), limb(), limb()]);
+        let mut divisor = [limb(), limb(), limb(), limb()];
+        let limbs = 1 + next() as usize % 4;
+        divisor[limbs..].fill(0);
+        let divisor = word(divisor);
+        if !divisor.is_zero() {
+            cases.push([numerator, divisor, zero]);
+        }
+    }
+    for op in ["udiv", "umod"] {
+        check(&binary(op), &cases, |[a, b, _]| (divided(op, a, b), false));
+    }
+}

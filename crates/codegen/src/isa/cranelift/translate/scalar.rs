@@ -1,8 +1,8 @@
-use cranelift_codegen::ir::{self as clif, InstBuilder, TrapCode, condcodes::IntCC};
+use cranelift_codegen::ir::{self as clif, InstBuilder, condcodes::IntCC};
 use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::Type;
 
-use super::{mul_limbs, unsigned_div_rem_limbs};
+use super::mul_limbs;
 
 /// Sonatina's one-bit values use an I8 register, but only bit zero is data.
 pub(super) fn normalize_scalar(
@@ -169,69 +169,23 @@ pub(super) fn emit_scalar_div_rem(
     } else {
         (lhs, rhs)
     };
-    let ty = builder.func.dfg.value_type(lhs);
-    if ty != clif::types::I128 {
-        return match kind {
-            DivRemKind::Udiv => builder.ins().udiv(lhs, rhs),
-            DivRemKind::Umod => builder.ins().urem(lhs, rhs),
-            DivRemKind::Smod => builder.ins().srem(lhs, rhs),
-            DivRemKind::Sdiv => {
-                let min = signed_min_value(ty, builder);
-                let lhs_min = builder.ins().icmp(IntCC::Equal, lhs, min);
-                let minus_one = scalar_constant(ty, -1, builder);
-                let rhs_minus_one = builder.ins().icmp(IntCC::Equal, rhs, minus_one);
-                let overflow = builder.ins().band(lhs_min, rhs_minus_one);
-                let one = scalar_constant(ty, 1, builder);
-                // Dividing the minimum by one gives the wrapping overflow
-                // result without executing Cranelift's trapping min / -1.
-                let divisor = builder.ins().select(overflow, one, rhs);
-                builder.ins().sdiv(lhs, divisor)
-            }
-        };
-    }
-
-    // Upstream Cranelift does not lower I128 division or remainder. Use the
-    // shared unsigned limb divider, restoring signs only for signed operations.
-    let zero = scalar_constant(ty, 0, builder);
-    let rhs_zero = builder.ins().icmp(IntCC::Equal, rhs, zero);
-    builder
-        .ins()
-        .trapnz(rhs_zero, TrapCode::INTEGER_DIVISION_BY_ZERO);
-    let signed = matches!(kind, DivRemKind::Sdiv | DivRemKind::Smod);
-    let remainder = matches!(kind, DivRemKind::Umod | DivRemKind::Smod);
-    let (numerator, denominator, negative) = if signed {
-        let lhs_negative = builder.ins().icmp(IntCC::SignedLessThan, lhs, zero);
-        let rhs_negative = builder.ins().icmp(IntCC::SignedLessThan, rhs, zero);
-        // Signed remainder takes the dividend's sign, not the quotient's.
-        let negative = if remainder {
-            lhs_negative
-        } else {
-            builder.ins().bxor(lhs_negative, rhs_negative)
-        };
-        let lhs_negated = builder.ins().ineg(lhs);
-        let rhs_negated = builder.ins().ineg(rhs);
-        let lhs_abs = builder.ins().select(lhs_negative, lhs_negated, lhs);
-        let rhs_abs = builder.ins().select(rhs_negative, rhs_negated, rhs);
-        (lhs_abs, rhs_abs, negative)
-    } else {
-        (lhs, rhs, builder.ins().iconst(clif::types::I8, 0))
-    };
-    let (lhs_low, lhs_high) = builder.ins().isplit(numerator);
-    let (rhs_low, rhs_high) = builder.ins().isplit(denominator);
-    let zero_limb = builder.ins().iconst(clif::types::I64, 0);
-    let (quotient, modulus) = unsigned_div_rem_limbs(
-        [lhs_low, lhs_high, zero_limb, zero_limb],
-        [rhs_low, rhs_high, zero_limb, zero_limb],
-        128,
-        builder,
-    );
-    let limbs = if remainder { modulus } else { quotient };
-    let result = builder.ins().iconcat(limbs[0], limbs[1]);
-    if signed {
-        let negated = builder.ins().ineg(result);
-        builder.ins().select(negative, negated, result)
-    } else {
-        result
+    match kind {
+        DivRemKind::Udiv => builder.ins().udiv(lhs, rhs),
+        DivRemKind::Umod => builder.ins().urem(lhs, rhs),
+        DivRemKind::Smod => builder.ins().srem(lhs, rhs),
+        DivRemKind::Sdiv => {
+            let ty = builder.func.dfg.value_type(lhs);
+            let min = signed_min_value(ty, builder);
+            let lhs_min = builder.ins().icmp(IntCC::Equal, lhs, min);
+            let minus_one = scalar_constant(ty, -1, builder);
+            let rhs_minus_one = builder.ins().icmp(IntCC::Equal, rhs, minus_one);
+            let overflow = builder.ins().band(lhs_min, rhs_minus_one);
+            let one = scalar_constant(ty, 1, builder);
+            // Dividing the minimum by one gives the wrapping overflow
+            // result without executing Cranelift's trapping min / -1.
+            let divisor = builder.ins().select(overflow, one, rhs);
+            builder.ins().sdiv(lhs, divisor)
+        }
     }
 }
 

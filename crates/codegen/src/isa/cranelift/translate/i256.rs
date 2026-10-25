@@ -6,7 +6,6 @@ use std::{cmp::Ordering, collections::HashMap};
 use cranelift_codegen::ir::{
     self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
     condcodes::IntCC,
-    instructions::BlockArg,
     types::{I64, I128},
 };
 use cranelift_frontend::FunctionBuilder;
@@ -16,7 +15,7 @@ use sonatina_ir::{
     isa::native::inst_set as native_inst_set,
 };
 
-use super::{DivRemKind, ValueMap, resolve_i256, resolve_value, scalar_constant};
+use super::{ValueMap, resolve_i256, resolve_value, scalar_constant};
 
 pub(super) const LIMBS: usize = 4;
 pub(super) type Limbs = [clif::Value; LIMBS];
@@ -614,142 +613,6 @@ fn shift_by_variable(
             builder.ins().select(moves, moved, limbs[limb])
         })
     })
-}
-
-fn shl_one_with_bit(limbs: Limbs, bit: clif::Value, builder: &mut FunctionBuilder) -> Limbs {
-    let mut carry = builder.ins().uextend(I64, bit);
-    std::array::from_fn(|limb| {
-        let shifted = builder.ins().ishl_imm_s(limbs[limb], 1);
-        let result = builder.ins().bor(shifted, carry);
-        carry = builder
-            .ins()
-            .ushr_imm_s(limbs[limb], i64::from(LIMB_BITS) - 1);
-        result
-    })
-}
-
-pub(super) fn unsigned_div_rem_limbs(
-    numerator: Limbs,
-    denominator: Limbs,
-    bits: usize,
-    builder: &mut FunctionBuilder,
-) -> (Limbs, Limbs) {
-    debug_assert!(matches!(bits, 128 | 256));
-    // Restoring division consumes the numerator from high bit to low bit.
-    // Carry quotient/remainder contents through a counted CLIF loop instead
-    // of emitting 128/256 copies of the body at every division site.
-    let header = builder.create_block();
-    let exit = builder.create_block();
-    let [bit, q0, q1, q2, q3, r0, r1, r2, r3] =
-        std::array::from_fn(|_| builder.append_block_param(header, I64));
-    let results: [clif::Value; LIMBS * 2] =
-        std::array::from_fn(|_| builder.append_block_param(exit, I64));
-    let initial_bit = builder.ins().iconst(I64, (bits - 1) as i64);
-    let zero = builder.ins().iconst(I64, 0);
-
-    // Avoid the bitwise loop for a zero quotient and for scalar-sized inputs.
-    // Signed callers apply this to magnitudes, then restore the result signs.
-    let scalar_check = builder.create_block();
-    let scalar = builder.create_block();
-    let smaller = ult(numerator, denominator, builder);
-    let [n0, n1, n2, n3] = numerator;
-    builder.ins().brif(
-        smaller,
-        exit,
-        &[zero, zero, zero, zero, n0, n1, n2, n3].map(BlockArg::from),
-        scalar_check,
-        &[],
-    );
-    builder.switch_to_block(scalar_check);
-    let mut high = zero;
-    for &limb in numerator[1..bits / 64]
-        .iter()
-        .chain(&denominator[1..bits / 64])
-    {
-        high = builder.ins().bor(high, limb);
-    }
-    let fits_scalar = builder.ins().icmp_imm_s(IntCC::Equal, high, 0);
-    let nonzero = builder.ins().icmp_imm_s(IntCC::NotEqual, denominator[0], 0);
-    let use_scalar = builder.ins().band(fits_scalar, nonzero);
-    builder.ins().brif(
-        use_scalar,
-        scalar,
-        &[],
-        header,
-        &[initial_bit, zero, zero, zero, zero, zero, zero, zero, zero].map(BlockArg::from),
-    );
-    builder.switch_to_block(scalar);
-    let quotient = builder.ins().udiv(numerator[0], denominator[0]);
-    let product = builder.ins().imul(quotient, denominator[0]);
-    let remainder = builder.ins().isub(numerator[0], product);
-    builder.ins().jump(
-        exit,
-        &[quotient, zero, zero, zero, remainder, zero, zero, zero].map(BlockArg::from),
-    );
-    builder.switch_to_block(header);
-
-    let limb_index = builder.ins().ushr_imm_s(bit, 6);
-    let mut limb = numerator[0];
-    for (index, &candidate) in numerator.iter().take(bits / 64).enumerate().skip(1) {
-        let matches = builder
-            .ins()
-            .icmp_imm_s(IntCC::Equal, limb_index, index as i64);
-        limb = builder.ins().select(matches, candidate, limb);
-    }
-    let shift = builder.ins().band_imm_s(bit, 63);
-    let shifted = builder.ins().ushr(limb, shift);
-    let next_bit = builder.ins().band_imm_s(shifted, 1);
-    let next_bit = builder.ins().icmp_imm_s(IntCC::NotEqual, next_bit, 0);
-    let remainder = shl_one_with_bit([r0, r1, r2, r3], next_bit, builder);
-    // The shifted remainder cannot overflow: it is at most the numerator
-    // prefix consumed so far, which still fits in `bits` bits.
-    let less = ult(remainder, denominator, builder);
-    let should_subtract = bool_not(less, builder);
-    let subtracted = sub(remainder, denominator, builder);
-    let remainder = select(should_subtract, subtracted, remainder, builder);
-    let quotient = shl_one_with_bit([q0, q1, q2, q3], should_subtract, builder);
-    let next_bit = builder.ins().iadd_imm_s(bit, -1);
-    let done = builder.ins().icmp_imm_s(IntCC::Equal, bit, 0);
-    let [q0, q1, q2, q3] = quotient;
-    let [r0, r1, r2, r3] = remainder;
-    builder.ins().brif(
-        done,
-        exit,
-        &[q0, q1, q2, q3, r0, r1, r2, r3].map(BlockArg::from),
-        header,
-        &[next_bit, q0, q1, q2, q3, r0, r1, r2, r3].map(BlockArg::from),
-    );
-    builder.switch_to_block(exit);
-
-    let [q0, q1, q2, q3, r0, r1, r2, r3] = results;
-    ([q0, q1, q2, q3], [r0, r1, r2, r3])
-}
-
-pub(super) fn div_rem_limbs(
-    lhs: Limbs,
-    rhs: Limbs,
-    kind: DivRemKind,
-    builder: &mut FunctionBuilder,
-) -> Limbs {
-    match kind {
-        DivRemKind::Udiv => unsigned_div_rem_limbs(lhs, rhs, 256, builder).0,
-        DivRemKind::Umod => unsigned_div_rem_limbs(lhs, rhs, 256, builder).1,
-        DivRemKind::Sdiv | DivRemKind::Smod => {
-            let lhs_negative = sign(lhs, builder);
-            let rhs_negative = sign(rhs, builder);
-            let lhs_abs = abs(lhs, builder);
-            let rhs_abs = abs(rhs, builder);
-            let (quotient, remainder) = unsigned_div_rem_limbs(lhs_abs, rhs_abs, 256, builder);
-            // The quotient is negative when the signs differ; the remainder
-            // takes the dividend's sign.
-            let (magnitude, negative) = match kind {
-                DivRemKind::Sdiv => (quotient, builder.ins().bxor(lhs_negative, rhs_negative)),
-                _ => (remainder, lhs_negative),
-            };
-            let negated = neg(magnitude, builder);
-            select(negative, negated, magnitude, builder)
-        }
-    }
 }
 
 /// Translates `inst` if it is an integer operation on i256 operands other

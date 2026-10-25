@@ -82,6 +82,45 @@ fn explicit_traps_are_four_byte_ebreaks() {
 }
 
 #[test]
+fn wide_divisions_call_a_local_divider() {
+    let source = r#"
+func public %divide(v0.*i256, v1.*i256, v2.*i128) {
+block0:
+    v3.i256 = mload v0 i256;
+    v4.i256 = mload v1 i256;
+    v5.i256 = sdiv v3 v4;
+    v6.i256 = umod v5 v3;
+    mstore v0 v6 i256;
+    v7.i128 = mload v2 i128;
+    v8.i128 = udiv v7 3.i128;
+    mstore v2 v8 i128;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(parse(source), CraneliftObjectBackend::new())
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+        let object = object::File::parse(artifact.as_bytes()).unwrap();
+        // The divider is defined in the object, so nothing is imported, and
+        // calls reach it PC-relative.
+        assert!(!object.symbols().any(|symbol| symbol.is_undefined()));
+        let calls: Vec<_> = object
+            .sections()
+            .filter(|section| section.kind() == SectionKind::Text)
+            .flat_map(|section| section.relocations())
+            .map(|(_, relocation)| relocation.flags())
+            .collect();
+        assert!(!calls.is_empty());
+        assert!(calls.iter().all(|&flags| flags
+            == RelocationFlags::Elf {
+                r_type: object::elf::R_RISCV_CALL_PLT
+            }));
+    }
+}
+
+#[test]
 fn imports_globals_and_memory_helpers_use_pc_relative_relocations() {
     let source = r#"
 global external i64 $imported;
