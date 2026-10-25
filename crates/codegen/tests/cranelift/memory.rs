@@ -491,3 +491,91 @@ block0:
         assert_eq!(output, expected, "{level:?}");
     }
 }
+
+#[test]
+fn returned_aggregates_live_in_the_return_buffer() {
+    // `either` builds both results before choosing one, so only one of them
+    // can live in the return buffer. `forward` returns a call result and
+    // `rotate` a loop phi, both stored in the buffer directly.
+    let source = r#"
+type @Pair = {[i64; 32], [i64; 32]};
+func inline(never) private %either(v0.i1, v1.[i64; 32], v2.[i64; 32]) -> @Pair {
+block0:
+    v3.@Pair = insert_value undef.@Pair 0.i64 v1;
+    v4.@Pair = insert_value v3 1.i64 v2;
+    v5.@Pair = insert_value undef.@Pair 0.i64 v2;
+    v6.@Pair = insert_value v5 1.i64 v1;
+    br v0 block1 block2;
+block1:
+    return v4;
+block2:
+    return v6;
+}
+func inline(never) private %forward(v0.i1, v1.[i64; 32], v2.[i64; 32]) -> @Pair {
+block0:
+    v3.@Pair = call %either v0 v1 v2;
+    return v3;
+}
+func inline(never) private %rotate(v0.@Pair, v1.i64) -> @Pair {
+block0:
+    jump block1;
+block1:
+    v2.@Pair = phi (v0 block0) (v7 block1);
+    v3.i64 = phi (0.i64 block0) (v8 block1);
+    v4.[i64; 32] = extract_value v2 0.i64;
+    v5.[i64; 32] = extract_value v2 1.i64;
+    v6.@Pair = insert_value undef.@Pair 0.i64 v5;
+    v7.@Pair = insert_value v6 1.i64 v4;
+    v8.i64 = add v3 1.i64;
+    v9.i1 = lt v8 v1;
+    br v9 block1 block2;
+block2:
+    return v2;
+}
+func public %run(v0.i1, v1.*[i64; 32], v2.*[i64; 32], v3.i64, v4.*@Pair, v5.*@Pair) {
+block0:
+    v6.[i64; 32] = mload v1 [i64; 32];
+    v7.[i64; 32] = mload v2 [i64; 32];
+    v8.@Pair = call %forward v0 v6 v7;
+    mstore v4 v8 @Pair;
+    v9.@Pair = call %rotate v8 v3;
+    mstore v5 v9 @Pair;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let run: unsafe extern "C" fn(bool, *const i64, *const i64, i64, *mut i64, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        let a: Vec<i64> = (0..32).collect();
+        let b: Vec<i64> = (100..132).collect();
+        for first in [false, true] {
+            for count in [1, 2, 3] {
+                let mut chosen = vec![0; 64];
+                let mut rotated = vec![0; 64];
+                unsafe {
+                    run(
+                        first,
+                        a.as_ptr(),
+                        b.as_ptr(),
+                        count,
+                        chosen.as_mut_ptr(),
+                        rotated.as_mut_ptr(),
+                    )
+                };
+                let (x, y) = if first { (&a, &b) } else { (&b, &a) };
+                assert_eq!(chosen[..32], x[..], "{level:?} {first} {count}");
+                assert_eq!(chosen[32..], y[..], "{level:?} {first} {count}");
+                let (x, y) = if count % 2 == 1 { (x, y) } else { (y, x) };
+                assert_eq!(rotated[..32], x[..], "{level:?} {first} {count}");
+                assert_eq!(rotated[32..], y[..], "{level:?} {first} {count}");
+            }
+        }
+    }
+}

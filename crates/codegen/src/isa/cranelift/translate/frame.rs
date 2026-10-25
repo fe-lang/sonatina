@@ -6,7 +6,7 @@ use std::{
 use cranelift_codegen::ir::{self as clif, InstBuilder, StackSlotData, StackSlotKind};
 use cranelift_entity::SecondaryMap;
 use cranelift_frontend::FunctionBuilder;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, ValueId,
     inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
@@ -32,8 +32,18 @@ use super::{uses_indirect_value_representation, value_storage_alignment, value_s
 /// result, so the two always overlap. Ranges are intervals over the
 /// translation's block order, so two classes live at a common point never
 /// share a slot.
+///
+/// A returned class can live in the function's return buffer instead, so
+/// that its `return` copies nothing. The buffer is caller storage distinct
+/// from every argument, and holds classes with disjoint ranges. A `return`
+/// of another value still copies into it, which is safe because no value is
+/// live after a `return`.
 pub(super) struct FrameSlots {
     slot_of: FxHashMap<ValueId, clif::StackSlot>,
+    return_buffer: Option<clif::Value>,
+    /// Values stored in the return buffer: returned classes' roots and their
+    /// `insert_value` continuations.
+    in_return_buffer: FxHashSet<ValueId>,
     /// The `insert_value` continuing each continued source's storage.
     continuation: FxHashMap<ValueId, InstId>,
 }
@@ -43,14 +53,33 @@ impl FrameSlots {
         function: &Function,
         cfg: &ControlFlowGraph,
         block_order: &[BlockId],
+        return_buffer: Option<clif::Value>,
         builder: &mut FunctionBuilder,
     ) -> Result<Self, String> {
         let plan = Plan::new(function, cfg, block_order)?;
+        let mut in_buffer = vec![false; plan.classes.len()];
+        if return_buffer.is_some() {
+            // Keep the most returned classes that are never live together.
+            let mut returned: Vec<_> = (0..plan.classes.len())
+                .filter(|&class| plan.classes[class].returned)
+                .collect();
+            returned.sort_by_key(|&class| plan.classes[class].end);
+            let mut last_end = None;
+            for class in returned {
+                if last_end.is_none_or(|end| plan.classes[class].start > end) {
+                    in_buffer[class] = true;
+                    last_end = Some(plan.classes[class].end);
+                }
+            }
+        }
+
         let mut slots: Vec<(u32, u64)> = Vec::new();
-        let mut slot_of_class = vec![0; plan.classes.len()];
+        let mut slot_of_class = vec![None; plan.classes.len()];
         let mut free: BTreeSet<(u32, usize)> = BTreeSet::new();
         let mut active: BinaryHeap<Reverse<(u32, usize)>> = BinaryHeap::new();
-        let mut order: Vec<_> = (0..plan.classes.len()).collect();
+        let mut order: Vec<_> = (0..plan.classes.len())
+            .filter(|&class| !in_buffer[class])
+            .collect();
         order.sort_by_key(|&class| plan.classes[class].start);
         for class in order {
             let Class {
@@ -83,7 +112,7 @@ impl FrameSlots {
                 }
             };
             slots[slot] = (slots[slot].0.max(size), slots[slot].1.max(align));
-            slot_of_class[class] = slot;
+            slot_of_class[class] = Some(slot);
             active.push(Reverse((end, slot)));
         }
 
@@ -97,27 +126,53 @@ impl FrameSlots {
                 ))
             })
             .collect();
+        let dfg = &function.dfg;
         Ok(Self {
             slot_of: plan
                 .roots
-                .into_iter()
-                .map(|(root, class)| (root, slots[slot_of_class[class]]))
+                .iter()
+                .filter_map(|&(root, class)| Some((root, slots[slot_of_class[class]?])))
+                .collect(),
+            return_buffer,
+            in_return_buffer: plan
+                .members
+                .iter()
+                .zip(in_buffer)
+                .filter(|&(_, in_buffer)| in_buffer)
+                .flat_map(|(members, _)| {
+                    let root_ty = dfg.value_ty(members[0]);
+                    members
+                        .iter()
+                        .copied()
+                        .filter(move |&member| dfg.value_ty(member) == root_ty)
+                })
                 .collect(),
             continuation: plan.continuation,
         })
     }
 
-    /// The address of the slot of a value that owns storage.
+    /// The address of the storage of a value that owns storage.
     pub fn address(
         &self,
         value: ValueId,
         builder: &mut FunctionBuilder,
     ) -> Result<clif::Value, String> {
+        if self.in_return_buffer.contains(&value) {
+            return self
+                .return_buffer
+                .ok_or_else(|| "return buffer without an indirect return".to_string());
+        }
         let slot = self
             .slot_of
             .get(&value)
             .ok_or_else(|| format!("v{} has no frame slot", value.0))?;
         Ok(builder.ins().stack_addr(clif::types::I64, *slot, 0))
+    }
+
+    /// Whether `value` is already in the return buffer, so that returning
+    /// it copies nothing.
+    pub fn in_return_buffer(&self, value: ValueId) -> bool {
+        self.in_return_buffer.contains(&value)
     }
 
     /// Whether the `insert_value` `inst` writes into the storage of its
@@ -150,6 +205,8 @@ struct Class {
     end: u32,
     size: u32,
     align: u64,
+    /// Whether a `return` returns the root or one of its continuations.
+    returned: bool,
 }
 
 impl Class {
@@ -161,6 +218,8 @@ impl Class {
 
 struct Plan {
     classes: Vec<Class>,
+    /// The values of each class, its root first.
+    members: Vec<Vec<ValueId>>,
     /// Values that own storage, by class.
     roots: Vec<(ValueId, usize)>,
     continuation: FxHashMap<ValueId, InstId>,
@@ -188,11 +247,11 @@ impl Plan {
 
         let mut plan = Self {
             classes: Vec::new(),
+            members: Vec::new(),
             roots: Vec::new(),
             continuation: FxHashMap::default(),
         };
         let mut class_of = FxHashMap::<ValueId, usize>::default();
-        let mut members: Vec<Vec<ValueId>> = Vec::new();
         for &block in block_order {
             let (block_start, _) = bounds[block].unwrap();
             for inst in function.layout.iter_inst(block) {
@@ -222,7 +281,7 @@ impl Plan {
                             plan.continuation.insert(source, inst);
                             let class = class_of[&source];
                             class_of.insert(result, class);
-                            members[class].push(result);
+                            plan.members[class].push(result);
                             None
                         } else {
                             Some(position[inst])
@@ -231,7 +290,7 @@ impl Plan {
                     NativeInstKind::ExtractValue(extract) => {
                         if let Some(&class) = class_of.get(extract.dest()) {
                             class_of.insert(result, class);
-                            members[class].push(result);
+                            plan.members[class].push(result);
                         }
                         None
                     }
@@ -245,10 +304,11 @@ impl Plan {
                         end: def,
                         size: value_storage_size(ty, ctx)?,
                         align: value_storage_alignment(ty, ctx)?,
+                        returned: false,
                     });
                     plan.roots.push((result, index));
                     class_of.insert(result, index);
-                    members.push(vec![result]);
+                    plan.members.push(vec![result]);
                 }
             }
         }
@@ -259,8 +319,8 @@ impl Plan {
             stamp: 0,
             pending: Vec::new(),
         };
-        for (index, members) in members.iter().enumerate() {
-            let class = &mut plan.classes[index];
+        for (class, members) in plan.classes.iter_mut().zip(&plan.members) {
+            let root_ty = dfg.value_ty(members[0]);
             ranges.stamp += 1;
             // A phi is written by the copies at the end of its predecessors.
             if let Some(phi) = dfg
@@ -280,6 +340,11 @@ impl Plan {
                             ranges.live_out(class, *pred);
                         }
                     } else {
+                        class.returned |= dfg.value_ty(value) == root_ty
+                            && matches!(
+                                native_inst_set().resolve_inst(dfg.inst(user)),
+                                NativeInstKind::Return(_)
+                            );
                         let block = function.layout.inst_block(user);
                         if let Some((start, _)) = ranges.bounds[block] {
                             class.cover(position[user]);
@@ -355,7 +420,7 @@ mod tests {
             let mut clif_function = clif::Function::new();
             let mut context = FunctionBuilderContext::new();
             let mut builder = FunctionBuilder::new(&mut clif_function, &mut context);
-            FrameSlots::new(function, &cfg, &block_order, &mut builder).unwrap();
+            FrameSlots::new(function, &cfg, &block_order, None, &mut builder).unwrap();
             clif_function
                 .sized_stack_slots
                 .values()

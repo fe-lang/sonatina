@@ -88,8 +88,9 @@ A single indirect return uses a caller-allocated, writable, suitably aligned
 buffer large enough for the complete native value, including padding. Its
 pointer is the first CLIF parameter with the `StructReturn` purpose, not
 necessarily an ordinary first machine argument: AArch64 uses `x8`, for
-example. Keep it distinct from live argument storage. The callee copies the
-value into this buffer, so no result depends on a dead callee stack frame.
+example. Keep it distinct from argument storage and any other memory the
+callee reads: the callee may build the value in this buffer at any point of
+the call, and no result depends on a dead callee stack frame.
 Even zero-sized indirect values retain the pointer parameter; provide a
 valid aligned address, although no bytes are copied.
 

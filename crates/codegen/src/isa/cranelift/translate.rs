@@ -175,7 +175,7 @@ fn translate_function(
         }
     }
 
-    let frame = FrameSlots::new(function, &cfg, &block_order, &mut builder)?;
+    let frame = FrameSlots::new(function, &cfg, &block_order, sret_ptr, &mut builder)?;
     for &block in &block_order {
         let clif_block = block_map[&block];
         for inst_id in function.layout.iter_inst(block) {
@@ -863,15 +863,17 @@ fn translate_function(
                         let val_ty = function.dfg.value_ty(*val_id);
                         let storage_ty = indirect_return_storage_type(&module.ctx, val_ty)
                             .ok_or("indirect return value has no storage type")?;
-                        store_indirect(
-                            function,
-                            *val_id,
-                            sret,
-                            value_storage_size(storage_ty, &module.ctx)?,
-                            &value_map,
-                            target_config,
-                            &mut builder,
-                        )?;
+                        if !frame.in_return_buffer(*val_id) {
+                            store_indirect(
+                                function,
+                                *val_id,
+                                sret,
+                                value_storage_size(storage_ty, &module.ctx)?,
+                                &value_map,
+                                target_config,
+                                &mut builder,
+                            )?;
+                        }
                         builder.ins().return_(&[]);
                     } else {
                         let args: Result<Vec<_>, _> = ret
