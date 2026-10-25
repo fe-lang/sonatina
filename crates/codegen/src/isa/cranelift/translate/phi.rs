@@ -72,6 +72,11 @@ impl Edges<'_> {
         })
     }
 
+    /// Whether the edge from `pred` to `succ` passes phi inputs.
+    pub fn has_inputs(&self, pred: BlockId, succ: BlockId) -> bool {
+        self.phi_inputs(pred, succ).next().is_some()
+    }
+
     pub fn fill(
         &self,
         target: EdgeTarget,
