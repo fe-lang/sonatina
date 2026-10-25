@@ -184,6 +184,98 @@ fn aggregate_construction_has_linear_code_size_and_executes_large_arrays() {
     }
 }
 
+fn text_size(bytes: &[u8]) -> u64 {
+    object::File::parse(bytes)
+        .unwrap()
+        .sections()
+        .filter(|section| section.kind() == object::SectionKind::Text)
+        .map(|section| section.size())
+        .sum()
+}
+
+fn imports(bytes: &[u8], name: &str) -> bool {
+    object::File::parse(bytes).unwrap().symbols().any(|symbol| {
+        symbol.is_undefined()
+            && symbol
+                .name()
+                .is_ok_and(|symbol| symbol.trim_start_matches('_') == name)
+    })
+}
+
+#[test]
+fn large_aggregate_copies_have_constant_code_size() {
+    // Snapshot loads, chain-head copies, return buffers, stores and undef
+    // zero fills of every length share one bounded code size.
+    for length in [8, 4096] {
+        let triple = native_isa(host_architecture()).triple();
+        let source = format!(
+            r#"target = "{triple}"
+type @Pair = {{[i64; {length}], [i64; {length}]}};
+func inline(never) private %update(v0.[i64; {length}], v1.i64) -> [i64; {length}] {{
+block0:
+    v2.[i64; {length}] = insert_value v0 1.i64 v1;
+    return v2;
+}}
+func public %copy(v0.*[i64; {length}], v1.*[i64; {length}], v2.*@Pair) {{
+block0:
+    v3.[i64; {length}] = mload v0 [i64; {length}];
+    mstore v0 undef.[i64; {length}] [i64; {length}];
+    v4.[i64; {length}] = call %update v3 99.i64;
+    mstore v1 v4 [i64; {length}];
+    v5.@Pair = insert_value undef.@Pair 0.i64 v3;
+    mstore v2 v5 @Pair;
+    return;
+}}
+"#
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let artifact = Compile::new(
+                module.clone_for_funcs(&module.funcs()),
+                CraneliftObjectBackend::new(),
+            )
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+            let bytes = artifact.as_bytes();
+            let text_size = text_size(bytes);
+            assert!(
+                text_size > 0 && text_size < 4096,
+                "[i64; {length}] copies at {level:?} emitted {text_size} text bytes"
+            );
+            // 64-byte arrays and 128-byte pairs stay inline; 32 KiB ones call libc.
+            assert_eq!(imports(bytes, "memcpy"), length > 16, "{length} {level:?}");
+            assert_eq!(imports(bytes, "memset"), length > 16, "{length} {level:?}");
+            #[cfg(feature = "cranelift-jit")]
+            {
+                let artifact = Compile::new(
+                    module.clone_for_funcs(&module.funcs()),
+                    CraneliftJitBackend::new(),
+                )
+                .with_opt_level(level)
+                .compile()
+                .unwrap();
+                let copy: unsafe extern "C" fn(*mut i64, *mut i64, *mut i64) =
+                    unsafe { std::mem::transmute(artifact.function_address("copy").unwrap()) };
+                let length = length as usize;
+                let original: Vec<i64> = (0..length as i64).map(|i| i * 3 - 7).collect();
+                let mut source = original.clone();
+                let mut updated = vec![-1; length];
+                let mut pair = vec![-1; length * 2];
+                unsafe { copy(source.as_mut_ptr(), updated.as_mut_ptr(), pair.as_mut_ptr()) };
+                assert!(source.iter().all(|&word| word == 0), "{level:?}");
+                let mut expected = original.clone();
+                expected[1] = 99;
+                assert_eq!(updated, expected, "{level:?}");
+                assert_eq!(pair[..length], original[..], "{level:?}");
+                assert!(pair[length..].iter().all(|&word| word == 0), "{level:?}");
+            }
+        }
+    }
+}
+
 #[cfg(feature = "cranelift-jit")]
 #[test]
 #[ignore = "manual release-profile compile/runtime measurement; run with --release --ignored --nocapture"]

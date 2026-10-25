@@ -8,10 +8,8 @@ use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Function, Immediate, Type, Value, ValueId, module::ModuleCtx};
 
 use super::{
-    DivRemKind,
-    memory::{stack_slot_data, storage_chunks},
-    scalar_constant, sonatina_scalar_type_to_clif_or_err, sonatina_type_to_clif_or_err,
-    uses_indirect_value_representation, value_storage_size,
+    DivRemKind, memory::stack_slot_data, scalar_constant, sonatina_scalar_type_to_clif_or_err,
+    sonatina_type_to_clif_or_err, uses_indirect_value_representation,
 };
 
 const I256_LIMBS: usize = 4;
@@ -60,18 +58,6 @@ pub(super) fn store_i256_limb(
     builder
         .ins()
         .store(MemFlagsData::new(), value, addr, (limb * 8) as i32);
-}
-
-pub(super) fn copy_bytes(
-    src: clif::Value,
-    dst: clif::Value,
-    size: u32,
-    builder: &mut FunctionBuilder,
-) {
-    for (offset, ty) in storage_chunks(size) {
-        let value = builder.ins().load(ty, MemFlagsData::new(), src, offset);
-        builder.ins().store(MemFlagsData::new(), value, dst, offset);
-    }
 }
 
 pub(super) fn materialize_scalar_as_i256(
@@ -1210,26 +1196,22 @@ pub(super) fn resolve_value(
                 Ok(val)
             }
         },
+        // This is a backend choice for surviving undef values, not an IR
+        // promise that optimizations must preserve zero.
+        Value::Undef { ty: Type::I256 } => Ok(store_i256_limbs(zero_i256_limbs(builder), builder)),
         Value::Undef { ty } => {
-            // This is a backend choice for surviving undef values, not an IR
-            // promise that optimizations must preserve zero.
             let ctx = function.ctx();
-            let size = value_storage_size(*ty, ctx)?;
             if uses_indirect_value_representation(ctx, *ty) {
-                let address = create_stack_slot_for_type(*ty, ctx, builder)?;
-                for (offset, chunk_ty) in storage_chunks(size) {
-                    let zero = scalar_constant(chunk_ty, 0, builder);
-                    builder
-                        .ins()
-                        .store(MemFlagsData::new(), zero, address, offset);
-                }
-                Ok(address)
-            } else {
-                let pointer_ty =
-                    sonatina_scalar_type_to_clif_or_err(ctx.type_layout.pointer_repl())?;
-                let clif_ty = sonatina_type_to_clif_or_err(*ty, pointer_ty)?;
-                Ok(scalar_constant(clif_ty, 0, builder))
+                // Aggregate consumers zero their destination (`store_indirect`)
+                // or a slot of their own (`resolve_operand`).
+                return Err(format!(
+                    "undef aggregate v{} needs a storage-aware consumer",
+                    value_id.0
+                ));
             }
+            let pointer_ty = sonatina_scalar_type_to_clif_or_err(ctx.type_layout.pointer_repl())?;
+            let clif_ty = sonatina_type_to_clif_or_err(*ty, pointer_ty)?;
+            Ok(scalar_constant(clif_ty, 0, builder))
         }
         Value::Global { gv, .. } => Err(format!(
             "unresolved global address {gv:?} at v{}",
