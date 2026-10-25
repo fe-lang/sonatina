@@ -12,8 +12,8 @@ use sonatina_ir::{
 };
 
 use super::{
-    aggregate_elem_offset, constant_value_index, copy_bytes, resolve_value, stack_slot_data,
-    store_indirect, uses_indirect_value_representation, value_storage_size,
+    aggregate_elem_offset, constant_value_index, copy_bytes, frame::FrameSlots, resolve_value,
+    stack_slot_data, store_indirect, uses_indirect_value_representation, value_storage_size,
 };
 
 /// Lowers CFG edges. Scalar phis receive Cranelift block arguments. Each
@@ -22,7 +22,7 @@ use super::{
 pub(super) struct Edges<'a> {
     pub function: &'a Function,
     pub block_map: &'a HashMap<BlockId, clif::Block>,
-    pub phi_slots: &'a HashMap<ValueId, clif::StackSlot>,
+    pub frame: &'a FrameSlots,
     pub config: TargetFrontendConfig,
 }
 
@@ -111,7 +111,11 @@ impl Edges<'_> {
         succ: BlockId,
     ) -> impl Iterator<Item = (ValueId, ValueId)> + '_ {
         self.phi_inputs(pred, succ)
-            .filter(|(phi, _)| self.phi_slots.contains_key(phi))
+            .filter(|&(phi, _)| self.is_aggregate(phi))
+    }
+
+    fn is_aggregate(&self, value: ValueId) -> bool {
+        uses_indirect_value_representation(self.function.ctx(), self.function.dfg.value_ty(value))
     }
 
     fn scalar_args(
@@ -122,7 +126,7 @@ impl Edges<'_> {
         builder: &mut FunctionBuilder,
     ) -> Result<Vec<BlockArg>, String> {
         self.phi_inputs(pred, succ)
-            .filter(|(phi, _)| !self.phi_slots.contains_key(phi))
+            .filter(|&(phi, _)| !self.is_aggregate(phi))
             .map(|(_, input)| {
                 resolve_value(self.function, input, value_map, builder).map(BlockArg::Value)
             })
@@ -183,7 +187,7 @@ impl Edges<'_> {
                         self.function.dfg.value_ty(phi),
                         self.function.ctx(),
                     )?);
-                    let src = self.slot_address(phi, builder);
+                    let src = self.frame.address(phi, builder)?;
                     let dst = builder
                         .ins()
                         .stack_addr(self.config.pointer_type(), slot, 0);
@@ -200,7 +204,7 @@ impl Edges<'_> {
                 }
             };
             let copy = &copies[index];
-            let dst = self.slot_address(copy.phi, builder);
+            let dst = self.frame.address(copy.phi, builder)?;
             let size = self.size(copy.phi)?;
             match copy.saved {
                 Some((slot, offset)) => {
@@ -239,12 +243,6 @@ impl Edges<'_> {
             value = base;
         }
         Ok((value, offset))
-    }
-
-    fn slot_address(&self, phi: ValueId, builder: &mut FunctionBuilder) -> clif::Value {
-        builder
-            .ins()
-            .stack_addr(self.config.pointer_type(), self.phi_slots[&phi], 0)
     }
 
     fn size(&self, phi: ValueId) -> Result<u32, String> {

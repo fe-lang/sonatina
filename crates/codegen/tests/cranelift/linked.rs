@@ -155,3 +155,74 @@ int main(int argc, char **argv) {
         }
     }
 }
+
+#[test]
+fn dead_aggregates_share_frame_slots() {
+    // Sixteen 4 KiB snapshots, each dead before the next, need one slot.
+    // A C probe measures the stack depth below the caller's frame.
+    let triple = native_isa(host_architecture()).triple();
+    let loads: String = (2..18)
+        .map(|value| {
+            format!("    v{value}.[i64; 512] = mload v0 [i64; 512];\n    mstore v1 v{value} [i64; 512];\n")
+        })
+        .collect();
+    let source = format!(
+        "target = \"{triple}\"\ndeclare external %probe();\nfunc public %copies(v0.*[i64; 512], v1.*[i64; 512]) {{\nblock0:\n{loads}    call %probe;\n    return;\n}}\n"
+    );
+    let c_source = r#"
+#include <stdint.h>
+#include <stdio.h>
+extern void copies(int64_t *source, int64_t *destination);
+static uintptr_t deepest;
+void probe(void) {
+    volatile char marker = 0;
+    deepest = (uintptr_t)&marker;
+}
+int main(void) {
+    static int64_t source[512], destination[512];
+    for (int i = 0; i < 512; i++) source[i] = i;
+    volatile char marker = 0;
+    copies(source, destination);
+    for (int i = 0; i < 512; i++) if (destination[i] != i) return 1;
+    printf("%lu\n", (unsigned long)((uintptr_t)&marker - deepest));
+    return 0;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        let artifact = CraneliftObjectBackend::new()
+            .compile_module(&module, &BackendOptions { opt_level: level })
+            .unwrap();
+        let directory = Builder::new()
+            .prefix("sonatina-native-frame-")
+            .tempdir()
+            .unwrap();
+        let object = directory.path().join("copies.o");
+        let harness = directory.path().join("main.c");
+        let executable = directory.path().join("copies");
+        fs::write(&object, artifact.as_bytes()).unwrap();
+        fs::write(&harness, c_source).unwrap();
+        let link = Command::new("cc")
+            .args(["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"])
+            .arg(&harness)
+            .arg(&object)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            link.status.success(),
+            "{}",
+            String::from_utf8_lossy(&link.stderr)
+        );
+        let run = Command::new(&executable).output().unwrap();
+        assert!(run.status.success(), "{level:?}: {run:?}");
+        let depth: u64 = String::from_utf8_lossy(&run.stdout).trim().parse().unwrap();
+        assert!(
+            (4096..12 * 1024).contains(&depth),
+            "{level:?}: copies used {depth} stack bytes"
+        );
+    }
+}
