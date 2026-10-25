@@ -2,13 +2,12 @@ mod abi;
 mod globals;
 mod i256;
 mod memory;
+mod phi;
 mod scalar;
 
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::{
-    self as clif, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC, instructions::BlockArg,
-};
+use cranelift_codegen::ir::{self as clif, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Linkage, Module as ClifModule};
 use rustc_hash::FxHashSet;
@@ -25,7 +24,7 @@ use crate::transform::aggregate::{
     compute_object_effect_summaries, object_abi::native_heap_object_roots,
 };
 
-use self::{abi::*, globals::*, i256::*, memory::*, scalar::*};
+use self::{abi::*, globals::*, i256::*, memory::*, phi::Edges, scalar::*};
 
 pub(super) fn translate_module(
     module: &Module,
@@ -175,43 +174,34 @@ fn translate_function(
         }
     }
 
-    let inst_set = function.inst_set();
-    let mut indirect_phi_stores: HashMap<BlockId, Vec<_>> = HashMap::new();
-
+    let mut phi_slots = HashMap::new();
     for &block in &block_order {
         let clif_block = block_map[&block];
         for inst_id in function.layout.iter_inst(block) {
-            let inst_data = function.dfg.inst(inst_id);
-            if <&sonatina_ir::inst::control_flow::Phi as sonatina_ir::InstDowncast>::downcast(
-                inst_set, inst_data,
-            )
-            .is_some()
-            {
-                let result = function
-                    .dfg
-                    .inst_result(inst_id)
-                    .ok_or("phi has no result")?;
-                let ty = function.dfg.value_ty(result);
-                if uses_indirect_value_representation(&module.ctx, ty) {
-                    let addr = create_stack_slot_for_type(ty, &module.ctx, &mut builder)?;
-                    value_map.insert(result, addr);
-                    for (offset, chunk_ty) in storage_chunks(value_storage_size(ty, &module.ctx)?) {
-                        let param = builder.append_block_param(clif_block, chunk_ty);
-                        indirect_phi_stores
-                            .entry(block)
-                            .or_default()
-                            .push((addr, param, offset));
-                    }
-                } else {
-                    let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_type)?;
-                    let param = builder.append_block_param(clif_block, clif_ty);
-                    value_map.insert(result, param);
-                }
-            } else {
+            if !function.dfg.is_phi(inst_id) {
                 break;
+            }
+            let result = function
+                .dfg
+                .inst_result(inst_id)
+                .ok_or("phi has no result")?;
+            let ty = function.dfg.value_ty(result);
+            if uses_indirect_value_representation(&module.ctx, ty) {
+                let slot = builder.create_sized_stack_slot(stack_slot_data(ty, &module.ctx)?);
+                phi_slots.insert(result, slot);
+            } else {
+                let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_type)?;
+                let param = builder.append_block_param(clif_block, clif_ty);
+                value_map.insert(result, param);
             }
         }
     }
+    let edges = Edges {
+        function,
+        block_map: &block_map,
+        phi_slots: &phi_slots,
+        config: target_config,
+    };
 
     if clif_entry != block_map[&entry] {
         builder.ins().jump(block_map[&entry], &[]);
@@ -222,14 +212,17 @@ fn translate_function(
         if clif_block != clif_entry {
             builder.switch_to_block(clif_block);
         }
-        // Incoming contents are SSA block parameters, not pointers into a
-        // previous iteration's reusable result slots. Capture all phi inputs
-        // on the edge before writing any destination, including phi swaps.
-        if let Some(stores) = indirect_phi_stores.get(&block) {
-            for &(addr, param, offset) in stores {
-                builder
-                    .ins()
-                    .store(MemFlagsData::new(), param, addr, offset);
+        // Incoming edges copy aggregate phi inputs into the phis' own slots,
+        // never aliasing the reusable result slot of an input's producer.
+        for inst_id in function.layout.iter_inst(block) {
+            if !function.dfg.is_phi(inst_id) {
+                break;
+            }
+            if let Some(result) = function.dfg.inst_result(inst_id)
+                && let Some(&slot) = phi_slots.get(&result)
+            {
+                let addr = builder.ins().stack_addr(pointer_type, slot, 0);
+                value_map.insert(result, addr);
             }
         }
 
@@ -799,40 +792,17 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::Jump(jump) => {
-                    let dest = block_map[jump.dest()];
-                    let phi_args = collect_phi_args_for_block(
-                        function,
-                        *jump.dest(),
-                        block,
-                        inst_set,
-                        &value_map,
-                        &mut builder,
-                    )?;
-                    builder.ins().jump(dest, &phi_args);
+                    edges.jump(block, *jump.dest(), &value_map, &mut builder)?;
                 }
                 NativeInstKind::Br(br) => {
                     let cond = resolve_value(function, *br.cond(), &value_map, &mut builder)?;
-                    let nz_block = block_map[br.nz_dest()];
-                    let z_block = block_map[br.z_dest()];
-                    let nz_args = collect_phi_args_for_block(
-                        function,
-                        *br.nz_dest(),
-                        block,
-                        inst_set,
-                        &value_map,
-                        &mut builder,
-                    )?;
-                    let z_args = collect_phi_args_for_block(
-                        function,
-                        *br.z_dest(),
-                        block,
-                        inst_set,
-                        &value_map,
-                        &mut builder,
-                    )?;
+                    let nz = edges.target(block, *br.nz_dest(), &value_map, &mut builder)?;
+                    let z = edges.target(block, *br.z_dest(), &value_map, &mut builder)?;
                     builder
                         .ins()
-                        .brif(cond, nz_block, &nz_args, z_block, &z_args);
+                        .brif(cond, nz.block, &nz.args, z.block, &z.args);
+                    edges.fill(nz, block, *br.nz_dest(), &value_map, &mut builder)?;
+                    edges.fill(z, block, *br.z_dest(), &value_map, &mut builder)?;
                 }
                 NativeInstKind::BrTable(br_table) => {
                     let scrutinee_id = *br_table.scrutinee();
@@ -853,15 +823,7 @@ fn translate_function(
                         let default = br_table
                             .default()
                             .ok_or("empty br_table requires a default destination")?;
-                        let default_args = collect_phi_args_for_block(
-                            function,
-                            default,
-                            block,
-                            inst_set,
-                            &value_map,
-                            &mut builder,
-                        )?;
-                        builder.ins().jump(block_map[&default], &default_args);
+                        edges.jump(block, default, &value_map, &mut builder)?;
                     } else {
                         for (idx, &(case, dest)) in br_table.table().iter().enumerate() {
                             let cond = if scrutinee_ty == Type::I256 {
@@ -878,33 +840,17 @@ fn translate_function(
                                 )?;
                                 builder.ins().icmp(IntCC::Equal, scrutinee, case)
                             };
-                            let dest_block = block_map[&dest];
-                            let dest_args = collect_phi_args_for_block(
-                                function,
-                                dest,
-                                block,
-                                inst_set,
-                                &value_map,
-                                &mut builder,
-                            )?;
+                            let target = edges.target(block, dest, &value_map, &mut builder)?;
                             let next_block = builder.create_block();
                             builder
                                 .ins()
-                                .brif(cond, dest_block, &dest_args, next_block, &[]);
+                                .brif(cond, target.block, &target.args, next_block, &[]);
+                            edges.fill(target, block, dest, &value_map, &mut builder)?;
                             builder.switch_to_block(next_block);
 
                             if idx + 1 == br_table.table().len() {
                                 if let Some(default) = br_table.default() {
-                                    let default_block = block_map[default];
-                                    let default_args = collect_phi_args_for_block(
-                                        function,
-                                        *default,
-                                        block,
-                                        inst_set,
-                                        &value_map,
-                                        &mut builder,
-                                    )?;
-                                    builder.ins().jump(default_block, &default_args);
+                                    edges.jump(block, *default, &value_map, &mut builder)?;
                                 } else {
                                     emit_trap(&mut builder, TrapCode::user(3).unwrap());
                                 }
@@ -1952,55 +1898,4 @@ fn translate_icmp(
         value_map.insert(result, result_val);
     }
     Ok(())
-}
-
-fn collect_phi_args_for_block(
-    function: &Function,
-    target_block: BlockId,
-    source_block: BlockId,
-    inst_set: &dyn sonatina_ir::InstSetBase,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<Vec<BlockArg>, String> {
-    let mut args = Vec::new();
-    for inst_id in function.layout.iter_inst(target_block) {
-        let inst_data = function.dfg.inst(inst_id);
-        if let Some(phi) =
-            <&sonatina_ir::inst::control_flow::Phi as sonatina_ir::InstDowncast>::downcast(
-                inst_set, inst_data,
-            )
-        {
-            for &(value, from_block) in phi.args() {
-                if from_block == source_block {
-                    let ty = function.dfg.value_ty(value);
-                    if uses_indirect_value_representation(function.ctx(), ty) {
-                        let clif_val = (!matches!(function.dfg.value(value), Value::Undef { .. }))
-                            .then(|| resolve_value(function, value, value_map, builder))
-                            .transpose()?;
-                        for (offset, chunk_ty) in
-                            storage_chunks(value_storage_size(ty, function.ctx())?)
-                        {
-                            let chunk = match clif_val {
-                                Some(clif_val) => builder.ins().load(
-                                    chunk_ty,
-                                    MemFlagsData::new(),
-                                    clif_val,
-                                    offset,
-                                ),
-                                None => builder.ins().iconst(chunk_ty, 0),
-                            };
-                            args.push(BlockArg::Value(chunk));
-                        }
-                    } else {
-                        let clif_val = resolve_value(function, value, value_map, builder)?;
-                        args.push(BlockArg::Value(clif_val));
-                    }
-                    break;
-                }
-            }
-        } else {
-            break;
-        }
-    }
-    Ok(args)
 }
