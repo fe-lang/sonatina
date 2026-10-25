@@ -25,7 +25,10 @@ use sonatina_verifier::{VerifierConfig, verify_function_signature};
 use crate::{
     backend::{Backend, BackendOptions},
     compile::OptLevel,
-    transform::aggregate::{EnumLowerToProduct, object_abi::legalize_native_object_returns},
+    transform::aggregate::{
+        EnumLowerToProduct, cleanup::DeadPureInstCleanup, combine::AggregateCombine,
+        object_abi::legalize_native_object_returns,
+    },
 };
 
 #[derive(Debug)]
@@ -235,6 +238,17 @@ fn legalize_module(module: &Module) -> Result<(), String> {
         if report.has_errors() {
             return Err(report.to_string());
         }
+    }
+    // Product construction followed by projection does not capture a reference.
+    // Remove that representational round trip before lifetime summaries inspect
+    // SSA aggregates; this is required legalization even without optimization.
+    for func in module.funcs() {
+        module.func_store.modify(func, |function| {
+            AggregateCombine::default().run(function);
+            function.rebuild_users();
+            DeadPureInstCleanup::default().run_with_current_users(function);
+            function.rebuild_users();
+        });
     }
     legalize_native_object_returns(module)
 }
