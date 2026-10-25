@@ -14,7 +14,8 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Module as ClifModule};
 
 use super::{
-    DivRemKind, LIMBS, Limbs, abs, is_zero, load_limbs, neg, select, sign, store_limbs, ult,
+    DivRemKind, LIMBS, Limbs, abs, add_carry, is_zero, load_limbs, mul_limbs, neg, select, sign,
+    store_limbs, sub_borrow, ult,
 };
 
 /// The divider takes one pointer to a buffer of an eight-limb numerator
@@ -171,14 +172,9 @@ pub(super) fn udivrem(
     );
 
     builder.switch_to_block(wide);
-    let buffer = builder.ins().stack_addr(I64, call.buffer, 0);
-    let flags = MemFlagsData::trusted();
-    store_limbs(numerator, buffer, 0, flags, builder);
-    store_limbs([zero; LIMBS], buffer, 8 * LIMBS as i32, flags, builder);
-    store_limbs(divisor, buffer, DIVISOR_OFFSET, flags, builder);
-    builder.ins().call(call.func, &[buffer]);
-    let quotient = load_limbs(buffer, 0, flags, builder);
-    let remainder = load_limbs(buffer, DIVISOR_OFFSET, flags, builder);
+    let buffer = call_divider(&numerator, divisor, call, builder);
+    let quotient = load_limbs(buffer, 0, MemFlagsData::trusted(), builder);
+    let remainder = load_limbs(buffer, DIVISOR_OFFSET, MemFlagsData::trusted(), builder);
     builder.ins().jump(exit, &exit_with(quotient, remainder));
 
     builder.switch_to_block(exit);
@@ -213,6 +209,113 @@ pub(super) fn div_rem(
             select(negative, negated, magnitude, builder)
         }
     }
+}
+
+/// Divides up to eight numerator limbs by a nonzero divisor and returns
+/// the address of the quotient, followed by the remainder at
+/// `DIVISOR_OFFSET`.
+fn call_divider(
+    numerator: &[clif::Value],
+    divisor: Limbs,
+    call: DividerCall,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    let flags = MemFlagsData::trusted();
+    let buffer = builder.ins().stack_addr(I64, call.buffer, 0);
+    let zero = builder.ins().iconst(I64, 0);
+    for (limb, &value) in numerator
+        .iter()
+        .chain(std::iter::repeat_n(
+            &zero,
+            NUMERATOR_LIMBS - numerator.len(),
+        ))
+        .enumerate()
+    {
+        builder.ins().store(flags, value, buffer, 8 * limb as i32);
+    }
+    store_limbs(divisor, buffer, DIVISOR_OFFSET, flags, builder);
+    builder.ins().call(call.func, &[buffer]);
+    buffer
+}
+
+fn remainder(
+    numerator: &[clif::Value],
+    modulus: Limbs,
+    call: DividerCall,
+    builder: &mut FunctionBuilder,
+) -> Limbs {
+    let buffer = call_divider(numerator, modulus, call, builder);
+    load_limbs(buffer, DIVISOR_OFFSET, MemFlagsData::trusted(), builder)
+}
+
+/// Branches to a block that returns zero for a zero modulus and switches
+/// to one for a nonzero modulus. Returns the exit block's limbs.
+fn zero_modulus_exit(modulus: Limbs, builder: &mut FunctionBuilder) -> (clif::Block, Limbs) {
+    let exit = builder.create_block();
+    let results = std::array::from_fn(|_| builder.append_block_param(exit, I64));
+    let nonzero = builder.create_block();
+    let modulus_zero = is_zero(modulus, builder);
+    let zero = builder.ins().iconst(I64, 0);
+    builder.ins().brif(
+        modulus_zero,
+        exit,
+        &[BlockArg::Value(zero); LIMBS],
+        nonzero,
+        &[],
+    );
+    builder.switch_to_block(nonzero);
+    (exit, results)
+}
+
+/// `(lhs + rhs) % modulus` at full precision; a zero modulus gives zero.
+pub(super) fn addmod(
+    lhs: Limbs,
+    rhs: Limbs,
+    modulus: Limbs,
+    call: DividerCall,
+    builder: &mut FunctionBuilder,
+) -> Limbs {
+    let (exit, results) = zero_modulus_exit(modulus, builder);
+    let (sum, carry) = add_carry(lhs, rhs, builder);
+    // With both operands reduced, the sum is below twice the modulus.
+    let lhs_reduced = ult(lhs, modulus, builder);
+    let rhs_reduced = ult(rhs, modulus, builder);
+    let reduced = builder.ins().band(lhs_reduced, rhs_reduced);
+    let subtract = builder.create_block();
+    let divide = builder.create_block();
+    builder.ins().brif(reduced, subtract, &[], divide, &[]);
+
+    builder.switch_to_block(subtract);
+    let (difference, borrow) = sub_borrow(sum, modulus, builder);
+    let below = builder.ins().bxor_imm_s(carry, 1);
+    let below = builder.ins().band(below, borrow);
+    let result = select(below, sum, difference, builder);
+    builder.ins().jump(exit, &result.map(BlockArg::Value));
+
+    builder.switch_to_block(divide);
+    let carry = builder.ins().uextend(I64, carry);
+    let [s0, s1, s2, s3] = sum;
+    let result = remainder(&[s0, s1, s2, s3, carry], modulus, call, builder);
+    builder.ins().jump(exit, &result.map(BlockArg::Value));
+
+    builder.switch_to_block(exit);
+    results
+}
+
+/// `(lhs * rhs) % modulus` at full precision; a zero modulus gives zero.
+pub(super) fn mulmod(
+    lhs: Limbs,
+    rhs: Limbs,
+    modulus: Limbs,
+    call: DividerCall,
+    builder: &mut FunctionBuilder,
+) -> Limbs {
+    let (exit, results) = zero_modulus_exit(modulus, builder);
+    let product = mul_limbs::<NUMERATOR_LIMBS>(&lhs, &rhs, builder);
+    let result = remainder(&product, modulus, call, builder);
+    builder.ins().jump(exit, &result.map(BlockArg::Value));
+    builder.switch_to_block(exit);
+    results
 }
 
 /// Divides i128 operands, trapping on a zero divisor like Cranelift's

@@ -558,3 +558,124 @@ fn i256_division_reaches_every_divider_step() {
         check(&binary(op), &cases, |[a, b, _]| (divided(op, a, b), false));
     }
 }
+
+/// `(a op b) % m` at full precision; a zero modulus gives zero.
+fn modular(a: U256, b: U256, m: U256, multiply: bool) -> U256 {
+    if m.is_zero() {
+        return U256::zero();
+    }
+    let one = U256::one();
+    let numerator = if multiply {
+        a.full_mul(b)
+    } else {
+        a.full_mul(one) + b.full_mul(one)
+    };
+    U256::try_from(numerator % m.full_mul(one)).unwrap()
+}
+
+fn moduli() -> Vec<U256> {
+    let mut moduli: Vec<U256> = [0u64, 1, 2, 3, 7, u64::MAX]
+        .into_iter()
+        .map(U256::from)
+        .collect();
+    moduli.extend([
+        U256::one() << 64,
+        (U256::one() << 64) + 1,
+        (U256::one() << 128) + 1,
+        (U256::one() << 192) - 1,
+        // The secp256k1 field prime and the BN254 scalar field order.
+        U256::from_str_radix(
+            "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f",
+            16,
+        )
+        .unwrap(),
+        U256::from_str_radix(
+            "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001",
+            16,
+        )
+        .unwrap(),
+        signed_min(),
+        U256::MAX - 1,
+        U256::MAX,
+    ]);
+    moduli
+}
+
+#[test]
+fn i256_modular_arithmetic_matches_reference() {
+    let values = operands();
+    let moduli = moduli();
+    let cases: Vec<_> = values
+        .iter()
+        .flat_map(|&a| {
+            let moduli = &moduli;
+            values
+                .iter()
+                .step_by(3)
+                .flat_map(move |&b| moduli.iter().map(move |&m| [a, b, m]))
+        })
+        .collect();
+    for (op, multiply) in [("evm_add_mod", false), ("evm_mul_mod", true)] {
+        check(
+            &format!("    v7.i256 = {op} v4 v5 v6;\n    mstore v3 v7 i256;\n    return 0.i8;"),
+            &cases,
+            |[a, b, m]| (modular(a, b, m, multiply), false),
+        );
+    }
+}
+
+#[test]
+fn narrow_modular_arithmetic_zero_extends_its_operands() {
+    for (ty, width) in [("i8", 1), ("i64", 8), ("i128", 16)] {
+        let mask = (U256::one() << (8 * width)) - 1;
+        for (op, multiply) in [("evm_add_mod", false), ("evm_mul_mod", true)] {
+            let source = format!(
+                "func public %apply(v0.*{ty}, v1.*{ty}, v2.*{ty}, v3.*{ty}) {{
+block0:
+    v4.{ty} = mload v0 {ty};
+    v5.{ty} = mload v1 {ty};
+    v6.{ty} = mload v2 {ty};
+    v7.{ty} = {op} v4 v5 v6;
+    mstore v3 v7 {ty};
+    return;
+}}
+"
+            );
+            for level in [OptLevel::O0, OptLevel::O2] {
+                let artifact = Compile::new(
+                    parse_verified_native_module(&source),
+                    CraneliftJitBackend::new(),
+                )
+                .with_opt_level(level)
+                .compile()
+                .unwrap_or_else(|errors| panic!("{ty} {op} {level:?}: {errors:?}"));
+                let apply: unsafe extern "C" fn(*const u8, *const u8, *const u8, *mut u8) =
+                    unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+                let values: Vec<_> = operands().into_iter().map(|value| value & mask).collect();
+                for &a in &values {
+                    for &b in values.iter().step_by(5) {
+                        for &m in values.iter().step_by(7) {
+                            let [a_bytes, b_bytes, m_bytes] = [a, b, m].map(bytes);
+                            let mut result = [0xa5u8; 32];
+                            unsafe {
+                                apply(
+                                    a_bytes.as_ptr(),
+                                    b_bytes.as_ptr(),
+                                    m_bytes.as_ptr(),
+                                    result.as_mut_ptr(),
+                                )
+                            };
+                            let expected = bytes(modular(a, b, m, multiply));
+                            assert_eq!(
+                                result[..width],
+                                expected[..width],
+                                "{ty} {op} {level:?} {a:x} {b:x} {m:x}"
+                            );
+                            assert!(result[width..].iter().all(|&byte| byte == 0xa5));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
