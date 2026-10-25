@@ -14,7 +14,7 @@ use super::{
 
 /// Copies and fills of at most this many bytes use inline loads and stores.
 /// Larger ones call `memcpy` or `memset`, so their code size is constant.
-const INLINE_MEMORY_BYTES: u32 = 128;
+pub(super) const INLINE_MEMORY_BYTES: u32 = 128;
 
 /// Copies `size` bytes between distinct, non-overlapping storage.
 pub(super) fn copy_bytes(
@@ -32,6 +32,28 @@ pub(super) fn copy_bytes(
     for (offset, ty) in storage_chunks(size) {
         let value = builder.ins().load(ty, MemFlagsData::new(), src, offset);
         builder.ins().store(MemFlagsData::new(), value, dst, offset);
+    }
+}
+
+/// Copies at most `INLINE_MEMORY_BYTES` between storage that may overlap,
+/// loading every word before storing any.
+pub(super) fn move_bytes(
+    src: clif::Value,
+    dst: clif::Value,
+    size: u32,
+    builder: &mut FunctionBuilder,
+) {
+    debug_assert!(size <= INLINE_MEMORY_BYTES);
+    let words: Vec<_> = storage_chunks(size)
+        .map(|(offset, ty)| {
+            (
+                offset,
+                builder.ins().load(ty, MemFlagsData::new(), src, offset),
+            )
+        })
+        .collect();
+    for (offset, word) in words {
+        builder.ins().store(MemFlagsData::new(), word, dst, offset);
     }
 }
 

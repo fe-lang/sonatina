@@ -372,14 +372,13 @@ fn references(bytes: &[u8], name: &str) -> usize {
 }
 
 #[test]
-fn returned_aggregates_are_built_in_the_return_buffer() {
-    // Each path builds its result in the return buffer, so the only copies
-    // are the four 256-byte field copies.
-    let triple = native_isa(host_architecture()).triple();
-    let source = format!(
-        r#"target = "{triple}"
-type @Pair = {{[i64; 32], [i64; 32]}};
-func private %pair(v0.i1, v1.[i64; 32], v2.[i64; 32]) -> @Pair {{
+fn aggregates_skip_temporary_copies() {
+    // Each case's only memcpy calls are the copies its result needs: paths
+    // build results in the return buffer, and a single-use load copies
+    // straight from memory into its consumer.
+    let cases = [
+        (
+            "func private %pair(v0.i1, v1.[i64; 32], v2.[i64; 32]) -> @Pair {
 block0:
     br v0 block1 block2;
 block1:
@@ -390,17 +389,54 @@ block2:
     v5.@Pair = insert_value undef.@Pair 0.i64 v2;
     v6.@Pair = insert_value v5 1.i64 v1;
     return v6;
-}}
-"#
-    );
-    let module = sonatina_parser::parse_module(&source).unwrap().module;
-    let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
-    assert!(!report.has_errors(), "{report}");
-    for level in [OptLevel::O0, OptLevel::O2] {
-        let artifact = CraneliftObjectBackend::new()
-            .compile_module(&module, &BackendOptions { opt_level: level })
-            .unwrap();
-        assert_eq!(references(artifact.as_bytes(), "memcpy"), 4, "{level:?}");
+}",
+            4,
+        ),
+        (
+            "func private %load(v0.*[i64; 32]) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = mload v0 [i64; 32];
+    return v1;
+}",
+            1,
+        ),
+        (
+            "func private %wrap(v0.*[i64; 32], v1.*@Pair) {
+block0:
+    v2.[i64; 32] = mload v0 [i64; 32];
+    v3.@Pair = insert_value undef.@Pair 1.i64 v2;
+    mstore v1 v3 @Pair;
+    return;
+}",
+            2,
+        ),
+        (
+            "func private %update(v0.*@Pair, v1.[i64; 32]) -> @Pair {
+block0:
+    v2.@Pair = mload v0 @Pair;
+    v3.@Pair = insert_value v2 0.i64 v1;
+    return v3;
+}",
+            2,
+        ),
+    ];
+    let triple = native_isa(host_architecture()).triple();
+    for (function, copies) in cases {
+        let source =
+            format!("target = \"{triple}\"\ntype @Pair = {{[i64; 32], [i64; 32]}};\n{function}\n");
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let artifact = CraneliftObjectBackend::new()
+                .compile_module(&module, &BackendOptions { opt_level: level })
+                .unwrap();
+            assert_eq!(
+                references(artifact.as_bytes(), "memcpy"),
+                copies,
+                "{level:?}\n{function}"
+            );
+        }
     }
 }
 

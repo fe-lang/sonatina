@@ -579,3 +579,108 @@ block0:
         }
     }
 }
+
+#[test]
+fn single_use_loads_copy_from_memory_only_while_it_is_unchanged() {
+    // `shift` stores a load over its own source, so the forwarded copy must
+    // read every word first. `snapshot` and `rebuild` change the source
+    // before a load's only use, and `wrap` calls a function that does, so
+    // they keep a snapshot. `load` returns a load straight from memory.
+    let source = r#"
+type @Pair = {[i64; 32], [i64; 32]};
+func inline(never) private %clobber(v0.*[i64; 32]) {
+block0:
+    mstore v0 undef.[i64; 32] [i64; 32];
+    return;
+}
+func inline(never) private %load(v0.*[i64; 32]) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = mload v0 [i64; 32];
+    return v1;
+}
+func public %shift(v0.*[i64; 16]) {
+block0:
+    v1.[i64; 15] = mload v0 [i64; 15];
+    v2.*i64 = gep v0 0.i64 1.i64;
+    mstore v2 v1 [i64; 15];
+    return;
+}
+func public %snapshot(v0.*[i64; 4], v1.*[i64; 4]) {
+block0:
+    v2.[i64; 4] = mload v0 [i64; 4];
+    mstore v0 undef.[i64; 4] [i64; 4];
+    mstore v1 v2 [i64; 4];
+    return;
+}
+func public %rebuild(v0.*[i64; 4], v1.*[i64; 4], v2.*[i64; 4]) {
+block0:
+    v3.[i64; 4] = mload v0 [i64; 4];
+    v4.[i64; 4] = insert_value v3 0.i64 9.i64;
+    mstore v1 v4 [i64; 4];
+    v5.[i64; 4] = mload v0 [i64; 4];
+    mstore v0 undef.[i64; 4] [i64; 4];
+    v6.[i64; 4] = insert_value v5 1.i64 9.i64;
+    mstore v2 v6 [i64; 4];
+    return;
+}
+func public %wrap(v0.*[i64; 32], v1.*@Pair) {
+block0:
+    v2.[i64; 32] = call %load v0;
+    v3.@Pair = insert_value undef.@Pair 1.i64 v2;
+    v4.[i64; 32] = mload v0 [i64; 32];
+    call %clobber v0;
+    v5.@Pair = insert_value v3 0.i64 v4;
+    mstore v1 v5 @Pair;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let shift: unsafe extern "C" fn(*mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("shift").unwrap()) };
+        let mut words: [i64; 16] = std::array::from_fn(|i| i as i64 + 1);
+        unsafe { shift(words.as_mut_ptr()) };
+        let shifted: [i64; 15] = std::array::from_fn(|i| i as i64 + 1);
+        assert_eq!(words[0], 1, "{level:?}");
+        assert_eq!(words[1..], shifted, "{level:?}");
+
+        let snapshot: unsafe extern "C" fn(*mut i64, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("snapshot").unwrap()) };
+        let mut source_words = [5i64, 6, 7, 8];
+        let mut copy = [0i64; 4];
+        unsafe { snapshot(source_words.as_mut_ptr(), copy.as_mut_ptr()) };
+        assert_eq!(source_words, [0; 4], "{level:?}");
+        assert_eq!(copy, [5, 6, 7, 8], "{level:?}");
+
+        let rebuild: unsafe extern "C" fn(*mut i64, *mut i64, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("rebuild").unwrap()) };
+        let mut source_words = [5i64, 6, 7, 8];
+        let (mut first, mut second) = ([0i64; 4], [0i64; 4]);
+        unsafe {
+            rebuild(
+                source_words.as_mut_ptr(),
+                first.as_mut_ptr(),
+                second.as_mut_ptr(),
+            )
+        };
+        assert_eq!(source_words, [0; 4], "{level:?}");
+        assert_eq!(first, [9, 6, 7, 8], "{level:?}");
+        assert_eq!(second, [5, 9, 7, 8], "{level:?}");
+
+        let wrap: unsafe extern "C" fn(*mut i64, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("wrap").unwrap()) };
+        let original: Vec<i64> = (1..=32).collect();
+        let mut memory = original.clone();
+        let mut pair = vec![0; 64];
+        unsafe { wrap(memory.as_mut_ptr(), pair.as_mut_ptr()) };
+        assert_eq!(memory, [0; 32], "{level:?}");
+        assert_eq!(pair[..32], original[..], "{level:?}");
+        assert_eq!(pair[32..], original[..], "{level:?}");
+    }
+}
