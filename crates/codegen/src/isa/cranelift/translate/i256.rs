@@ -15,7 +15,7 @@ use sonatina_ir::{
     isa::native::inst_set as native_inst_set,
 };
 
-use super::{ValueMap, resolve_i256, resolve_value, scalar_constant};
+use super::{ValueMap, resolve_i256, scalar_constant};
 
 pub(super) const LIMBS: usize = 4;
 pub(super) type Limbs = [clif::Value; LIMBS];
@@ -24,8 +24,8 @@ const LIMB_BITS: u32 = 64;
 const I256_ALIGN_SHIFT: u8 = 4;
 
 /// Memory that carries i256 values across calls. An argument is stored
-/// right before its call and a result loaded right after it, so each role
-/// needs only one slot per function.
+/// right before its call and a result loaded right after it, so a function
+/// needs one slot per argument position and one for results.
 #[derive(Default)]
 pub(super) struct I256Storage {
     /// The caller's storage for each i256 argument, unchanged for the call.
@@ -429,7 +429,7 @@ fn ssub_overflow(
     builder.ins().icmp_imm_s(IntCC::SignedLessThan, both, 0)
 }
 
-/// The saturation bound for a signed overflow toward the sign of `lhs`.
+/// The saturation bound of a signed overflow: MIN when `negative`, else MAX.
 fn signed_bound(negative: clif::Value, builder: &mut FunctionBuilder) -> Limbs {
     let min = signed_min_limbs(builder);
     let max = signed_max_limbs(builder);
@@ -437,7 +437,7 @@ fn signed_bound(negative: clif::Value, builder: &mut FunctionBuilder) -> Limbs {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum ShiftKind {
+enum ShiftKind {
     Shl,
     Shr,
     Sar,
@@ -462,27 +462,14 @@ fn shift_amount(
             (amount < U256::from(256)).then(|| amount.low_u32()),
         ));
     }
-    let (amount, high_nonzero) = if function.dfg.value_ty(bits) == Type::I256 {
-        let limbs = resolve_i256(function, bits, value_map, builder)?;
-        (limbs[0], Some(any_nonzero(&limbs[1..], builder)))
-    } else {
-        let raw = resolve_value(function, bits, value_map, builder)?;
-        let raw_ty = builder.func.dfg.value_type(raw);
-        let amount = resize_int_value(raw, I64, false, builder);
-        let high_nonzero = (raw_ty == I128).then(|| {
-            let (_, high) = builder.ins().isplit(raw);
-            builder.ins().icmp_imm_s(IntCC::NotEqual, high, 0)
-        });
-        (amount, high_nonzero)
-    };
+    // The verifier gives a shift amount the type of the shifted value.
+    let limbs = resolve_i256(function, bits, value_map, builder)?;
+    let high_nonzero = any_nonzero(&limbs[1..], builder);
     let too_large = builder
         .ins()
-        .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, amount, 256);
-    let too_large = match high_nonzero {
-        Some(high_nonzero) => builder.ins().bor(too_large, high_nonzero),
-        None => too_large,
-    };
-    Ok(ShiftAmount::Variable(amount, too_large))
+        .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, limbs[0], 256);
+    let too_large = builder.ins().bor(too_large, high_nonzero);
+    Ok(ShiftAmount::Variable(limbs[0], too_large))
 }
 
 fn shift(
