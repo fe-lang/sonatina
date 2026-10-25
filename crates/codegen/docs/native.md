@@ -185,4 +185,5 @@ materialization use the allocation and lifetime rules above.
 There are no first-class function values, indirect calls, varargs, floating
 point operations or EVM-specific runtime services in this slice. Division
 by zero is undefined at the IR level; callers must not rely on an EVM-style
-zero result or a uniform trap policy across widths.
+zero result or a uniform trap policy across widths. `i128` and `i256`
+divisions call a divider function local to each object.
