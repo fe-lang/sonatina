@@ -10,9 +10,13 @@ mod values;
 
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::{self as clif, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC};
+use cranelift_codegen::{
+    Context,
+    control::ControlPlane,
+    ir::{self as clif, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC},
+};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
-use cranelift_module::{FuncId, Linkage, Module as ClifModule};
+use cranelift_module::{FuncId, Linkage, Module as ClifModule, ModuleReloc};
 use rustc_hash::FxHashSet;
 
 use sonatina_ir::{
@@ -20,6 +24,7 @@ use sonatina_ir::{
     inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
     module::FuncRef,
+    parallel,
 };
 use sonatina_triple::TargetTriple;
 
@@ -67,42 +72,88 @@ pub(super) fn translate_module(
         func_id_map.insert(func_ref, func_id);
     }
 
+    let mut translated = Vec::new();
     for &func_ref in &funcs {
         let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
-        let translated = module
-            .func_store
-            .try_view(func_ref, |function| -> Result<bool, String> {
-                if module.ctx.func_linkage(func_ref).is_external() {
-                    return Ok(false);
-                }
-                if function.layout.entry_block().is_none() {
-                    return Ok(false);
-                }
-                let heap_roots = native_heap_object_roots(function, &object_effects);
-                divider.start_function();
-                translate_function(
-                    module,
-                    function,
-                    func_ref,
-                    &heap_roots,
-                    &func_id_map,
-                    &data_ids,
-                    &mut divider,
-                    clif_module,
-                )?;
-                Ok(true)
-            });
-        match translated {
-            Some(Ok(true)) => {
-                defined_func_map.insert(name, func_id_map[&func_ref]);
+        let ctx =
+            module
+                .func_store
+                .try_view(func_ref, |function| -> Result<Option<Context>, String> {
+                    if module.ctx.func_linkage(func_ref).is_external() {
+                        return Ok(None);
+                    }
+                    if function.layout.entry_block().is_none() {
+                        return Ok(None);
+                    }
+                    let heap_roots = native_heap_object_roots(function, &object_effects);
+                    divider.start_function();
+                    translate_function(
+                        module,
+                        function,
+                        func_ref,
+                        &heap_roots,
+                        &func_id_map,
+                        &data_ids,
+                        &mut divider,
+                        clif_module,
+                    )
+                    .map(Some)
+                });
+        match ctx {
+            Some(Ok(Some(ctx))) => {
+                let func_id = func_id_map[&func_ref];
+                defined_func_map.insert(name.clone(), func_id);
+                translated.push((format!("function {name}"), func_id, ctx));
             }
-            Some(Ok(false)) | None => {}
+            Some(Ok(None)) | None => {}
             Some(Err(error)) => {
                 return Err(format!("failed to translate function {name}: {error}"));
             }
         }
     }
-    divider.define(clif_module)?;
+    translated.extend(
+        divider
+            .finish(clif_module)
+            .map(|(func_id, ctx)| ("the divider".to_string(), func_id, ctx)),
+    );
+
+    // Functions compile independently; defining them in order keeps the
+    // output deterministic.
+    let isa = clif_module.isa();
+    let compiled = parallel::map_owned(
+        &module.func_store,
+        translated,
+        |(name, func_id, mut ctx)| {
+            let compiled = ctx
+                .compile(isa, &mut ControlPlane::default())
+                .map(|_| ())
+                .map_err(|error| error.inner.to_string());
+            (name, func_id, ctx, compiled)
+        },
+    );
+    for (name, func_id, ctx, compiled) in compiled {
+        if let Err(error) = compiled {
+            eprintln!("[cranelift] CLIF IR (error):\n{}", ctx.func.display());
+            return Err(format!("cranelift failed to compile {name}: {error}"));
+        }
+        let code = ctx
+            .compiled_code()
+            .ok_or_else(|| format!("cranelift compiled no code for {name}"))?;
+        let relocs: Vec<_> = code
+            .buffer
+            .relocs()
+            .iter()
+            .map(|reloc| ModuleReloc::from_mach_reloc(reloc, &ctx.func, func_id))
+            .collect();
+        clif_module
+            .define_function_bytes(
+                func_id,
+                code.buffer.alignment.into(),
+                code.code_buffer(),
+                &relocs,
+            )
+            .map_err(|error| format!("failed to define {name}: {error}"))?;
+    }
 
     Ok(defined_func_map)
 }
@@ -129,7 +180,7 @@ fn translate_function(
     data_ids: &GlobalDataMap,
     divider: &mut Divider,
     clif_module: &mut impl ClifModule,
-) -> Result<(), String> {
+) -> Result<Context, String> {
     let target_config = clif_module.target_config();
     let pointer_type = target_config.pointer_type();
     let mut ctx = clif_module.make_context();
@@ -1587,12 +1638,7 @@ fn translate_function(
         eprintln!("[cranelift] CLIF IR for {name}:\n{}", ctx.func.display());
     }
 
-    if let Err(e) = clif_module.define_function(func_id_map[&func_ref], &mut ctx) {
-        eprintln!("[cranelift] CLIF IR (error):\n{}", ctx.func.display());
-        return Err(format!("cranelift define_function failed: {e}"));
-    }
-
-    Ok(())
+    Ok(ctx)
 }
 
 fn heap_allocate(

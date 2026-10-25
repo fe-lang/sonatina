@@ -757,6 +757,84 @@ fn object_backend_emits_external_import_relocations() {
     );
 }
 
+/// A chain of `count` public functions: each runs `ops` dependent i64
+/// operations on its argument and returns the next one's result. With
+/// enough instructions, Cranelift compiles the functions in parallel.
+fn function_chain(count: usize, ops: usize) -> String {
+    let triple = TargetTriple::new(
+        host_architecture(),
+        Vendor::Unknown,
+        OperatingSystem::Native,
+    );
+    let mut source = format!("target = \"{triple}\"\n");
+    for i in 0..count {
+        source += &format!("func public %f{i}(v0.i64) -> i64 {{\nblock0:\n");
+        for k in 0..ops {
+            let op = ["add", "xor", "mul"][k % 3];
+            source += &format!("    v{}.i64 = {op} v{k} {}.i64;\n", k + 1, 2 * k + 1);
+        }
+        let result = if i + 1 < count {
+            source += &format!("    v{}.i64 = call %f{} v{ops};\n", ops + 1, i + 1);
+            ops + 1
+        } else {
+            ops
+        };
+        source += &format!("    return v{result};\n}}\n");
+    }
+    source
+}
+
+/// What `%f0` of `function_chain(count, ops)` returns for `input`.
+#[cfg(feature = "cranelift-jit")]
+fn function_chain_result(count: usize, ops: usize, input: i64) -> i64 {
+    (0..count).fold(input, |value, _| {
+        (0..ops).fold(value, |value, k| {
+            let constant = 2 * k as i64 + 1;
+            match k % 3 {
+                0 => value.wrapping_add(constant),
+                1 => value ^ constant,
+                _ => value.wrapping_mul(constant),
+            }
+        })
+    })
+}
+
+#[test]
+fn functions_compiled_in_parallel_give_deterministic_objects() {
+    let source = function_chain(80, 120);
+    let compile = || {
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        Compile::new(module, CraneliftObjectBackend::new())
+            .compile()
+            .unwrap()
+            .into_bytes()
+    };
+    let object = compile();
+    assert!(text_size(&object) > 0);
+    for _ in 0..3 {
+        assert!(
+            compile() == object,
+            "parallel compilation changed the object"
+        );
+    }
+}
+
+#[cfg(feature = "cranelift-jit")]
+#[test]
+fn jit_runs_functions_compiled_in_parallel() {
+    let module = sonatina_parser::parse_module(&function_chain(80, 120))
+        .unwrap()
+        .module;
+    let artifact = Compile::new(module, CraneliftJitBackend::new())
+        .compile()
+        .unwrap();
+    let f0: unsafe extern "C" fn(i64) -> i64 =
+        unsafe { std::mem::transmute(artifact.function_address("f0").unwrap()) };
+    for input in [0, 7, -3, i64::MAX] {
+        assert_eq!(unsafe { f0(input) }, function_chain_result(80, 120, input));
+    }
+}
+
 #[test]
 fn parsed_native_ir_compiles_to_an_object() {
     let triple = TargetTriple::new(
