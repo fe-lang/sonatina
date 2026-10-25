@@ -135,6 +135,32 @@ impl AggregateLayoutCache {
         })
     }
 
+    /// The largest child slices of `ty` outside leaves `range` (`[start, end)`,
+    /// relative to `ty`), splitting each struct or array child the range
+    /// partly covers. A partly covered enum or packed struct, which cannot
+    /// split, is kept whole when `keep_unsplit` and left out otherwise. `None`
+    /// when the parts would exceed `limit` slices.
+    pub(crate) fn slices_outside(
+        &mut self,
+        module: &ModuleCtx,
+        ty: Type,
+        range: (usize, usize),
+        keep_unsplit: bool,
+        limit: usize,
+    ) -> Option<SmallVec<[AggregateSlice; 4]>> {
+        self.with_layout(module, |layout| {
+            let mut parts = SmallVec::new();
+            let mut split = SliceSplit {
+                range,
+                keep_unsplit,
+                limit,
+                parts: &mut parts,
+            };
+            layout.push_slices_outside(ty, 0, &mut split)?;
+            Some(parts)
+        })
+    }
+
     pub(crate) fn child_containing_slice(
         &mut self,
         module: &ModuleCtx,
@@ -254,6 +280,20 @@ impl AggregateLayoutCache {
         self.with_layout(module, |layout| {
             layout.enum_variant_field_slice(enum_ty, variant, field)
         })
+    }
+}
+
+/// The state of [`AggregateLayoutCache::slices_outside`].
+struct SliceSplit<'a> {
+    range: (usize, usize),
+    keep_unsplit: bool,
+    limit: usize,
+    parts: &'a mut SmallVec<[AggregateSlice; 4]>,
+}
+
+impl SliceSplit<'_> {
+    fn push(&mut self, part: AggregateSlice) -> Option<()> {
+        (self.parts.len() < self.limit).then(|| self.parts.push(part))
     }
 }
 
@@ -925,6 +965,70 @@ impl LayoutCtx<'_> {
             | CompoundType::ConstRef(_)
             | CompoundType::Func { .. } => None,
         }
+    }
+
+    /// Pushes the parts of `ty`, whose first leaf is `base`, outside the
+    /// split's range; see [`AggregateLayoutCache::slices_outside`].
+    fn push_slices_outside(
+        &mut self,
+        ty: Type,
+        base: usize,
+        split: &mut SliceSplit<'_>,
+    ) -> Option<()> {
+        let (start, end) = split.range;
+        let visit = |layout: &mut Self, split: &mut SliceSplit<'_>, child: AggregateSlice| {
+            let first = base.checked_add(child.first_leaf)?;
+            let last = first.checked_add(child.leaf_count)?;
+            if child.leaf_count == 0 || (start <= first && last <= end) {
+                Some(())
+            } else if last <= start || end <= first {
+                split.push(AggregateSlice {
+                    first_leaf: first,
+                    ..child
+                })
+            } else {
+                layout.push_slices_outside(child.ty, first, split)
+            }
+        };
+        match compound_ty(self.types, ty) {
+            Some(CompoundType::Struct(s)) if !s.packed => {
+                for index in 0..s.fields.len() {
+                    let child = self.aggregate_slice_for_index(ty, u32::try_from(index).ok()?)?;
+                    visit(self, split, child)?;
+                }
+            }
+            Some(&CompoundType::Array { elem, len }) => {
+                let count = self.flattened_leaf_count(elem)?;
+                if count == 0 || len == 0 {
+                    return Some(());
+                }
+                // Only the elements holding the write's first and last leaves
+                // can be partly covered; skip the fully covered ones between.
+                let first_hit = (start.saturating_sub(base) / count).min(len - 1);
+                let last_hit = (end.saturating_sub(base).saturating_sub(1) / count).min(len - 1);
+                for index in (0..=first_hit).chain(last_hit.max(first_hit + 1)..len) {
+                    visit(
+                        self,
+                        split,
+                        AggregateSlice {
+                            ty: elem,
+                            first_leaf: index.checked_mul(count)?,
+                            leaf_count: count,
+                        },
+                    )?;
+                }
+            }
+            _ if split.keep_unsplit => {
+                let leaf_count = self.flattened_leaf_count(ty)?;
+                split.push(AggregateSlice {
+                    ty,
+                    first_leaf: base,
+                    leaf_count,
+                })?;
+            }
+            _ => {}
+        }
+        Some(())
     }
 
     fn aggregate_child_count(&mut self, agg_ty: Type) -> Option<usize> {

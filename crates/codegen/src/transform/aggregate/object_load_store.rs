@@ -4,10 +4,11 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, InstId, ValueId,
+    BlockId, ControlFlowGraph, Function, InstId, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{control_flow, data},
-    module::FuncRef,
+    module::{FuncRef, ModuleCtx},
+    types::CompoundType,
 };
 
 use super::{
@@ -15,7 +16,7 @@ use super::{
     cleanup::DeadPureInstCleanup,
     object_access::{ObjectAccess, ObjectAccessFacts, ObjectInstEffects},
     object_state::{
-        LiveLeafMap, enum_write_variant_slices, mark_live_slice, mark_root_live,
+        LiveLeafMap, LiveLeaves, enum_write_variant_slices, mark_live_slice, mark_root_live,
         slice_has_live_leaf, union_live_leaf_maps,
     },
     object_tracking::{
@@ -24,9 +25,21 @@ use super::{
     },
     provenance::{MayProvenance, MayRootSet, RootValue},
     reconstruct::AggregateValueReconstructor,
-    scalarize::enum_variant_tag_imm,
+    scalarize::{enum_variant_tag_imm, insert_object_child_ref},
     shape,
 };
+
+/// The most slices an exact write may leave of one available slice. Past it the
+/// slice is dropped whole.
+const MAX_REMAINING_PARTS: usize = 32;
+
+/// A value stored to `source`. An available slice is all of `source`, or a
+/// part of it that later writes left in place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Available {
+    value: ValueId,
+    source: ObjectSlice,
+}
 
 /// Nonempty slices within a root never overlap: every insertion follows
 /// invalidation of all may-writes. Index their starts so disjoint field stores
@@ -34,12 +47,12 @@ use super::{
 /// separately, because several empty views can share a coordinate.
 #[derive(Clone, Default, PartialEq, Eq)]
 struct AvailableMap {
-    roots: FxHashMap<ValueId, BTreeMap<usize, (ObjectSlice, ValueId)>>,
-    empty: FxHashMap<ObjectSlice, ValueId>,
+    roots: FxHashMap<ValueId, BTreeMap<usize, (ObjectSlice, Available)>>,
+    empty: FxHashMap<ObjectSlice, Available>,
 }
 
 impl AvailableMap {
-    fn get(&self, slice: &ObjectSlice) -> Option<&ValueId> {
+    fn get(&self, slice: &ObjectSlice) -> Option<&Available> {
         if slice.leaf_count == 0 {
             self.empty.get(slice)
         } else {
@@ -51,7 +64,7 @@ impl AvailableMap {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = (&ObjectSlice, &ValueId)> {
+    fn iter(&self) -> impl Iterator<Item = (&ObjectSlice, &Available)> {
         self.roots
             .values()
             .flat_map(|root| root.values().map(|(slice, value)| (slice, value)))
@@ -61,7 +74,7 @@ impl AvailableMap {
     fn load_candidates(
         &self,
         slice: ObjectSlice,
-    ) -> impl Iterator<Item = (&ObjectSlice, &ValueId)> {
+    ) -> impl Iterator<Item = (&ObjectSlice, &Available)> {
         // Nonempty stored slices do not overlap, so only the last start at or
         // before the load can cover it. Empty views can share a coordinate with
         // several typed slices; preserve their ordinary coverage scan.
@@ -83,8 +96,12 @@ impl AvailableMap {
 
     fn extend(&mut self, entries: impl IntoIterator<Item = (ObjectSlice, ValueId)>) {
         for (slice, value) in entries {
+            let available = Available {
+                value,
+                source: slice,
+            };
             if slice.leaf_count == 0 {
-                self.empty.insert(slice, value);
+                self.empty.insert(slice, available);
             } else {
                 let root = self.roots.entry(slice.root).or_default();
                 debug_assert!(
@@ -102,12 +119,12 @@ impl AvailableMap {
                             |(&next, _)| slice.first_leaf.saturating_add(slice.leaf_count) <= next
                         )
                 );
-                root.insert(slice.first_leaf, (slice, value));
+                root.insert(slice.first_leaf, (slice, available));
             }
         }
     }
 
-    fn retain(&mut self, mut keep: impl FnMut(&ObjectSlice, &mut ValueId) -> bool) {
+    fn retain(&mut self, mut keep: impl FnMut(&ObjectSlice, &mut Available) -> bool) {
         self.roots.retain(|_, root| {
             root.retain(|_, (slice, value)| keep(slice, value));
             !root.is_empty()
@@ -115,7 +132,15 @@ impl AvailableMap {
         self.empty.retain(keep);
     }
 
-    fn invalidate(&mut self, writes: &[ObjectAccess], accesses: &ObjectAccessFacts) {
+    /// Drops what `writes` may overwrite. An exact write keeps the parts of a
+    /// partly overwritten slice outside it, read from the same stored value.
+    fn invalidate(
+        &mut self,
+        writes: &[ObjectAccess],
+        accesses: &ObjectAccessFacts,
+        module: &ModuleCtx,
+        layout_cache: &mut shape::AggregateLayoutCache,
+    ) {
         if writes.is_empty() {
             return;
         }
@@ -145,8 +170,18 @@ impl AvailableMap {
                                 .map(|(&key, _)| key),
                         );
                     }
+                    let mut remaining = SmallVec::<[(ObjectSlice, Available); 4]>::new();
                     for key in remove {
-                        root.remove(&key);
+                        let (slice, available) = root.remove(&key).expect("key was in the root");
+                        remaining.extend(
+                            parts_outside(slice, (first, end), false, module, layout_cache)
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|part| (part, available)),
+                        );
+                    }
+                    for (part, available) in remaining {
+                        root.insert(part.first_leaf, (part, available));
                     }
                     !root.is_empty()
                 } else {
@@ -158,6 +193,180 @@ impl AvailableMap {
             });
         }
     }
+}
+
+/// The largest parts of `slice` outside leaves `[first, end)` of its root,
+/// which overlap it; see [`shape::AggregateLayoutCache::slices_outside`].
+/// `None` unless the slice's type spans exactly its leaves.
+fn parts_outside(
+    slice: ObjectSlice,
+    (first, end): (usize, usize),
+    keep_unsplit: bool,
+    module: &ModuleCtx,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) -> Option<SmallVec<[ObjectSlice; 4]>> {
+    if layout_cache.shape_leaf_count(module, slice.ty) != Some(slice.leaf_count) {
+        return None;
+    }
+    let offset = slice.first_leaf;
+    let range = (
+        first.max(offset) - offset,
+        end.min(offset + slice.leaf_count) - offset,
+    );
+    let parts =
+        layout_cache.slices_outside(module, slice.ty, range, keep_unsplit, MAX_REMAINING_PARTS)?;
+    Some(
+        parts
+            .into_iter()
+            .map(|part| ObjectSlice {
+                ty: part.ty,
+                first_leaf: offset + part.first_leaf,
+                leaf_count: part.leaf_count,
+                ..slice
+            })
+            .collect(),
+    )
+}
+
+/// The slice an exact store writes and its parts that hold a live leaf, when
+/// others are dead. `None` when every leaf is live, every leaf is dead, or the
+/// slice cannot split.
+fn live_store_parts(
+    func: &Function,
+    inst: InstId,
+    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
+    live: &LiveLeafMap,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) -> Option<(ObjectSlice, SmallVec<[ObjectSlice; 4]>)> {
+    let store = func.dfg.downcast::<&data::ObjStore>(inst)?;
+    let slice = tracked[*store.object()].and_then(TrackedObject::exact)?;
+    let (start, end) = (slice.first_leaf, slice.first_leaf + slice.leaf_count);
+    let mut dead = SmallVec::<[(usize, usize); 2]>::new();
+    let mut next = start;
+    for range in live.get(&slice.root).map_or(&[][..], LiveLeaves::ranges) {
+        if range.start >= end {
+            break;
+        }
+        if range.start > next {
+            dead.push((next, range.start));
+        }
+        next = next.max(range.end);
+    }
+    if next < end {
+        dead.push((next, end));
+    }
+    if dead.is_empty() || dead[..] == [(start, end)] {
+        return None;
+    }
+    let mut parts = SmallVec::<[ObjectSlice; 4]>::from_elem(slice, 1);
+    for range in dead {
+        let mut rest = SmallVec::new();
+        for part in parts {
+            if part.first_leaf + part.leaf_count <= range.0 || range.1 <= part.first_leaf {
+                rest.push(part);
+            } else {
+                rest.extend(parts_outside(part, range, true, func.ctx(), layout_cache)?);
+            }
+        }
+        if rest.len() > MAX_REMAINING_PARTS {
+            return None;
+        }
+        parts = rest;
+    }
+    (parts[..] != [slice]).then_some((slice, parts))
+}
+
+/// Replaces the store `inst` of `slice` with stores of `parts` of it, each
+/// through a projection of the stored object and read from the stored value.
+fn narrow_store(
+    func: &mut Function,
+    inst: InstId,
+    slice: ObjectSlice,
+    parts: &[ObjectSlice],
+    layout_cache: &mut shape::AggregateLayoutCache,
+) -> bool {
+    let module = func.ctx().clone();
+    let store = func
+        .dfg
+        .downcast::<&data::ObjStore>(inst)
+        .expect("a narrowed store is a store");
+    let (object, value) = (*store.object(), *store.value());
+    let before = func.layout.prev_inst_of(inst);
+    let narrowed = parts.iter().all(|&part| {
+        let mut steps = SmallVec::<[(u32, Type); 4]>::new();
+        let (mut ty, mut base) = (slice.ty, slice.first_leaf);
+        while ty != part.ty || base != part.first_leaf {
+            let Some((index, child)) = layout_cache.child_containing_slice(
+                &module,
+                ty,
+                shape::AggregateSlice {
+                    ty: part.ty,
+                    first_leaf: part.first_leaf - base,
+                    leaf_count: part.leaf_count,
+                },
+            ) else {
+                return false;
+            };
+            if !matches!(
+                ty.resolve_compound(&module),
+                Some(CompoundType::Struct(_) | CompoundType::Array { .. })
+            ) {
+                return false;
+            }
+            steps.push((index, child.ty));
+            (ty, base) = (child.ty, base + child.first_leaf);
+        }
+        let Some(part_value) = AggregateValueReconstructor::new(layout_cache).rebuild_slice(
+            func,
+            inst,
+            value,
+            slice.ty,
+            shape::AggregateSlice {
+                ty: part.ty,
+                first_leaf: part.first_leaf - slice.first_leaf,
+                leaf_count: part.leaf_count,
+            },
+            part.ty,
+        ) else {
+            return false;
+        };
+        let mut cursor = InstInserter::at_location(func.layout.prev_inst_of(inst).map_or(
+            CursorLocation::BlockTop(func.layout.inst_block(inst)),
+            CursorLocation::At,
+        ));
+        let (mut part_object, mut ty) = (object, slice.ty);
+        for (index, child_ty) in steps {
+            part_object = insert_object_child_ref(
+                func,
+                &mut cursor,
+                &module,
+                part_object,
+                ty,
+                index,
+                child_ty,
+            );
+            ty = child_ty;
+        }
+        cursor.insert_inst_data(
+            func,
+            data::ObjStore::new_unchecked(func.inst_set(), part_object, part_value),
+        );
+        true
+    });
+    if !narrowed {
+        // Drop the partial replacement.
+        let mut inserted = Vec::new();
+        while let Some(prev) = func.layout.prev_inst_of(inst)
+            && Some(prev) != before
+        {
+            func.layout.remove_inst(prev);
+            inserted.push(prev);
+        }
+        func.erase_insts(&inserted);
+        return false;
+    }
+    InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+    true
 }
 
 #[derive(Default)]
@@ -316,11 +525,11 @@ impl ObjectLoadStore {
         slice: ObjectSlice,
         available: &AvailableMap,
     ) -> Option<ValueId> {
-        for (&available_slice, &value) in available.load_candidates(slice) {
+        for (&available_slice, &Available { value, source }) in available.load_candidates(slice) {
             if !same_base_slice_covers(available_slice, slice) {
                 continue;
             }
-            if available_slice == slice && func.dfg.value_ty(value) == slice.ty {
+            if source == slice && func.dfg.value_ty(value) == slice.ty {
                 return Some(value);
             }
 
@@ -328,18 +537,11 @@ impl ObjectLoadStore {
             // from a sole field or a fieldless enum's tag that spans it.
             let source_slice = shape::AggregateSlice {
                 ty: slice.ty,
-                first_leaf: slice.first_leaf - available_slice.first_leaf,
+                first_leaf: slice.first_leaf - source.first_leaf,
                 leaf_count: slice.leaf_count,
             };
             if let Some(rebuilt) = AggregateValueReconstructor::new(&mut self.layout_cache)
-                .rebuild_slice(
-                    func,
-                    inst,
-                    value,
-                    available_slice.ty,
-                    source_slice,
-                    slice.ty,
-                )
+                .rebuild_slice(func, inst, value, source.ty, source_slice, slice.ty)
             {
                 return Some(rebuilt);
             }
@@ -416,14 +618,23 @@ impl ObjectLoadStore {
         });
         // Check redundancy against the old contents, before invalidating aliases.
         if !written.is_empty()
-            && written
-                .iter()
-                .all(|(slice, value)| available.get(slice) == Some(value))
+            && written.iter().all(|(slice, value)| {
+                available.get(slice)
+                    == Some(&Available {
+                        value: *value,
+                        source: *slice,
+                    })
+            })
         {
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return true;
         }
-        available.invalidate(&effects.writes, accesses);
+        available.invalidate(
+            &effects.writes,
+            accesses,
+            func.ctx(),
+            &mut self.layout_cache,
+        );
         available.extend(written);
         false
     }
@@ -517,10 +728,15 @@ impl ObjectLoadStore {
                 if removed {
                     continue;
                 }
+                // Liveness after a partly dead store picks the parts it keeps.
+                let parts = live_store_parts(func, inst, tracked, &live, &mut self.layout_cache);
                 let effects = inst_effects
                     .entry(inst)
                     .or_insert_with(|| accesses.effects(func, inst, object_effects));
                 transfer_backward_effects(func, tracked, accesses, effects, &mut live);
+                if let Some((slice, parts)) = parts {
+                    changed |= narrow_store(func, inst, slice, &parts, &mut self.layout_cache);
+                }
             }
         }
 
@@ -838,17 +1054,47 @@ block0:
                     }
                 }
             }
-            let original: FxHashMap<_, _> =
-                seed.iter().map(|(&slice, &value)| (slice, value)).collect();
+            let mut layout = shape::AggregateLayoutCache::default();
+            // An unindexed model: drop every overlapped slice, keeping the parts
+            // an exact write of its own root leaves.
+            let mut flat_invalidate = |flat: &mut FxHashMap<ObjectSlice, Available>,
+                                       write: ObjectAccess| {
+                let overlapped: Vec<_> = flat
+                    .iter()
+                    .filter(|&(&slice, _)| accesses.may_overlap(write, slice))
+                    .map(|(&slice, &available)| (slice, available))
+                    .collect();
+                for (slice, available) in overlapped {
+                    flat.remove(&slice);
+                    let ObjectAccess::Exact(projection) = write else {
+                        continue;
+                    };
+                    if projection.root_value.value() != slice.root {
+                        continue;
+                    }
+                    let first = projection.slice.first_leaf;
+                    let write = (first, first + projection.slice.leaf_count);
+                    for part in parts_outside(slice, write, false, func.ctx(), &mut layout)
+                        .unwrap_or_default()
+                    {
+                        flat.insert(part, available);
+                    }
+                }
+            };
+            let mut invalidate_layout = shape::AggregateLayoutCache::default();
+            let original: FxHashMap<_, _> = seed
+                .iter()
+                .map(|(&slice, &available)| (slice, available))
+                .collect();
             for &write in &writes {
                 let mut indexed = seed.clone();
                 let mut flat = original.clone();
-                indexed.invalidate(&[write], &accesses);
-                flat.retain(|&slice, _| !accesses.may_overlap(write, slice));
+                indexed.invalidate(&[write], &accesses, func.ctx(), &mut invalidate_layout);
+                flat_invalidate(&mut flat, write);
                 assert_eq!(
                     indexed
                         .iter()
-                        .map(|(&slice, &value)| (slice, value))
+                        .map(|(&slice, &available)| (slice, available))
                         .collect::<FxHashMap<_, _>>(),
                     flat,
                     "{write:?}"
@@ -860,36 +1106,44 @@ block0:
                 let met = meet_forward([seed.clone(), indexed].into_iter());
                 assert_eq!(
                     met.iter()
-                        .map(|(&slice, &value)| (slice, value))
+                        .map(|(&slice, &available)| (slice, available))
                         .collect::<FxHashMap<_, _>>(),
-                    flat
+                    flat.into_iter()
+                        .filter(|(slice, available)| original.get(slice) == Some(available))
+                        .collect::<FxHashMap<_, _>>()
                 );
             }
             let mut indexed = seed.clone();
             let mut flat = original;
             for &write in &writes {
-                indexed.invalidate(&[write], &accesses);
-                flat.retain(|&slice, _| !accesses.may_overlap(write, slice));
+                indexed.invalidate(&[write], &accesses, func.ctx(), &mut invalidate_layout);
+                flat_invalidate(&mut flat, write);
                 if let ObjectAccess::Exact(projection) = write {
                     let slice = accesses.projection_slice(projection);
                     let value = func.arg_values[2];
                     indexed.extend([(slice, value)]);
-                    flat.insert(slice, value);
+                    flat.insert(
+                        slice,
+                        Available {
+                            value,
+                            source: slice,
+                        },
+                    );
                 }
                 assert_eq!(
                     indexed
                         .iter()
-                        .map(|(&slice, &value)| (slice, value))
+                        .map(|(&slice, &available)| (slice, available))
                         .collect::<FxHashMap<_, _>>(),
                     flat,
                     "sequential write {write:?}"
                 );
             }
             let mut indexed = seed.clone();
-            indexed.invalidate(&[], &accesses);
+            indexed.invalidate(&[], &accesses, func.ctx(), &mut invalidate_layout);
             assert!(indexed == seed);
             // Batched effects must behave like their individual transfers.
-            indexed.invalidate(&writes, &accesses);
+            indexed.invalidate(&writes, &accesses, func.ctx(), &mut invalidate_layout);
             assert_eq!(indexed.iter().count(), 0);
         });
     }
@@ -1169,6 +1423,139 @@ func private %f(v0.objref<@pair>, v1.i256, v2.i256) -> i256 {
             assert!(
                 dumped.contains("return v1;"),
                 "field 0 load should still forward:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn summary_write_one_field_keeps_rest_of_whole_store() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @triple = { i256, i256, i256 };
+
+func private %write_second(v0.objref<@triple>, v1.i256) {
+    block0:
+        v2.objref<i256> = obj.proj v0 1.i8;
+        obj.store v2 v1;
+        return;
+}
+
+func private %f(v0.objref<@triple>, v1.@triple) -> i256 {
+    block0:
+        obj.store v0 v1;
+        call %write_second v0 9.i256;
+        v2.objref<i256> = obj.proj v0 0.i8;
+        v3.i256 = obj.load v2;
+        v4.objref<i256> = obj.proj v0 1.i8;
+        v5.i256 = obj.load v4;
+        v6.objref<i256> = obj.proj v0 2.i8;
+        v7.i256 = obj.load v6;
+        v8.i256 = add v3 v5;
+        v9.i256 = add v8 v7;
+        return v9;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("extract_value v1 0.i256")
+                    && dumped.contains("extract_value v1 2.i256"),
+                "fields the callee leaves should forward from the whole store:\n{dumped}"
+            );
+            assert_eq!(
+                dumped.matches("obj.load").count(),
+                1,
+                "only the field the callee writes should still load:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn whole_store_narrows_to_fields_read_later() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @triple = { i256, i256, i256 };
+
+func private %read_outer(v0.objref<@triple>) -> i256 {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        v3.objref<i256> = obj.proj v0 2.i8;
+        v4.i256 = obj.load v3;
+        v5.i256 = add v2 v4;
+        return v5;
+}
+
+func private %f(v0.@triple) -> i256 {
+    block0:
+        v1.objref<@triple> = obj.alloc @triple;
+        obj.store v1 v0;
+        v2.i256 = call %read_outer v1;
+        return v2;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.store v1 v0;"),
+                "the whole store writes a field nothing reads:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("extract_value v0 0.i256")
+                    && dumped.contains("extract_value v0 2.i256")
+                    && !dumped.contains("extract_value v0 1.i256"),
+                "only the fields the callee reads should be stored:\n{dumped}"
+            );
+            assert_eq!(dumped.matches("obj.store").count(), 2, "{dumped}");
+        });
+    }
+
+    #[test]
+    fn nested_field_store_keeps_rest_of_whole_store() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+type @outer = { i256, @pair };
+
+func private %f(v0.objref<@outer>, v1.@outer, v2.i256) -> i256 {
+    block0:
+        obj.store v0 v1;
+        v3.objref<@pair> = obj.proj v0 1.i8;
+        v4.objref<i256> = obj.proj v3 1.i8;
+        obj.store v4 v2;
+        v5.objref<i256> = obj.proj v0 0.i8;
+        v6.i256 = obj.load v5;
+        v7.objref<i256> = obj.proj v3 0.i8;
+        v8.i256 = obj.load v7;
+        v9.i256 = obj.load v4;
+        v10.i256 = add v6 v8;
+        v11.i256 = add v10 v9;
+        return v11;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.load"),
+                "every load should forward from the whole store or the field store:\n{dumped}"
             );
         });
     }
