@@ -29,7 +29,7 @@ use crate::transform::aggregate::{
 
 use self::{
     abi::*,
-    division::{Divider, div_rem, div_rem_i128},
+    division::{Divider, DividerCall, addmod, div_rem, div_rem_i128, mulmod},
     frame::FrameSlots,
     globals::*,
     i256::*,
@@ -327,6 +327,26 @@ fn translate_function(
                     DivRemKind::Smod,
                     *rem.lhs(),
                     *rem.rhs(),
+                    inst_id,
+                    function,
+                    &mut value_map,
+                    divider,
+                    clif_module,
+                    &mut builder,
+                )?,
+                NativeInstKind::EvmAddMod(op) => translate_modular(
+                    addmod,
+                    [*op.lhs(), *op.rhs(), *op.modulus()],
+                    inst_id,
+                    function,
+                    &mut value_map,
+                    divider,
+                    clif_module,
+                    &mut builder,
+                )?,
+                NativeInstKind::EvmMulMod(op) => translate_modular(
+                    mulmod,
+                    [*op.lhs(), *op.rhs(), *op.modulus()],
                     inst_id,
                     function,
                     &mut value_map,
@@ -1609,6 +1629,49 @@ fn translate_div_rem(
             let rhs = resolve_value(function, rhs, value_map, builder)?;
             value_map.insert(result, emit_scalar_div_rem(lhs, rhs, ty, kind, builder));
         }
+    }
+    Ok(())
+}
+
+type ModularOp = fn(Limbs, Limbs, Limbs, DividerCall, &mut FunctionBuilder) -> Limbs;
+
+/// Translates `evm_add_mod` or `evm_mul_mod`. Narrower operands are
+/// zero-extended to i256, and the result, below the modulus, truncated.
+#[allow(clippy::too_many_arguments)]
+fn translate_modular(
+    op: ModularOp,
+    operands: [ValueId; 3],
+    inst_id: InstId,
+    function: &Function,
+    value_map: &mut ValueMap,
+    divider: &mut Divider,
+    clif_module: &mut impl ClifModule,
+    builder: &mut FunctionBuilder,
+) -> Result<(), String> {
+    let result = function
+        .dfg
+        .inst_result(inst_id)
+        .ok_or("modular arithmetic has no result")?;
+    let ty = function.dfg.value_ty(operands[0]);
+    let operand = |value, builder: &mut FunctionBuilder| {
+        if ty == Type::I256 {
+            resolve_i256(function, value, value_map, builder)
+        } else {
+            resolve_value(function, value, value_map, builder)
+                .map(|value| extend_to_limbs(value, ty, false, builder))
+        }
+    };
+    let [lhs, rhs, modulus] = operands;
+    let lhs = operand(lhs, builder)?;
+    let rhs = operand(rhs, builder)?;
+    let modulus = operand(modulus, builder)?;
+    let call = divider.call(clif_module, builder)?;
+    let limbs = op(lhs, rhs, modulus, call, builder);
+    if ty == Type::I256 {
+        value_map.insert_limbs(result, limbs);
+    } else {
+        let clif_ty = sonatina_scalar_type_to_clif_or_err(ty)?;
+        value_map.insert(result, truncate_limbs(limbs, clif_ty, builder));
     }
     Ok(())
 }

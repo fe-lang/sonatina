@@ -2,7 +2,8 @@ use macros::inst_set;
 
 use crate::inst::*;
 
-/// Target-neutral instructions accepted by the host-native ISA.
+/// Target-neutral instructions accepted by the host-native ISA, and EVM
+/// modular arithmetic, whose full-precision semantics are not EVM-specific.
 #[inst_set(InstKind = "NativeInstKind")]
 pub struct NativeInstSet(
     arith::Neg,
@@ -90,4 +91,6 @@ pub struct NativeInstSet(
     logic::Or,
     logic::Xor,
     logic::Bswap,
+    evm::EvmAddMod,
+    evm::EvmMulMod,
 );

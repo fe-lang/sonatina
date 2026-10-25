@@ -178,10 +178,13 @@ not a guarantee that earlier IR optimization preserves a particular undef
 value. Unresolved SSA values are compilation errors, not implicit undef.
 
 The native instruction set includes integer arithmetic, comparisons, casts,
-control flow, direct calls, memory and aggregate/object operations. Enum
-operations must disappear during legalization. `get_function_ptr`,
-`sym_addr` and `sym_size` are unsupported. Dynamic allocation and object
-materialization use the allocation and lifetime rules above.
+control flow, direct calls, memory and aggregate/object operations. It also
+accepts `evm_add_mod` and `evm_mul_mod`: `(a + b) % m` and `(a * b) % m` at
+full precision, zero for a zero modulus, with narrower operands
+zero-extended. Enum operations must disappear during legalization.
+`get_function_ptr`, `sym_addr` and `sym_size` are unsupported. Dynamic
+allocation and object materialization use the allocation and lifetime rules
+above.
 There are no first-class function values, indirect calls, varargs, floating
 point operations or EVM-specific runtime services in this slice. Division
 by zero is undefined at the IR level; callers must not rely on an EVM-style
