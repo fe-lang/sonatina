@@ -139,7 +139,7 @@ pub(super) fn translate_bitcast(
     }
 }
 
-pub(super) fn storage_chunks(size: u32) -> impl Iterator<Item = (i32, clif::Type)> {
+fn storage_chunks(size: u32) -> impl Iterator<Item = (i32, clif::Type)> {
     let mut offset = 0;
     std::iter::from_fn(move || {
         let (bytes, ty) = match size - offset {
