@@ -431,3 +431,153 @@ block6:
         }
     }
 }
+
+/// Checks `%select`, which loads a `ty` scrutinee through its first argument
+/// and dispatches on it with a `br_table`. The `i`th of `keys` returns `i`,
+/// `shared` keys branch straight to the merge block and return the second
+/// argument, and every other value takes the default and returns -1.
+fn check_br_table(ty: Type, keys: &[i128], shared: &[i128], probes: &[i128]) {
+    let name = match ty {
+        Type::I8 => "i8",
+        Type::I32 => "i32",
+        Type::I64 => "i64",
+        Type::I128 => "i128",
+        Type::I256 => "i256",
+        _ => unreachable!(),
+    };
+    let imm = |value: i128| Immediate::from_i256(I256::from(value), ty);
+    let default = keys.len() + 1;
+    let merge = keys.len() + 2;
+    let table: String = keys
+        .iter()
+        .enumerate()
+        .map(|(i, &key)| format!(" ({}.{name} block{})", imm(key), i + 1))
+        .chain(
+            shared
+                .iter()
+                .map(|&key| format!(" ({}.{name} block{merge})", imm(key))),
+        )
+        .collect();
+    let blocks: String = (1..=default)
+        .map(|block| format!("block{block}:\n    jump block{merge};\n"))
+        .collect();
+    let inputs: String = (0..keys.len())
+        .map(|i| format!(" ({i}.i64 block{})", i + 1))
+        .chain((!shared.is_empty()).then(|| " (v1 block0)".to_string()))
+        .collect();
+    let source = format!(
+        "func public %select(v0.*{name}, v1.i64) -> i64 {{
+block0:
+    v2.{name} = mload v0 {name};
+    br_table v2 block{default}{table};
+{blocks}block{merge}:
+    v3.i64 = phi{inputs} (-1.i64 block{default});
+    return v3;
+}}
+"
+    );
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{source}\n{errors:?}"));
+        let select: unsafe extern "C" fn(*const u8, i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("select").unwrap()) };
+        for &probe in probes {
+            let probe = imm(probe);
+            let bytes = probe
+                .zext(Type::I256)
+                .as_i256()
+                .to_u256()
+                .to_little_endian();
+            let expected = if let Some(i) = keys.iter().position(|&key| imm(key) == probe) {
+                i as i64
+            } else if shared.iter().any(|&key| imm(key) == probe) {
+                77
+            } else {
+                -1
+            };
+            let actual = unsafe { select(bytes.as_ptr(), 77) };
+            assert_eq!(actual, expected, "{level:?} {name} {probe}\n{source}");
+        }
+    }
+}
+
+#[test]
+fn br_table_dense_keys() {
+    let probes: Vec<_> = (-3..=20)
+        .chain([i32::MIN as i128, i32::MAX as i128])
+        .collect();
+    check_br_table(Type::I32, &(0..16).collect::<Vec<_>>(), &[16, 17], &probes);
+    // In unsigned order the keys are two ranges, 0..=3 and 252..=255.
+    check_br_table(
+        Type::I8,
+        &(-4..=3).collect::<Vec<_>>(),
+        &[-128, 127],
+        &(-128..=127).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn br_table_sparse_keys() {
+    let keys = [
+        -5,
+        0,
+        3,
+        1000,
+        1 << 40,
+        i64::MIN as i128,
+        i64::MAX as i128,
+        77777,
+    ];
+    let probes: Vec<_> = keys
+        .iter()
+        .chain(&[9, 2, -1])
+        .flat_map(|&key: &i128| [key - 1, key, key + 1])
+        .collect();
+    check_br_table(Type::I64, &keys, &[9], &probes);
+    let wide = [0, 1, 1 << 64, 1 << 100, -1, i128::MIN];
+    let probes: Vec<_> = wide
+        .iter()
+        .chain(&[2])
+        .flat_map(|&key: &i128| [key.wrapping_sub(1), key, key.wrapping_add(1)])
+        .collect();
+    check_br_table(Type::I128, &wide, &[2], &probes);
+}
+
+#[test]
+fn br_table_on_i256_switches_on_the_low_limb() {
+    // Every key fits the low limb, so a scrutinee with any upper bit set
+    // takes the default even when its low limb matches a key.
+    let probes: Vec<_> = (-2..=8)
+        .chain([(1 << 64) + 2, (1 << 127) + 3, 1 << 64, -(1 << 64) + 1])
+        .collect();
+    check_br_table(Type::I256, &[0, 1, 2, 3, 5, 1000], &[6], &probes);
+}
+
+#[test]
+fn br_table_with_only_a_default() {
+    for ty in [Type::I64, Type::I256] {
+        check_br_table(ty, &[], &[], &[0, 1, -1, 1 << 70]);
+    }
+}
+
+#[test]
+fn br_table_with_few_keys() {
+    check_br_table(Type::I8, &[-1, 0], &[5], &(-128..=127).collect::<Vec<_>>());
+    check_br_table(
+        Type::I128,
+        &[1 << 100],
+        &[-1],
+        &[0, 1, -1, -2, 1 << 100, (1 << 100) + 1, 1 << 36],
+    );
+    check_br_table(
+        Type::I256,
+        &[0, 7],
+        &[-1],
+        &[0, 7, 8, -1, -2, (1 << 64) + 7, 1 << 64],
+    );
+}
