@@ -1,4 +1,5 @@
 mod abi;
+mod frame;
 mod globals;
 mod i256;
 mod memory;
@@ -19,7 +20,7 @@ use sonatina_ir::{
 };
 use sonatina_triple::TargetTriple;
 
-use self::{abi::*, globals::*, i256::*, memory::*, phi::Edges, scalar::*};
+use self::{abi::*, frame::FrameSlots, globals::*, i256::*, memory::*, phi::Edges, scalar::*};
 
 pub(super) fn translate_module(
     module: &Module,
@@ -165,7 +166,7 @@ fn translate_function(
         }
     }
 
-    let mut phi_slots = HashMap::new();
+    let frame = FrameSlots::new(function, &cfg, &block_order, &mut builder)?;
     for &block in &block_order {
         let clif_block = block_map[&block];
         for inst_id in function.layout.iter_inst(block) {
@@ -177,10 +178,7 @@ fn translate_function(
                 .inst_result(inst_id)
                 .ok_or("phi has no result")?;
             let ty = function.dfg.value_ty(result);
-            if uses_indirect_value_representation(&module.ctx, ty) {
-                let slot = builder.create_sized_stack_slot(stack_slot_data(ty, &module.ctx)?);
-                phi_slots.insert(result, slot);
-            } else {
+            if !uses_indirect_value_representation(&module.ctx, ty) {
                 let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_type)?;
                 let param = builder.append_block_param(clif_block, clif_ty);
                 value_map.insert(result, param);
@@ -190,7 +188,7 @@ fn translate_function(
     let edges = Edges {
         function,
         block_map: &block_map,
-        phi_slots: &phi_slots,
+        frame: &frame,
         config: target_config,
     };
 
@@ -210,10 +208,9 @@ fn translate_function(
                 break;
             }
             if let Some(result) = function.dfg.inst_result(inst_id)
-                && let Some(&slot) = phi_slots.get(&result)
+                && uses_indirect_value_representation(&module.ctx, function.dfg.value_ty(result))
             {
-                let addr = builder.ins().stack_addr(pointer_type, slot, 0);
-                value_map.insert(result, addr);
+                value_map.insert(result, frame.address(result, &mut builder)?);
             }
         }
 
@@ -896,9 +893,15 @@ fn translate_function(
 
                     let mut call_args = Vec::new();
                     let sret_slot = if let Some(storage_ty) = indirect_storage_ty {
-                        let slot = builder
-                            .create_sized_stack_slot(stack_slot_data(storage_ty, &module.ctx)?);
-                        let addr = builder.ins().stack_addr(pointer_type, slot, 0);
+                        // A constref result's copy of its referent stays
+                        // in a slot of its own.
+                        let addr = if storage_ty == function.dfg.value_ty(ir_results[0]) {
+                            frame.address(ir_results[0], &mut builder)?
+                        } else {
+                            let slot = builder
+                                .create_sized_stack_slot(stack_slot_data(storage_ty, &module.ctx)?);
+                            builder.ins().stack_addr(pointer_type, slot, 0)
+                        };
                         call_args.push(addr);
                         Some(addr)
                     } else {
@@ -1332,8 +1335,7 @@ fn translate_function(
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let result_ty = function.dfg.value_ty(result);
                         if uses_indirect_value_representation(&module.ctx, result_ty) {
-                            let result_addr =
-                                create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?;
+                            let result_addr = frame.address(result, &mut builder)?;
                             copy_bytes(
                                 addr,
                                 result_addr,
@@ -1386,28 +1388,13 @@ fn translate_function(
                     };
                     let result_ty = function.dfg.value_ty(result);
                     let source_value = *insert.dest();
-                    // An insert result owns its storage. Its sole consumer can
-                    // continue construction in that storage without changing an
-                    // observable SSA snapshot. Stay in the same block: a use in
-                    // a nested loop can execute repeatedly for one definition.
-                    // Other sources (including extracted views and arguments)
-                    // do not carry this ownership guarantee.
-                    let reuse = function
-                        .dfg
-                        .value_inst(source_value)
-                        .is_some_and(|source_inst| {
-                            function.layout.inst_block(source_inst) == block
-                                && function.dfg.users(source_value).copied().eq([inst_id])
-                                && matches!(
-                                    native_inst_set().resolve_inst(function.dfg.inst(source_inst)),
-                                    NativeInstKind::InsertValue(_)
-                                )
-                        });
-                    let result_addr = if reuse {
+                    // An insert result owns its storage. Its sole consumer in
+                    // the same block continues construction there without
+                    // changing an observable SSA snapshot (see `FrameSlots`).
+                    let result_addr = if frame.continues_source(inst_id) {
                         resolve_value(function, source_value, &value_map, &mut builder)?
                     } else {
-                        let address =
-                            create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?;
+                        let address = frame.address(result, &mut builder)?;
                         store_indirect(
                             function,
                             source_value,
@@ -1523,8 +1510,7 @@ fn translate_function(
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let result_ty = function.dfg.value_ty(result);
                         if uses_indirect_value_representation(&module.ctx, result_ty) {
-                            let result_addr =
-                                create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?;
+                            let result_addr = frame.address(result, &mut builder)?;
                             copy_bytes(
                                 addr,
                                 result_addr,

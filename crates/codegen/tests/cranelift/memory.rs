@@ -369,3 +369,89 @@ block3:
         }
     }
 }
+
+#[test]
+fn shared_frame_slots_keep_live_views_loop_values_and_call_arguments() {
+    // A loop temporary and a call result would reuse `v5`'s slot if its view
+    // `v6`, live across the loop, did not keep it alive.
+    let reverse: String = (0..32)
+        .map(|index| {
+            let source = if index == 0 {
+                "undef.[i64; 32]".to_string()
+            } else {
+                format!("v{}", index * 2)
+            };
+            format!(
+                "    v{}.i64 = extract_value v0 {}.i64;\n    v{}.[i64; 32] = insert_value {source} {index}.i64 v{};\n",
+                index * 2 + 1,
+                31 - index,
+                index * 2 + 2,
+                index * 2 + 1
+            )
+        })
+        .collect();
+    let source = format!(
+        r#"
+type @Big = {{[i64; 32], [i64; 32]}};
+func inline(never) private %reverse(v0.[i64; 32]) -> [i64; 32] {{
+block0:
+{reverse}    return v64;
+}}
+func public %mix(v0.*@Big, v1.*@Big, v2.i64, v3.*[i64; 32], v4.*[i64; 32]) {{
+block0:
+    v5.@Big = mload v0 @Big;
+    v6.[i64; 32] = extract_value v5 1.i64;
+    v7.@Big = mload v1 @Big;
+    v8.[i64; 32] = extract_value v7 0.i64;
+    v9.[i64; 32] = call %reverse v8;
+    jump block1;
+block1:
+    v10.[i64; 32] = phi (v9 block0) (v13 block1);
+    v11.i64 = phi (0.i64 block0) (v14 block1);
+    v12.@Big = mload v1 @Big;
+    v13.[i64; 32] = call %reverse v10;
+    v16.[i64; 32] = extract_value v12 1.i64;
+    mstore v3 v16 [i64; 32];
+    v14.i64 = add v11 1.i64;
+    v15.i1 = lt v14 v2;
+    br v15 block1 block2;
+block2:
+    mstore v3 v6 [i64; 32];
+    mstore v4 v10 [i64; 32];
+    return;
+}}
+"#
+    );
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let mix: unsafe extern "C" fn(*const i64, *const i64, i64, *mut i64, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("mix").unwrap()) };
+        let first: Vec<i64> = (0..64).collect();
+        let second: Vec<i64> = (0..64).map(|i| 1000 + i).collect();
+        for count in [1, 2, 3] {
+            let mut view = [0; 32];
+            let mut carried = [0; 32];
+            unsafe {
+                mix(
+                    first.as_ptr(),
+                    second.as_ptr(),
+                    count,
+                    view.as_mut_ptr(),
+                    carried.as_mut_ptr(),
+                )
+            };
+            assert_eq!(view[..], first[32..], "{level:?} {count}");
+            let mut expected = second[..32].to_vec();
+            if count % 2 == 1 {
+                expected.reverse();
+            }
+            assert_eq!(carried[..], expected[..], "{level:?} {count}");
+        }
+    }
+}
