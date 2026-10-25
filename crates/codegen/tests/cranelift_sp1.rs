@@ -93,12 +93,20 @@ block0:
     v2.i64 = mload $imported i64;
     return v2;
 }
+func public %copy(v0.*[i64; 32], v1.*[i64; 32]) {
+block0:
+    v2.[i64; 32] = mload v0 [i64; 32];
+    mstore v1 v2 [i64; 32];
+    return;
+}
 "#;
     let artifact = CraneliftObjectBackend::new()
         .compile_module(&parse(source), &BackendOptions::default())
         .unwrap();
     let object = object::File::parse(artifact.as_bytes()).unwrap();
-    for name in ["consume", "imported", "memset"] {
+    // The SP1 runtime archive defines both memory helpers; sp1-zkvm
+    // assembles its own `memcpy`.
+    for name in ["consume", "imported", "memset", "memcpy"] {
         assert!(
             object
                 .symbols()
@@ -127,7 +135,7 @@ block0:
             count += 1;
         }
     }
-    assert!(count >= 4);
+    assert!(count >= 5);
 }
 
 #[cfg(feature = "cranelift-jit")]

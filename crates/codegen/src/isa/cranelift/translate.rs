@@ -749,13 +749,19 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::Bitcast(bitcast) => {
-                    let val = resolve_value(function, *bitcast.from(), &value_map, &mut builder)?;
+                    let val = resolve_operand(
+                        function,
+                        *bitcast.from(),
+                        &value_map,
+                        target_config,
+                        &mut builder,
+                    )?;
                     let result_val = translate_bitcast(
                         val,
                         function.dfg.value_ty(*bitcast.from()),
                         *bitcast.ty(),
                         &module.ctx,
-                        pointer_type,
+                        target_config,
                         &mut builder,
                     )?;
                     if let Some(result) = function.dfg.inst_result(inst_id) {
@@ -911,16 +917,18 @@ fn translate_function(
                         let [val_id] = ret.args().as_slice() else {
                             return Err("indirect return requires exactly one value".to_string());
                         };
-                        let val = resolve_value(function, *val_id, &value_map, &mut builder)?;
                         let val_ty = function.dfg.value_ty(*val_id);
                         let storage_ty = indirect_return_storage_type(&module.ctx, val_ty)
                             .ok_or("indirect return value has no storage type")?;
-                        copy_bytes(
-                            val,
+                        store_indirect(
+                            function,
+                            *val_id,
                             sret,
                             value_storage_size(storage_ty, &module.ctx)?,
+                            &value_map,
+                            target_config,
                             &mut builder,
-                        );
+                        )?;
                         builder.ins().return_(&[]);
                     } else {
                         let args: Result<Vec<_>, _> = ret
@@ -963,7 +971,15 @@ fn translate_function(
                     let args: Result<Vec<_>, _> = call
                         .args()
                         .iter()
-                        .map(|value| resolve_value(function, *value, &value_map, &mut builder))
+                        .map(|value| {
+                            resolve_operand(
+                                function,
+                                *value,
+                                &value_map,
+                                target_config,
+                                &mut builder,
+                            )
+                        })
                         .collect();
                     call_args.extend(args?);
 
@@ -1385,6 +1401,7 @@ fn translate_function(
                                 addr,
                                 result_addr,
                                 value_storage_size(result_ty, &module.ctx)?,
+                                target_config,
                                 &mut builder,
                             );
                             value_map.insert(result, result_addr);
@@ -1396,7 +1413,13 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::ExtractValue(extract) => {
-                    let base = resolve_value(function, *extract.dest(), &value_map, &mut builder)?;
+                    let base = resolve_operand(
+                        function,
+                        *extract.dest(),
+                        &value_map,
+                        target_config,
+                        &mut builder,
+                    )?;
                     let idx = constant_value_index(function, *extract.idx(), "extract_value")?;
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let result_ty = function.dfg.value_ty(result);
@@ -1426,7 +1449,6 @@ fn translate_function(
                     };
                     let result_ty = function.dfg.value_ty(result);
                     let source_value = *insert.dest();
-                    let source = resolve_value(function, source_value, &value_map, &mut builder)?;
                     // An insert result owns its storage. Its sole consumer can
                     // continue construction in that storage without changing an
                     // observable SSA snapshot. Stay in the same block: a use in
@@ -1445,16 +1467,19 @@ fn translate_function(
                                 )
                         });
                     let result_addr = if reuse {
-                        source
+                        resolve_value(function, source_value, &value_map, &mut builder)?
                     } else {
                         let address =
                             create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?;
-                        copy_bytes(
-                            source,
+                        store_indirect(
+                            function,
+                            source_value,
                             address,
                             value_storage_size(result_ty, &module.ctx)?,
+                            &value_map,
+                            target_config,
                             &mut builder,
-                        );
+                        )?;
                         address
                     };
 
@@ -1467,16 +1492,20 @@ fn translate_function(
                         ));
                     }
 
-                    let value = resolve_value(function, *insert.value(), &value_map, &mut builder)?;
                     if uses_indirect_value_representation(&module.ctx, value_ty) {
                         let field_addr = builder.ins().iadd_imm_s(result_addr, i64::from(offset));
-                        copy_bytes(
-                            value,
+                        store_indirect(
+                            function,
+                            *insert.value(),
                             field_addr,
                             value_storage_size(value_ty, &module.ctx)?,
+                            &value_map,
+                            target_config,
                             &mut builder,
-                        );
+                        )?;
                     } else {
+                        let value =
+                            resolve_value(function, *insert.value(), &value_map, &mut builder)?;
                         builder
                             .ins()
                             .store(MemFlagsData::new(), value, result_addr, offset);
@@ -1511,16 +1540,20 @@ fn translate_function(
                         pointer_type,
                         &mut builder,
                     )?;
-                    let val = resolve_value(function, *mstore.value(), &value_map, &mut builder)?;
                     let store_ty = *mstore.ty();
                     if uses_indirect_value_representation(&module.ctx, store_ty) {
-                        copy_bytes(
-                            val,
+                        store_indirect(
+                            function,
+                            *mstore.value(),
                             addr,
                             value_storage_size(store_ty, &module.ctx)?,
+                            &value_map,
+                            target_config,
                             &mut builder,
-                        );
+                        )?;
                     } else {
+                        let val =
+                            resolve_value(function, *mstore.value(), &value_map, &mut builder)?;
                         builder.ins().store(MemFlagsData::new(), val, addr, 0);
                     }
                 }
@@ -1559,6 +1592,7 @@ fn translate_function(
                                 addr,
                                 result_addr,
                                 value_storage_size(result_ty, &module.ctx)?,
+                                target_config,
                                 &mut builder,
                             );
                             value_map.insert(result, result_addr);
@@ -1572,17 +1606,20 @@ fn translate_function(
                 NativeInstKind::ObjStore(obj_store) => {
                     let dest =
                         resolve_value(function, *obj_store.object(), &value_map, &mut builder)?;
-                    let val =
-                        resolve_value(function, *obj_store.value(), &value_map, &mut builder)?;
                     let val_ty = function.dfg.value_ty(*obj_store.value());
                     if uses_indirect_value_representation(&module.ctx, val_ty) {
-                        copy_bytes(
-                            val,
+                        store_indirect(
+                            function,
+                            *obj_store.value(),
                             dest,
                             value_storage_size(val_ty, &module.ctx)?,
+                            &value_map,
+                            target_config,
                             &mut builder,
-                        );
+                        )?;
                     } else {
+                        let val =
+                            resolve_value(function, *obj_store.value(), &value_map, &mut builder)?;
                         builder.ins().store(MemFlagsData::new(), val, dest, 0);
                     }
                 }
@@ -1935,19 +1972,27 @@ fn collect_phi_args_for_block(
         {
             for &(value, from_block) in phi.args() {
                 if from_block == source_block {
-                    let clif_val = resolve_value(function, value, value_map, builder)?;
                     let ty = function.dfg.value_ty(value);
                     if uses_indirect_value_representation(function.ctx(), ty) {
+                        let clif_val = (!matches!(function.dfg.value(value), Value::Undef { .. }))
+                            .then(|| resolve_value(function, value, value_map, builder))
+                            .transpose()?;
                         for (offset, chunk_ty) in
                             storage_chunks(value_storage_size(ty, function.ctx())?)
                         {
-                            let chunk =
-                                builder
-                                    .ins()
-                                    .load(chunk_ty, MemFlagsData::new(), clif_val, offset);
+                            let chunk = match clif_val {
+                                Some(clif_val) => builder.ins().load(
+                                    chunk_ty,
+                                    MemFlagsData::new(),
+                                    clif_val,
+                                    offset,
+                                ),
+                                None => builder.ins().iconst(chunk_ty, 0),
+                            };
                             args.push(BlockArg::Value(chunk));
                         }
                     } else {
+                        let clif_val = resolve_value(function, value, value_map, builder)?;
                         args.push(BlockArg::Value(clif_val));
                     }
                     break;

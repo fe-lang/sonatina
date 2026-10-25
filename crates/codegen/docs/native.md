@@ -168,7 +168,8 @@ visible to that resolver: it must be exported for dynamic lookup. There is
 no user-supplied JIT symbol map in this API. Unresolved JIT symbols can panic
 during finalization in upstream Cranelift; do not treat this as a recoverable
 symbol-registration interface. Native memory helpers may require platform
-libc symbols such as `memset`.
+libc symbols: aggregate copies and zero fills above 128 bytes call `memcpy` and
+`memset`.
 
 Representable `undef` values surviving to native translation are materialized
 as zero, null or zero-filled aggregate storage. This is a backend choice,

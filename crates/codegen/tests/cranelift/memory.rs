@@ -306,3 +306,66 @@ block0:
         assert_eq!(unsafe { read(values.as_ptr().add(1), &0) }, 22);
     }
 }
+
+#[test]
+fn undef_aggregates_read_as_zero_in_every_position() {
+    let source = r#"
+type @Big = {[i64; 40], i64};
+func inline(never) private %ends(v0.[i64; 40]) -> i64 {
+block0:
+    v1.i64 = extract_value v0 0.i64;
+    v2.i64 = extract_value v0 39.i64;
+    v3.i64 = add v1 v2;
+    return v3;
+}
+func public %read(v0.i1, v1.*[i64; 40], v2.*[i64; 40], v3.*i64) {
+block0:
+    v4.i64 = call %ends undef.[i64; 40];
+    mstore v3 v4 i64;
+    v5.[i64; 40] = extract_value undef.@Big 0.i64;
+    mstore v1 v5 [i64; 40];
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    v6.[i64; 40] = mload v2 [i64; 40];
+    jump block3;
+block3:
+    v7.[i64; 40] = phi (undef.[i64; 40] block1) (v6 block2);
+    mstore v2 v7 [i64; 40];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let read: unsafe extern "C" fn(bool, *mut i64, *mut i64, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("read").unwrap()) };
+        for take_undef in [false, true] {
+            let mut extracted = [-1i64; 40];
+            let mut merged: [i64; 40] = std::array::from_fn(|i| i as i64 + 1);
+            let original = merged;
+            let mut sum = -1;
+            unsafe {
+                read(
+                    take_undef,
+                    extracted.as_mut_ptr(),
+                    merged.as_mut_ptr(),
+                    &mut sum,
+                )
+            };
+            assert_eq!(sum, 0, "{level:?}");
+            assert_eq!(extracted, [0; 40], "{level:?}");
+            assert_eq!(
+                merged,
+                if take_undef { [0; 40] } else { original },
+                "{level:?} {take_undef}"
+            );
+        }
+    }
+}
