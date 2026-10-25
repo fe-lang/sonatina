@@ -20,6 +20,7 @@ use tracing::{debug_span, info_span, trace_span};
 use crate::{
     analysis::func_behavior,
     cfg_edit::CleanupMode,
+    compile::OptLevel,
     domtree::DomTree,
     loop_analysis::LoopTree,
     transform::aggregate::{
@@ -289,6 +290,7 @@ impl Step {
 /// tree) recomputes them from the current IR state. Module pipelines execute
 /// pass-major function rounds so cross-function behavior summaries stay fresh
 /// between passes.
+#[derive(Debug)]
 pub struct Pipeline {
     steps: Vec<Step>,
     /// Configuration for all [`Step::Inline`] steps in this pipeline.
@@ -427,8 +429,28 @@ fn speed_inliner_config() -> InlinerConfig {
     }
 }
 
+fn native_inliner_config() -> InlinerConfig {
+    InlinerConfig {
+        // A native call passes i256 and aggregate values through memory and
+        // stops optimization at its boundary, while code size costs little,
+        // so native code inlines callees of up to 64 instructions however
+        // many call sites they have.
+        max_inlinee_blocks: 16,
+        max_inlinee_insts: 64,
+        max_growth_per_caller: 4096,
+        max_total_growth: 65536,
+        inline_threshold: 64,
+        inline_threshold_cold: 48,
+        duplicated_block_penalty: 0,
+        multi_use_excess_inst_penalty: 0,
+        ..speed_inliner_config()
+    }
+}
+
 impl Pipeline {
-    fn optimized(inliner_config: InlinerConfig, rotate_loops: bool) -> Self {
+    /// The optimization schedule. Without `late_rounds` it stops after the
+    /// second of its four inline rounds.
+    fn optimized(inliner_config: InlinerConfig, rotate_loops: bool, late_rounds: bool) -> Self {
         // Rotation copies each rotated loop's header, so a size-oriented
         // pipeline leaves loops as they are.
         let passes = |passes: &[Pass]| {
@@ -449,12 +471,14 @@ impl Pipeline {
         p.add_step(Step::DeadArgElim);
         p.add_step(Step::FuncPasses(POST_DEAD_ARG_CLEANUP_PASSES.to_vec()));
         p.add_step(Step::DeadFuncElim);
-        p.add_step(Step::PromoteObjectArgs);
-        p.add_step(Step::Inline);
-        p.add_step(Step::FuncPasses(passes(SECONDARY_FUNC_PASSES)));
-        p.add_step(Step::Inline);
-        p.add_step(Step::FuncPasses(POST_INLINE_CLEANUP_PASSES.to_vec()));
-        p.add_step(Step::DeadFuncElim);
+        if late_rounds {
+            p.add_step(Step::PromoteObjectArgs);
+            p.add_step(Step::Inline);
+            p.add_step(Step::FuncPasses(passes(SECONDARY_FUNC_PASSES)));
+            p.add_step(Step::Inline);
+            p.add_step(Step::FuncPasses(POST_INLINE_CLEANUP_PASSES.to_vec()));
+            p.add_step(Step::DeadFuncElim);
+        }
         p
     }
 
@@ -479,7 +503,7 @@ impl Pipeline {
     /// keeps inlining biased toward avoiding code size growth and does not
     /// rotate loops.
     pub fn size() -> Self {
-        Self::optimized(size_inliner_config(), false)
+        Self::optimized(size_inliner_config(), false, true)
     }
 
     /// Speed-oriented optimization pipeline preset.
@@ -487,7 +511,22 @@ impl Pipeline {
     /// Uses the same pass schedule as [`Pipeline::size`], but widens the
     /// inliner budget for runtime speed and rotates loops.
     pub fn speed() -> Self {
-        Self::optimized(speed_inliner_config(), true)
+        Self::optimized(speed_inliner_config(), true, true)
+    }
+
+    /// Optimization pipeline for native code, which runs on a register
+    /// machine rather than the EVM.
+    ///
+    /// O2 runs the speed schedule with an inliner tuned for native code. O1
+    /// stops that schedule after its second of four inline rounds, for
+    /// quicker builds. Os is the size pipeline.
+    pub fn native(level: OptLevel) -> Self {
+        match level {
+            OptLevel::O0 => Self::none(),
+            OptLevel::O1 => Self::optimized(native_inliner_config(), true, false),
+            OptLevel::Os => Self::size(),
+            OptLevel::O2 => Self::optimized(native_inliner_config(), true, true),
+        }
     }
 
     /// Default optimization pipeline with a speed-oriented ordering.
@@ -2607,6 +2646,44 @@ func private %entry(v0.i32, v1.i32) -> i32 {
             speed.inliner_config.inline_threshold_cold,
             size.inliner_config.inline_threshold_cold
         );
+    }
+
+    #[test]
+    fn native_o2_runs_the_speed_schedule_and_o1_its_first_two_inline_rounds() {
+        let steps = |pipeline: &Pipeline| -> Vec<String> {
+            pipeline
+                .steps
+                .iter()
+                .map(|step| format!("{step:?}"))
+                .collect()
+        };
+        let o1 = steps(&Pipeline::native(OptLevel::O1));
+        let o2 = steps(&Pipeline::native(OptLevel::O2));
+        assert_eq!(o2, steps(&Pipeline::speed()));
+        assert!(o2.starts_with(&o1));
+        let inline_rounds =
+            |steps: &[String]| steps.iter().filter(|step| *step == "Inline").count();
+        assert_eq!((inline_rounds(&o1), inline_rounds(&o2)), (2, 4));
+        assert_eq!(o1.last().map(String::as_str), Some("DeadFuncElim"));
+        assert!(Pipeline::native(OptLevel::O0).steps.is_empty());
+        assert_eq!(
+            steps(&Pipeline::native(OptLevel::Os)),
+            steps(&Pipeline::size())
+        );
+    }
+
+    #[test]
+    fn native_inliner_ignores_call_site_counts_and_widens_budgets() {
+        let speed = Pipeline::speed().inliner_config;
+        for level in [OptLevel::O1, OptLevel::O2] {
+            let native = Pipeline::native(level).inliner_config;
+            assert_eq!(native.multi_use_excess_inst_penalty, 0);
+            assert_eq!(native.duplicated_block_penalty, 0);
+            assert!(native.max_inlinee_insts > speed.max_inlinee_insts);
+            assert!(native.inline_threshold > speed.inline_threshold);
+            assert!(native.max_growth_per_caller > speed.max_growth_per_caller);
+            assert!(native.max_total_growth > speed.max_total_growth);
+        }
     }
 
     #[test]

@@ -43,8 +43,11 @@ fn compile_object(module: Module) -> Vec<u8> {
 }
 ```
 
-One optimization level configures both the shared Sonatina pipeline and
-Cranelift: O0 uses `none`, O1/O2 use `speed`, and Os uses `speed_and_size`.
+One optimization level configures both Sonatina's native pipeline
+(`Pipeline::native`) and Cranelift. O2 runs the speed schedule with an inliner
+tuned for native code, O1 stops that schedule after the second of its four
+inline rounds for quicker builds, Os runs the size pipeline and O0 runs none.
+Cranelift uses `none` at O0, `speed` at O1/O2 and `speed_and_size` at Os.
 Backend legalization runs on a private module clone at every level; it does
 not rely on inlining to make return storage safe. Cranelift's IR verifier runs
 only when Sonatina is built with debug assertions.

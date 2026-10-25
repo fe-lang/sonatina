@@ -25,6 +25,7 @@ use sonatina_verifier::{VerifierConfig, verify_function_signature};
 use crate::{
     backend::{Backend, BackendOptions},
     compile::OptLevel,
+    optim::Pipeline,
     transform::aggregate::{EnumLowerToProduct, object_abi::legalize_native_object_returns},
 };
 
@@ -171,6 +172,10 @@ impl Backend for CraneliftJitBackend {
     type Artifact = CraneliftJitArtifact;
     type Error = CraneliftError;
 
+    fn pipeline(&self, options: &BackendOptions) -> Pipeline {
+        Pipeline::native(options.opt_level)
+    }
+
     fn compile_module(
         &self,
         module: &Module,
@@ -212,6 +217,10 @@ fn build_native_isa(
 impl Backend for CraneliftObjectBackend {
     type Artifact = CraneliftObjectArtifact;
     type Error = CraneliftError;
+
+    fn pipeline(&self, options: &BackendOptions) -> Pipeline {
+        Pipeline::native(options.opt_level)
+    }
 
     fn compile_module(
         &self,
@@ -291,7 +300,32 @@ mod tests {
     use cranelift_codegen::settings::Flags;
 
     use super::{CraneliftObjectBackend, cranelift_opt_level};
-    use crate::{backend::BackendOptions, compile::OptLevel};
+    use crate::{
+        backend::{Backend, BackendOptions},
+        compile::OptLevel,
+        optim::Pipeline,
+    };
+
+    #[test]
+    fn native_backends_use_native_pipelines() {
+        for opt_level in [OptLevel::O0, OptLevel::O1, OptLevel::Os, OptLevel::O2] {
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    CraneliftObjectBackend.pipeline(&BackendOptions { opt_level })
+                ),
+                format!("{:?}", Pipeline::native(opt_level)),
+            );
+            #[cfg(feature = "cranelift-jit")]
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    super::CraneliftJitBackend.pipeline(&BackendOptions { opt_level })
+                ),
+                format!("{:?}", Pipeline::native(opt_level)),
+            );
+        }
+    }
 
     #[test]
     fn object_and_jit_flags_enable_direct_i128_signatures() {

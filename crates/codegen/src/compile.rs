@@ -63,16 +63,25 @@ impl<B> Compile<B> {
         self
     }
 
-    /// Run the optimization pipeline (idempotent) and return a reference to
-    /// the optimized module for inspection or IR dumping.
+    pub fn opt_level(&self) -> OptLevel {
+        self.options.opt_level
+    }
+
+    pub fn module(&self) -> &Module {
+        &self.module
+    }
+
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+}
+
+impl<B: Backend> Compile<B> {
+    /// Run the backend's optimization pipeline (idempotent) and return a
+    /// reference to the optimized module for inspection or IR dumping.
     pub fn optimize(&mut self) -> &Module {
         if !self.optimized {
-            match self.options.opt_level {
-                OptLevel::O0 => {}
-                OptLevel::O1 => Pipeline::speed().run(&mut self.module),
-                OptLevel::Os => Pipeline::size().run(&mut self.module),
-                OptLevel::O2 => Pipeline::speed().run(&mut self.module),
-            }
+            self.backend.pipeline(&self.options).run(&mut self.module);
             self.optimized = true;
         }
         &self.module
@@ -136,20 +145,6 @@ impl<B> Compile<B> {
         }
     }
 
-    pub fn opt_level(&self) -> OptLevel {
-        self.options.opt_level
-    }
-
-    pub fn module(&self) -> &Module {
-        &self.module
-    }
-
-    pub fn backend(&self) -> &B {
-        &self.backend
-    }
-}
-
-impl<B: Backend> Compile<B> {
     pub fn compile(mut self) -> Result<B::Artifact, Vec<B::Error>> {
         self.optimize();
         self.backend.compile_module(&self.module, &self.options)
@@ -178,6 +173,14 @@ impl EvmCompiler {
 impl Backend for EvmCompiler {
     type Artifact = Vec<ObjectArtifact>;
     type Error = ObjectCompileError;
+
+    fn pipeline(&self, options: &BackendOptions) -> Pipeline {
+        match options.opt_level {
+            OptLevel::O0 => Pipeline::none(),
+            OptLevel::O1 | OptLevel::O2 => Pipeline::speed(),
+            OptLevel::Os => Pipeline::size(),
+        }
+    }
 
     fn compile_module(
         &self,
@@ -313,15 +316,20 @@ mod tests {
         backend::{Backend, BackendOptions},
         compile::{Compile, OptLevel},
         object::SymbolId,
+        optim::Pipeline,
     };
 
-    use super::{EvmCompile, ObjectCompileError, OptInstId, evm_osaka_triple};
+    use super::{EvmCompile, EvmCompiler, ObjectCompileError, OptInstId, evm_osaka_triple};
 
     struct OptionsBackend;
 
     impl Backend for OptionsBackend {
         type Artifact = OptLevel;
         type Error = ();
+
+        fn pipeline(&self, _options: &BackendOptions) -> Pipeline {
+            Pipeline::none()
+        }
 
         fn compile_module(
             &self,
@@ -338,6 +346,24 @@ mod tests {
             operating_system: OperatingSystem::Evm(version),
             ..triple
         }))
+    }
+
+    #[test]
+    fn evm_pipelines_follow_the_opt_level() {
+        for (opt_level, pipeline) in [
+            (OptLevel::O0, Pipeline::none()),
+            (OptLevel::O1, Pipeline::speed()),
+            (OptLevel::Os, Pipeline::size()),
+            (OptLevel::O2, Pipeline::speed()),
+        ] {
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    EvmCompiler::default().pipeline(&BackendOptions { opt_level })
+                ),
+                format!("{pipeline:?}"),
+            );
+        }
     }
 
     #[test]
