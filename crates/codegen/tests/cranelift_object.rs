@@ -276,6 +276,84 @@ block0:
     }
 }
 
+#[test]
+fn undef_insert_chains_zero_only_unwritten_bytes() {
+    // A chain that writes both halves needs no zero fill, one that writes a
+    // half zeroes the other, and padding is zeroed inline.
+    let triple = native_isa(host_architecture()).triple();
+    let cases = [
+        (
+            "v3.@T = insert_value undef.@T 0.i64 v2;\n    v4.@T = insert_value v3 1.i64 v2;",
+            false,
+        ),
+        ("v4.@T = insert_value undef.@T 1.i64 v2;", true),
+    ];
+    for (inserts, zero_fill) in cases {
+        let source = format!(
+            r#"target = "{triple}"
+type @T = {{[i64; 32], [i64; 32]}};
+type @Padded = {{i8, [i64; 32]}};
+func public %build(v0.*[i64; 32], v1.*@T) {{
+block0:
+    v2.[i64; 32] = mload v0 [i64; 32];
+    {inserts}
+    mstore v1 v4 @T;
+    return;
+}}
+func public %pad(v0.*[i64; 32], v1.i8, v2.*@Padded) {{
+block0:
+    v3.[i64; 32] = mload v0 [i64; 32];
+    v4.@Padded = insert_value undef.@Padded 1.i64 v3;
+    v5.@Padded = insert_value v4 0.i64 v1;
+    mstore v2 v5 @Padded;
+    return;
+}}
+"#
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        let artifact = CraneliftObjectBackend::new()
+            .compile_module(
+                &module,
+                &BackendOptions {
+                    opt_level: OptLevel::O2,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            imports(artifact.as_bytes(), "memset"),
+            zero_fill,
+            "{inserts}"
+        );
+        #[cfg(feature = "cranelift-jit")]
+        {
+            let artifact = CraneliftJitBackend::new()
+                .compile_module(
+                    &module,
+                    &BackendOptions {
+                        opt_level: OptLevel::O2,
+                    },
+                )
+                .unwrap();
+            let build: unsafe extern "C" fn(*const i64, *mut i64) =
+                unsafe { std::mem::transmute(artifact.function_address("build").unwrap()) };
+            let pad: unsafe extern "C" fn(*const i64, u8, *mut u8) =
+                unsafe { std::mem::transmute(artifact.function_address("pad").unwrap()) };
+            let input: Vec<i64> = (1..=32).collect();
+            let mut output = vec![-1; 64];
+            unsafe { build(input.as_ptr(), output.as_mut_ptr()) };
+            let first: &[i64] = if zero_fill { &[0; 32] } else { &input };
+            assert_eq!(output[..32], first[..], "{inserts}");
+            assert_eq!(output[32..], input[..], "{inserts}");
+            let mut padded = vec![0xa5u8; 8 + 256];
+            unsafe { pad(input.as_ptr(), 7, padded.as_mut_ptr()) };
+            assert_eq!(padded[..8], [7, 0, 0, 0, 0, 0, 0, 0]);
+            assert_eq!(padded[8..16], 1i64.to_le_bytes());
+        }
+    }
+}
+
 #[cfg(feature = "cranelift-jit")]
 #[test]
 #[ignore = "manual release-profile compile/runtime measurement; run with --release --ignored --nocapture"]

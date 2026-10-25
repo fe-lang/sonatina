@@ -1400,19 +1400,46 @@ fn translate_function(
                     // An insert result owns its storage. Its sole consumer in
                     // the same block continues construction there without
                     // changing an observable SSA snapshot (see `FrameSlots`).
-                    let result_addr = if frame.continues_source(inst_id) {
+                    let result_addr = if frame.continues_source(inst_id, source_value) {
                         resolve_value(function, source_value, &value_map, &mut builder)?
                     } else {
                         let address = frame.address(result, &mut builder)?;
-                        store_indirect(
-                            function,
-                            source_value,
-                            address,
-                            value_storage_size(result_ty, &module.ctx)?,
-                            &value_map,
-                            target_config,
-                            &mut builder,
-                        )?;
+                        let size = value_storage_size(result_ty, &module.ctx)?;
+                        if is_undef(function, source_value) {
+                            // An undef source is zero, but only the bytes no
+                            // insert of the chain writes need zeroing.
+                            let written = frame
+                                .insert_chain(function, inst_id)
+                                .map(|inst| {
+                                    let NativeInstKind::InsertValue(insert) =
+                                        native_inst_set().resolve_inst(function.dfg.inst(inst))
+                                    else {
+                                        return Err(
+                                            "insert chain continues past insert_value".to_string()
+                                        );
+                                    };
+                                    let idx = constant_value_index(
+                                        function,
+                                        *insert.idx(),
+                                        "insert_value",
+                                    )?;
+                                    let (offset, elem_ty) =
+                                        aggregate_elem_offset(&module.ctx, result_ty, idx)?;
+                                    Ok((offset as u32, value_storage_size(elem_ty, &module.ctx)?))
+                                })
+                                .collect::<Result<_, String>>()?;
+                            zero_unwritten(address, size, written, target_config, &mut builder);
+                        } else {
+                            store_indirect(
+                                function,
+                                source_value,
+                                address,
+                                size,
+                                &value_map,
+                                target_config,
+                                &mut builder,
+                            )?;
+                        }
                         address
                     };
 
