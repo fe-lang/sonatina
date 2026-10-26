@@ -442,14 +442,17 @@ fn native_inliner_config() -> InlinerConfig {
     InlinerConfig {
         // A native call passes i256 and aggregate values through memory and
         // stops optimization at its boundary, while code size costs little,
-        // so native code inlines callees of up to 64 instructions however
-        // many call sites they have.
-        max_inlinee_blocks: 16,
-        max_inlinee_insts: 64,
+        // so native code inlines small callees however many call sites they
+        // have. A callee is measured before cleanup, just after its own
+        // callees are inlined into it, so the caps allow twice what it
+        // usually shrinks to. A call inside a callee, often a slow path,
+        // does not make it cold.
+        max_inlinee_blocks: 32,
+        max_inlinee_insts: 128,
         max_growth_per_caller: 4096,
         max_total_growth: 65536,
         inline_threshold: 64,
-        inline_threshold_cold: 48,
+        inline_threshold_cold: 64,
         duplicated_block_penalty: 0,
         multi_use_excess_inst_penalty: 0,
         ..speed_inliner_config()
