@@ -1326,6 +1326,18 @@ impl AggregateScalarize {
                 continue;
             }
 
+            if let Some(enum_make) = func.dfg.downcast::<&data::EnumMake>(user)
+                && enum_make.values().contains(&value)
+            {
+                let Some(res) = func.dfg.inst_result(user) else {
+                    return false;
+                };
+                if !scalarizable[res] {
+                    return false;
+                }
+                continue;
+            }
+
             if let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(user)
                 && *extract.dest() == value
             {
