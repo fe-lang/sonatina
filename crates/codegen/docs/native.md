@@ -62,7 +62,7 @@ signless; individual instructions select signed or unsigned semantics.
 | `i8`, `i16`, `i32`, `i64` | 1/1, 2/2, 4/4, 8/8 | Corresponding scalar |
 | `i128` | 16 / 16 | Cranelift `I128` scalar |
 | `*T` | 8 / 8 | Native pointer |
-| `i256` | 32 / 16 | Pointer to value / hidden return buffer; four `i64` limbs in private functions |
+| `i256` | 32 / 16 | Pointer to value / hidden return buffer |
 | Arrays and unpacked structs | Native element/field layout | Pointer to value / hidden return buffer |
 | `objref<T>` (private only) | 8 / 8 | Reference pointer |
 | `constref<T>` (private only) | 8 / 8 | Reference pointer / hidden buffer containing a copy of `T` |
@@ -98,11 +98,8 @@ Even zero-sized indirect values retain the pointer parameter; provide a
 valid aligned address, although no bytes are copied.
 
 Multiple direct scalar returns follow Cranelift's platform convention, not
-a C struct convention. Private functions, which only their module calls, use
-Cranelift's tail convention instead: i256 arguments and results pass as four
-`i64` limbs, up to eight words return in registers, and further results go
-through an implicit return area. Multi-return signatures containing other
-indirect returns are rejected. A function with no result has no return values; explicit
+a C struct convention. Multi-return signatures containing indirect returns
+are rejected. A function with no result has no return values; explicit
 `unit` arguments or results are unsupported.
 
 ### Private references
