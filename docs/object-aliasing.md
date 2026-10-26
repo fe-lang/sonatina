@@ -114,8 +114,8 @@ return observation. Binding checks alone cannot validate arbitrary edits.
 allowing only the known-preserving ObjectLoadStore cleanup between ABI rewriting
 and memory lowering. It refreshes inferred facts after cleanup and consumes
 contracts before type/signature cutover. Separate invocations receive no old
-contracts. Native translation is read-only after inference; native return
-legalization and ABI elision rebuild facts after complete rewrites.
+contracts. Native translation is read-only after inference; ABI elision
+rebuilds facts after complete rewrites.
 
 ## Conservative limits
 
@@ -129,7 +129,16 @@ Effect sets above the exact-leaf budget widen to whole-root may-effects. Unknown
 reference producers remain unknown, and source-definedness traversal has a
 bounded conservative fallback. Capture/exposure closure is a whole-function
 may analysis; it can inhibit optimization before a later publication. No
-must-write or must-initialize call summaries are inferred. Native retains its
-separate stack-lifetime contract: a reference captured by a helper is not
-automatically accepted merely because its caller supplies a local holder. The
-acceptance suite checks that native rejection and executes the case on EVM.
+must-write or must-initialize call summaries are inferred.
+
+## Frame lifetimes
+
+An `obj.alloc` instance lives until its function returns or that allocation
+runs again. References derived from it, including projections,
+`obj.materialize.stack` pointers and copies held in other objects or memory,
+may be used only while it lives. Frontends guarantee this, so placement needs
+no escape proof: native code gives each allocation one stack slot. Native
+compilation rejects only IR that certainly breaks the rule: a returned
+reference into a local allocation, or a reference to an earlier instance that
+is live when its allocation runs again. EVM placement still moves objects it
+cannot prove local to its heap, which also runs IR that returns them.

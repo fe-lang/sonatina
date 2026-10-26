@@ -3,58 +3,6 @@ use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftJitB
 use super::parse_verified_native_module;
 
 #[test]
-fn heap_exports_preserve_projected_aliases_across_returns() {
-    let source = r#"
-declare external %free(*[i64; 2]);
-func private %export(v0.objref<i64>) -> *i64 {
-block0:
-    v1.*i64 = obj.materialize.heap v0;
-    return v1;
-}
-func private %make(v0.i64) -> *[i64; 2] {
-block0:
-    v1.objref<[i64; 2]> = obj.alloc [i64; 2];
-    v2.objref<i64> = obj.index v1 1.i64;
-    obj.store v2 v0;
-    v3.*i64 = call %export v2;
-    mstore v3 40.i64 i64;
-    v4.i64 = obj.load v2;
-    v5.i64 = add v4 2.i64;
-    obj.store v2 v5;
-    v6.*[i64; 2] = obj.materialize.stack v1;
-    return v6;
-}
-func public %exercise() -> i64 {
-block0:
-    v0.*[i64; 2] = call %make 11.i64;
-    v1.*[i64; 2] = call %make 22.i64;
-    v2.*i64 = gep v0 0.i64 1.i64;
-    v3.*i64 = gep v1 0.i64 1.i64;
-    mstore v2 17.i64 i64;
-    v4.i64 = mload v2 i64;
-    v5.i64 = mload v3 i64;
-    v6.i64 = mul v4 100.i64;
-    v7.i64 = add v6 v5;
-    call %free v0;
-    call %free v1;
-    return v7;
-}
-"#;
-    for level in [OptLevel::O0, OptLevel::O2] {
-        let artifact = Compile::new(
-            parse_verified_native_module(source),
-            CraneliftJitBackend::new(),
-        )
-        .with_opt_level(level)
-        .compile()
-        .unwrap();
-        let exercise: unsafe extern "C" fn() -> i64 =
-            unsafe { std::mem::transmute(artifact.function_address("exercise").unwrap()) };
-        assert_eq!(unsafe { exercise() }, 1742, "{level:?}");
-    }
-}
-
-#[test]
 fn dynamic_allocations_are_distinct_and_support_wide_sizes() {
     let source = r#"
 declare external %free(*i64);
@@ -135,94 +83,6 @@ block0:
 }
 
 #[test]
-fn mixed_returns_preserve_fresh_lifetimes_and_borrowed_projection_aliases() {
-    for separate_returns in [true, false] {
-        let choose = if separate_returns {
-            r#"block0:
-    br v0 block1 block2;
-block1:
-    v3.objref<i64> = obj.alloc i64;
-    obj.store v3 v2;
-    return v3;
-block2:
-    v4.objref<i64> = obj.index v1 1.i64;
-    return v4;"#
-        } else {
-            r#"block0:
-    br v0 block1 block2;
-block1:
-    v3.objref<i64> = obj.alloc i64;
-    obj.store v3 v2;
-    jump block3;
-block2:
-    v4.objref<i64> = obj.index v1 1.i64;
-    jump block3;
-block3:
-    v5.objref<i64> = phi (v3 block1) (v4 block2);
-    return v5;"#
-        };
-        let source = format!(
-            r#"
-func private %choose(v0.i1, v1.objref<[i64; 2]>, v2.i64) -> objref<i64> {{
-{choose}
-}}
-func private %forward(v0.i1, v1.objref<[i64; 2]>, v2.i64) -> objref<i64> {{
-block0:
-    v3.objref<i64> = call %choose v0 v1 v2;
-    return v3;
-}}
-func public %exercise(v0.i8, v1.i8) -> i64 {{
-block0:
-    v2.objref<[i64; 2]> = obj.alloc [i64; 2];
-    v3.objref<i64> = obj.index v2 1.i64;
-    obj.store v3 42.i64;
-    v4.i1 = trunc v0 i1;
-    v5.i1 = trunc v1 i1;
-    v6.objref<i64> = call %forward v4 v2 111.i64;
-    v7.objref<i64> = call %forward v5 v2 222.i64;
-    v8.i64 = obj.load v6;
-    v9.i64 = obj.load v7;
-    v10.i64 = add v8 v9;
-    obj.store v6 10.i64;
-    v11.i64 = obj.load v7;
-    v12.i64 = obj.load v3;
-    v13.i64 = mul v10 10000.i64;
-    v14.i64 = mul v11 100.i64;
-    v15.i64 = add v13 v14;
-    v16.i64 = add v15 v12;
-    return v16;
-}}
-"#
-        );
-        for level in [OptLevel::O0, OptLevel::O2] {
-            let artifact = Compile::new(
-                parse_verified_native_module(&source),
-                CraneliftJitBackend::new(),
-            )
-            .with_opt_level(level)
-            .compile()
-            .unwrap();
-            let exercise: unsafe extern "C" fn(u8, u8) -> i64 =
-                unsafe { std::mem::transmute(artifact.function_address("exercise").unwrap()) };
-            for first in [0, 1] {
-                for second in [0, 1] {
-                    let lhs = if first == 1 { 111 } else { 42 };
-                    let rhs = if second == 1 { 222 } else { 42 };
-                    let borrowed = if first == 1 { 42 } else { 10 };
-                    let second_after = if second == 1 { 222 } else { borrowed };
-                    let expected = (lhs + rhs) * 10000 + second_after * 100 + borrowed;
-                    assert_eq!(
-                        unsafe { exercise(first, second) },
-                        expected,
-                        "{first} {second} {level:?}"
-                    );
-                }
-            }
-        }
-    }
-}
-
-#[test]
 fn loop_carried_value_snapshot_precedes_fresh_storage_reuse() {
     let source = r#"
 func private %read(v0.objref<[i64; 2]>) -> i64 {
@@ -274,9 +134,8 @@ block2:
 }
 
 #[test]
-fn overlapping_materialized_loop_pointers_require_heap_storage() {
-    // An explicit heap export preserves distinct iterations. A stack export
-    // must still fail when an older alias overlaps the next allocation.
+fn overlapping_materialized_loop_pointers_are_rejected() {
+    // An older alias read after the next allocation names reused storage.
     for raw_pointer_phi in [false, true] {
         let source = format!(
             r#"
@@ -339,33 +198,9 @@ block2:
             assert!(
                 errors
                     .iter()
-                    .any(|error| error.to_string().contains("loop-carried fresh object")),
+                    .any(|error| error.to_string().contains("refers to an earlier instance")),
                 "{raw_pointer_phi} {level:?}: {errors:?}"
             );
-            let heap_source = format!(
-                "declare external %free(*[i64; 2]);\n{}",
-                source
-                    .replace("obj.materialize.stack", "obj.materialize.heap")
-                    .replace("v5.i64 = mload v16 i64;", "v5.i64 = mload v16 i64;\n    call %free v13;")
-                    .replace("return v5;", "v19.*[i64; 2] = obj.materialize.heap v8;\n    call %free v19;\n    return v5;")
-            );
-            let artifact = Compile::new(
-                parse_verified_native_module(&heap_source),
-                CraneliftJitBackend::new(),
-            )
-            .with_opt_level(level)
-            .compile()
-            .unwrap();
-            let exercise: unsafe extern "C" fn(i64) -> i64 =
-                unsafe { std::mem::transmute(artifact.function_address("exercise").unwrap()) };
-            for iterations in [1, 2, 3, 17] {
-                let expected = if iterations == 1 { 37 } else { iterations - 2 };
-                assert_eq!(
-                    unsafe { exercise(iterations) },
-                    expected,
-                    "{raw_pointer_phi} {level:?}"
-                );
-            }
         }
     }
 }
@@ -420,7 +255,7 @@ block2:
                         .expect("backedge alias must prevent slot reuse");
                     assert!(
                         errors.iter().any(|error| {
-                            error.to_string().contains("loop-carried fresh object")
+                            error.to_string().contains("refers to an earlier instance")
                         }),
                         "{split_latch} {level:?}: {errors:?}"
                     );
@@ -659,78 +494,9 @@ block0:
 }
 
 #[test]
-fn references_held_beyond_the_frame_are_rejected() {
-    // Each case lets a reference into the local `v1` outlive the frame or the
-    // iteration that allocated it, through a holder or an SSA pair.
-    for (name, body) in [
-        (
-            "returned_pair",
-            "v2.@pair = insert_value undef.@pair 1.i64 v1;\n    return v2;",
-        ),
-        (
-            "stored_in_argument",
-            "v2.@pair = insert_value undef.@pair 1.i64 v1;\n    obj.store v0 v2;\n    return undef.@pair;",
-        ),
-        (
-            "holder_passed_on",
-            "v2.objref<@holder> = obj.alloc @holder;\n    v3.objref<objref<i64>> = obj.proj v2 0.i64;\n    obj.store v3 v1;\n    call %keep v2 v0;\n    return undef.@pair;",
-        ),
-        (
-            "recovered_from_holder",
-            "v2.objref<@holder> = obj.alloc @holder;\n    v3.objref<objref<i64>> = obj.proj v2 0.i64;\n    obj.store v3 v1;\n    v4.objref<i64> = obj.load v3;\n    v5.@pair = insert_value undef.@pair 1.i64 v4;\n    obj.store v0 v5;\n    return undef.@pair;",
-        ),
-    ] {
-        let source = format!(
-            r#"
-type @pair = {{ i64, objref<i64> }};
-type @holder = {{ objref<i64> }};
-func inline(never) private %keep(v0.objref<@holder>, v1.objref<@pair>) {{
-block0:
-    v2.objref<objref<i64>> = obj.proj v0 0.i64;
-    v3.objref<i64> = obj.load v2;
-    v4.objref<objref<i64>> = obj.proj v1 1.i64;
-    obj.store v4 v3;
-    return;
-}}
-func inline(never) private %{name}(v0.objref<@pair>) -> @pair {{
-block0:
-    v1.objref<i64> = obj.alloc i64;
-    obj.store v1 5.i64;
-    {body}
-}}
-func public %entry() -> i64 {{
-block0:
-    v0.objref<@pair> = obj.alloc @pair;
-    v1.@pair = call %{name} v0;
-    v2.i64 = extract_value v1 0.i64;
-    return v2;
-}}
-"#
-        );
-        let errors = match Compile::new(
-            parse_verified_native_module(&source),
-            CraneliftJitBackend::new(),
-        )
-        .with_opt_level(OptLevel::O0)
-        .compile()
-        {
-            Ok(_) => panic!("{name}: an escaping stack reference was accepted"),
-            Err(errors) => errors,
-        };
-        assert!(
-            errors.iter().any(|error| {
-                let error = error.to_string();
-                error.contains(&format!("native reference lifetime in {name}: unproven"))
-            }),
-            "{name}: {errors:?}"
-        );
-    }
-}
-
-#[test]
-fn loop_allocations_cannot_rest_in_outer_holders() {
-    // The holder outlives the iteration whose allocation it references; the
-    // next iteration reuses that allocation's slot.
+fn loop_allocations_may_rest_in_outer_holders() {
+    // The holder keeps the last iteration's allocation, which lives until the
+    // function returns.
     let source = r#"
 type @holder = { objref<i64> };
 func public %exercise(v0.i64) -> i64 {
@@ -752,20 +518,18 @@ block2:
     return v8;
 }
 "#;
-    let errors = match Compile::new(
-        parse_verified_native_module(source),
-        CraneliftJitBackend::new(),
-    )
-    .with_opt_level(OptLevel::O0)
-    .compile()
-    {
-        Ok(_) => panic!("a loop allocation held by an outer holder was accepted"),
-        Err(errors) => errors,
-    };
-    assert!(
-        errors.iter().any(|error| error
-            .to_string()
-            .contains("native reference lifetime in exercise: unproven escape of local object")),
-        "{errors:?}"
-    );
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let exercise: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("exercise").unwrap()) };
+        for iterations in [1, 2, 3, 17] {
+            assert_eq!(unsafe { exercise(iterations) }, iterations - 1, "{level:?}");
+        }
+    }
 }

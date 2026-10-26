@@ -26,7 +26,7 @@ use crate::{
     backend::{Backend, BackendOptions},
     compile::OptLevel,
     optim::Pipeline,
-    transform::aggregate::{EnumLowerToProduct, object_abi::legalize_native_object_returns},
+    transform::aggregate::{EnumLowerToProduct, frame_lifetimes::check_frame_lifetimes},
 };
 
 #[derive(Debug)]
@@ -256,7 +256,7 @@ fn legalize_module(module: &Module) -> Result<(), String> {
             return Err(report.to_string());
         }
     }
-    legalize_native_object_returns(module)
+    check_frame_lifetimes(module)
 }
 
 fn cranelift_opt_level(level: OptLevel) -> &'static str {

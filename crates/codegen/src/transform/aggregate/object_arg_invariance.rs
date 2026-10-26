@@ -575,7 +575,7 @@ block0:
     v0.objref<i256> = obj.alloc i256;
     v1.objref<i256> = obj.alloc i256;
     obj.store v0 11.i256;
-    v2.*i256 = obj.materialize.heap v0;
+    v2.*i256 = obj.materialize.stack v0;
     v3.i256 = ptr_to_int v2 i256;
     mstore 0.i256 v3 i256;
     v4.i256 = call %f v0 v1;

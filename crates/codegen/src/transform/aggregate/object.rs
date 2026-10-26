@@ -193,40 +193,30 @@ impl ObjectLowerToMemory {
         root_value_ty: Type,
         local_object_args: &LocalObjectArgs,
     ) -> Materialization {
-        let mut kind = Materialization::Stack;
-        if let Some(materialization) =
-            object_locality::walk_object_root_uses(func, root, |special| match special {
-                SpecialObjectUse::MaterializeStack(Some(ptr))
-                    if object_locality::raw_pointer_stays_local(func, ptr, true) =>
-                {
-                    std::ops::ControlFlow::Continue(())
-                }
-                SpecialObjectUse::MaterializeStack(_) => {
-                    std::ops::ControlFlow::Break(Materialization::Heap)
-                }
-                SpecialObjectUse::MaterializeHeap => {
-                    kind = Materialization::Heap;
-                    std::ops::ControlFlow::Continue(())
-                }
-                SpecialObjectUse::Call { value, call, .. }
-                    if value == root
-                        && object_locality::call_passes_object_to_local_args(
-                            func.ctx(),
-                            call,
-                            value,
-                            root_value_ty,
-                            local_object_args,
-                        ) =>
-                {
-                    std::ops::ControlFlow::Continue(())
-                }
-                _ => std::ops::ControlFlow::Break(Materialization::Heap),
-            })
-        {
-            return materialization;
-        }
-
-        kind
+        object_locality::walk_object_root_uses(func, root, |special| match special {
+            SpecialObjectUse::MaterializeStack(Some(ptr))
+                if object_locality::raw_pointer_stays_local(func, ptr, true) =>
+            {
+                std::ops::ControlFlow::Continue(())
+            }
+            SpecialObjectUse::MaterializeStack(_) => {
+                std::ops::ControlFlow::Break(Materialization::Heap)
+            }
+            SpecialObjectUse::Call { value, call, .. }
+                if value == root
+                    && object_locality::call_passes_object_to_local_args(
+                        func.ctx(),
+                        call,
+                        value,
+                        root_value_ty,
+                        local_object_args,
+                    ) =>
+            {
+                std::ops::ControlFlow::Continue(())
+            }
+            _ => std::ops::ControlFlow::Break(Materialization::Heap),
+        })
+        .unwrap_or(Materialization::Stack)
     }
 
     fn rewrite_inst(
@@ -337,14 +327,6 @@ impl ObjectLowerToMemory {
             return alias_and_remove_object_materialize(func, inst, *mat_stack.object());
         }
 
-        if let Some(mat_heap) = func
-            .dfg
-            .downcast::<&data::ObjMaterializeHeap>(inst)
-            .cloned()
-        {
-            return alias_and_remove_object_materialize(func, inst, *mat_heap.object());
-        }
-
         if let Some(mem_alloc) = func.dfg.downcast::<&data::MemAllocDynamic>(inst).cloned() {
             func.dfg.replace_inst(
                 inst,
@@ -384,10 +366,6 @@ fn has_object_lowering_work(func: &Function) -> bool {
                 || func
                     .dfg
                     .downcast::<&data::ObjMaterializeStack>(inst)
-                    .is_some()
-                || func
-                    .dfg
-                    .downcast::<&data::ObjMaterializeHeap>(inst)
                     .is_some()
                 || func.dfg.downcast::<&data::MemAllocDynamic>(inst).is_some()
             {
@@ -561,13 +539,6 @@ mod tests {
                                 .downcast::<&data::ObjMaterializeStack>(inst)
                                 .is_none(),
                             "obj.materialize.stack remained in {}",
-                            sig.name()
-                        );
-                        assert!(
-                            func.dfg
-                                .downcast::<&data::ObjMaterializeHeap>(inst)
-                                .is_none(),
-                            "obj.materialize.heap remained in {}",
                             sig.name()
                         );
                         assert!(

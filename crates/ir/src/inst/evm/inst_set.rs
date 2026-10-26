@@ -81,7 +81,6 @@ pub struct EvmInstSet(
     data::EnumGetTag,
     data::EnumProj,
     data::ObjMaterializeStack,
-    data::ObjMaterializeHeap,
     data::MemAllocDynamic,
     data::InsertValue,
     data::ExtractValue,

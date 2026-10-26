@@ -48,9 +48,8 @@ One optimization level configures both Sonatina's native pipeline
 tuned for native code, O1 stops that schedule after the second of its four
 inline rounds for quicker builds, Os runs the size pipeline and O0 runs none.
 Cranelift uses `none` at O0, `speed` at O1/O2 and `speed_and_size` at Os.
-Backend legalization runs on a private module clone at every level; it does
-not rely on inlining to make return storage safe. Cranelift's IR verifier runs
-only when Sonatina is built with debug assertions.
+Backend legalization runs on a private module clone at every level.
+Cranelift's IR verifier runs only when Sonatina is built with debug assertions.
 
 ## Native layout and function ABI
 
@@ -65,7 +64,7 @@ signless; individual instructions select signed or unsigned semantics.
 | `*T` | 8 / 8 | Native pointer |
 | `i256` | 32 / 16 | Pointer to value / hidden return buffer |
 | Arrays and unpacked structs | Native element/field layout | Pointer to value / hidden return buffer |
-| `objref<T>` (private only) | 8 / 8 | Reference pointer, subject to lifetime legalization |
+| `objref<T>` (private only) | 8 / 8 | Reference pointer |
 | `constref<T>` (private only) | 8 / 8 | Reference pointer / hidden buffer containing a copy of `T` |
 
 Arrays use the element size as their stride and inherit its alignment.
@@ -107,22 +106,17 @@ are rejected. A function with no result has no return values; explicit
 
 Public and external signatures must not expose `objref` or `constref`,
 including references nested inside other types. Private object returns may
-borrow caller arguments or their projections. Proven fresh whole-object
-return roots are rewritten into hidden caller-owned stack storage while
-retaining the actual reference result. Thus a function can return a fresh
-object on one path and a borrowed alias on another without copying the
-borrowed object or losing its mutation semantics.
+borrow caller arguments or their projections.
 
-The stack lifetime proof is conservative. Unproven fresh projections, captured
-local references, reference-bearing aggregate returns, recursive fresh
-escapes and overlapping loop-carried stack objects are rejected. An explicit
-`obj.materialize.heap` allocates the original object on the host heap, including
-when the export occurs through a callee or projected alias. All aliases retain
-that allocation's identity; export does not copy the referent. Each execution
-of a heap object allocation creates distinct storage. Objects without a heap
-export continue to require the stack lifetime proof. This private ABI may change
-during legalization; do not call private reference-bearing functions directly
-from foreign code.
+Each `obj.alloc` is one stack slot of its function's frame. An instance lives
+until the function returns or the allocation runs again, and the frontend
+guarantees that no reference derived from it, including an
+`obj.materialize.stack` pointer, is used after that (see
+[frame lifetimes](https://github.com/fe-lang/sonatina/blob/main/docs/object-aliasing.md#frame-lifetimes)).
+Compilation rejects IR that certainly breaks the rule: a returned reference
+into a local allocation, or a reference to an earlier instance that is live
+when its allocation runs again. Do not call private reference-bearing
+functions directly from foreign code.
 
 `mem.alloc_dynamic` allocates host memory through `malloc`. Sizes that exceed
 the native pointer width and allocation failures trap. Zero-sized allocations

@@ -149,6 +149,13 @@ pub struct Alloca {
     ty: Type,
 }
 
+/// Allocates frame storage for an object of type `ty`.
+///
+/// An instance lives until its function returns or this instruction runs
+/// again, so each `obj.alloc` can be one static slot. References derived from
+/// the instance, including projections, `obj.materialize.stack` pointers and
+/// copies stored in other objects or memory, may be used only while it lives.
+/// Frontends guarantee this; backends need no escape proof to place it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]
 #[inst(text = "obj.alloc")]
@@ -290,17 +297,12 @@ pub struct EnumProj {
     field: ValueId,
 }
 
+/// Returns a raw pointer to `object`'s storage, valid while the object's
+/// allocation lives (see [`ObjAlloc`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]
 #[inst(text = "obj.materialize.stack")]
 pub struct ObjMaterializeStack {
-    object: ValueId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(side_effect(super::SideEffect::Write))]
-#[inst(text = "obj.materialize.heap")]
-pub struct ObjMaterializeHeap {
     object: ValueId,
 }
 

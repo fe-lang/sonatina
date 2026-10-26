@@ -766,7 +766,7 @@ fn i256_addresses_and_boolean_extensions_round_trip() {
 }
 
 #[test]
-fn fresh_object_returns_use_caller_owned_storage() {
+fn fresh_object_returns_are_rejected() {
     let isa = native_isa();
     let instructions = isa.inst_set();
     let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
@@ -787,13 +787,6 @@ fn fresh_object_returns_use_caller_owned_storage() {
             Type::I64,
         ))
         .unwrap();
-    let clobber = builder
-        .declare_function(Signature::new_unit(
-            "clobber_object_stack",
-            Linkage::Private,
-            &[],
-        ))
-        .unwrap();
 
     {
         let mut function_builder = builder.func_builder::<InstInserter>(make);
@@ -812,21 +805,6 @@ fn fresh_object_returns_use_caller_owned_storage() {
     }
 
     {
-        let mut function_builder = builder.func_builder::<InstInserter>(clobber);
-        let entry = function_builder.append_block();
-        function_builder.switch_to_block(entry);
-        let object = function_builder.insert_inst(
-            data::ObjAlloc::new(instructions, Type::I64),
-            object_ref_type,
-        );
-        let value = function_builder.make_imm_value(999i64);
-        function_builder.insert_inst_no_result(data::ObjStore::new(instructions, object, value));
-        function_builder.insert_inst_no_result(control_flow::Return::new_unit(instructions));
-        function_builder.seal_all();
-        function_builder.finish();
-    }
-
-    {
         let mut function_builder = builder.func_builder::<InstInserter>(read);
         let entry = function_builder.append_block();
         function_builder.switch_to_block(entry);
@@ -834,11 +812,6 @@ fn fresh_object_returns_use_caller_owned_storage() {
             control_flow::Call::new(instructions, make, smallvec::smallvec![]),
             object_ref_type,
         );
-        function_builder.insert_inst_no_result(control_flow::Call::new(
-            instructions,
-            clobber,
-            smallvec::smallvec![],
-        ));
         let value =
             function_builder.insert_inst(data::ObjLoad::new(instructions, object), Type::I64);
         function_builder
@@ -847,12 +820,18 @@ fn fresh_object_returns_use_caller_owned_storage() {
         function_builder.finish();
     }
 
-    let artifact = Compile::new(builder.build(), CraneliftJitBackend::new())
-        .compile()
-        .expect("fresh object return should compile");
-    let address = artifact.function_address("load_returned_ref").unwrap();
-    let function: unsafe extern "C" fn() -> i64 = unsafe { std::mem::transmute(address) };
-    assert_eq!(unsafe { function() }, 123);
+    let errors = match Compile::new(builder.build(), CraneliftJitBackend::new()).compile() {
+        Ok(_) => panic!("a returned local allocation was accepted"),
+        Err(errors) => errors,
+    };
+    assert!(
+        errors.iter().any(|error| {
+            let error = error.to_string();
+            error.contains("frame object lifetime in make_ref: ")
+                && error.contains("returns a reference to local object")
+        }),
+        "{errors:?}"
+    );
 }
 
 #[test]

@@ -1699,39 +1699,6 @@ impl VerifyInst for data::ObjMaterializeStack {
     }
 }
 
-impl VerifyInst for data::ObjMaterializeHeap {
-    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
-        let location = verifier.inst_location(inst_id);
-        let Some(object_ty) = verifier.value_ty(*self.object()) else {
-            return;
-        };
-        let Some(elem_ty) = verifier.objref_ty(object_ty) else {
-            verifier.emit(Diagnostic::error(
-                DiagnosticCode::InstOperandTypeMismatch,
-                "obj.materialize.heap operand must be an object reference",
-                location.clone(),
-            ));
-            return;
-        };
-        if verifier.pointee_ty(verifier.inst_result_ty(inst_id).unwrap_or(Type::Unit))
-            != Some(elem_ty)
-        {
-            verifier.emit(
-                Diagnostic::error(
-                    DiagnosticCode::InstResultTypeMismatch,
-                    "obj.materialize.heap result must be a raw pointer to the object type",
-                    verifier.inst_location(inst_id),
-                )
-                .with_note(format!(
-                    "expected pointer to {:?}, found {:?}",
-                    elem_ty,
-                    verifier.inst_result_ty(inst_id)
-                )),
-            );
-        }
-    }
-}
-
 impl VerifyInst for data::MemAllocDynamic {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         let location = verifier.inst_location(inst_id);

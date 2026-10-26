@@ -315,18 +315,6 @@ pub(super) fn instruction(
             ValueState::new(verifier.func.dfg.value_ty(result.unwrap()), true),
             None,
         );
-    } else if let Some(mat) = downcast::<&data::ObjMaterializeHeap>(is, inst) {
-        let refs = state.reference(verifier, *mat.object());
-        if refs.undefined {
-            return Outcome::Stop(Some(UNDEFINED_REFERENCE));
-        }
-        state.expose(ctx, &refs);
-        state.bind(
-            verifier,
-            result.unwrap(),
-            ValueState::new(verifier.func.dfg.value_ty(result.unwrap()), true),
-            None,
-        );
     } else {
         let call = downcast::<&control_flow::Call>(is, inst);
         let raw_load = downcast::<&data::Mload>(is, inst).is_some_and(|load| {
