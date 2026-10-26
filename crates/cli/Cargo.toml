@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 indexmap = "2.12"
-sonatina-codegen = { path = "../codegen", version = "0.0.3-alpha" }
+sonatina-codegen = { path = "../codegen", version = "0.0.3-alpha", features = ["cranelift"] }
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
