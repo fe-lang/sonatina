@@ -11,10 +11,12 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use sonatina_codegen::{
-    EvmCompile, OptLevel as CodegenOptLevel, object::ObjectArtifact, optim::pipeline::Pipeline,
+    Compile, EvmCompile, OptLevel as CodegenOptLevel, isa::cranelift::CraneliftObjectBackend,
+    object::ObjectArtifact, optim::pipeline::Pipeline,
 };
 use sonatina_ir::{ir_writer::ModuleWriter, module::Module};
 use sonatina_parser::{ParsedModule, parse_module};
+use sonatina_triple::Architecture;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 use tracing::span::Id;
 use tracing_subscriber::{
@@ -49,7 +51,8 @@ enum Command {
         input: PathBuf,
     },
 
-    /// Build EVM bytecode and write <input>.evm.bin
+    /// Build EVM bytecode and write <input>.evm.bin, or for a native target
+    /// an object file <input>.o
     Build {
         /// Emit profile timing from tracing spans
         #[arg(short = 'p', long = "profile")]
@@ -189,6 +192,37 @@ fn run_build(input: &Path, profile: bool, opt_level: BuildOptLevel) -> i32 {
         return code;
     }
 
+    if parsed.module.ctx.triple.architecture != Architecture::Evm {
+        let object = match measure_stage(&mut stages, "codegen", || {
+            Compile::new(parsed.module, CraneliftObjectBackend::new())
+                .with_opt_level(opt_level.codegen())
+                .compile()
+        }) {
+            Ok(object) => object,
+            Err(errors) => {
+                eprintln!("error: native compilation failed:");
+                for error in errors {
+                    eprintln!("  {error:?}");
+                }
+                return 1;
+            }
+        };
+        let output_path = output_path(input, "o");
+        if let Err(err) = measure_stage(&mut stages, "write", || {
+            fs::write(&output_path, object.as_bytes())
+        }) {
+            eprintln!("error: failed to write `{}`: {err}", output_path.display());
+            return 2;
+        }
+        println!(
+            "wrote {} ({} bytes)",
+            output_path.display(),
+            object.as_bytes().len()
+        );
+        profiler.print("build", &stages, total_start.elapsed());
+        return 0;
+    }
+
     let artifacts = match measure_stage(&mut stages, "codegen", || {
         compile_artifacts(parsed.module, opt_level)
     }) {
@@ -210,7 +244,7 @@ fn run_build(input: &Path, profile: bool, opt_level: BuildOptLevel) -> i32 {
         }
     };
 
-    let output_path = bytecode_output_path(input);
+    let output_path = output_path(input, "evm.bin");
     if let Err(err) = measure_stage(&mut stages, "write", || fs::write(&output_path, bytes)) {
         eprintln!("error: failed to write `{}`: {err}", output_path.display(),);
         return 2;
@@ -337,13 +371,13 @@ fn optimized_output_path(input: &Path) -> PathBuf {
     with_suffix_before_ext(input, ".opt", "sntn")
 }
 
-fn bytecode_output_path(input: &Path) -> PathBuf {
+fn output_path(input: &Path, ext: &str) -> PathBuf {
     let parent = input.parent().unwrap_or_else(|| Path::new("."));
     let stem = input
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("output");
-    parent.join(format!("{stem}.evm.bin"))
+    parent.join(format!("{stem}.{ext}"))
 }
 
 fn with_suffix_before_ext(input: &Path, suffix: &str, fallback_ext: &str) -> PathBuf {
@@ -639,11 +673,33 @@ fn span_depth(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
     use clap::Parser;
 
-    use super::{BuildOptLevel, Cli, Command};
+    use super::{BuildOptLevel, Cli, Command, run_build};
+
+    #[test]
+    fn build_writes_an_object_file_for_a_native_target() {
+        let arch = if cfg!(target_arch = "aarch64") {
+            "aarch64"
+        } else {
+            "x86_64"
+        };
+        let dir = std::env::temp_dir().join(format!("sonatina-cli-native-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("add.sntn");
+        fs::write(
+            &input,
+            format!(
+                "target = \"{arch}-unknown-native\"\n\nfunc public %add(v0.i64, v1.i64) -> i64 {{\n    block0:\n        v2.i64 = add v0 v1;\n        return v2;\n}}\n"
+            ),
+        )
+        .unwrap();
+        assert_eq!(run_build(&input, false, BuildOptLevel::O2), 0);
+        let object = fs::read(dir.join("add.o")).unwrap();
+        assert!(object.starts_with(b"\x7fELF") || object.starts_with(&[0xcf, 0xfa, 0xed, 0xfe]));
+    }
 
     #[test]
     fn build_defaults_to_o0() {
