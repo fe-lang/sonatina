@@ -369,7 +369,7 @@ impl<'f> CfgEditor<'f> {
         (from, new_block)
     }
 
-    fn insert_edge_block(&mut self, to: BlockId) -> BlockId {
+    pub(crate) fn insert_edge_block(&mut self, to: BlockId) -> BlockId {
         let mid = self.func.dfg.make_block();
         if self.func.layout.entry_block() == Some(to) {
             // Splitting an edge whose destination is the entry block (e.g. a multiway self-loop
