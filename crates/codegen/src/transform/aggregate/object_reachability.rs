@@ -245,11 +245,12 @@ impl ObjectReachability {
             changed |= self.expose(&self.references[from].clone());
         } else if let Some(call) = downcast::<&control_flow::Call>(is, data) {
             let summary = summaries.and_then(|summaries| summaries.get(call.callee()));
+            // A callee publishing what external memory already reaches cannot
+            // publish an argument; `escapes` covers what it does with those.
             for (index, &arg) in call.args().iter().enumerate() {
                 if raw_pointer(arg)
                     || summary.is_none_or(|summary| {
-                        summary.non_arg.external.publishes
-                            || summary.non_arg.unknown.publishes
+                        summary.non_arg.unknown.publishes
                             || summary
                                 .arg_effects
                                 .get(index)
