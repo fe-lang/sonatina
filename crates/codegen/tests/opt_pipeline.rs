@@ -2025,3 +2025,57 @@ block0:
         }
     }
 }
+
+#[test]
+fn gvn_merges_object_reads_after_a_call_that_writes_the_object() {
+    // After `%bump` may have written field 0, its contents are not proven
+    // defined, but two reads with nothing between them read the same bits.
+    let source = r#"
+target = "x86_64-unknown-native"
+
+type @vm = {i64, i64};
+
+func inline(never) private %bump(v0.objref<@vm>) {
+    block0:
+        v1.objref<i64> = obj.proj v0 0.i256;
+        v2.i64 = obj.load v1;
+        v3.i64 = add v2 1.i64;
+        obj.store v1 v3;
+        return;
+}
+
+func inline(never) private %reads_after_call(v0.objref<@vm>) -> i64 {
+    block0:
+        v1.objref<i64> = obj.proj v0 0.i256;
+        call %bump v0;
+        v3.i64 = obj.load v1;
+        v4.i64 = obj.load v1;
+        v5.i64 = mul v3 v4;
+        return v5;
+}
+
+func public %entry(v0.i64) -> i64 {
+    block0:
+        v1.objref<@vm> = obj.alloc @vm;
+        v2.objref<i64> = obj.proj v1 0.i256;
+        obj.store v2 v0;
+        v3.objref<i64> = obj.proj v1 1.i256;
+        obj.store v3 v0;
+        v4.i64 = call %reads_after_call v1;
+        return v4;
+}
+"#;
+    let mut parsed = parse_module(source).unwrap();
+    Pipeline::native(OptLevel::O2).run(&mut parsed.module);
+    verify_module_or_panic(
+        &parsed.module,
+        &VerifierConfig::for_level(VerificationLevel::Full),
+    );
+    let ir = ModuleWriter::new(&parsed.module).dump_string();
+    let body = ir
+        .split("func inline(never) private %reads_after_call")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .unwrap_or_else(|| panic!("{ir}"));
+    assert_eq!(body.matches("obj.load").count(), 1, "{ir}");
+}

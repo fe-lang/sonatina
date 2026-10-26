@@ -647,15 +647,13 @@ impl GvnSolver {
         inst_result: ValueId,
     ) -> Option<GvnInsn> {
         let read = object_memory?.read_state(insn)?;
-        if read.may_be_undef() {
-            return None;
-        }
-
-        // ObjectMemory proves the demanded contents defined, including
-        // reconstructed aggregates and immutable load snapshots. Its covering
-        // carrier proof is stronger than the generic SSA walk.
         let key = read.key();
-        if let CarrierSource::Value(value) = key.source
+        // Forwarding the carried value needs ObjectMemory's proof that the
+        // demanded contents are defined, including reconstructed aggregates
+        // and immutable load snapshots; it is stronger than the generic SSA
+        // walk. Reads of the same contents return the same bits either way.
+        if !read.may_be_undef()
+            && let CarrierSource::Value(value) = key.source
             && key.carrier_slice == key.read_slice
             && func.dfg.value_ty(value) == func.dfg.value_ty(inst_result)
         {
@@ -2513,10 +2511,11 @@ impl<'a> RedundantCodeRemover<'a> {
             return false;
         };
         // The analysis predates code removal, so its carrier may already have
-        // been erased. Only the initialization proof is needed to eliminate a read.
+        // been erased. A read with a state was numbered by what it reads, which
+        // is all its elimination needs.
         object_memory
             .and_then(|memory| memory.read_state(insn))
-            .is_some_and(|read| !read.may_be_undef())
+            .is_some()
     }
 
     /// Returns `true` if the `value_phi` can be resolved, i.e. all phi args are dominated by

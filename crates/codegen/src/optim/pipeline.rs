@@ -1788,7 +1788,9 @@ func private %entry() -> i256 {
     }
 
     #[test]
-    fn gvn_does_not_cse_uninitialized_obj_loads_from_fresh_alloc() {
+    fn gvn_cses_uninitialized_obj_loads_from_fresh_alloc() {
+        // Both reads see the same unwritten contents, so they agree whatever
+        // those contents are.
         let source = r#"
 target = "evm-ethereum-london"
 
@@ -1811,11 +1813,7 @@ func private %entry() -> i256 {
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
-            let load_count = dumped.matches(" = obj.load ").count();
-            assert_eq!(
-                load_count, 2,
-                "fresh uninitialized loads must remain distinct:\n{dumped}"
-            );
+            assert_eq!(dumped.matches(" = obj.load ").count(), 1, "{dumped}");
         });
     }
 
