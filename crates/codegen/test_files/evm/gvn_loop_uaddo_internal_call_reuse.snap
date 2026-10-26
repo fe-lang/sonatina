@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 2136
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/gvn_loop_uaddo_internal_call_reuse.sntn
 ---
@@ -137,23 +136,23 @@ evm:
     // jump block6;
     - stack=[v28, v27, v0]
       jump -> block6
-  block6 P=[v36, v1] T=[v0]
+  block6 P=[v39, v1] T=[v0]
     // v29.i256 = evm_mload v1;
-    - stack=[v36, v1, v0], last_use=[v1]
+    - stack=[v39, v1, v0], last_use=[v1]
       pre: [SWAP1]
       evm_mload [v1] -> v29
     // v30.i256 = eq v29 1.i256;
-    - stack=[v29, v36, v0], last_use=[v29]
+    - stack=[v29, v39, v0], last_use=[v29]
       pre: [PUSH(1)]
       eq [1, v29] -> v30
     // br v30 block7 block13;
-    - stack=[v30, v36, v0]
+    - stack=[v30, v39, v0]
       br [v30] -> [block7, block13]
-  block7 P=[] T=[v36, v0]
-    inherited from block6: [v36, v0]
-    // v32.i256 = evm_mload v36;
-    - stack=[v36, v0], last_use=[v36]
-      evm_mload [v36] -> v32
+  block7 P=[] T=[v39, v0]
+    inherited from block6: [v39, v0]
+    // v32.i256 = evm_mload v39;
+    - stack=[v39, v0], last_use=[v39]
+      evm_mload [v39] -> v32
     // evm_mstore 0.i256 v32;
     - stack=[v32, v0], last_use=[v32]
       pre: [PUSH(0)]
@@ -275,7 +274,7 @@ entry:
     PUSH1 block10
     JUMPI
   block7:
-    MLOAD  // v32.i256 = evm_mload v36;
+    MLOAD  // v32.i256 = evm_mload v39;
     PUSH0  // evm_mstore v40 v32;
     MSTORE
     PUSH1 0x6 (6)  // v34.i256 = add v0 6.i256;

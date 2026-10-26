@@ -26,17 +26,17 @@ global private const @layout_5 $const_region_0 = {0};
 
 func private %contract_init_root_DepositContract() {
     block0:
-        v41.i256 = evm_call_value;
-        v6.i1 = is_zero v41;
+        v44.i256 = evm_call_value;
+        v6.i1 = is_zero v44;
         br v6 block10 block5;
 
     block5:
         evm_revert 0.i256 0.i256;
 
     block10:
+        v43.i256 = phi (33.i256 block0) (v38 block17);
         v20.i256 = phi (v36 block17) (0.i256 block0);
-        v23.i256 = add 33.i256 v20;
-        v24.i256 = evm_sload v23;
+        v24.i256 = evm_sload v43;
         v26.*i8 = evm_malloc 64.i256;
         v27.i256 = ptr_to_int v26 i256;
         mstore v27 v24 i256;
@@ -120,20 +120,20 @@ func private %contract_runtime_root_DepositContract() {
 
     block749:
         v1409.i1 = phi (0.i1 block748) (1.i1 block101) (1.i1 block750);
-        v1936.*i8 = evm_malloc 32.i256;
-        v1937.i256 = ptr_to_int v1936 i256;
+        v1938.*i8 = evm_malloc 32.i256;
+        v1939.i256 = ptr_to_int v1938 i256;
         br v1409 block868 block869;
 
     block868:
-        mstore v1937 1.i256 i256;
+        mstore v1939 1.i256 i256;
         jump block870;
 
     block869:
-        mstore v1937 0.i256 i256;
+        mstore v1939 0.i256 i256;
         jump block870;
 
     block870:
-        evm_return v1937 32.i256;
+        evm_return v1939 32.i256;
 
     block750:
         v1408.i1 = eq v187 2237925639.i256;
@@ -770,27 +770,27 @@ func private %contract_runtime_root_DepositContract() {
         v1792.i256 = or v1790 v1791;
         v1793.i256 = shl 192.i256 v1792;
         mstore v1778 v1793 i256;
-        v1945.*i8 = evm_malloc 96.i256;
-        v1946.i256 = ptr_to_int v1945 i256;
-        v1948.*i256 = alloca i256;
-        v1949.i256 = add v1946 32.i256;
-        mstore v1948 v1949 i256;
-        v1950.i256 = ptr_to_int v1948 i256;
-        mstore v1946 32.i256 i256;
-        v1951.i256 = mload v1950 i256;
-        v1953.i1 = is_zero v1777;
-        br v1953 block877 block878;
+        v1947.*i8 = evm_malloc 96.i256;
+        v1948.i256 = ptr_to_int v1947 i256;
+        v1950.*i256 = alloca i256;
+        v1951.i256 = add v1948 32.i256;
+        mstore v1950 v1951 i256;
+        v1952.i256 = ptr_to_int v1950 i256;
+        mstore v1948 32.i256 i256;
+        v1953.i256 = mload v1952 i256;
+        v1955.i1 = is_zero v1777;
+        br v1955 block877 block878;
 
     block877:
-        mstore v1951 8.i256 i256;
+        mstore v1953 8.i256 i256;
         jump block879;
 
     block878:
-        evm_mcopy v1951 v1777 64.i256;
+        evm_mcopy v1953 v1777 64.i256;
         jump block879;
 
     block879:
-        evm_return v1946 96.i256;
+        evm_return v1948 96.i256;
 
     block563:
         v829.i256 = evm_call_value;

@@ -1678,7 +1678,7 @@ smt_root_from_calldata:
     PUSH1 0x20 (32)  // v44.i256 = lt v43 v40;
     DUP2
     LT
-    SWAP2  // v48.i256 = shr v92 v79;
+    SWAP2  // v51.i256 = shr v92 v79;
     PUSH1 0x1 (1)
     SHR
     SWAP3  // v46.i256 = add v40 v77;
@@ -1761,10 +1761,10 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(2)
     JUMP
     JUMPDEST
-    PUSH1 0x4 (4)  // v131.i256 = evm_calldata_load v42;
+    PUSH1 0x4 (4)  // v136.i256 = evm_calldata_load v42;
     CALLDATALOAD
-    EQ  // v132.i256 = eq v131 v50;
-    PUSH1 block54  // br v132 block54 block5;
+    EQ  // v137.i256 = eq v136 v50;
+    PUSH1 block54  // br v137 block54 block5;
     JUMPI
   block5:
     PUSH0  // jump block4;
@@ -1782,29 +1782,29 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     RETURN
   block50:
     JUMPDEST
-    DUP1  // v133.i256 = eq 1025915995.i256 v39;
+    DUP1  // v138.i256 = eq 1025915995.i256 v39;
     PUSH4 0x3d263c5b (1025915995)
     EQ
-    ISZERO  // br v133 block6 block51;
+    ISZERO  // br v138 block6 block51;
     PUSH1 block51
     JUMPI
   block6:
-    POP  // v134.i256 = evm_calldata_load 132.i256;
+    POP  // v139.i256 = evm_calldata_load 132.i256;
     PUSH1 0x84 (132)
     CALLDATALOAD
-    PUSH1 0x20 (32)  // v135.i256 = gt v134 v64;
+    PUSH1 0x20 (32)  // v140.i256 = gt v139 v64;
     DUP2
     GT
-    PUSH1 block44  // br v135 block7 block8;
+    PUSH1 block44  // br v140 block7 block8;
     JUMPI
   block8:
-    PUSH1 0x24 (36)  // v136.i256 = evm_calldata_load v61;
+    PUSH1 0x24 (36)  // v141.i256 = evm_calldata_load v61;
     CALLDATALOAD
-    PUSH1 0x44 (68)  // v137.i256 = evm_calldata_load v62;
+    PUSH1 0x44 (68)  // v142.i256 = evm_calldata_load v62;
     CALLDATALOAD
-    PUSH1 0x64 (100)  // v138.i256 = evm_calldata_load v63;
+    PUSH1 0x64 (100)  // v143.i256 = evm_calldata_load v63;
     CALLDATALOAD
-    DUP4  // br v134 block55 block56;
+    DUP4  // br v139 block55 block56;
     ISZERO
     PUSH1 block56
     JUMPI
@@ -1820,12 +1820,12 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     SWAP3  // jump block11;
   block11:
     JUMPDEST
-    DUP4  // v139.i256 = shl 5.i256 v7;
+    DUP4  // v144.i256 = shl 5.i256 v7;
     PUSH1 0x5 (5)
     SHL
-    PUSH1 0xa4 (164)  // v140.i256 = add v139 164.i256;
+    PUSH1 0xa4 (164)  // v145.i256 = add v144 164.i256;
     ADD
-    CALLDATALOAD  // v141.i256 = evm_calldata_load v140;
+    CALLDATALOAD  // v146.i256 = evm_calldata_load v145;
     DUP4  // v67.i256 = and 1.i256 v5;
     PUSH1 0x1 (1)
     AND
@@ -1835,7 +1835,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 block17
     JUMPI
   block15:
-    PUSH0  // evm_mstore v60 v141;
+    PUSH0  // evm_mstore v60 v146;
     MSTORE
     SWAP1  // evm_mstore v64 v51;
     PUSH1 0x20 (32)
@@ -1856,7 +1856,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     SWAP2  // evm_mstore v60 v51;
     PUSH0
     MSTORE
-    SWAP1  // evm_mstore v64 v141;
+    SWAP1  // evm_mstore v64 v146;
     PUSH1 0x20 (32)
     MSTORE
     PUSH1 0x40 (64)  // v72.i256 = evm_keccak256 v60 64.i256;
@@ -1873,7 +1873,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     SWAP3  // v74.i256 = add 1.i256 v7;
     PUSH1 0x1 (1)
     ADD
-    DUP5  // v75.i256 = lt v74 v134;
+    DUP5  // v75.i256 = lt v74 v139;
     DUP2
     LT
     SWAP3  // v76.i256 = shr 1.i256 v5;

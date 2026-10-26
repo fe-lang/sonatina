@@ -62,8 +62,8 @@ func private %__Bench_runtime() {
 
     block4:
         v13.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
-        v149.i1 = is_zero v13;
-        br v149 block24 block27;
+        v151.i1 = is_zero v13;
+        br v151 block24 block27;
 
     block27:
         v144.i256 = phi (0.i256 block4) (v118 block27);
@@ -90,24 +90,24 @@ func private %__Bench_runtime() {
         br v141 block31 block63;
 
     block63:
-        v163.i256 = phi (1.i256 block7) (v159 block66);
-        v162.i256 = phi (2.i256 block7) (v166 block66);
-        v142.i1 = gt v162 v19;
+        v166.i256 = phi (1.i256 block7) (v161 block66);
+        v165.i256 = phi (2.i256 block7) (v169 block66);
+        v142.i1 = gt v165 v19;
         br v142 block31 block64;
 
     block64:
-        (v159.i256, v160.i1) = uaddo v163 v162;
-        br v160 block36 block66;
+        (v161.i256, v162.i1) = uaddo v166 v165;
+        br v162 block36 block66;
 
     block36:
         evm_revert 0.i256 0.i256;
 
     block66:
-        (v166.i256, v167.i1) = uaddo v162 1.i256;
-        br v167 block36 block63;
+        (v169.i256, v170.i1) = uaddo v165 1.i256;
+        br v170 block36 block63;
 
     block31:
-        v143.i256 = phi (0.i256 block7) (v163 block63);
+        v143.i256 = phi (0.i256 block7) (v166 block63);
         mstore 0.i256 v143 i256;
         evm_return 0.i256 32.i256;
 
@@ -122,8 +122,8 @@ func private %__Bench_runtime() {
     block10:
         v73.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
         v74.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
-        v150.i1 = is_zero v73;
-        br v150 block42 block45;
+        v152.i1 = is_zero v73;
+        br v152 block42 block45;
 
     block45:
         v135.i256 = phi (v74 block10) (v83 block45);
@@ -149,8 +149,8 @@ func private %__Bench_runtime() {
 
     block13:
         v31.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
-        v151.i1 = is_zero v31;
-        br v151 block48 block51;
+        v153.i1 = is_zero v31;
+        br v153 block48 block51;
 
     block51:
         v130.i256 = phi (0.i256 block13) (v89 block51);
@@ -200,8 +200,8 @@ func private %__Bench_runtime() {
     block19:
         v78.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
         v79.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
-        v152.i1 = is_zero v78;
-        br v152 block58 block61;
+        v154.i1 = is_zero v78;
+        br v154 block58 block61;
 
     block61:
         v121.i256 = phi (v79 block19) (v108 block61);

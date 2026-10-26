@@ -145,11 +145,9 @@ func private %main_root() {
         br v293 block76 block77;
 
     block76:
-        v302.i16 = phi (1.i16 block95) (0.i16 block74) (0.i16 block77);
+        v391.i256 = phi (0.i256 block74) (0.i256 block77) (512.i256 block95);
         v312.i256 = and v292 -130561.i256;
-        v313.i256 = zext v302 i256;
-        v315.i256 = shl 9.i256 v313;
-        v316.i256 = or v312 v315;
+        v316.i256 = or v312 v391;
         v317.i256 = and v316 -8589803521.i256;
         v320.i256 = or v317 262144.i256;
         v323.i256 = and v320 -2.i256;
