@@ -59,7 +59,6 @@ pub(crate) type LocalObjectArgs = FxHashMap<FuncRef, FxHashSet<usize>>;
 
 pub(crate) enum SpecialObjectUse<'a> {
     MaterializeStack(Option<ValueId>),
-    MaterializeHeap,
     Call {
         inst: sonatina_ir::InstId,
         value: ValueId,
@@ -713,13 +712,6 @@ impl Walk<'_> {
                 function.dfg.inst_result(self.user),
             ));
         }
-        if function
-            .dfg
-            .downcast::<&data::ObjMaterializeHeap>(self.user)
-            .is_some_and(|mat_heap| *mat_heap.object() == value)
-        {
-            return on_special(SpecialObjectUse::MaterializeHeap);
-        }
         if let Some(call) = function.dfg.downcast::<&control_flow::Call>(self.user)
             && call.args().contains(&value)
         {
@@ -811,13 +803,6 @@ impl Walk<'_> {
                 .is_some_and(|enum_write_variant| *enum_write_variant.object() == value)
         {
             return ControlFlow::Continue(());
-        }
-        if function
-            .dfg
-            .downcast::<&data::ObjMaterializeHeap>(self.user)
-            .is_some_and(|mat_heap| *mat_heap.object() == value)
-        {
-            return on_special(SpecialObjectUse::MaterializeHeap);
         }
         // A raw pointer into the memory can carry the object out only through
         // a read, which would recover the held reference as untracked bits.
@@ -1360,7 +1345,7 @@ block2:
 
 block3:
     v3.objref<@pair> = phi (v0 block1) (v1 block2);
-    obj.materialize.heap v3;
+    obj.materialize.stack v3;
     return;
 }
 "#,
@@ -1386,7 +1371,7 @@ type @pair = { i256, i256 };
 
 func private %escape(v0.objref<@pair>) {
 block0:
-    obj.materialize.heap v0;
+    obj.materialize.stack v0;
     return;
 }
 

@@ -32,7 +32,6 @@ super::impl_inst_build_common! {EnumWriteVariant, build_enum_write_variant}
 super::impl_inst_build! {EnumGetTag, (object: ValueId)}
 super::impl_inst_build_common! {EnumProj, build_enum_proj}
 super::impl_inst_build! {ObjMaterializeStack, (object: ValueId)}
-super::impl_inst_build! {ObjMaterializeHeap, (object: ValueId)}
 super::impl_inst_build! {MemAllocDynamic, (size: ValueId)}
 super::impl_inst_build! {InsertValue, (dest: ValueId, idx: ValueId, value: ValueId)}
 super::impl_inst_build! {ExtractValue, (dest: ValueId, idx: ValueId)}

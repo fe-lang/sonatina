@@ -410,7 +410,7 @@ type @Holder = { objref<@E> };
 func private %holder() -> objref<@Holder> {
 block0:
  v0.objref<@Holder> = obj.alloc @Holder;
- v1.*@Holder = obj.materialize.heap v0;
+ v1.*@Holder = obj.materialize.stack v0;
  return v0;
 }
 func private %entry(v100.*i256) -> i256 {
@@ -1457,10 +1457,6 @@ fn undefined_reference_strict_uses_are_reported() {
         ),
         (
             "v9.*@E = obj.materialize.stack undef.objref<@E>;",
-            &[UNDEFINED],
-        ),
-        (
-            "v9.*@E = obj.materialize.heap undef.objref<@E>;",
             &[UNDEFINED],
         ),
         // A trusted assumption about no location is contradicted, not a use.

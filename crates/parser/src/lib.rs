@@ -1173,7 +1173,6 @@ func private %ops(v0.i256, v1.i256, v2.i256) -> i256 {
         v7.i256 = obj.load v6;
         v8.*@pair = obj.materialize.stack v3;
         v9.*i8 = mem.alloc_dynamic v2;
-        v10.*@pair = obj.materialize.heap v3;
         return v7;
 }
 "#;
@@ -1188,7 +1187,6 @@ func private %ops(v0.i256, v1.i256, v2.i256) -> i256 {
         assert!(printed.contains("obj.load v6"));
         assert!(printed.contains("obj.materialize.stack v3"));
         assert!(printed.contains("mem.alloc_dynamic v2"));
-        assert!(printed.contains("obj.materialize.heap v3"));
     }
 
     #[test]

@@ -148,7 +148,6 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
                 ("linked_result", 22),
                 ("forwarded_result", 22),
                 ("stack_leaked_result", 22),
-                ("heap_leaked_result", 22),
                 ("linked_then_filled", 22),
                 ("returned_then_filled", 22),
                 ("copied_then_cleared", 22),

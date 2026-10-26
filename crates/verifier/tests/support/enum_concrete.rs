@@ -588,10 +588,6 @@ fn execute_block(
             Some(field.clone())
         } else if let Some(object) = downcast::<&data::ObjMaterializeStack>(is, data)
             .map(|materialize| *materialize.object())
-            .or_else(|| {
-                downcast::<&data::ObjMaterializeHeap>(is, data)
-                    .map(|materialize| *materialize.object())
-            })
         {
             let object = value(object).view().location.object;
             world.exposed.insert(object);

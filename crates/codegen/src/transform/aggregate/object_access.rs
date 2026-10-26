@@ -524,8 +524,6 @@ impl ObjectAccessFacts {
             }
         } else if let Some(mat) = func.dfg.downcast::<&data::ObjMaterializeStack>(inst) {
             effects.reads.extend(self.reachable_access(*mat.object()));
-        } else if let Some(mat) = func.dfg.downcast::<&data::ObjMaterializeHeap>(inst) {
-            effects.reads.extend(self.reachable_access(*mat.object()));
         } else if func.dfg.downcast::<&control_flow::Return>(inst).is_some() {
             for value in data.collect_values() {
                 effects.reads.extend(self.reachable_access(value));

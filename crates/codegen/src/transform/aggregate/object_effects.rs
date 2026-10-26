@@ -182,12 +182,11 @@ pub(crate) struct ObjectArgEffect {
     /// May-write slices; these never establish overwrite or initialization.
     pub writes: SliceSet,
     pub materializes_stack: bool,
-    pub materializes_heap: bool,
 }
 
 impl ObjectArgEffect {
     pub(crate) fn needs_unknown_object_barrier(&self) -> bool {
-        self.escapes || self.materializes_stack || self.materializes_heap
+        self.escapes || self.materializes_stack
     }
 }
 
@@ -340,7 +339,6 @@ impl ObjectEffectSummary {
             let whole = whole_root_slice(layout_cache, module, elem_ty);
             effect.escapes = true;
             effect.local_only = false;
-            effect.materializes_heap = true;
             effect.reads = SliceSet::whole_root(whole.leaf_count);
             effect.writes = SliceSet::whole_root(whole.leaf_count);
         }
@@ -362,7 +360,6 @@ impl ObjectArgEffect {
             reads: SliceSet::empty(total_leaves),
             writes: SliceSet::empty(total_leaves),
             materializes_stack: false,
-            materializes_heap: false,
         }
     }
 }
@@ -700,18 +697,6 @@ fn compute_summary_for_func(
                         &root_captures,
                         effect_provenance,
                         *mat_stack.object(),
-                        false,
-                    );
-                    continue;
-                }
-
-                if let Some(mat_heap) = function.dfg.downcast::<&data::ObjMaterializeHeap>(inst) {
-                    record_materialize(
-                        &mut summary,
-                        &root_captures,
-                        effect_provenance,
-                        *mat_heap.object(),
-                        true,
                     );
                     continue;
                 }
@@ -1443,7 +1428,6 @@ fn merge_call_arg_effect(
             }
             summary.arg_effects[src_arg].escapes |= callee_effect.escapes;
             summary.arg_effects[src_arg].materializes_stack |= callee_effect.materializes_stack;
-            summary.arg_effects[src_arg].materializes_heap |= callee_effect.materializes_heap;
         }
     }
 }
@@ -1459,7 +1443,6 @@ fn merge_effect_into_arg(
     };
     arg_effect.escapes |= callee_effect.escapes;
     arg_effect.materializes_stack |= callee_effect.materializes_stack;
-    arg_effect.materializes_heap |= callee_effect.materializes_heap;
     map_into_slice_set(&mut arg_effect.reads, base_slice, &callee_effect.reads);
     map_into_slice_set(&mut arg_effect.writes, base_slice, &callee_effect.writes);
 }
@@ -1945,24 +1928,19 @@ fn record_materialize(
     root_captures: &RootCaptureMap,
     capture_ctx: EffectProvenance<'_>,
     object: ValueId,
-    heap: bool,
 ) {
     if capture_ctx.has_unmapped_alternative(object) {
         summary.non_arg.unknown.publishes = true;
     }
     for root_idx in capture_ctx.arg_root_indices_for_observation(object) {
-        summary.arg_effects[root_idx].materializes_stack |= !heap;
-        summary.arg_effects[root_idx].materializes_heap |= heap;
-        summary.arg_effects[root_idx].escapes |= heap;
+        summary.arg_effects[root_idx].materializes_stack = true;
     }
     let mut seen = FxHashSet::default();
     for (src_arg, _) in capture_source_slices(root_captures, capture_ctx, object, None) {
         if !seen.insert(src_arg) {
             continue;
         }
-        summary.arg_effects[src_arg].materializes_stack |= !heap;
-        summary.arg_effects[src_arg].materializes_heap |= heap;
-        summary.arg_effects[src_arg].escapes |= heap;
+        summary.arg_effects[src_arg].materializes_stack = true;
     }
 }
 

@@ -627,7 +627,7 @@ fn untracked_phi_alternative_preserves_its_observable_store() {
 target = "evm-ethereum-osaka"
 func private %f(v0.objref<i256>, v1.objref<i256>, v2.i1) {
 block0:
-    v3.*i256 = obj.materialize.heap v1;
+    v3.*i256 = obj.materialize.stack v1;
     br v2 block1 block2;
 block1:
     jump block3;
@@ -1122,7 +1122,7 @@ fn t11_untracked_materialized_writer_invalidates_tracked_reader() {
 target = "evm-ethereum-osaka"
 func private %f(v0.objref<i256>, v1.objref<i256>) -> i256 {
 block0:
-    v2.*i256 = obj.materialize.heap v1;
+    v2.*i256 = obj.materialize.stack v1;
     obj.store v0 11.i256;
     obj.store v1 22.i256;
     v3.i256 = obj.load v0;
