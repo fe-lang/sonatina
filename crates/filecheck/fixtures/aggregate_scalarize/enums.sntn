@@ -1,0 +1,63 @@
+target = "evm-ethereum-osaka"
+
+type @unit = {};
+type @pair = {i8, i64};
+type @res = enum {
+    #variant_0(@unit),
+    #variant_1(i256),
+};
+type @either = enum {
+    #variant_0(@pair),
+    #variant_1(i256),
+};
+
+# An empty struct payload, like the `()` of `Result<T, ()>`, has no leaves
+# and does not keep the enum in memory.
+# sameln: func public %empty_struct_payload(v0.i1, v1.i256) -> i256 {
+# not:         enum.make
+# not:         enum.tag
+func public %empty_struct_payload(v0.i1, v1.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+    block1:
+        v2.@res = enum.make @res #variant_1 v1;
+        jump block3;
+    block2:
+        v3.@res = enum.make @res #variant_0 undef.@unit;
+        jump block3;
+    block3:
+        v4.@res = phi (v2 block1) (v3 block2);
+        v5.enumtag(@res) = enum.tag v4;
+        br_table v5 (0.enumtag(@res) block4) (1.enumtag(@res) block5);
+    block4:
+        return 7.i256;
+    block5:
+        return 9.i256;
+}
+
+# A struct payload built by `insert_value` splits into its fields.
+# sameln: func public %struct_payload(v0.i1, v1.i64) -> i64 {
+# not:         enum.make
+# not:         insert_value
+# not:         enum.extract
+func public %struct_payload(v0.i1, v1.i64) -> i64 {
+    block0:
+        br v0 block1 block2;
+    block1:
+        v2.@pair = insert_value undef.@pair 1.i8 v1;
+        v3.@either = enum.make @either #variant_0 v2;
+        jump block3;
+    block2:
+        v4.@either = enum.make @either #variant_1 5.i256;
+        jump block3;
+    block3:
+        v5.@either = phi (v3 block1) (v4 block2);
+        v6.i1 = enum.is_variant v5 #variant_0;
+        br v6 block4 block5;
+    block4:
+        v7.@pair = enum.extract v5 #variant_0 0.i8;
+        v8.i64 = extract_value v7 1.i8;
+        return v8;
+    block5:
+        return 0.i64;
+}
