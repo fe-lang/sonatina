@@ -33,7 +33,9 @@ use super::{
     },
     object_alias::ObjectAliasFacts,
     object_effects::ObjectEffectSummary,
-    object_reachability::{ObjectReachability, raw_access_may_reach_objects, reference_bearing},
+    object_reachability::{
+        ObjectReachability, object_reference_bearing, raw_access_may_reach_objects,
+    },
     object_tracking::single_result_value,
     shape,
 };
@@ -948,7 +950,7 @@ fn refine_possible_roots_from_objref_loads(
     maybe_unknown: &mut SecondaryMap<ValueId, bool>,
 ) {
     let has_reference_load = snapshot.single_result_insts.iter().any(|&(inst, result)| {
-        reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
+        object_reference_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
             && func.dfg.downcast::<&data::ObjLoad>(inst).is_some()
     });
     if !has_reference_load {
@@ -1018,7 +1020,7 @@ fn refine_possible_roots_from_objref_loads(
 
                 if let Some(obj_load) = func.dfg.downcast::<&data::ObjLoad>(inst)
                     && let Some(result) = single_result_value(func, inst)
-                    && reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
+                    && object_reference_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
                     && union_capture_roots_for_value(
                         *obj_load.object(),
                         capture_state,
@@ -1085,7 +1087,7 @@ fn compute_capture_states_for_blocks(
         for inst in func.layout.iter_inst(block) {
             if let Some(load) = func.dfg.downcast::<&data::ObjLoad>(inst)
                 && let Some(result) = single_result_value(func, inst)
-                && reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
+                && object_reference_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
             {
                 for (root, dst_slice) in
                     capture_destinations_for_value(*load.object(), None, capture_state)
@@ -1126,13 +1128,13 @@ fn apply_inst_capture_transfer(
 
     match capture_relevant_inst(func, inst) {
         Some(CaptureRelevantInst::ObjStore(obj_store)) => {
-            if !reference_bearing(func, *obj_store.value())
+            if !object_reference_bearing(func, *obj_store.value())
                 || capture_state.maybe_unknown[*obj_store.object()]
             {
                 widen_typed_capture_write(root_captures, *obj_store.object(), None, capture_state);
             }
             kill_capture_access(root_captures, *obj_store.object(), None, capture_state);
-            if reference_bearing(func, *obj_store.value()) {
+            if object_reference_bearing(func, *obj_store.value()) {
                 record_root_capture_sources(
                     root_captures,
                     capture_destinations_for_value(*obj_store.object(), None, capture_state),
@@ -1158,7 +1160,7 @@ fn apply_inst_capture_transfer(
             let tag = enum_ty.and_then(|ty| shape::enum_tag_slice(func.ctx(), ty));
             widen_typed_capture_write(root_captures, object, tag, capture_state);
             for (index, &value) in enum_write_variant.values().iter().enumerate() {
-                if !reference_bearing(func, value) || capture_state.maybe_unknown[object] {
+                if !object_reference_bearing(func, value) || capture_state.maybe_unknown[object] {
                     let field = enum_ty.and_then(|ty| {
                         shape::enum_variant_field_slice(
                             func.ctx(),
@@ -1419,7 +1421,7 @@ fn record_enum_variant_capture_sources(
     };
     let mut layout_cache = shape::AggregateLayoutCache::default();
     for (field_idx, &value) in values.iter().enumerate() {
-        if !reference_bearing(func, value) {
+        if !object_reference_bearing(func, value) {
             continue;
         }
         let Some(field_slice) = layout_cache.enum_variant_field_slice(
@@ -2341,6 +2343,19 @@ fn bitcast_projection_slice(
             ..slice
         },
     )
+}
+
+/// The referent of an object or const reference. A raw pointer publishes what
+/// it reaches when it leaves SSA, so no capture holds one and loading one finds
+/// no tracked root.
+fn object_reference_ty(module: &ModuleCtx, ty: Type) -> Option<Type> {
+    let Type::Compound(cmpd) = ty else {
+        return None;
+    };
+    module.with_ty_store(|store| match store.resolve_compound(cmpd) {
+        CompoundType::ObjRef(elem) | CompoundType::ConstRef(elem) => Some(*elem),
+        _ => None,
+    })
 }
 
 fn reference_element_ty(module: &ModuleCtx, ty: Type) -> Option<Type> {

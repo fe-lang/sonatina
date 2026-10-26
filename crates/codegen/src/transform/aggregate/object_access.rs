@@ -14,7 +14,9 @@ use sonatina_ir::{
 use super::{
     LocalObjectArgInfo, ObjectEffectSummaryMap, SliceSet,
     object_effects::{ObjectCaptureDestination, ObjectEffectSummary},
-    object_reachability::{ObjectReachability, raw_access_may_reach_objects, reference_bearing},
+    object_reachability::{
+        ObjectReachability, object_reference_bearing, raw_access_may_reach_objects,
+    },
     object_tracking::{
         AggregateFacts, ObjectSlice, TrackedObject, collect_tracked_objects, enum_tag_object_slice,
     },
@@ -424,7 +426,7 @@ impl ObjectAccessFacts {
                 None,
                 ObjectInitializationSource::Value(*store.value()),
             );
-            if reference_bearing(func, *store.value()) {
+            if object_reference_bearing(func, *store.value()) {
                 effects.captures.push((
                     self.access(*store.object(), None),
                     self.reachable_access(*store.value()),
@@ -468,7 +470,7 @@ impl ObjectAccessFacts {
                             ObjectInitializationSource::Value(store.values()[index]),
                         );
                         let value = store.values()[index];
-                        if reference_bearing(func, value) {
+                        if object_reference_bearing(func, value) {
                             effects.captures.push((
                                 self.access(*store.object(), Some(field)),
                                 self.reachable_access(value),
@@ -666,7 +668,7 @@ block0:
     }
 
     #[test]
-    fn publishing_unresolved_pointer_cannot_leave_an_empty_alternative() {
+    fn unresolved_raw_pointers_settle_as_external() {
         check(
             r#"
 target = "evm-ethereum-osaka"
@@ -679,8 +681,9 @@ block0:
 }
 "#,
             |_, facts, _| {
-                assert!(facts.reachability.references[ValueId::from_u32(2)].unknown);
-                assert!(facts.may_overlap(ObjectAccess::External, location(facts, 1)));
+                let pointer = &facts.reachability.references[ValueId::from_u32(2)];
+                assert!(pointer.external && !pointer.unknown);
+                assert!(!facts.may_overlap(ObjectAccess::External, location(facts, 1)));
             },
         );
     }
@@ -750,6 +753,80 @@ block0:
                 },
             );
         }
+    }
+
+    #[test]
+    fn raw_pointers_entering_objects_or_aggregates_publish_their_roots() {
+        for publish in [
+            "v2.objref<*i256> = obj.alloc *i256;\n    obj.store v2 v1;",
+            "v2.@Holder = insert_value undef.@Holder 0.i256 v1;",
+        ] {
+            check(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+type @Holder = {{ *i256 }};
+func private %f() {{
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    v1.*i256 = alloca i256;
+    {publish}
+    return;
+}}
+"#
+                ),
+                |_, facts, _| {
+                    assert!(
+                        facts.exposed(RootValue::new(ValueId::from_u32(1))),
+                        "{publish}"
+                    );
+                    assert!(
+                        !facts.exposed(RootValue::new(ValueId::from_u32(0))),
+                        "{publish}"
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn undefined_raw_pointers_are_external() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+declare external %release(*i8);
+func private %f() {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    call %release undef.*i8;
+    return;
+}
+"#,
+            |_, facts, _| {
+                assert!(!facts.exposed(RootValue::new(ValueId::from_u32(0))));
+            },
+        );
+    }
+
+    #[test]
+    fn raw_pointers_loaded_from_objects_are_external() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f() {
+block0:
+    v0.objref<*i256> = obj.alloc *i256;
+    v1.objref<i256> = obj.alloc i256;
+    v2.*i256 = obj.load v0;
+    return;
+}
+"#,
+            |_, facts, _| {
+                let pointer = &facts.reachability.references[ValueId::from_u32(2)];
+                assert!(pointer.external && !pointer.unknown && pointer.roots.is_empty());
+                assert!(!facts.exposed(RootValue::new(ValueId::from_u32(1))));
+            },
+        );
     }
 
     #[test]
