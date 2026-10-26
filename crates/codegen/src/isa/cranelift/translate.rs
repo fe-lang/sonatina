@@ -811,9 +811,10 @@ fn translate_function(
                         )?,
                     };
                     // From four keys up, Cranelift's switch gives each run of
-                    // consecutive keys a jump table and searches the runs.
-                    // Fewer keys, or i256 keys beyond the low limb, are
-                    // compared in turn.
+                    // consecutive keys a jump table and searches the runs; a
+                    // run's holes take the default while at least 40% of its
+                    // entries are keys, so one table covers it. Fewer keys,
+                    // or i256 keys beyond the low limb, are compared in turn.
                     if keys.len() >= 4
                         && limbs.is_none_or(|_| keys.iter().all(|(key, _)| key.0[1..] == [0; 3]))
                     {
@@ -829,6 +830,33 @@ fn translate_function(
                         let mut switch = Switch::new();
                         for &(key, dest) in &keys {
                             switch.set_entry(key.low_u128(), dest_block(dest, &mut builder));
+                        }
+                        let mut sorted: Vec<_> =
+                            keys.iter().map(|(key, _)| key.low_u128()).collect();
+                        sorted.sort_unstable();
+                        let mut runs = Vec::new();
+                        let mut run: Option<(u128, u128, u128)> = None;
+                        for key in sorted {
+                            run = match run {
+                                Some((first, _, count))
+                                    if (key - first).saturating_add(1).saturating_mul(2)
+                                        <= (count + 1) * 5 =>
+                                {
+                                    Some((first, key, count + 1))
+                                }
+                                _ => {
+                                    runs.extend(run);
+                                    Some((key, key, 1))
+                                }
+                            };
+                        }
+                        runs.extend(run);
+                        for (first, last, _) in runs {
+                            for hole in first..=last {
+                                if !switch.entries().contains_key(&hole) {
+                                    switch.set_entry(hole, otherwise);
+                                }
+                            }
                         }
                         switch.emit(&mut builder, scrutinee, otherwise);
                     } else {
