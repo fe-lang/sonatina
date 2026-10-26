@@ -1265,6 +1265,19 @@ fn compare_truth_in_env(
         return None;
     }
 
+    // Offsets of one base that cannot wrap order the values themselves, as
+    // `len - 1 < len` once `len >= 1`.
+    let (lhs_base, lhs_offset) = unsigned_base_offset(func, env, lhs);
+    let (rhs_base, rhs_offset) = unsigned_base_offset(func, env, rhs);
+    if lhs_base == rhs_base {
+        match kind {
+            BinaryInstKind::Lt => return Some(lhs_offset < rhs_offset),
+            BinaryInstKind::Le => return Some(lhs_offset <= rhs_offset),
+            BinaryInstKind::Eq => return Some(lhs_offset == rhs_offset),
+            _ => {}
+        }
+    }
+
     let lhs_fact = fact_for_value(func, env, lhs);
     let rhs_fact = fact_for_value(func, env, rhs);
 
@@ -1325,6 +1338,39 @@ fn compare_truth_in_env(
             compare_truth_in_env(func, env, BinaryInstKind::Eq, lhs, rhs).map(|v| !v)
         }
         _ => None,
+    }
+}
+
+/// `value` as `base + offset` when it adds or subtracts an immediate that
+/// `base`'s range keeps from wrapping; otherwise `value` itself at offset zero.
+fn unsigned_base_offset(func: &Function, env: &RangeEnv, value: ValueId) -> (ValueId, i128) {
+    let plain = (value, 0);
+    let Some(inst) = func.dfg.value_inst(value) else {
+        return plain;
+    };
+    let InstClassKind::Binary(kind @ (BinaryInstKind::Add | BinaryInstKind::Sub)) =
+        func.dfg.inst(inst).kind()
+    else {
+        return plain;
+    };
+    let args = func.dfg.inst(inst).collect_values();
+    let [base, step] = args.as_slice() else {
+        return plain;
+    };
+    let Some(step) = func.dfg.value_imm(*step) else {
+        return plain;
+    };
+    let ty = func.dfg.value_ty(value);
+    let step = imm_to_unsigned(step);
+    if step > U256::from(i128::MAX as u128) {
+        return plain;
+    }
+    let base_range = fact_for_value(func, env, *base).unsigned;
+    let offset = step.low_u128() as i128;
+    match kind {
+        BinaryInstKind::Sub if base_range.lo >= step => (*base, -offset),
+        BinaryInstKind::Add if !unsigned_add(base_range.hi, step, ty).1 => (*base, offset),
+        _ => plain,
     }
 }
 
