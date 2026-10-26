@@ -206,9 +206,9 @@ fn translate_function(
         block_map.insert(block, clif_block);
     }
 
-    let has_sret = module
-        .ctx
-        .func_sig(func_ref, |sig| returns_indirect(&module.ctx, sig));
+    let (has_sret, registers) = module.ctx.func_sig(func_ref, |sig| {
+        (returns_indirect(&module.ctx, sig), uses_register_abi(sig))
+    });
 
     let entry = function.layout.entry_block().ok_or("no entry block")?;
     // Cranelift forbids branches to its entry block, so a Sonatina entry block
@@ -227,15 +227,20 @@ fn translate_function(
         None
     };
 
-    let arg_offset = if has_sret { 1 } else { 0 };
-    for (idx, &arg_value) in function.arg_values.iter().enumerate() {
-        let param = builder.block_params(clif_entry)[idx + arg_offset];
+    let params = builder.block_params(clif_entry).to_vec();
+    let mut params = params.into_iter().skip(usize::from(has_sret));
+    let mut next_param = || params.next().ok_or("missing function parameter");
+    for &arg_value in &function.arg_values {
         let ty = function.dfg.value_ty(arg_value);
         if ty == Type::I256 {
-            let limbs = i256_storage.incoming(arg_value, param, &mut builder);
+            let limbs = if registers {
+                [next_param()?, next_param()?, next_param()?, next_param()?]
+            } else {
+                i256_storage.incoming(arg_value, next_param()?, &mut builder)
+            };
             value_map.insert_limbs(arg_value, limbs);
         } else {
-            let param = normalize_scalar(param, ty, &mut builder);
+            let param = normalize_scalar(next_param()?, ty, &mut builder);
             value_map.insert(arg_value, param);
         }
     }
@@ -895,7 +900,7 @@ fn translate_function(
                             return Err("indirect return requires exactly one value".to_string());
                         };
                         let val_ty = function.dfg.value_ty(*val_id);
-                        let storage_ty = indirect_return_storage_type(&module.ctx, val_ty)
+                        let storage_ty = indirect_return_storage_type(&module.ctx, val_ty, false)
                             .ok_or("indirect return value has no storage type")?;
                         if val_ty == Type::I256 {
                             store_value(function, *val_id, sret, 0, &value_map, &mut builder)?;
@@ -912,13 +917,24 @@ fn translate_function(
                         }
                         builder.ins().return_(&[]);
                     } else {
-                        let args: Result<Vec<_>, _> = ret
-                            .args()
-                            .as_slice()
-                            .iter()
-                            .map(|v| resolve_value(function, *v, &value_map, &mut builder))
-                            .collect();
-                        let args = args?;
+                        let mut args = Vec::new();
+                        for &value in ret.args().iter() {
+                            if function.dfg.value_ty(value) == Type::I256 {
+                                args.extend(resolve_i256(
+                                    function,
+                                    value,
+                                    &value_map,
+                                    &mut builder,
+                                )?);
+                            } else {
+                                args.push(resolve_value(
+                                    function,
+                                    value,
+                                    &value_map,
+                                    &mut builder,
+                                )?);
+                            }
+                        }
                         builder.ins().return_(&args);
                     }
                 }
@@ -930,10 +946,12 @@ fn translate_function(
                     let clif_func_ref =
                         clif_module.declare_func_in_func(*clif_func_id, builder.func);
                     let ir_results = function.dfg.inst_results(inst_id);
+                    let callee_registers = module.ctx.func_sig(callee, uses_register_abi);
                     let indirect_storage_ty = match ir_results {
                         [result] => indirect_return_storage_type(
                             &module.ctx,
                             function.dfg.value_ty(*result),
+                            callee_registers,
                         ),
                         _ => None,
                     };
@@ -960,19 +978,31 @@ fn translate_function(
 
                     let mut i256_args = 0;
                     for &arg in call.args() {
-                        let value = if function.dfg.value_ty(arg) == Type::I256 {
+                        if function.dfg.value_ty(arg) != Type::I256 {
+                            call_args.push(resolve_operand(
+                                function,
+                                arg,
+                                &value_map,
+                                target_config,
+                                &mut builder,
+                            )?);
+                        } else if callee_registers {
+                            call_args.extend(resolve_i256(
+                                function,
+                                arg,
+                                &value_map,
+                                &mut builder,
+                            )?);
+                        } else {
                             i256_args += 1;
-                            i256_storage.outgoing(
+                            call_args.push(i256_storage.outgoing(
                                 function,
                                 arg,
                                 i256_args - 1,
                                 &value_map,
                                 &mut builder,
-                            )?
-                        } else {
-                            resolve_operand(function, arg, &value_map, target_config, &mut builder)?
-                        };
-                        call_args.push(value);
+                            )?);
+                        }
                     }
 
                     let clif_call = builder.ins().call(clif_func_ref, &call_args);
@@ -986,9 +1016,20 @@ fn translate_function(
                             value_map.insert(result, sret_addr);
                         }
                     } else {
-                        let results = builder.inst_results(clif_call);
-                        for (ir_result, clif_result) in ir_results.iter().zip(results) {
-                            value_map.insert(*ir_result, *clif_result);
+                        let mut results = builder.inst_results(clif_call).iter().copied();
+                        let mut next_result = || results.next().ok_or("missing call result");
+                        for &ir_result in ir_results {
+                            if function.dfg.value_ty(ir_result) == Type::I256 {
+                                let limbs = [
+                                    next_result()?,
+                                    next_result()?,
+                                    next_result()?,
+                                    next_result()?,
+                                ];
+                                value_map.insert_limbs(ir_result, limbs);
+                            } else {
+                                value_map.insert(ir_result, next_result()?);
+                            }
                         }
                     }
                 }
