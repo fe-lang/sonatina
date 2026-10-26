@@ -112,22 +112,18 @@ pub(crate) fn compute_capture_states_for_blocks<C: RootCapturePayload>(
     (block_entry_captures, exit_root_captures)
 }
 
+/// Adds `src`'s captures to `dst`'s, leaving each merged list sorted and
+/// deduped.
 pub(crate) fn merge_root_capture_maps<C: RootCapturePayload>(
     dst: &mut RootCaptureMap<C>,
     src: &RootCaptureMap<C>,
-) -> bool {
-    let mut changed = false;
+) {
     for (&root, captures) in src {
         let entry = dst.entry(root).or_default();
-        for &capture in captures {
-            if entry.contains(&capture) {
-                continue;
-            }
-            entry.push(capture);
-            changed = true;
-        }
+        entry.extend_from_slice(captures);
+        entry.sort_unstable();
+        entry.dedup();
     }
-    changed
 }
 
 /// Sorts and dedups each root's captures. The block fixpoint compares maps,
