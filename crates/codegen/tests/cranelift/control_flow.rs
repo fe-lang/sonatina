@@ -522,6 +522,14 @@ fn br_table_dense_keys() {
 }
 
 #[test]
+fn br_table_holes_in_dense_keys_take_the_default() {
+    // Every other value is a key: one jump table covers them, with the
+    // default in its holes.
+    let keys: Vec<_> = (0..12).map(|key| key * 2).collect();
+    check_br_table(Type::I32, &keys, &[25], &(-3..=30).collect::<Vec<_>>());
+}
+
+#[test]
 fn br_table_sparse_keys() {
     let keys = [
         -5,
