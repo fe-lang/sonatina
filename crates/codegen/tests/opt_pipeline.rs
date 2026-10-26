@@ -2154,3 +2154,106 @@ func public %entry(v0.i64) -> i64 {
         .unwrap_or_else(|| panic!("{ir}"));
     assert_eq!(body.matches("obj.load").count(), 1, "{ir}");
 }
+
+#[test]
+fn licm_hoists_reads_of_an_argument_another_noalias_argument_cannot_write() {
+    // The loop writes `pc` through `v0` and reads `len` through `v1`. Only a
+    // `noalias` `v0` rules out that the write changes `len`.
+    for noalias in [false, true] {
+        let marker = if noalias { "noalias " } else { "" };
+        let source = format!(
+            r#"
+target = "x86_64-unknown-native"
+
+type @vm = {{ i64, i64 }};
+type @code = {{ i64, i64 }};
+
+func private %run({marker}v0.objref<@vm>, v1.objref<@code>) -> i64 {{
+    block0:
+        v2.objref<i64> = obj.proj v0 0.i64;
+        v3.objref<i64> = obj.proj v1 1.i64;
+        jump block1;
+    block1:
+        v4.i64 = obj.load v2;
+        v5.i64 = obj.load v3;
+        v6.i1 = lt v4 v5;
+        br v6 block2 block3;
+    block2:
+        v7.i64 = add v4 1.i64;
+        obj.store v2 v7;
+        jump block1;
+    block3:
+        return v4;
+}}
+"#
+        );
+        let mut parsed = parse_module(&source).unwrap();
+        verify_module_or_panic(
+            &parsed.module,
+            &VerifierConfig::for_level(VerificationLevel::Full),
+        );
+        let mut pipeline = Pipeline::new();
+        pipeline.add_step(Step::FuncPasses(vec![Pass::Licm]));
+        pipeline.run(&mut parsed.module);
+        let text = ModuleWriter::new(&parsed.module).dump_string();
+        let header = text.split("block1:").nth(1).unwrap();
+        assert_eq!(header.contains("obj.load v3"), !noalias, "{text}");
+        assert!(
+            text.contains(&format!("%run({marker}v0.objref<@vm>")),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn object_load_store_forwards_noalias_arguments_across_opaque_calls() {
+    // An opaque call reaches a caller's object unless it is `noalias` and
+    // not passed on.
+    for noalias in [false, true] {
+        let marker = if noalias { "noalias " } else { "" };
+        let source = format!(
+            r#"
+target = "x86_64-unknown-native"
+
+declare external %opaque();
+
+func private %f({marker}v0.objref<i64>) -> i64 {{
+    block0:
+        obj.store v0 7.i64;
+        call %opaque;
+        v1.i64 = obj.load v0;
+        return v1;
+}}
+"#
+        );
+        let mut parsed = parse_module(&source).unwrap();
+        let mut pipeline = Pipeline::new();
+        pipeline.add_step(Step::FuncPasses(vec![Pass::ObjectLoadStore]));
+        pipeline.run(&mut parsed.module);
+        let text = ModuleWriter::new(&parsed.module).dump_string();
+        assert_eq!(text.contains("return 7.i64"), noalias, "{text}");
+    }
+}
+
+#[test]
+fn object_load_store_keeps_final_stores_to_noalias_arguments() {
+    // Nothing else reaches a `noalias` argument during the call, but its
+    // caller reads the object afterwards.
+    let source = r#"
+target = "x86_64-unknown-native"
+
+func private %f(noalias v0.objref<i64>) {
+    block0:
+        obj.store v0 7.i64;
+        obj.store v0 8.i64;
+        return;
+}
+"#;
+    let mut parsed = parse_module(source).unwrap();
+    let mut pipeline = Pipeline::new();
+    pipeline.add_step(Step::FuncPasses(vec![Pass::ObjectLoadStore]));
+    pipeline.run(&mut parsed.module);
+    let text = ModuleWriter::new(&parsed.module).dump_string();
+    assert!(text.contains("obj.store v0 8.i64"), "{text}");
+    assert!(!text.contains("obj.store v0 7.i64"), "{text}");
+}

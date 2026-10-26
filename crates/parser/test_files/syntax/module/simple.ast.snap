@@ -203,18 +203,21 @@ Module {
                     ..
                 },
                 params: [
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v0",
-                            ..
-                        },
-                        Type {
-                            kind: Int(
-                                I8,
-                            ),
-                            ..
-                        },
-                    ),
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v0",
+                                ..
+                            },
+                            Type {
+                                kind: Int(
+                                    I8,
+                                ),
+                                ..
+                            },
+                        ),
+                    },
                 ],
                 ret_types: [
                     Type {
@@ -398,117 +401,135 @@ Module {
                     ..
                 },
                 params: [
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v0",
-                            ..
-                        },
-                        Type {
-                            kind: Ptr(
-                                Type {
-                                    kind: Int(
-                                        I8,
-                                    ),
-                                    ..
-                                },
-                            ),
-                            ..
-                        },
-                    ),
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v1",
-                            ..
-                        },
-                        Type {
-                            kind: Array(
-                                Type {
-                                    kind: Int(
-                                        I8,
-                                    ),
-                                    ..
-                                },
-                                2,
-                            ),
-                            ..
-                        },
-                    ),
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v2",
-                            ..
-                        },
-                        Type {
-                            kind: Array(
-                                Type {
-                                    kind: Ptr(
-                                        Type {
-                                            kind: Int(
-                                                I8,
-                                            ),
-                                            ..
-                                        },
-                                    ),
-                                    ..
-                                },
-                                2,
-                            ),
-                            ..
-                        },
-                    ),
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v3",
-                            ..
-                        },
-                        Type {
-                            kind: Array(
-                                Type {
-                                    kind: Array(
-                                        Type {
-                                            kind: Int(
-                                                I8,
-                                            ),
-                                            ..
-                                        },
-                                        2,
-                                    ),
-                                    ..
-                                },
-                                2,
-                            ),
-                            ..
-                        },
-                    ),
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v4",
-                            ..
-                        },
-                        Type {
-                            kind: Named(
-                                "foo",
-                            ),
-                            ..
-                        },
-                    ),
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v5",
-                            ..
-                        },
-                        Type {
-                            kind: Ptr(
-                                Type {
-                                    kind: Named(
-                                        "foo",
-                                    ),
-                                    ..
-                                },
-                            ),
-                            ..
-                        },
-                    ),
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v0",
+                                ..
+                            },
+                            Type {
+                                kind: Ptr(
+                                    Type {
+                                        kind: Int(
+                                            I8,
+                                        ),
+                                        ..
+                                    },
+                                ),
+                                ..
+                            },
+                        ),
+                    },
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v1",
+                                ..
+                            },
+                            Type {
+                                kind: Array(
+                                    Type {
+                                        kind: Int(
+                                            I8,
+                                        ),
+                                        ..
+                                    },
+                                    2,
+                                ),
+                                ..
+                            },
+                        ),
+                    },
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v2",
+                                ..
+                            },
+                            Type {
+                                kind: Array(
+                                    Type {
+                                        kind: Ptr(
+                                            Type {
+                                                kind: Int(
+                                                    I8,
+                                                ),
+                                                ..
+                                            },
+                                        ),
+                                        ..
+                                    },
+                                    2,
+                                ),
+                                ..
+                            },
+                        ),
+                    },
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v3",
+                                ..
+                            },
+                            Type {
+                                kind: Array(
+                                    Type {
+                                        kind: Array(
+                                            Type {
+                                                kind: Int(
+                                                    I8,
+                                                ),
+                                                ..
+                                            },
+                                            2,
+                                        ),
+                                        ..
+                                    },
+                                    2,
+                                ),
+                                ..
+                            },
+                        ),
+                    },
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v4",
+                                ..
+                            },
+                            Type {
+                                kind: Named(
+                                    "foo",
+                                ),
+                                ..
+                            },
+                        ),
+                    },
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v5",
+                                ..
+                            },
+                            Type {
+                                kind: Ptr(
+                                    Type {
+                                        kind: Named(
+                                            "foo",
+                                        ),
+                                        ..
+                                    },
+                                ),
+                                ..
+                            },
+                        ),
+                    },
                 ],
                 ret_types: [],
             },
@@ -548,18 +569,21 @@ Module {
                     ..
                 },
                 params: [
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v0",
-                            ..
-                        },
-                        Type {
-                            kind: Int(
-                                I8,
-                            ),
-                            ..
-                        },
-                    ),
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v0",
+                                ..
+                            },
+                            Type {
+                                kind: Int(
+                                    I8,
+                                ),
+                                ..
+                            },
+                        ),
+                    },
                 ],
                 ret_types: [],
             },
@@ -741,18 +765,21 @@ Module {
                     ..
                 },
                 params: [
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v0",
-                            ..
-                        },
-                        Type {
-                            kind: Int(
-                                I64,
-                            ),
-                            ..
-                        },
-                    ),
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v0",
+                                ..
+                            },
+                            Type {
+                                kind: Int(
+                                    I64,
+                                ),
+                                ..
+                            },
+                        ),
+                    },
                 ],
                 ret_types: [
                     Type {

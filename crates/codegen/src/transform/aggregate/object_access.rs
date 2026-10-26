@@ -92,7 +92,11 @@ impl ObjectAccessFacts {
             .root_slices()
             .keys()
             .copied()
-            .filter(|&root| self.reachability.aliases.is_fresh(RootValue::new(root)))
+            .filter(|&root| {
+                let root = RootValue::new(root);
+                self.reachability.aliases.is_fresh(root)
+                    || self.reachability.aliases.is_noalias(root)
+            })
             .collect();
         if let Some(local_args) = local_args {
             eligible.extend(
@@ -238,6 +242,12 @@ impl ObjectAccessFacts {
 
     pub(crate) fn exposed(&self, root: RootValue) -> bool {
         self.reachability.exposed(root)
+    }
+
+    /// Whether code reads `root` after the function returns: it is exposed
+    /// to other code, or a caller's object, including a `noalias` one.
+    pub(crate) fn observed_after_return(&self, root: RootValue) -> bool {
+        self.exposed(root) || !self.reachability.aliases.is_fresh(root)
     }
 
     pub(crate) fn may_overlap(&self, access: ObjectAccess, target: ObjectSlice) -> bool {

@@ -3273,3 +3273,27 @@ block3:
         }
     }
 }
+
+#[test]
+fn noalias_is_only_valid_on_object_reference_arguments() {
+    let source = |arg: &str| {
+        format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(noalias v0.{arg}) {{
+block0:
+    return;
+}}
+"#
+        )
+    };
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    let valid = parse_module(&source("objref<i256>")).unwrap();
+    assert!(!verify_module(&valid.module, &config).has_errors());
+    let invalid = parse_module(&source("i256")).unwrap();
+    let report = verify_module(&invalid.module, &config);
+    assert!(
+        has_message(&report, "only an object reference argument can be noalias"),
+        "{report}"
+    );
+}

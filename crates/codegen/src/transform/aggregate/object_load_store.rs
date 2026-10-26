@@ -792,7 +792,7 @@ impl ObjectLoadStore {
         let mut live_out_roots = FxHashMap::default();
         for value in accesses.roots().filter(|&value| func.dfg.has_value(value)) {
             if let Some(root) = whole_root_slice_for_value(tracked, value)
-                && accesses.exposed(RootValue::new(root.root))
+                && accesses.observed_after_return(RootValue::new(root.root))
             {
                 live_out_roots.insert(root.root, root.total_leaves);
             }

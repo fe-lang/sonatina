@@ -9,8 +9,8 @@ behavior; it grants neither no-alias nor unchanged-memory semantics.
 
 `object_alias.rs` classifies direct origins independently of optimization
 eligibility. Distinct fresh allocations and incoming-versus-new allocations are
-separate. Different incoming roots may overlap. A missing origin or unknown
-provenance contributor cannot prove separation. Same-base intervals retain their
+separate. Different incoming roots may overlap unless one is `noalias`. A
+missing origin or unknown provenance contributor cannot prove separation. Same-base intervals retain their
 ordinary field precision. Repeating allocation sites do not identify one dynamic
 instance and cannot establish definite overwrite.
 
@@ -34,6 +34,20 @@ Capture updates use strong replacement only for exact covering writes to one
 instance. Aliased, ambiguous, and conditional/call writes preserve old possible
 referents and add new or unknown alternatives. Inactive enum reference storage
 remains possible containment even after a tag changes logical readability.
+
+## Noalias arguments
+
+`func %f(noalias v0.objref<T>, ..)` marks an object argument as LLVM's
+`noalias` does: while `%f` runs, its object is accessed only through
+references derived from `v0`, unless no access writes. The caller guarantees
+it; Fe marks its `mut` and view parameters, which its access rules make
+exclusive or unwritten for the call. A `noalias` root overlaps no other
+root and, until the function publishes it, no external or unknown access,
+so opaque calls and raw stores leave it alone. Object memory analysis tracks
+it like a borrowed local argument, with its contents defined at entry. It is
+still the caller's object: its stores stay live at return. The mark belongs
+to the argument value; a transformation that rebuilds an argument drops it,
+and inlining discards the callee's marks.
 
 ## Consumers and coordinate-query audit
 
