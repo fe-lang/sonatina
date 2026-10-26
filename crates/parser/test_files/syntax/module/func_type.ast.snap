@@ -26,44 +26,47 @@ Module {
                     ..
                 },
                 params: [
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v0",
-                            ..
-                        },
-                        Type {
-                            kind: Ptr(
-                                Type {
-                                    kind: Func {
-                                        args: [
-                                            Type {
-                                                kind: Int(
-                                                    I256,
-                                                ),
-                                                ..
-                                            },
-                                            Type {
-                                                kind: Int(
-                                                    I256,
-                                                ),
-                                                ..
-                                            },
-                                        ],
-                                        ret_tys: [
-                                            Type {
-                                                kind: Int(
-                                                    I32,
-                                                ),
-                                                ..
-                                            },
-                                        ],
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v0",
+                                ..
+                            },
+                            Type {
+                                kind: Ptr(
+                                    Type {
+                                        kind: Func {
+                                            args: [
+                                                Type {
+                                                    kind: Int(
+                                                        I256,
+                                                    ),
+                                                    ..
+                                                },
+                                                Type {
+                                                    kind: Int(
+                                                        I256,
+                                                    ),
+                                                    ..
+                                                },
+                                            ],
+                                            ret_tys: [
+                                                Type {
+                                                    kind: Int(
+                                                        I32,
+                                                    ),
+                                                    ..
+                                                },
+                                            ],
+                                        },
+                                        ..
                                     },
-                                    ..
-                                },
-                            ),
-                            ..
-                        },
-                    ),
+                                ),
+                                ..
+                            },
+                        ),
+                    },
                 ],
                 ret_types: [],
             },
