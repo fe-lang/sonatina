@@ -13,7 +13,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     Function, InstId, Type, ValueId,
     effects::{AccessKind, AccessLoc, MemoryAccess},
-    inst::{cast, control_flow, data, downcast},
+    inst::{cast, control_flow, data, downcast, evm},
     module::ModuleCtx,
 };
 
@@ -198,6 +198,20 @@ impl ObjectReachability {
             changed |= self.expose(&self.references[*mat.object()].clone());
         } else if let Some(mat) = downcast::<&data::ObjMaterializeHeap>(is, data) {
             changed |= self.expose(&self.references[*mat.object()].clone());
+        } else if let Some(from) = downcast::<&cast::PtrToInt>(is, data)
+            .map(|cast| *cast.from())
+            .or_else(|| {
+                downcast::<&cast::Bitcast>(is, data)
+                    .filter(|_| {
+                        func.dfg
+                            .inst_result(inst)
+                            .is_some_and(|result| !bears_reference[result])
+                    })
+                    .map(|cast| *cast.from())
+            })
+        {
+            // An address that becomes an integer may come back as any pointer.
+            changed |= self.expose(&self.references[from].clone());
         } else if let Some(call) = downcast::<&control_flow::Call>(is, data) {
             let summary = summaries.and_then(|summaries| summaries.get(call.callee()));
             for (index, &arg) in call.args().iter().enumerate() {
@@ -303,9 +317,19 @@ impl ObjectReachability {
                         next.unknown |= self.unknown_published;
                     }
                 }
-            } else if downcast::<&data::Mload>(is, data).is_some() {
+            } else if downcast::<&data::Mload>(is, data).is_some()
+                || downcast::<&cast::IntToPtr>(is, data).is_some()
+            {
+                // Raw stores, materialization and conversion to an integer
+                // expose a root, so raw memory and integers reach no other.
                 next.external = true;
                 next.unknown = self.unknown_published;
+            } else if downcast::<&data::MemAllocDynamic>(is, data).is_some()
+                || downcast::<&evm::EvmMalloc>(is, data).is_some()
+            {
+                // Fresh heap memory holds no reference until a raw store
+                // exposes one.
+                next.external = true;
             } else if downcast::<&data::ObjProj>(is, data).is_some()
                 || downcast::<&data::ObjIndex>(is, data).is_some()
                 || downcast::<&data::EnumProj>(is, data).is_some()
