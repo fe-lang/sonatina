@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 1264
 expression: opt_ir_snapshot
 input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 ---
@@ -119,34 +118,34 @@ func private %mix(v0.objref<[i256; 3]>) -> objref<[i256; 3]> {
         return v1;
 
     block20:
-        v62.i256 = phi (v61 block20) (0.i256 block16);
+        v63.i256 = phi (v61 block20) (0.i256 block16);
         v29.i256 = obj.load v28;
         v30.objref<[[i256; 3]; 3]> = obj.alloc [[i256; 3]; 3];
         v31.*[[i256; 3]; 3] = obj.materialize.stack v30;
         v34.i256 = ptr_to_int v31 i256;
         evm_code_copy v34 v32 v33;
         v38.objref<[i256; 3]> = obj.index v30 v55;
-        v42.objref<i256> = obj.index v38 v62;
+        v42.objref<i256> = obj.index v38 v63;
         v43.i256 = obj.load v42;
-        v48.objref<i256> = obj.index v0 v62;
+        v48.objref<i256> = obj.index v0 v63;
         v49.i256 = obj.load v48;
         v52.i256 = evm_mul_mod v43 v49 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v54.i256 = evm_add_mod v29 v52 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         obj.store v28 v54;
-        v61.i256 = add v62 1.i256;
-        v63.i1 = lt v61 3.i256;
-        br v63 block20 block3;
+        v61.i256 = add v63 1.i256;
+        v64.i1 = lt v61 3.i256;
+        br v64 block20 block3;
 }
 
 func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
     block0:
-        v91.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v92.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v93.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v94.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v9.objref<[i256; 3]> = obj.alloc [i256; 3];
         v11.objref<i256> = obj.index v9 0.i256;
-        obj.store v11 v91;
+        obj.store v11 v93;
         v13.objref<i256> = obj.index v9 1.i256;
-        obj.store v13 v92;
+        obj.store v13 v94;
         v15.objref<i256> = obj.index v9 2.i256;
         obj.store v15 0.i256;
         jump block17;
@@ -156,13 +155,13 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
         v66.objref<[i256; 3]> = phi (v9 block0) (v31 block3);
         v65.i256 = phi (0.i256 block0) (v36 block3);
         v29.objref<[i256; 3]> = call %ark v66 v67;
-        v79.objref<i256> = obj.index v29 0.i256;
-        v80.i256 = obj.load v79;
-        v81.objref<i256> = obj.index v29 1.i256;
+        v81.objref<i256> = obj.index v29 0.i256;
         v82.i256 = obj.load v81;
-        v83.objref<i256> = obj.index v29 2.i256;
+        v83.objref<i256> = obj.index v29 1.i256;
         v84.i256 = obj.load v83;
-        v30.objref<[i256; 3]> = call %sigma_full v80 v82 v84;
+        v85.objref<i256> = obj.index v29 2.i256;
+        v86.i256 = obj.load v85;
+        v30.objref<[i256; 3]> = call %sigma_full v82 v84 v86;
         v31.objref<[i256; 3]> = call %mix v30;
         (v33.i256, v34.i1) = uaddo v67 3.i256;
         br v34 block9 block3;
@@ -177,13 +176,13 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
         v60.objref<[i256; 3]> = phi (v31 block3) (v51 block7);
         v59.i256 = phi (0.i256 block3) (v55 block7);
         v49.objref<[i256; 3]> = call %ark v60 v61;
-        v85.objref<i256> = obj.index v49 0.i256;
-        v86.i256 = obj.load v85;
-        v87.objref<i256> = obj.index v49 1.i256;
+        v87.objref<i256> = obj.index v49 0.i256;
         v88.i256 = obj.load v87;
-        v89.objref<i256> = obj.index v49 2.i256;
+        v89.objref<i256> = obj.index v49 1.i256;
         v90.i256 = obj.load v89;
-        v50.objref<[i256; 3]> = call %sigma_full v86 v88 v90;
+        v91.objref<i256> = obj.index v49 2.i256;
+        v92.i256 = obj.load v91;
+        v50.objref<[i256; 3]> = call %sigma_full v88 v90 v92;
         v51.objref<[i256; 3]> = call %mix v50;
         (v52.i256, v53.i1) = uaddo v61 3.i256;
         br v53 block9 block7;

@@ -6,16 +6,16 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 503 bytes
-  total: 503 bytes
+  section runtime: 500 bytes
+  total: 500 bytes
 
 functions:
   mem: global_dyn_base=0x2e0 arena_base=0x0 scratch_peak_words=23 stable_chain_peak_words=0
-  main_root: ir_blocks=33 ir_insts=92 vcode_ops=288 fixups=26 imm_bytes=73
+  main_root: ir_blocks=33 ir_insts=91 vcode_ops=285 fixups=26 imm_bytes=72
     mem: scratch_words=23 stable_words=0 stable_mode=None entry_abs_words=23 abs_words_end=23
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=22444 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1444
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=22435 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1435
 
 
 --------------- DEBUG ---------------
@@ -294,7 +294,7 @@ main_root:
     PUSH1 block36  // br v71 block36 block30;
     JUMPI
   block30:
-    PUSH1 0x1 (1)  // jump block18;
+    PUSH2 0x200 (512)  // jump block18;
     PUSH1 block18
     JUMP
   block36:
@@ -312,31 +312,28 @@ main_root:
     PUSH3 0x1fe00 (130560)
     NOT
     AND
-    SWAP1  // v95.i256 = shl 9.i256 v2;
-    PUSH1 0x9 (9)
-    SHL
-    OR  // v96.i256 = or v93 v95;
-    PUSH5 0x1fffe0000 (8589803520)  // v98.i256 = and v96 -8589803521.i256;
+    OR  // v94.i256 = or v93 v2;
+    PUSH5 0x1fffe0000 (8589803520)  // v96.i256 = and v94 -8589803521.i256;
     NOT
     AND
-    PUSH3 0x40000 (262144)  // v100.i256 = or v98 262144.i256;
+    PUSH3 0x40000 (262144)  // v98.i256 = or v96 262144.i256;
     OR
-    PUSH1 0x1 (1)  // v102.i256 = and v100 -2.i256;
+    PUSH1 0x1 (1)  // v100.i256 = and v98 -2.i256;
     NOT
     AND
-    PUSH1 0x1 (1)  // v103.i256 = or v102 1.i256;
+    PUSH1 0x1 (1)  // v101.i256 = or v100 1.i256;
     OR
-    PUSH1 0x60 (96)  // evm_mstore 96.i256 v103;
+    PUSH1 0x60 (96)  // evm_mstore 96.i256 v101;
     MSTORE
   block32:
     JUMPDEST
-    PUSH1 0x60 (96)  // v106.i256 = evm_mload 96.i256;
+    PUSH1 0x60 (96)  // v104.i256 = evm_mload 96.i256;
     MLOAD
-    PUSH1 0x1 (1)  // v107.i256 = shr 1.i256 v106;
+    PUSH1 0x1 (1)  // v105.i256 = shr 1.i256 v104;
     SHR
-    PUSH1 0xf (15)  // v108.i256 = and v107 15.i256;
+    PUSH1 0xf (15)  // v106.i256 = and v105 15.i256;
     AND
-    PUSH0  // evm_mstore v3 v108;
+    PUSH0  // evm_mstore v3 v106;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v3 32.i256;
     PUSH0

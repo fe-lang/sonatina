@@ -3,52 +3,52 @@
 
 target = "evm-ethereum-london"
 
-# check:  block0:
-# nextln:     jump block2;
+# check:     block0:
+# nextln:         jump block2;
 # nextln:
-# nextln: block2:
-# nextln:     v2.i32 = phi (v10 block17) (0.i32 block0) (0.i32 block19);
-# nextln:     v3.i1 = le v2 1.i32;
-# nextln:     br v3 block3 block19;
+# nextln:     block2:
+# nextln:         v2.i32 = phi (v10 block17) (0.i32 block0) (0.i32 block19);
+# nextln:         v3.i1 = le v2 1.i32;
+# nextln:         br v3 block3 block19;
 # nextln:
-# nextln: block3:
-# nextln:     br v0 block16 block6;
+# nextln:     block3:
+# nextln:         br v0 block16 block6;
 # nextln:
-# nextln: block6:
-# nextln:     br v1 block14 block9;
+# nextln:     block6:
+# nextln:         br v1 block14 block9;
 # nextln:
-# nextln: block9:
-# nextln:     v4.i64 = phi (v6 block10) (0.i64 block6);
-# nextln:     v5.i1 = le v4 1.i64;
-# nextln:     br v5 block10 block14;
+# nextln:     block9:
+# nextln:         v4.i64 = phi (v6 block10) (0.i64 block6);
+# nextln:         v5.i1 = le v4 1.i64;
+# nextln:         br v5 block10 block14;
 # nextln:
-# nextln: block10:
-# nextln:     v6.i64 = add v4 1.i64;
-# nextln:     jump block9;
+# nextln:     block10:
+# nextln:         v6.i64 = add v4 1.i64;
+# nextln:         jump block9;
 # nextln:
-# nextln: block14:
-# nextln:     v7.i32 = phi (1.i32 block9) (9.i32 block6);
-# nextln:     br_table v7 block16 (0.i32 block6) (9.i32 block15);
+# nextln:     block14:
+# nextln:         v7.i32 = phi (1.i32 block9) (9.i32 block6);
+# nextln:         br_table v7 block16 (0.i32 block6) (9.i32 block15);
 # nextln:
-# nextln: block15:
-# nextln:     jump block16;
+# nextln:     block15:
+# nextln:         jump block16;
 # nextln:
-# nextln: block16:
-# nextln:     v8.i32 = phi (0.i32 block15) (v7 block14) (1.i32 block3);
-# nextln:     v9.i1 = eq v8 0.i32;
-# nextln:     br v9 block17 block19;
+# nextln:     block16:
+# nextln:         v23.i1 = phi (0.i1 block3) (0.i1 block14) (1.i1 block15);
+# nextln:         v8.i32 = phi (0.i32 block15) (v7 block14) (1.i32 block3);
+# nextln:         br v23 block17 block19;
 # nextln:
-# nextln: block17:
-# nextln:     v10.i32 = add v2 1.i32;
-# nextln:     jump block2;
+# nextln:     block17:
+# nextln:         v10.i32 = add v2 1.i32;
+# nextln:         jump block2;
 # nextln:
-# nextln: block19:
-# nextln:     v11.i32 = phi (v8 block16) (0.i32 block2);
-# nextln:     v12.i1 = eq v11 0.i32;
-# nextln:     br v12 block2 block20;
+# nextln:     block19:
+# nextln:         v24.i1 = phi (v23 block16) (1.i1 block2);
+# nextln:         v11.i32 = phi (v8 block16) (0.i32 block2);
+# nextln:         br v24 block2 block20;
 # nextln:
-# nextln: block20:
-# nextln:     return;
+# nextln:     block20:
+# nextln:         return;
 func public %llvm_d(v0.i1, v1.i1) -> unit {
     block0:
         jump block1;

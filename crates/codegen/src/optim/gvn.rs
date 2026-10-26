@@ -590,8 +590,8 @@ impl GvnSolver {
         };
 
         // If insn has a side effect, create new class if the value still belongs to
-        // `INITIAL_CLASS`.
-        if !func.dfg.has_value_semantics(insn) && object_read.is_none() {
+        // `INITIAL_CLASS`. A phi has none: its class follows its inputs.
+        if func.dfg.effect_summary(insn).has_effect() && object_read.is_none() {
             if self.value_class(inst_result) == INITIAL_CLASS {
                 let class = self.make_class(gvn_insn, None);
                 let move_result = self.assign_class(inst_result, class);
@@ -2400,7 +2400,7 @@ impl<'a> RedundantCodeRemover<'a> {
 
                     let mut changed = false;
                     let mut aliased_results = FxHashSet::default();
-                    if func.dfg.has_value_semantics(insn)
+                    if !func.dfg.effect_summary(insn).has_effect()
                         || self.inst_is_eliminable_object_read(func, object_memory, insn)
                     {
                         for &inst_result in &inst_results {
