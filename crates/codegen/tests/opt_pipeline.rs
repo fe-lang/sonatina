@@ -91,6 +91,81 @@ func public %entry(v0.*i64) {{
 }
 
 #[test]
+fn native_pipelines_inline_helpers_with_slow_path_calls() {
+    // Like a vector push: a bounds check, an out-of-line grow and a fault
+    // flag, called from many sites. The call does not make it cold.
+    let calls: String = (0..8)
+        .map(|i| {
+            let value = i + 2;
+            format!("        v{value}.i64 = add v1 {i}.i64;\n        call %push v0 v{value};\n")
+        })
+        .collect();
+    // The stored value's computation sizes the helper between the native
+    // cold threshold and the native threshold.
+    let mix: String = (100..110)
+        .map(|v| format!("        v{}.i64 = add v{v} 3.i64;\n", v + 1))
+        .collect();
+    let source = format!(
+        r#"
+target = "x86_64-unknown-native"
+
+declare external %grow(*i64) -> i1;
+
+func private %push(v0.*i64, v1.i64) {{
+    block0:
+        v2.i64 = mload v0 i64;
+        v3.i1 = lt v2 1024.i64;
+        br v3 block2 block1;
+    block1:
+        mstore v0 11.i64 i64;
+        return;
+    block2:
+        v4.i64 = ptr_to_int v0 i64;
+        v5.i64 = add v4 8.i64;
+        v6.*i64 = int_to_ptr v5 *i64;
+        v7.i64 = mload v6 i64;
+        v8.i1 = eq v2 v7;
+        br v8 block3 block5;
+    block3:
+        v9.i1 = call %grow v0;
+        br v9 block5 block4;
+    block4:
+        mstore v0 21.i64 i64;
+        return;
+    block5:
+        v100.i64 = add v1 1.i64;
+{mix}        v10.i64 = add v4 16.i64;
+        v11.*i64 = int_to_ptr v10 *i64;
+        v12.i64 = mload v11 i64;
+        v13.i64 = mload v0 i64;
+        v14.i64 = shl 3.i64 v13;
+        v15.i64 = add v12 v14;
+        v16.*i64 = int_to_ptr v15 *i64;
+        mstore v16 v110 i64;
+        v17.i64 = add v13 1.i64;
+        mstore v0 v17 i64;
+        return;
+}}
+
+func public %entry(v0.*i64, v1.i64) {{
+    block0:
+{calls}        return;
+}}
+"#
+    );
+    for level in [OptLevel::O1, OptLevel::O2] {
+        let mut parsed = parse_module(&source).unwrap();
+        Pipeline::native(level).run(&mut parsed.module);
+        verify_module_or_panic(
+            &parsed.module,
+            &VerifierConfig::for_level(VerificationLevel::Full),
+        );
+        let native = ModuleWriter::new(&parsed.module).dump_string();
+        assert!(!native.contains("call %push"), "{level:?}\n{native}");
+    }
+}
+
+#[test]
 fn optimized_ir_roundtrips_with_debug_names_after_inlining() {
     let source = r#"
 target = "evm-ethereum-osaka"
