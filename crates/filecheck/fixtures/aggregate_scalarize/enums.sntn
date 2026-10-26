@@ -61,3 +61,28 @@ func public %struct_payload(v0.i1, v1.i64) -> i64 {
     block5:
         return 0.i64;
 }
+
+# An assertion that only proved an extraction goes with the enum.
+# sameln: func public %asserted_variant(v0.i1, v1.i256) -> i256 {
+# not:         enum.assert_variant
+# not:         enum.make
+func public %asserted_variant(v0.i1, v1.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+    block1:
+        v2.@res = enum.make @res #variant_1 v1;
+        jump block3;
+    block2:
+        v3.@res = enum.make @res #variant_0 undef.@unit;
+        jump block3;
+    block3:
+        v4.@res = phi (v2 block1) (v3 block2);
+        v5.enumtag(@res) = enum.tag v4;
+        br_table v5 (1.enumtag(@res) block4) (0.enumtag(@res) block5);
+    block4:
+        enum.assert_variant v4 #variant_1;
+        v6.i256 = enum.extract v4 #variant_1 0.i8;
+        return v6;
+    block5:
+        return 0.i256;
+}
