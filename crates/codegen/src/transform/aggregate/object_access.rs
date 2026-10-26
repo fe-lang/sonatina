@@ -863,6 +863,38 @@ block0:
     }
 
     #[test]
+    fn calls_into_helpers_that_reach_opaque_code_spare_unescaped_arguments() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+declare external %opaque();
+func private %helper(v0.objref<i256>) -> i256 {
+block0:
+    v1.i256 = obj.load v0;
+    call %opaque;
+    return v1;
+}
+func private %f() {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    obj.store v0 11.i256;
+    v1.i256 = call %helper v0;
+    return;
+}
+"#,
+            |_, facts, summaries| {
+                let helper = summaries
+                    .values()
+                    .find(|summary| summary.arg_effects.len() == 1)
+                    .expect("helper summary");
+                assert!(helper.non_arg.external.publishes);
+                assert!(!helper.arg_effects[0].escapes);
+                assert!(!facts.exposed(RootValue::new(ValueId::from_u32(0))));
+            },
+        );
+    }
+
+    #[test]
     fn opaque_zero_argument_effects_spare_unpublished_fresh_roots() {
         check(
             r#"
