@@ -38,7 +38,7 @@ use super::{
     shape,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct RootCaptureSource {
     dst_slice: shape::AggregateSlice,
     src_root: Option<RootValue>,
@@ -52,7 +52,7 @@ impl RootCapturePayload for RootCaptureSource {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct RootValue(ValueId);
 
 impl RootValue {
@@ -75,7 +75,7 @@ impl From<RootValue> for ValueId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct Projection {
     pub root_value: RootValue,
     pub slice: shape::AggregateSlice,

@@ -1,7 +1,7 @@
 use std::hash::Hash;
 
 use cranelift_entity::SecondaryMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, Function, InstId,
     cfg::ControlFlowGraph,
@@ -18,7 +18,7 @@ use super::{
 
 pub(crate) type RootCaptureMap<C> = FxHashMap<RootValue, Vec<C>>;
 
-pub(crate) trait RootCapturePayload: Copy + Eq + Hash {
+pub(crate) trait RootCapturePayload: Copy + Ord + Hash {
     fn dst_slice(self) -> shape::AggregateSlice;
 }
 
@@ -77,7 +77,7 @@ pub(crate) fn compute_capture_states_for_blocks<C: RootCapturePayload>(
                     merge_root_capture_maps(&mut entry_captures, &block_exit_captures[pred]);
                 }
             }
-            dedup_root_capture_map(&mut entry_captures);
+            canonicalize_root_capture_map(&mut entry_captures);
 
             if block_entry_captures[block] != entry_captures {
                 block_entry_captures[block] = entry_captures.clone();
@@ -88,7 +88,7 @@ pub(crate) fn compute_capture_states_for_blocks<C: RootCapturePayload>(
             for inst in function.layout.iter_inst(block) {
                 transfer_inst(inst, &mut exit_captures);
             }
-            dedup_root_capture_map(&mut exit_captures);
+            canonicalize_root_capture_map(&mut exit_captures);
 
             if block_exit_captures[block] != exit_captures {
                 block_exit_captures[block] = exit_captures;
@@ -107,7 +107,7 @@ pub(crate) fn compute_capture_states_for_blocks<C: RootCapturePayload>(
             merge_root_capture_maps(&mut exit_root_captures, &block_exit_captures[block]);
         }
     }
-    dedup_root_capture_map(&mut exit_root_captures);
+    canonicalize_root_capture_map(&mut exit_root_captures);
 
     (block_entry_captures, exit_root_captures)
 }
@@ -130,10 +130,12 @@ pub(crate) fn merge_root_capture_maps<C: RootCapturePayload>(
     changed
 }
 
-pub(crate) fn dedup_root_capture_map<C: RootCapturePayload>(root_captures: &mut RootCaptureMap<C>) {
+/// Sorts and dedups each root's captures. The block fixpoint compares maps,
+/// so a capture set must not compare unequal to itself in another order.
+fn canonicalize_root_capture_map<C: RootCapturePayload>(root_captures: &mut RootCaptureMap<C>) {
     for captures in root_captures.values_mut() {
-        let mut seen = FxHashSet::default();
-        captures.retain(|capture| seen.insert(*capture));
+        captures.sort_unstable();
+        captures.dedup();
     }
 }
 
@@ -196,4 +198,72 @@ pub(crate) fn slices_overlap_relative(
 ) -> bool {
     lhs.first_leaf < rhs.first_leaf + rhs.leaf_count
         && rhs.first_leaf < lhs.first_leaf + lhs.leaf_count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonatina_ir::{Type, ValueId};
+    use sonatina_parser::parse_module;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    struct Capture(u32);
+
+    impl RootCapturePayload for Capture {
+        fn dst_slice(self) -> shape::AggregateSlice {
+            shape::AggregateSlice {
+                ty: Type::I256,
+                first_leaf: 0,
+                leaf_count: 1,
+            }
+        }
+    }
+
+    #[test]
+    fn capture_fixpoint_compares_capture_sets() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.i1) {
+block0:
+    jump block1;
+block1:
+    br v0 block2 block3;
+block2:
+    jump block1;
+block3:
+    return;
+}
+"#,
+        )
+        .unwrap()
+        .module;
+        module.func_store.view(module.funcs()[0], |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+            let mut reachable = SecondaryMap::default();
+            for block in function.layout.iter_block() {
+                reachable[block] = true;
+            }
+            let blocks: Vec<_> = function.layout.iter_block().collect();
+            let root = RootValue::new(ValueId::from_u32(0));
+            // The loop body finds two captures and passes them on in the
+            // other order than it received them, which changes no set.
+            let (entries, _) = compute_capture_states_for_blocks(
+                function,
+                &cfg,
+                &reachable,
+                &RootCaptureMap::default(),
+                |inst, captures| {
+                    if function.layout.inst_block(inst) == blocks[2] {
+                        captures
+                            .entry(root)
+                            .or_insert_with(|| vec![Capture(0), Capture(1)])
+                            .reverse();
+                    }
+                },
+            );
+            assert_eq!(entries[blocks[1]][&root], [Capture(0), Capture(1)]);
+        });
+    }
 }
