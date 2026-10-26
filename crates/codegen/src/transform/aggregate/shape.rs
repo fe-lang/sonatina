@@ -8,8 +8,10 @@ use sonatina_ir::{
     types::{CompoundType, EnumData, EnumVariantRef, TypeStore},
 };
 
-// References embedded in SSA aggregates have no object slice/capture identity.
-// Classify by type so arguments, phi results and call returns share the boundary.
+// Object references embedded in SSA aggregates have no object slice/capture
+// identity. Classify by type so arguments, phi results and call returns share
+// the boundary. A raw pointer publishes what it reaches when it enters an
+// aggregate, so it does not make one a reference aggregate.
 pub(crate) fn is_reference_aggregate(module: &ModuleCtx, ty: Type) -> bool {
     module.with_ty_store(|types| {
         if !matches!(
@@ -25,9 +27,7 @@ pub(crate) fn is_reference_aggregate(module: &ModuleCtx, ty: Type) -> bool {
                 continue;
             }
             match compound_ty(types, ty) {
-                Some(
-                    CompoundType::ObjRef(_) | CompoundType::Ptr(_) | CompoundType::ConstRef(_),
-                ) => {
+                Some(CompoundType::ObjRef(_) | CompoundType::ConstRef(_)) => {
                     return true;
                 }
                 Some(CompoundType::Array { elem, len }) if *len != 0 => pending.push(*elem),

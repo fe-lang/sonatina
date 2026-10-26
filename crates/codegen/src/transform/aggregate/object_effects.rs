@@ -23,7 +23,7 @@ use super::{
     },
     object_alias::ObjectAliasFacts,
     object_locality::{object_root_stays_local_with_effects, packed_reference_stays_packed},
-    object_reachability::reference_bearing,
+    object_reachability::object_reference_bearing,
     object_tracking::{AggregateFacts, objref_element_ty, single_result_value},
     provenance::{
         CompleteProvenance, CompleteRootSet, MayProvenance, Projection, ProvenanceSnapshot,
@@ -537,7 +537,7 @@ fn compute_summary_for_func(
             let ty = function.dfg.value_ty(value);
             !matches!(ty, Type::Compound(_))
                 || !checked_types.insert(ty)
-                || !reference_bearing(function, value)
+                || !object_reference_bearing(function, value)
         }) {
             return compute_reference_free_summary(function, summaries, layout_cache, summary);
         }
@@ -711,7 +711,7 @@ fn compute_summary_for_func(
                     for &value in ret
                         .args()
                         .iter()
-                        .filter(|&&value| unclassified && reference_bearing(function, value))
+                        .filter(|&&value| unclassified && object_reference_bearing(function, value))
                     {
                         for (src_arg, _) in
                             capture_source_slices(&root_captures, effect_provenance, value, None)
@@ -735,8 +735,12 @@ fn compute_summary_for_func(
                     // not references embedded in SSA aggregate values. Crossing
                     // that boundary lets the reference escape our tracked uses,
                     // as through an aggregate return, a later call or an
-                    // extraction, unless it stays packed.
-                    for &value in values {
+                    // extraction, unless it stays packed. A raw pointer
+                    // publishes what it reaches instead.
+                    for &value in values
+                        .iter()
+                        .filter(|&&value| object_reference_bearing(function, value))
+                    {
                         let sources =
                             capture_source_slices(&root_captures, effect_provenance, value, None);
                         if sources.is_empty()
@@ -888,12 +892,14 @@ fn apply_inst_capture_transfer(
     match capture_relevant_inst(function, inst) {
         Some(CaptureRelevantInst::ObjStore(obj_store)) => {
             kill_capture_access(root_captures, effect_provenance, *obj_store.object(), None);
-            record_capture(
-                root_captures,
-                effect_provenance,
-                *obj_store.object(),
-                *obj_store.value(),
-            );
+            if object_reference_bearing(function, *obj_store.value()) {
+                record_capture(
+                    root_captures,
+                    effect_provenance,
+                    *obj_store.object(),
+                    *obj_store.value(),
+                );
+            }
         }
         Some(CaptureRelevantInst::EnumSetTag(enum_set_tag)) => {
             kill_capture_access(
@@ -1505,7 +1511,7 @@ fn record_enum_variant_captures(
     variant: sonatina_ir::types::EnumVariantRef,
 ) {
     for (field_idx, &value) in values.iter().enumerate() {
-        if !reference_bearing(function, value) {
+        if !object_reference_bearing(function, value) {
             continue;
         }
         let Some(field_slice) = shape::enum_variant_field_slice(
@@ -1916,7 +1922,7 @@ fn record_unmapped_publication(
         return;
     }
     for &value in values {
-        if reference_bearing(function, value) {
+        if object_reference_bearing(function, value) {
             summary.non_arg.unknown.publishes = true;
             for (src_arg, _) in capture_source_slices(root_captures, capture_ctx, value, None) {
                 summary.arg_effects[src_arg].escapes = true;
@@ -2099,11 +2105,12 @@ mod tests {
 
     #[test]
     fn reference_aggregate_formals_require_alias_barriers() {
+        // A raw pointer publishes what it reaches when it enters an aggregate.
         for (ty, barrier) in [
             ("@Wrapper", true),
             ("@Choice", true),
             ("[@Wrapper; 2]", true),
-            ("@Pointers", true),
+            ("@Pointers", false),
             ("@Words", false),
             ("[@Wrapper; 0]", false),
         ] {
@@ -2147,6 +2154,33 @@ block0:
                 }
             }
         }
+    }
+
+    #[test]
+    fn raw_pointer_fields_keep_their_holder_local() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Buffer = { *i8, i256 };
+declare external %release(*i8);
+func private %grow(v0.objref<@Buffer>) {
+block0:
+    v1.objref<*i8> = obj.proj v0 0.i256;
+    v2.*i8 = obj.load v1;
+    call %release v2;
+    v3.*i8 = mem.alloc_dynamic 64.i256;
+    obj.store v1 v3;
+    return;
+}
+"#,
+        );
+        let summaries = compute_object_effect_summaries(&module);
+        let summary = &summaries[&lookup_func(&module, "grow")];
+        // Neither the old buffer passed on nor the new one stored carries a
+        // reference to the holder's contents.
+        assert!(summary.captures.is_empty(), "{:?}", summary.captures);
+        assert!(!summary.arg_effects[0].escapes);
+        assert!(summary.arg_effects[0].local_only);
     }
 
     #[test]

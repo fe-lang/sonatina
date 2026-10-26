@@ -20,10 +20,21 @@ are excluded, inactive, or blocked in a particular optimization. Accesses are
 exact projections, whole roots, external memory, or unknown memory. Publication
 and materialization close transitively over stored references and expose the
 whole allocation. External effects spare unrelated unpublished allocations;
-unresolved local origins use the stronger unknown domain. Materialization, a
-raw store of a pointer and its conversion to an integer each publish what the
-pointer reaches, so a pointer from `int_to_ptr`, raw memory, or a heap
-allocation is external: it reaches only published objects.
+unresolved local origins use the stronger unknown domain.
+
+## Raw pointers
+
+A raw pointer carries roots only through SSA: from an `alloca` or
+`obj.materialize.stack` through `gep`, `bitcast` and `phi`. Storing it in an
+object or raw memory, putting it in an aggregate, passing it to a call,
+returning it, or converting it to an integer publishes what it reaches, as
+materialization publishes the object. Every other raw pointer (a load, an
+extraction, an argument, a call result, a heap allocation, `int_to_ptr`) is
+external: it reaches only published objects. Captures and argument escapes
+therefore track object references alone; a raw pointer field costs a holder
+nothing, and aggregates of raw pointers are not reference aggregates. Within
+provenance, a raw pointer without local roots stays a possibly unknown
+contributor, so joins and completeness proofs remain conservative.
 
 Instruction effects distinguish may-read, may-write, definite physical overwrite,
 initialization sources, capture, logical unreadability, and variant assumptions.
