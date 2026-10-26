@@ -20,7 +20,10 @@ are excluded, inactive, or blocked in a particular optimization. Accesses are
 exact projections, whole roots, external memory, or unknown memory. Publication
 and materialization close transitively over stored references and expose the
 whole allocation. External effects spare unrelated unpublished allocations;
-unresolved local origins use the stronger unknown domain.
+unresolved local origins use the stronger unknown domain. Materialization, a
+raw store of a pointer and its conversion to an integer each publish what the
+pointer reaches, so a pointer from `int_to_ptr`, raw memory, or a heap
+allocation is external: it reaches only published objects.
 
 Instruction effects distinguish may-read, may-write, definite physical overwrite,
 initialization sources, capture, logical unreadability, and variant assumptions.

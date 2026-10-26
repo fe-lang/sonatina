@@ -686,6 +686,106 @@ block0:
     }
 
     #[test]
+    fn opaque_calls_with_heap_and_integer_pointers_spare_unpublished_fresh_roots() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+declare external %release(*i8);
+func private %f(v0.i256) {
+block0:
+    v1.objref<i256> = obj.alloc i256;
+    obj.store v1 11.i256;
+    v2.*i8 = mem.alloc_dynamic 64.i256;
+    call %release v2;
+    v3.*i8 = evm_malloc 32.i256;
+    call %release v3;
+    v4.*i8 = int_to_ptr v0 *i8;
+    call %release v4;
+    return;
+}
+"#,
+            |func, facts, summaries| {
+                assert!(!facts.exposed(RootValue::new(ValueId::from_u32(1))));
+                for call in func
+                    .layout
+                    .iter_all_insts()
+                    .filter(|&inst| func.dfg.call_info(inst).is_some())
+                {
+                    let effects = facts.effects(func, call, Some(summaries));
+                    for accesses in [&effects.reads, &effects.writes] {
+                        assert!(
+                            !accesses
+                                .iter()
+                                .any(|&access| facts.may_overlap(access, location(facts, 1)))
+                        );
+                    }
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn pointers_converted_to_integers_expose_their_roots() {
+        for convert in ["ptr_to_int v0 i256", "bitcast v0 i256"] {
+            check(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+declare external %opaque(*i256);
+func private %f() {{
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = {convert};
+    v2.*i256 = int_to_ptr v1 *i256;
+    call %opaque v2;
+    return;
+}}
+"#
+                ),
+                |_, facts, _| {
+                    assert!(
+                        facts.exposed(RootValue::new(ValueId::from_u32(0))),
+                        "{convert}"
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn integer_pointers_reach_materialized_roots() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f() {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    v1.objref<i256> = obj.alloc i256;
+    v2.*i256 = obj.materialize.stack v0;
+    v3.i256 = ptr_to_int v2 i256;
+    v4.*i256 = int_to_ptr v3 *i256;
+    mstore v4 11.i256 i256;
+    return;
+}
+"#,
+            |_, facts, _| {
+                let pointer = ValueId::from_u32(4);
+                assert!(!facts.reachability.references[pointer].unknown);
+                assert!(
+                    facts
+                        .reachability
+                        .may_reach(pointer, RootValue::new(ValueId::from_u32(0)))
+                );
+                assert!(
+                    !facts
+                        .reachability
+                        .may_reach(pointer, RootValue::new(ValueId::from_u32(1)))
+                );
+            },
+        );
+    }
+
+    #[test]
     fn opaque_zero_argument_effects_spare_unpublished_fresh_roots() {
         check(
             r#"
