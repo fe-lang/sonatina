@@ -15,6 +15,7 @@ pub mod loop_rotate;
 pub mod loop_strength_reduce;
 pub mod range_branch_simplify;
 pub mod sccp;
+pub mod switch_formation;
 
 use std::{
     fs,

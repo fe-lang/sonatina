@@ -1,5 +1,7 @@
-use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend};
-use sonatina_ir::{I256, Immediate, Type, U256};
+use sonatina_codegen::{
+    Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend, optim::Pipeline,
+};
+use sonatina_ir::{I256, Immediate, Type, U256, ir_writer::ModuleWriter};
 
 use super::{parse_native_module, parse_verified_native_module};
 
@@ -588,4 +590,147 @@ fn br_table_with_few_keys() {
         &[-1],
         &[0, 7, 8, -1, -2, (1 << 64) + 7, 1 << 64],
     );
+}
+
+#[test]
+fn compare_trees_become_switches_with_the_same_results() {
+    // The shape Fe gives an `if`/`else if` chain over one integer: a tree of
+    // blocks that each compare it with a constant.
+    let source = "func public %cost(v0.i16) -> i64 {
+block0:
+    v1.i1 = slt v0 -8.i16;
+    br v1 block20 block1;
+block1:
+    v2.i1 = sgt v0 60.i16;
+    br v2 block20 block2;
+block2:
+    v3.i1 = eq v0 2.i16;
+    br v3 block21 block3;
+block3:
+    v4.i1 = slt v0 4.i16;
+    br v4 block4 block5;
+block5:
+    v5.i1 = sgt v0 7.i16;
+    br v5 block4 block21;
+block4:
+    v6.i1 = eq v0 11.i16;
+    br v6 block21 block6;
+block6:
+    v7.i1 = is_zero v0;
+    br v7 block22 block7;
+block7:
+    v8.i1 = lt v0 24.i16;
+    br v8 block23 block8;
+block8:
+    v9.i1 = sle v0 40.i16;
+    br v9 block24 block25;
+block20:
+    return 99.i64;
+block21:
+    return 5.i64;
+block22:
+    return 1.i64;
+block23:
+    return 3.i64;
+block24:
+    return 4.i64;
+block25:
+    return 6.i64;
+}
+";
+    let cost = |v: i16| -> i64 {
+        if !(-8..=60).contains(&v) {
+            99
+        } else if v == 2 || (4..=7).contains(&v) || v == 11 {
+            5
+        } else if v == 0 {
+            1
+        } else if (v as u16) < 24 {
+            3
+        } else if v <= 40 {
+            4
+        } else {
+            6
+        }
+    };
+
+    let mut optimized = parse_verified_native_module(source);
+    Pipeline::native(OptLevel::O2).run(&mut optimized);
+    let ir = ModuleWriter::new(&optimized).dump_string();
+    assert!(
+        ir.contains("br_table") && !ir.contains(" lt ") && !ir.contains(" slt "),
+        "{ir}"
+    );
+
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let run: unsafe extern "C" fn(i16) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("cost").unwrap()) };
+        for v in i16::MIN..=i16::MAX {
+            assert_eq!(unsafe { run(v) }, cost(v), "{level:?} {v}");
+        }
+    }
+}
+
+#[test]
+fn constant_arms_joined_by_a_phi_become_switches_with_the_same_results() {
+    // A `match` whose arms produce constants: each test branches to one
+    // join, and the join's phi takes the arm's value.
+    let source = "func public %arm(v0.i16) -> i64 {
+block0:
+    v1.i1 = eq v0 1.i16;
+    br v1 block9 block1;
+block1:
+    v2.i1 = eq v0 2.i16;
+    br v2 block9 block2;
+block2:
+    v3.i1 = eq v0 -3.i16;
+    br v3 block9 block3;
+block3:
+    v4.i1 = eq v0 10.i16;
+    br v4 block9 block4;
+block4:
+    v5.i1 = eq v0 4.i16;
+    br v5 block9 block5;
+block5:
+    jump block9;
+block9:
+    v6.i64 = phi (30.i64 block0) (50.i64 block1) (30.i64 block2) (100.i64 block3) (50.i64 block4) (0.i64 block5);
+    return v6;
+}
+";
+    let arm = |v: i16| -> i64 {
+        match v {
+            1 | -3 => 30,
+            2 | 4 => 50,
+            10 => 100,
+            _ => 0,
+        }
+    };
+
+    let mut optimized = parse_verified_native_module(source);
+    Pipeline::native(OptLevel::O2).run(&mut optimized);
+    let ir = ModuleWriter::new(&optimized).dump_string();
+    assert!(ir.contains("br_table") && !ir.contains(" eq "), "{ir}");
+
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let run: unsafe extern "C" fn(i16) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("arm").unwrap()) };
+        for v in i16::MIN..=i16::MAX {
+            assert_eq!(unsafe { run(v) }, arm(v), "{level:?} {v}");
+        }
+    }
 }

@@ -53,6 +53,7 @@ use super::{
     range_branch_simplify::{RangeBranchSimplify, has_conditional_branch},
     scalar_canonicalize::ScalarCanonicalize,
     sccp::SccpSolver,
+    switch_formation::SwitchFormation,
 };
 
 /// A per-function optimization pass.
@@ -99,6 +100,9 @@ pub enum Pass {
     CodeSink,
     /// Complete Global Value Numbering (legacy sparse predicated solver).
     Gvn,
+    /// Turn trees of branches on comparisons of one integer with constants into
+    /// a `br_table` (native pipelines only).
+    SwitchFormation,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
     /// Use after passes that can leave stale user entries
@@ -209,6 +213,11 @@ impl Pass {
             Pass::Gvn => PassInfo {
                 name: "gvn",
                 needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::SwitchFormation => PassInfo {
+                name: "switch_formation",
+                needs_func_behavior: false,
                 invalidates_func_behavior: true,
             },
             Pass::RebuildUsers => PassInfo {
@@ -519,14 +528,17 @@ impl Pipeline {
     ///
     /// O2 runs the speed schedule with an inliner tuned for native code. O1
     /// stops that schedule after its second of four inline rounds, for
-    /// quicker builds. Os is the size pipeline.
+    /// quicker builds. Both end by forming switches from comparison trees.
+    /// Os is the size pipeline.
     pub fn native(level: OptLevel) -> Self {
-        match level {
-            OptLevel::O0 => Self::none(),
+        let mut pipeline = match level {
+            OptLevel::O0 => return Self::none(),
             OptLevel::O1 => Self::optimized(native_inliner_config(), true, false),
-            OptLevel::Os => Self::size(),
+            OptLevel::Os => return Self::size(),
             OptLevel::O2 => Self::optimized(native_inliner_config(), true, true),
-        }
+        };
+        pipeline.add_step(Step::FuncPasses(vec![Pass::SwitchFormation]));
+        pipeline
     }
 
     /// Default optimization pipeline with a speed-oriented ordering.
@@ -900,6 +912,10 @@ fn run_pass(
         Pass::JumpThread => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.jump_thread").entered();
             JumpThread::new().run(func)
+        }
+        Pass::SwitchFormation => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.switch_formation").entered();
+            SwitchFormation::new().run(func)
         }
         Pass::RangeBranchSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.range_branch_simplify").entered();
@@ -2657,8 +2673,12 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 .map(|step| format!("{step:?}"))
                 .collect()
         };
-        let o1 = steps(&Pipeline::native(OptLevel::O1));
-        let o2 = steps(&Pipeline::native(OptLevel::O2));
+        // Both end by forming switches.
+        let switches = format!("{:?}", Step::FuncPasses(vec![Pass::SwitchFormation]));
+        let mut o1 = steps(&Pipeline::native(OptLevel::O1));
+        let mut o2 = steps(&Pipeline::native(OptLevel::O2));
+        assert_eq!(o1.pop(), Some(switches.clone()));
+        assert_eq!(o2.pop(), Some(switches));
         assert_eq!(o2, steps(&Pipeline::speed()));
         assert!(o2.starts_with(&o1));
         let inline_rounds =
