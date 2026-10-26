@@ -72,9 +72,13 @@ impl ObjectReachability {
         for &root in &this.roots {
             let value = root.value();
             this.references[value].roots.insert(root);
+            // A caller's object may hold any reference. Code outside this
+            // function reaches it too, unless it is a `noalias` argument.
             if !this.aliases.is_fresh(root) {
-                this.exposed.insert(root);
                 this.contents.entry(root).or_default().external = true;
+                if !this.aliases.is_noalias(root) {
+                    this.exposed.insert(root);
+                }
             }
         }
         // Whether a value can carry a reference depends only on its type.
@@ -141,7 +145,9 @@ impl ObjectReachability {
     }
 
     pub(crate) fn exposed(&self, root: RootValue) -> bool {
-        self.unknown_published || !self.aliases.is_fresh(root) || self.exposed.contains(&root)
+        self.unknown_published
+            || !(self.aliases.is_fresh(root) || self.aliases.is_noalias(root))
+            || self.exposed.contains(&root)
     }
 
     fn expose(&mut self, references: &References) -> bool {

@@ -19,6 +19,8 @@ pub struct Function {
     pub dfg: DataFlowGraph,
     pub layout: Layout,
     inst_attribution: SecondaryMap<InstId, InstAttribution>,
+    /// Object reference arguments marked `noalias`; see [`Self::is_noalias_arg`].
+    noalias_args: SmallVec<[ValueId; 4]>,
 }
 
 impl Function {
@@ -39,11 +41,28 @@ impl Function {
             dfg,
             layout: Layout::default(),
             inst_attribution: SecondaryMap::new(),
+            noalias_args: SmallVec::new(),
         }
     }
 
     pub fn ctx(&self) -> &ModuleCtx {
         &self.dfg.ctx
+    }
+
+    /// Whether `value` is a `noalias` object reference argument: while the
+    /// function runs, its object is accessed only through references derived
+    /// from it, unless no access writes. Like LLVM's `noalias`, this binds the
+    /// caller; a transformation that rebuilds an argument drops the mark.
+    pub fn is_noalias_arg(&self, value: ValueId) -> bool {
+        self.noalias_args.contains(&value)
+    }
+
+    /// Marks argument `value` `noalias`; see [`Self::is_noalias_arg`].
+    pub fn set_noalias_arg(&mut self, value: ValueId) {
+        debug_assert!(self.arg_values.contains(&value));
+        if !self.noalias_args.contains(&value) {
+            self.noalias_args.push(value);
+        }
     }
 
     pub fn set_inst_frontend_origin(&mut self, inst: InstId, origin: Arc<str>) {

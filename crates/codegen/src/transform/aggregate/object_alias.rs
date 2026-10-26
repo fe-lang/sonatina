@@ -19,8 +19,14 @@ use super::{
 
 #[derive(Clone, Copy, Debug)]
 enum ObjectOrigin {
-    Incoming,
-    Fresh { repeating: bool },
+    /// An object argument. A `noalias` one is reached during the call only
+    /// through this function's own references to it, unless nothing writes.
+    Incoming {
+        noalias: bool,
+    },
+    Fresh {
+        repeating: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -38,7 +44,8 @@ impl ObjectAliasFacts {
         let mut origins = FxHashMap::default();
         for &arg in &func.arg_values {
             if func.dfg.value_ty(arg).is_obj_ref(func.ctx()) {
-                origins.insert(arg, ObjectOrigin::Incoming);
+                let noalias = func.is_noalias_arg(arg);
+                origins.insert(arg, ObjectOrigin::Incoming { noalias });
             }
         }
         // Only blocks with a fresh origin need their cycle membership.
@@ -79,6 +86,16 @@ impl ObjectAliasFacts {
         )
     }
 
+    /// Whether `root` is a `noalias` argument.
+    pub(crate) fn is_noalias(&self, root: RootValue) -> bool {
+        matches!(
+            self.origins.get(&root.value()),
+            Some(ObjectOrigin::Incoming { noalias: true })
+        )
+    }
+
+    /// A `noalias` argument overlaps no other root: if another reference did
+    /// reach its object, neither would write it during the call.
     pub(crate) fn roots_may_overlap(&self, lhs: RootValue, rhs: RootValue) -> bool {
         if lhs == rhs {
             return true;
@@ -90,11 +107,12 @@ impl ObjectAliasFacts {
             ),
             (
                 Some(ObjectOrigin::Fresh { .. }),
-                Some(ObjectOrigin::Fresh { .. } | ObjectOrigin::Incoming)
+                Some(ObjectOrigin::Fresh { .. } | ObjectOrigin::Incoming { .. })
             ) | (
-                Some(ObjectOrigin::Incoming),
+                Some(ObjectOrigin::Incoming { .. }),
                 Some(ObjectOrigin::Fresh { .. })
-            )
+            ) | (Some(ObjectOrigin::Incoming { noalias: true }), Some(_))
+                | (Some(_), Some(ObjectOrigin::Incoming { noalias: true }))
         )
     }
 
@@ -109,7 +127,7 @@ impl ObjectAliasFacts {
     pub(crate) fn single_instance(&self, root: RootValue) -> bool {
         matches!(
             self.origins.get(&root.value()),
-            Some(ObjectOrigin::Incoming | ObjectOrigin::Fresh { repeating: false })
+            Some(ObjectOrigin::Incoming { .. } | ObjectOrigin::Fresh { repeating: false })
         )
     }
 

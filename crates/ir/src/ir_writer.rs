@@ -446,13 +446,15 @@ impl IrWrite<FuncWriteCtx<'_>> for FunctionSignature {
             write!(w, " %{}(", sig.name())?;
             io::Result::Ok(())
         })?;
-        let arg_values: SmallVec<[ValueWithTy; 8]> = ctx
-            .func
-            .arg_values
-            .iter()
-            .map(|value| ValueWithTy(*value))
-            .collect();
-        arg_values.write_with_delim(w, ", ", ctx)?;
+        for (idx, &value) in ctx.func.arg_values.iter().enumerate() {
+            if idx > 0 {
+                write!(w, ", ")?;
+            }
+            if ctx.func.is_noalias_arg(value) {
+                write!(w, "noalias ")?;
+            }
+            ValueWithTy(value).write(w, ctx)?;
+        }
         write!(w, ")")?;
 
         m_ctx.func_sig(func_ref, |sig| match sig.ret_tys() {

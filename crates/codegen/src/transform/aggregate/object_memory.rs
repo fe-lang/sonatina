@@ -487,15 +487,14 @@ fn initial_state(
         return state;
     }
 
-    let Some(local_object_args) = local_object_args else {
-        return state;
-    };
-
-    for (&idx, info) in local_object_args {
-        let Some(init) = info.init(func, idx) else {
-            continue;
-        };
-        let Some(&root) = func.arg_values.get(idx) else {
+    // A `noalias` argument starts with its caller's contents, as a borrowed
+    // local argument does.
+    for (idx, &root) in func.arg_values.iter().enumerate() {
+        let local_init = local_object_args
+            .and_then(|args| args.get(&idx))
+            .and_then(|info| info.init(func, idx));
+        let Some(init) = local_init.or(func.is_noalias_arg(root).then_some(RootInit::LoadLiveIn))
+        else {
             continue;
         };
         let Some(root_slice) = whole_root_slice_for_value(tracked, root) else {

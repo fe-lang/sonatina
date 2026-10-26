@@ -64,6 +64,19 @@ impl FunctionVerifier<'_> {
                             .with_note(format!("arg index {index}")),
                         );
                     }
+                    if self.func.is_noalias_arg(*value) && !ty.is_obj_ref(self.ctx) {
+                        self.emit(
+                            Diagnostic::error(
+                                DiagnosticCode::InvalidSignature,
+                                "only an object reference argument can be noalias",
+                                Location::Value {
+                                    func: self.func_ref,
+                                    value: *value,
+                                },
+                            )
+                            .with_note(format!("arg index {index}")),
+                        );
+                    }
                     if has_by_value_function_type_in_signature(self.ctx, *ty) {
                         self.emit(
                             Diagnostic::error(
