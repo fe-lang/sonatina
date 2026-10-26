@@ -70,7 +70,7 @@ pub(crate) struct NonArgObjectEffects {
     pub unknown: ObjectMayEffects,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum ObjectCaptureDestination {
     Arg {
         index: usize,
@@ -81,14 +81,14 @@ pub(crate) enum ObjectCaptureDestination {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ObjectCaptureEffect {
     pub dst: ObjectCaptureDestination,
     pub src_arg: usize,
     pub src_slice: shape::AggregateSlice,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct RootCaptureEffect {
     dst_slice: shape::AggregateSlice,
     /// A target the slice may reach directly: a stored reference's target, or
@@ -784,7 +784,7 @@ fn compute_summary_for_func(
             effect_provenance,
             &return_analysis.returned_fresh_slices,
         );
-        dedup_capture_effects(&mut summary.captures);
+        canonicalize_capture_effects(&mut summary.captures);
         summary.ret_effect = return_analysis.ret_effect;
         for idx in 0..summary.arg_effects.len() {
             summary.arg_effects[idx].local_only = !summary.arg_effects[idx]
@@ -1744,9 +1744,11 @@ fn push_capture_effect(summary: &mut ObjectEffectSummary, capture: ObjectCapture
     summary.captures.push(capture);
 }
 
-fn dedup_capture_effects(captures: &mut Vec<ObjectCaptureEffect>) {
-    let mut seen = FxHashSet::default();
-    captures.retain(|capture| seen.insert(*capture));
+/// Sorts and dedups `captures`, so the effect SCC fixpoint compares capture
+/// sets rather than the order a pass found them in.
+fn canonicalize_capture_effects(captures: &mut Vec<ObjectCaptureEffect>) {
+    captures.sort_unstable();
+    captures.dedup();
 }
 
 fn map_into_slice_set(
