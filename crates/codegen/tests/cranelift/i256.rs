@@ -212,7 +212,6 @@ fn i256_arithmetic_matches_reference() {
 fn i256_comparisons_with_one_limb_constants_match_reference() {
     let values = operands();
     let cases = pairs(&values, &[U256::zero()]);
-    type Compare = (&'static str, fn(U256, U256) -> bool);
     let compares: [Compare; 4] = [
         ("lt", |a, b| a < b),
         ("gt", |a, b| a > b),
@@ -239,6 +238,35 @@ fn i256_comparisons_with_one_limb_constants_match_reference() {
                 (U256::zero(), expected(constant, a))
             });
         }
+    }
+}
+
+/// An unsigned comparison's name and its reference.
+type Compare = (&'static str, fn(U256, U256) -> bool);
+
+#[test]
+fn i256_comparisons_with_extended_words_match_reference() {
+    let values = operands();
+    let cases = pairs(&values, &values);
+    let compares: [Compare; 4] = [
+        ("lt", |a, b| a < b),
+        ("gt", |a, b| a > b),
+        ("le", |a, b| a <= b),
+        ("ge", |a, b| a >= b),
+    ];
+    let low_word = |value: U256| value & U256::from(u64::MAX);
+    for (op, expected) in compares {
+        let body = |lhs: &str, rhs: &str| {
+            format!(
+                "    v8.i64 = trunc v5 i64;\n    v9.i256 = zext v8 i256;\n    v7.i1 = {op} {lhs} {rhs};\n    mstore v3 0.i256 i256;\n    v10.i8 = zext v7 i8;\n    return v10;"
+            )
+        };
+        check(&body("v4", "v9"), &cases, |[a, b, _]| {
+            (U256::zero(), expected(a, low_word(b)))
+        });
+        check(&body("v9", "v4"), &cases, |[a, b, _]| {
+            (U256::zero(), expected(low_word(b), a))
+        });
     }
 }
 
