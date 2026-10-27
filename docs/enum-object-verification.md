@@ -149,7 +149,7 @@ An unsupported producer yields unknown local provenance, not an empty view.
 | `enum.tag`, `enum.is_variant`, `enum.assert_variant` | Observe/refine immutable value state. |
 | `phi` | Substitute every incoming value on its predecessor edge before merging. |
 | `const.ref`, `const.proj`, `const.index`, `const.load` | Transport typed constant shapes; do not fabricate mutable local aliases. |
-| `obj.materialize.stack`, `obj.materialize.heap` | Seed exposure, followed by containment closure. |
+| `obj.materialize.stack` | Seed exposure, followed by containment closure. |
 | `call`, `return` | Publish reachable reference-bearing values at the interface boundary; calls invalidate mutable guarantees. |
 | `bitcast` | Reject by-value object-reference contents before semantic analysis; raw pointers retain their ordinary cast rules. |
 | Raw loads and other opaque producers | Retain possible local aliases/guards in reference-bearing results. |

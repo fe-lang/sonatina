@@ -190,8 +190,6 @@ impl ObjectReachability {
             }
         } else if let Some(mat) = downcast::<&data::ObjMaterializeStack>(is, data) {
             changed |= self.expose(&self.references[*mat.object()].clone());
-        } else if let Some(mat) = downcast::<&data::ObjMaterializeHeap>(is, data) {
-            changed |= self.expose(&self.references[*mat.object()].clone());
         } else if let Some(call) = downcast::<&control_flow::Call>(is, data) {
             let summary = summaries.and_then(|summaries| summaries.get(call.callee()));
             for (index, &arg) in call.args().iter().enumerate() {
@@ -305,7 +303,6 @@ impl ObjectReachability {
                 || downcast::<&data::EnumProj>(is, data).is_some()
                 || downcast::<&data::EnumAssertVariantRef>(is, data).is_some()
                 || downcast::<&data::ObjMaterializeStack>(is, data).is_some()
-                || downcast::<&data::ObjMaterializeHeap>(is, data).is_some()
                 || downcast::<&data::Gep>(is, data).is_some()
                 || downcast::<&cast::Bitcast>(is, data).is_some()
                 || downcast::<&control_flow::Phi>(is, data).is_some()

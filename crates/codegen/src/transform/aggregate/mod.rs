@@ -7,6 +7,8 @@ mod capture_state;
 mod cleanup;
 pub(crate) mod combine;
 pub(crate) mod enum_lowering;
+#[cfg(feature = "cranelift")]
+pub(crate) mod frame_lifetimes;
 pub(crate) mod legalize;
 pub(crate) mod object;
 pub(crate) mod object_abi;

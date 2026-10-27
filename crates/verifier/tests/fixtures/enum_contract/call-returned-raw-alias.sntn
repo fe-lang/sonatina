@@ -4,7 +4,7 @@ func private %get() -> (objref<@E>, *@E) {
 block0:
  v0.objref<@E> = obj.alloc @E;
  enum.write_variant v0 #Some (17.i256);
- v1.*@E = obj.materialize.heap v0;
+ v1.*@E = obj.materialize.stack v0;
  return (v0, v1);
 }
 

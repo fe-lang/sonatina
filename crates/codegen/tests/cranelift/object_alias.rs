@@ -8,7 +8,7 @@ use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 use super::{alias_execution, parse_verified_native_module};
 
 #[test]
-fn captured_alias_retains_native_stack_lifetime_rejection() {
+fn returned_local_allocations_are_rejected_natively() {
     for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
         let mut compiler = Compile::new(
             parse_verified_native_module(alias_execution::CAPTURE_SOURCE),
@@ -21,13 +21,13 @@ fn captured_alias_retains_native_stack_lifetime_rejection() {
         );
         assert!(report.is_ok(), "{level:?}: {report}");
         let errors = match compiler.compile() {
-            Ok(_) => panic!("native captured stack reference unexpectedly accepted"),
+            Ok(_) => panic!("returned local allocations unexpectedly accepted"),
             Err(errors) => errors,
         };
         assert!(
-            errors.iter().any(|error| error.to_string().contains(
-                "native reference lifetime in captured_alias: unproven escape of local object"
-            )),
+            errors.iter().any(|error| error
+                .to_string()
+                .contains("returns a reference to local object")),
             "{level:?}: {errors:?}"
         );
     }

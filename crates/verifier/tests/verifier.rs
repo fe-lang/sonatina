@@ -2469,62 +2469,56 @@ func public %bad_evm_return_result() -> unit {
 
 #[test]
 fn enum_proofs_invalidate_raw_writes_and_saved_tags() {
-    for materialize in ["stack", "heap"] {
-        for (operation, preserves) in [
-            ("", true),
-            ("v8.i256 = mload v3 i256;", true),
-            ("evm_sstore 0.i256 42.i256;", true),
-            ("mstore v3 0.i256 i256;", false),
-            ("memzero v3 64.i256;", false),
-            (
-                "v8.i256 = ptr_to_int v3 i256;\n    evm_mstore v8 0.i256;",
-                false,
-            ),
-            (
-                "v8.i256 = ptr_to_int v3 i256;\n    evm_mcopy v8 0.i256 64.i256;",
-                false,
-            ),
-        ] {
-            for mode in ["direct", "saved_tag", "fresh_tag", "reassert"] {
-                let continuation = match mode {
-                    "direct" => "v6.i256 = obj.load v2;\n    return v6;".to_owned(),
-                    "reassert" => "v5.objref<@Choice> = enum.assert_variant_ref v0 #Some;\n    v6.i256 = obj.load v2;\n    return v6;".to_owned(),
-                    _ => {
-                        let refresh = if mode == "fresh_tag" { "v5.enumtag(@Choice) = enum.get_tag v0;" } else { "" };
-                        let tag = if mode == "fresh_tag" { "v5" } else { "v4" };
-                        format!("obj.store v2 17.i256;\n    {refresh}\n    br_table {tag} block2 (1.enumtag(@Choice) block1);\nblock1:\n    v6.i256 = obj.load v2;\n    return v6;\nblock2:\n    return 0.i256;")
-                    }
-                };
-                let source = format!(
-                    r#"
+    for (operation, preserves) in [
+        ("", true),
+        ("v8.i256 = mload v3 i256;", true),
+        ("evm_sstore 0.i256 42.i256;", true),
+        ("mstore v3 0.i256 i256;", false),
+        ("memzero v3 64.i256;", false),
+        (
+            "v8.i256 = ptr_to_int v3 i256;\n    evm_mstore v8 0.i256;",
+            false,
+        ),
+        (
+            "v8.i256 = ptr_to_int v3 i256;\n    evm_mcopy v8 0.i256 64.i256;",
+            false,
+        ),
+    ] {
+        for mode in ["direct", "saved_tag", "fresh_tag", "reassert"] {
+            let continuation = match mode {
+                "direct" => "v6.i256 = obj.load v2;\n    return v6;".to_owned(),
+                "reassert" => "v5.objref<@Choice> = enum.assert_variant_ref v0 #Some;\n    v6.i256 = obj.load v2;\n    return v6;".to_owned(),
+                _ => {
+                    let refresh = if mode == "fresh_tag" { "v5.enumtag(@Choice) = enum.get_tag v0;" } else { "" };
+                    let tag = if mode == "fresh_tag" { "v5" } else { "v4" };
+                    format!("obj.store v2 17.i256;\n    {refresh}\n    br_table {tag} block2 (1.enumtag(@Choice) block1);\nblock1:\n    v6.i256 = obj.load v2;\n    return v6;\nblock2:\n    return 0.i256;")
+                }
+            };
+            let source = format!(
+                r#"
 target = "evm-ethereum-osaka"
 type @Choice = enum {{ #None, #Some(i256) }};
 func private %entry(v0.objref<@Choice>) -> i256 {{
 block0:
-    v1.objref<@Choice> = enum.assert_variant_ref v0 #Some;
-    v2.objref<i256> = enum.proj v1 #Some 0.i8;
-    v3.*@Choice = obj.materialize.{materialize} v0;
-    v4.enumtag(@Choice) = enum.get_tag v0;
-    {operation}
-    {continuation}
+v1.objref<@Choice> = enum.assert_variant_ref v0 #Some;
+v2.objref<i256> = enum.proj v1 #Some 0.i8;
+v3.*@Choice = obj.materialize.stack v0;
+v4.enumtag(@Choice) = enum.get_tag v0;
+{operation}
+{continuation}
 }}
 "#
-                );
-                let parsed = parse_module(&source).expect("parse");
-                let report = verify_module(
-                    &parsed.module,
-                    &VerifierConfig::for_level(VerificationLevel::Full),
-                );
-                let valid = preserves || matches!(mode, "fresh_tag" | "reassert");
-                assert_eq!(
-                    !report.has_errors(),
-                    valid,
-                    "{materialize}, {operation}, {mode}: {report}"
-                );
-                if !valid {
-                    assert_eq!(report.errors().count(), 1, "{report}");
-                    assert!(has_code(&report, "IR0600"), "{report}");
-                }
+            );
+            let parsed = parse_module(&source).expect("parse");
+            let report = verify_module(
+                &parsed.module,
+                &VerifierConfig::for_level(VerificationLevel::Full),
+            );
+            let valid = preserves || matches!(mode, "fresh_tag" | "reassert");
+            assert_eq!(!report.has_errors(), valid, "{operation}, {mode}: {report}");
+            if !valid {
+                assert_eq!(report.errors().count(), 1, "{report}");
+                assert!(has_code(&report, "IR0600"), "{report}");
             }
         }
     }
