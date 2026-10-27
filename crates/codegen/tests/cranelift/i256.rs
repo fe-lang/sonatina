@@ -210,7 +210,23 @@ fn i256_arithmetic_matches_reference() {
 
 #[test]
 fn i256_comparisons_with_one_limb_constants_match_reference() {
-    let values = operands();
+    let mut values = operands();
+    // Each side of the power-of-two thresholds below, and high limbs alone.
+    values.extend(
+        [
+            31u64,
+            32,
+            33,
+            254,
+            255,
+            257,
+            (1 << 63) - 1,
+            1 << 63,
+            (1 << 63) + 1,
+        ]
+        .map(U256::from),
+    );
+    values.extend([word([0, 1, 0, 0]), word([255, 0, 0, 1 << 63])]);
     let cases = pairs(&values, &[U256::zero()]);
     let compares: [Compare; 4] = [
         ("lt", |a, b| a < b),
@@ -218,10 +234,16 @@ fn i256_comparisons_with_one_limb_constants_match_reference() {
         ("le", |a, b| a <= b),
         ("ge", |a, b| a >= b),
     ];
+    // Powers of two and one less take the shifted-limb test.
     for constant in [
         U256::zero(),
         U256::one(),
+        U256::from(31),
+        U256::from(32),
+        U256::from(255),
         U256::from(256),
+        U256::from((1u64 << 63) - 1),
+        U256::from(1u64 << 63),
         U256::from(u64::MAX),
     ] {
         for (op, expected) in compares {

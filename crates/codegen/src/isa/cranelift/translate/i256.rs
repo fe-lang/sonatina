@@ -5,7 +5,7 @@ use std::{cmp::Ordering, collections::HashMap};
 
 use cranelift_codegen::ir::{
     self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
-    condcodes::IntCC,
+    condcodes::{CondCode, IntCC},
     types::{I64, I128},
 };
 use cranelift_frontend::FunctionBuilder;
@@ -326,6 +326,28 @@ fn one_limb_compare(
         IntCC::UnsignedGreaterThanOrEqual => (lhs, rhs, true),
         _ => return None,
     };
+    // Below a power of two `2^k` exactly when no bit from `k` up is set, and
+    // above `2^k - 1` exactly when one is: one comparison of the limbs, with
+    // the low one shifted, against zero.
+    let bits_from = match (lhs, rhs) {
+        ((value, _), (_, Some(OneLimb::Constant(constant)))) if constant.is_power_of_two() => {
+            Some((value, constant.trailing_zeros(), IntCC::Equal))
+        }
+        ((_, Some(OneLimb::Constant(constant))), (value, _))
+            if constant.wrapping_add(1).is_power_of_two() =>
+        {
+            Some((value, constant.trailing_ones(), IntCC::NotEqual))
+        }
+        _ => None,
+    };
+    if let Some((value, bits, cc)) = bits_from {
+        let low = builder.ins().ushr_imm_s(value[0], i64::from(bits));
+        let combined = [value[1], value[2], value[3]]
+            .into_iter()
+            .fold(low, |combined, limb| builder.ins().bor(combined, limb));
+        let cc = if negate { cc.complement() } else { cc };
+        return Some(builder.ins().icmp_imm_s(cc, combined, 0));
+    }
     // `lhs < rhs`.
     let low_lt =
         |lhs: clif::Value, rhs: (clif::Value, OneLimb), builder: &mut FunctionBuilder| match rhs {
