@@ -2,6 +2,7 @@ mod common;
 
 use dir_test::{Fixture, dir_test};
 use sonatina_codegen::{
+    OptLevel,
     domtree::DomTree,
     loop_analysis::LoopTree,
     optim::{
@@ -30,6 +31,63 @@ fn test_opt_pipeline(fixture: Fixture<&str>) {
 
     let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
     snap_test!(writer.dump_string(), fixture.path());
+}
+
+#[test]
+fn native_pipelines_inline_helpers_with_many_call_sites() {
+    // EVM tuning keeps a helper with many call sites out of line to save
+    // bytecode; native code inlines it.
+    let calls: String = (0..8)
+        .map(|i| format!("        call %push v0 {i}.i64;\n"))
+        .collect();
+    let source = format!(
+        r#"
+target = "x86_64-unknown-native"
+
+declare external %fault(*i64);
+
+func private %push(v0.*i64, v1.i64) {{
+    block0:
+        v2.i64 = mload v0 i64;
+        v3.i1 = lt v2 1024.i64;
+        br v3 block1 block2;
+    block1:
+        v4.i64 = mul v1 v2;
+        v5.i64 = xor v4 v1;
+        v6.i64 = add v5 v2;
+        v7.i64 = add v2 1.i64;
+        mstore v0 v7 i64;
+        v8.i64 = ptr_to_int v0 i64;
+        v9.i64 = add v8 8.i64;
+        v10.*i64 = int_to_ptr v9 *i64;
+        mstore v10 v6 i64;
+        return;
+    block2:
+        call %fault v0;
+        return;
+}}
+
+func public %entry(v0.*i64) {{
+    block0:
+{calls}        return;
+}}
+"#
+    );
+    let optimized = |pipeline: Pipeline| {
+        let mut parsed = parse_module(&source).unwrap();
+        pipeline.run(&mut parsed.module);
+        verify_module_or_panic(
+            &parsed.module,
+            &VerifierConfig::for_level(VerificationLevel::Full),
+        );
+        ModuleWriter::new(&parsed.module).dump_string()
+    };
+    let speed = optimized(Pipeline::speed());
+    assert!(speed.contains("call %push"), "{speed}");
+    for level in [OptLevel::O1, OptLevel::O2] {
+        let native = optimized(Pipeline::native(level));
+        assert!(!native.contains("call %push"), "{level:?}\n{native}");
+    }
 }
 
 #[test]

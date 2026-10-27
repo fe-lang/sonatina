@@ -10,15 +10,20 @@ mod values;
 
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::{self as clif, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC};
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
-use cranelift_module::{FuncId, Linkage, Module as ClifModule};
+use cranelift_codegen::{
+    Context,
+    control::ControlPlane,
+    ir::{self as clif, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC},
+};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
+use cranelift_module::{FuncId, Linkage, Module as ClifModule, ModuleReloc};
 
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Linkage as SonatinaLinkage, Module, Type, Value, ValueId,
     inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
     module::FuncRef,
+    parallel,
 };
 use sonatina_triple::TargetTriple;
 
@@ -61,40 +66,86 @@ pub(super) fn translate_module(
         func_id_map.insert(func_ref, func_id);
     }
 
+    let mut translated = Vec::new();
     for &func_ref in &funcs {
         let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
-        let translated = module
-            .func_store
-            .try_view(func_ref, |function| -> Result<bool, String> {
-                if module.ctx.func_linkage(func_ref).is_external() {
-                    return Ok(false);
-                }
-                if function.layout.entry_block().is_none() {
-                    return Ok(false);
-                }
-                divider.start_function();
-                translate_function(
-                    module,
-                    function,
-                    func_ref,
-                    &func_id_map,
-                    &data_ids,
-                    &mut divider,
-                    clif_module,
-                )?;
-                Ok(true)
-            });
-        match translated {
-            Some(Ok(true)) => {
-                defined_func_map.insert(name, func_id_map[&func_ref]);
+        let ctx =
+            module
+                .func_store
+                .try_view(func_ref, |function| -> Result<Option<Context>, String> {
+                    if module.ctx.func_linkage(func_ref).is_external() {
+                        return Ok(None);
+                    }
+                    if function.layout.entry_block().is_none() {
+                        return Ok(None);
+                    }
+                    divider.start_function();
+                    translate_function(
+                        module,
+                        function,
+                        func_ref,
+                        &func_id_map,
+                        &data_ids,
+                        &mut divider,
+                        clif_module,
+                    )
+                    .map(Some)
+                });
+        match ctx {
+            Some(Ok(Some(ctx))) => {
+                let func_id = func_id_map[&func_ref];
+                defined_func_map.insert(name.clone(), func_id);
+                translated.push((format!("function {name}"), func_id, ctx));
             }
-            Some(Ok(false)) | None => {}
+            Some(Ok(None)) | None => {}
             Some(Err(error)) => {
                 return Err(format!("failed to translate function {name}: {error}"));
             }
         }
     }
-    divider.define(clif_module)?;
+    translated.extend(
+        divider
+            .finish(clif_module)
+            .map(|(func_id, ctx)| ("the divider".to_string(), func_id, ctx)),
+    );
+
+    // Functions compile independently; defining them in order keeps the
+    // output deterministic.
+    let isa = clif_module.isa();
+    let compiled = parallel::map_owned(
+        &module.func_store,
+        translated,
+        |(name, func_id, mut ctx)| {
+            let compiled = ctx
+                .compile(isa, &mut ControlPlane::default())
+                .map(|_| ())
+                .map_err(|error| error.inner.to_string());
+            (name, func_id, ctx, compiled)
+        },
+    );
+    for (name, func_id, ctx, compiled) in compiled {
+        if let Err(error) = compiled {
+            eprintln!("[cranelift] CLIF IR (error):\n{}", ctx.func.display());
+            return Err(format!("cranelift failed to compile {name}: {error}"));
+        }
+        let code = ctx
+            .compiled_code()
+            .ok_or_else(|| format!("cranelift compiled no code for {name}"))?;
+        let relocs: Vec<_> = code
+            .buffer
+            .relocs()
+            .iter()
+            .map(|reloc| ModuleReloc::from_mach_reloc(reloc, &ctx.func, func_id))
+            .collect();
+        clif_module
+            .define_function_bytes(
+                func_id,
+                code.buffer.alignment.into(),
+                code.code_buffer(),
+                &relocs,
+            )
+            .map_err(|error| format!("failed to define {name}: {error}"))?;
+    }
 
     Ok(defined_func_map)
 }
@@ -120,7 +171,7 @@ fn translate_function(
     data_ids: &GlobalDataMap,
     divider: &mut Divider,
     clif_module: &mut impl ClifModule,
-) -> Result<(), String> {
+) -> Result<Context, String> {
     let target_config = clif_module.target_config();
     let pointer_type = target_config.pointer_type();
     let mut ctx = clif_module.make_context();
@@ -704,65 +755,101 @@ fn translate_function(
                     edges.fill(z, block, *br.z_dest(), &value_map, &mut builder)?;
                 }
                 NativeInstKind::BrTable(br_table) => {
+                    // A switch's branches pass no block arguments, so an edge
+                    // with phi inputs runs them in a block of its own.
+                    let mut edge_blocks = Vec::new();
+                    let mut dest_blocks = HashMap::new();
+                    let mut dest_block = |dest: BlockId, builder: &mut FunctionBuilder| {
+                        *dest_blocks.entry(dest).or_insert_with(|| {
+                            if edges.has_inputs(block, dest) {
+                                let edge_block = builder.create_block();
+                                edge_blocks.push((edge_block, dest));
+                                edge_block
+                            } else {
+                                block_map[&dest]
+                            }
+                        })
+                    };
+                    let (otherwise, traps) = match *br_table.default() {
+                        Some(default) => (dest_block(default, &mut builder), false),
+                        None => (builder.create_block(), true),
+                    };
+                    // Each key as the unsigned bits of the scrutinee's type.
+                    let keys = br_table
+                        .table()
+                        .iter()
+                        .map(|&(key, dest)| {
+                            let key = function
+                                .dfg
+                                .value_imm(key)
+                                .ok_or("br_table key is not an immediate")?;
+                            Ok((key.zext(Type::I256).as_i256().to_u256(), dest))
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
                     let scrutinee_id = *br_table.scrutinee();
-                    let cases = br_table.table().iter().map(|&(case, _)| case);
-                    let conditions: Vec<_> = if function.dfg.value_ty(scrutinee_id) == Type::I256 {
-                        let scrutinee =
-                            resolve_i256(function, scrutinee_id, &value_map, &mut builder)?;
-                        cases
-                            .map(|case| {
-                                let case = resolve_i256(function, case, &value_map, &mut builder)?;
-                                Ok(eq(scrutinee, case, &mut builder))
-                            })
-                            .collect::<Result<_, String>>()?
-                    } else {
-                        let scrutinee = resolve_scalar_value(
+                    let limbs = (function.dfg.value_ty(scrutinee_id) == Type::I256)
+                        .then(|| resolve_i256(function, scrutinee_id, &value_map, &mut builder))
+                        .transpose()?;
+                    let scrutinee = match limbs {
+                        Some(limbs) => limbs[0],
+                        None => resolve_scalar_value(
                             module,
                             function,
                             scrutinee_id,
                             &value_map,
                             pointer_type,
                             &mut builder,
-                        )?;
-                        cases
-                            .map(|case| {
-                                let case = resolve_scalar_value(
-                                    module,
-                                    function,
-                                    case,
-                                    &value_map,
-                                    pointer_type,
-                                    &mut builder,
-                                )?;
-                                Ok(builder.ins().icmp(IntCC::Equal, scrutinee, case))
-                            })
-                            .collect::<Result<_, String>>()?
+                        )?,
                     };
-                    if br_table.table().is_empty() {
-                        let default = br_table
-                            .default()
-                            .ok_or("empty br_table requires a default destination")?;
-                        edges.jump(block, default, &value_map, &mut builder)?;
-                    } else {
-                        for (idx, (&(_, dest), cond)) in
-                            br_table.table().iter().zip(conditions).enumerate()
-                        {
-                            let target = edges.target(block, dest, &value_map, &mut builder)?;
-                            let next_block = builder.create_block();
-                            builder
-                                .ins()
-                                .brif(cond, target.block, &target.args, next_block, &[]);
-                            edges.fill(target, block, dest, &value_map, &mut builder)?;
-                            builder.switch_to_block(next_block);
-
-                            if idx + 1 == br_table.table().len() {
-                                if let Some(default) = br_table.default() {
-                                    edges.jump(block, *default, &value_map, &mut builder)?;
-                                } else {
-                                    emit_trap(&mut builder, TrapCode::user(3).unwrap());
-                                }
-                            }
+                    // From four keys up, Cranelift's switch gives each run of
+                    // consecutive keys a jump table and searches the runs.
+                    // Fewer keys, or i256 keys beyond the low limb, are
+                    // compared in turn.
+                    if keys.len() >= 4
+                        && limbs.is_none_or(|_| keys.iter().all(|(key, _)| key.0[1..] == [0; 3]))
+                    {
+                        if let Some(limbs) = limbs {
+                            // The keys lie in the low limb, so a scrutinee
+                            // with any upper bit set takes the default.
+                            let upper = builder.ins().bor(limbs[1], limbs[2]);
+                            let upper = builder.ins().bor(upper, limbs[3]);
+                            let low = builder.create_block();
+                            builder.ins().brif(upper, otherwise, &[], low, &[]);
+                            builder.switch_to_block(low);
                         }
+                        let mut switch = Switch::new();
+                        for &(key, dest) in &keys {
+                            switch.set_entry(key.low_u128(), dest_block(dest, &mut builder));
+                        }
+                        switch.emit(&mut builder, scrutinee, otherwise);
+                    } else {
+                        let ty = builder.func.dfg.value_type(scrutinee);
+                        for &(key, dest) in &keys {
+                            let matches = match limbs {
+                                Some(limbs) => {
+                                    let key = constant_limbs(key, &mut builder);
+                                    eq(limbs, key, &mut builder)
+                                }
+                                None => {
+                                    let key =
+                                        scalar_constant(ty, key.low_u128() as i128, &mut builder);
+                                    builder.ins().icmp(IntCC::Equal, scrutinee, key)
+                                }
+                            };
+                            let dest = dest_block(dest, &mut builder);
+                            let next = builder.create_block();
+                            builder.ins().brif(matches, dest, &[], next, &[]);
+                            builder.switch_to_block(next);
+                        }
+                        builder.ins().jump(otherwise, &[]);
+                    }
+                    for (edge_block, dest) in edge_blocks {
+                        builder.switch_to_block(edge_block);
+                        edges.jump(block, dest, &value_map, &mut builder)?;
+                    }
+                    if traps {
+                        builder.switch_to_block(otherwise);
+                        emit_trap(&mut builder, TrapCode::user(3).unwrap());
                     }
                 }
                 NativeInstKind::Return(ret) => {
@@ -1528,12 +1615,7 @@ fn translate_function(
         eprintln!("[cranelift] CLIF IR for {name}:\n{}", ctx.func.display());
     }
 
-    if let Err(e) = clif_module.define_function(func_id_map[&func_ref], &mut ctx) {
-        eprintln!("[cranelift] CLIF IR (error):\n{}", ctx.func.display());
-        return Err(format!("cranelift define_function failed: {e}"));
-    }
-
-    Ok(())
+    Ok(ctx)
 }
 
 fn heap_allocate(

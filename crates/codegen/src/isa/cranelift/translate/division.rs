@@ -5,11 +5,14 @@
 //! reciprocal (Möller and Granlund, "Improved division by invariant
 //! integers").
 
-use cranelift_codegen::ir::{
-    self as clif, AbiParam, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
-    condcodes::IntCC,
-    instructions::BlockArg,
-    types::{I64, I128},
+use cranelift_codegen::{
+    Context,
+    ir::{
+        self as clif, AbiParam, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
+        condcodes::IntCC,
+        instructions::BlockArg,
+        types::{I64, I128},
+    },
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Module as ClifModule};
@@ -80,11 +83,9 @@ impl Divider {
         Ok(call)
     }
 
-    /// Defines the divider if any function calls it.
-    pub fn define(self, clif_module: &mut impl ClifModule) -> Result<(), String> {
-        let Some(id) = self.id else {
-            return Ok(());
-        };
+    /// The divider's id and CLIF, if any function calls it.
+    pub fn finish(self, clif_module: &impl ClifModule) -> Option<(FuncId, Context)> {
+        let id = self.id?;
         let mut ctx = clif_module.make_context();
         ctx.func.signature = signature(clif_module);
         let mut builder_ctx = FunctionBuilderContext::new();
@@ -98,9 +99,7 @@ impl Divider {
                 ctx.func.display()
             );
         }
-        clif_module
-            .define_function(id, &mut ctx)
-            .map_err(|error| format!("cranelift define_function failed for the divider: {error}"))
+        Some((id, ctx))
     }
 }
 
