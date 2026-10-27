@@ -134,8 +134,9 @@ impl AvailableMap {
         self.empty.retain(keep);
     }
 
-    /// Drops what `writes` may overwrite. An exact write keeps the parts of a
-    /// partly overwritten slice outside it, read from the same stored value.
+    /// Drops what `writes` may overwrite. An exact or bounded write keeps the
+    /// parts of a partly overwritten slice outside it, read from the same
+    /// stored value.
     fn invalidate(
         &mut self,
         writes: &[ObjectAccess],
@@ -153,7 +154,7 @@ impl AvailableMap {
         });
         for &write in writes {
             self.roots.retain(|&root_id, root| {
-                if let ObjectAccess::Exact(projection) = write
+                if let ObjectAccess::Exact(projection) | ObjectAccess::Within(projection) = write
                     && projection.root_value.value() == root_id
                 {
                     let first = projection.slice.first_leaf;
@@ -862,7 +863,7 @@ fn mark_access_live(
         if !accesses.may_overlap(access, root) {
             continue;
         }
-        if let ObjectAccess::Exact(projection) = access
+        if let ObjectAccess::Exact(projection) | ObjectAccess::Within(projection) = access
             && projection.root_value.value() == root.root
         {
             mark_live_slice(
@@ -1074,14 +1075,16 @@ block0:
                 for first_leaf in 0..=16 {
                     for leaf_count in [0, 1, 2, 4, 16] {
                         if first_leaf + leaf_count <= 16 {
-                            writes.push(ObjectAccess::Exact(Projection {
+                            let projection = Projection {
                                 root_value: RootValue::new(root),
                                 slice: shape::AggregateSlice {
                                     ty: pair,
                                     first_leaf,
                                     leaf_count,
                                 },
-                            }));
+                            };
+                            writes.push(ObjectAccess::Exact(projection));
+                            writes.push(ObjectAccess::Within(projection));
                         }
                     }
                 }
@@ -1098,7 +1101,9 @@ block0:
                     .collect();
                 for (slice, available) in overlapped {
                     flat.remove(&slice);
-                    let ObjectAccess::Exact(projection) = write else {
+                    let (ObjectAccess::Exact(projection) | ObjectAccess::Within(projection)) =
+                        write
+                    else {
                         continue;
                     };
                     if projection.root_value.value() != slice.root {
@@ -1324,6 +1329,46 @@ func private %f(v0.objref<@pair>, v1.i256) -> i256 {
             assert!(
                 dumped.contains("return v1;"),
                 "forwarded local object arg result should return the stored scalar:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn forwards_field_store_across_dynamic_index_store_to_sibling_array() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @state = { [i256; 4], i256 };
+
+func private %f(v0.objref<@state>, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.objref<i256> = obj.proj v0 1.i8;
+        v4.objref<[i256; 4]> = obj.proj v0 0.i8;
+        v5.objref<i256> = obj.index v4 0.i8;
+        obj.store v3 v1;
+        obj.store v5 v1;
+        v6.objref<i256> = obj.index v4 v2;
+        obj.store v6 7.i256;
+        v7.i256 = obj.load v3;
+        v8.i256 = obj.load v5;
+        v9.i256 = add v7 v8;
+        return v9;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.load v3"),
+                "a store into the array leaves the sibling field available:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("v8.i256 = obj.load v5;"),
+                "the dynamic index may select element 0:\n{dumped}"
             );
         });
     }

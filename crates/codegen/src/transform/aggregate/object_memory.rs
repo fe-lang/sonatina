@@ -744,7 +744,7 @@ fn transfer_inst(
             if !ctx.accesses.may_overlap(access, root_slice) {
                 continue;
             }
-            if let ObjectAccess::Exact(projection) = access
+            if let ObjectAccess::Exact(projection) | ObjectAccess::Within(projection) = access
                 && projection.root_value.value() == root
             {
                 value.forget(ctx.func.ctx(), projection.slice, &mut layout);
