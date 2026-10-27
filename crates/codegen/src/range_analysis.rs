@@ -715,18 +715,9 @@ fn compute_block_entry(
         if !reachable[pred] {
             continue;
         }
-        let Some(mut refined) = refine_edge(func, pred, block, &exit_envs[pred], maybe_undef)
-        else {
+        let Some(refined) = refine_edge(func, pred, block, &exit_envs[pred], maybe_undef) else {
             continue;
         };
-        // A branch constrains the choice its comparison saw, not the other
-        // uses of a value that may be undef.
-        for &value in maybe_undef {
-            match exit_envs[pred].get(&value) {
-                Some(&fact) => refined.insert(value, fact),
-                None => refined.remove(&value),
-            };
-        }
         edge_envs.push((pred, refined));
     }
     let pred_env_index: FxHashMap<_, _> = edge_envs
@@ -841,6 +832,7 @@ fn refine_br_edge(
                     value,
                     RangeFact::singleton(Immediate::from(effective)),
                 );
+                keep_undef_facts(&mut refined, env, &[value], maybe_undef);
                 Some(refined)
             } else {
                 Some(env.clone())
@@ -861,7 +853,7 @@ fn refine_br_edge(
             maybe_undef,
         ),
         NormalizedCond::ZeroTest { value, invert } => {
-            refine_zero_test_edge(func, env, value, take_true_edge ^ invert)
+            refine_zero_test_edge(func, env, value, take_true_edge ^ invert, maybe_undef)
         }
     }
 }
@@ -998,6 +990,7 @@ fn refine_zero_test_edge(
     env: &RangeEnv,
     value: ValueId,
     zero_test_truth: bool,
+    maybe_undef: &FxHashSet<ValueId>,
 ) -> Option<RangeEnv> {
     let ty = func.dfg.value_ty(value);
     if !supports_range_facts(ty) {
@@ -1019,7 +1012,25 @@ fn refine_zero_test_edge(
     } else {
         refine_not_equal_immediate_edge(func, &mut refined, value, value_fact, zero);
     }
+    keep_undef_facts(&mut refined, env, &[value], maybe_undef);
     Some(refined)
+}
+
+/// Restores in `refined` the facts `env` has for those of `values` that may
+/// be undef: a branch constrains the choice its condition saw, not the other
+/// uses of such a value.
+fn keep_undef_facts(
+    refined: &mut RangeEnv,
+    env: &RangeEnv,
+    values: &[ValueId],
+    maybe_undef: &FxHashSet<ValueId>,
+) {
+    for value in values.iter().filter(|value| maybe_undef.contains(value)) {
+        match env.get(value) {
+            Some(&fact) => refined.insert(*value, fact),
+            None => refined.remove(value),
+        };
+    }
 }
 
 fn zero_test_truth_in_env(func: &Function, env: &RangeEnv, value: ValueId) -> Option<bool> {
@@ -1132,6 +1143,7 @@ fn refine_compare_edge_impl(
         _ => {}
     }
 
+    keep_undef_facts(&mut refined, env, &[lhs, rhs], maybe_undef);
     Some(refined)
 }
 
