@@ -2417,6 +2417,7 @@ version = "0.0.3-alpha"
 dependencies = [
  "clap",
  "indexmap",
+ "object",
  "sonatina-codegen",
  "sonatina-ir",
  "sonatina-parser",

@@ -676,6 +676,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use clap::Parser;
+    use object::{Object, ObjectSymbol};
 
     use super::{BuildOptLevel, Cli, Command, run_build};
 
@@ -697,8 +698,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(run_build(&input, false, BuildOptLevel::O2), 0);
-        let object = fs::read(dir.join("add.o")).unwrap();
-        assert!(object.starts_with(b"\x7fELF") || object.starts_with(&[0xcf, 0xfa, 0xed, 0xfe]));
+        let bytes = fs::read(dir.join("add.o")).unwrap();
+        let object = object::File::parse(&*bytes).unwrap();
+        assert!(object.symbols().any(|symbol| {
+            symbol
+                .name()
+                .is_ok_and(|name| name.trim_start_matches('_') == "add")
+        }));
     }
 
     #[test]
