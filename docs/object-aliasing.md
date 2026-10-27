@@ -17,7 +17,12 @@ instance and cannot establish definite overwrite.
 `object_access.rs::ObjectAccessFacts` combines those origins with complete/may
 provenance and reachability. Its access universe includes operands whose roots
 are excluded, inactive, or blocked in a particular optimization. Accesses are
-exact projections, whole roots, external memory, or unknown memory. Publication
+exact projections, parts of a projection, whole roots, external memory, or
+unknown memory. An `obj.index` index must be in bounds, so a dynamic index
+designates some element of its array: accesses through it, projections of
+that element, and phis contained in one such array touch only that array.
+They overlap like the array's projection but never supply definite overwrite
+or initialization. Publication
 and materialization close transitively over stored references and expose the
 whole allocation. External effects spare unrelated unpublished allocations;
 unresolved local origins use the stronger unknown domain.
