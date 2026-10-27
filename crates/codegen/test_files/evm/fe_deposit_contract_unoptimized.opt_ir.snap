@@ -950,21 +950,18 @@ func private %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4
     block39:
         v114.i256 = sub v42 1.i256;
         v116.i256 = shr 5.i256 v114;
-        (v117.i256, v118.i1) = uaddo v116 1.i256;
-        br v118 block40 block41;
+        v117.i256 = add v116 1.i256;
+        (v118.i256, v119.i1) = umulo v117 32.i256;
+        br v119 block40 block36;
 
     block40:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block41:
-        (v119.i256, v120.i1) = umulo v117 32.i256;
-        br v120 block40 block36;
-
     block36:
-        v121.i256 = phi (0.i256 block32) (v119 block41);
-        (v44.i256, v45.i1) = uaddo 32.i256 v121;
+        v120.i256 = phi (0.i256 block32) (v118 block39);
+        (v44.i256, v45.i1) = uaddo 32.i256 v120;
         br v45 block17 block18;
 
     block13:

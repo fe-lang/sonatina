@@ -30,30 +30,30 @@ func private %main_root() {
         v149.*i8 = alloca i8;
         mstore v149 7.i8 i8;
         v151.i256 = ptr_to_int v149 i256;
-        jump block32;
+        jump block30;
 
     block30:
+        v152.i8 = mload v149 i8;
+        v154.i1 = gt v152 1.i8;
+        br v154 block31 block40;
+
+    block31:
         v155.i256 = mload v151 i256;
         v156.i8 = trunc v155 i8;
         (v157.i8, v158.i1) = usubo v156 1.i8;
-        br v158 block31 block33;
+        br v158 block32 block33;
 
-    block31:
+    block32:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
-
-    block32:
-        v152.i8 = mload v149 i8;
-        v154.i1 = gt v152 1.i8;
-        br v154 block30 block40;
 
     block33:
         v159.i256 = zext v157 i256;
         mstore v151 v159 i256;
         v160.i8 = mload v149 i8;
         (v161.i8, v162.i1) = umulo v160 8.i8;
-        br v162 block31 block35;
+        br v162 block32 block35;
 
     block35:
         v168.i256 = zext v161 i256;
@@ -62,7 +62,7 @@ func private %main_root() {
         v171.i256 = and v170 15.i256;
         v172.i8 = trunc v171 i8;
         v173.i1 = is_zero v172;
-        br v173 block32 block36;
+        br v173 block30 block36;
 
     block36:
         v174.@layout_0 = enum.make @layout_0 #BlockedPath;
@@ -142,10 +142,13 @@ func private %main_root() {
         v291.i1 = extract_value v230 3.i256;
         br v291 block76 block77;
 
+    block75:
+        jump block76;
+
     block76:
-        v399.i256 = phi (0.i256 block74) (0.i256 block77) (512.i256 block95);
+        v400.i256 = phi (0.i256 block74) (512.i256 block75) (0.i256 block77);
         v310.i256 = and v290 -130561.i256;
-        v314.i256 = or v310 v399;
+        v314.i256 = or v310 v400;
         v315.i256 = and v314 -8589803521.i256;
         v318.i256 = or v315 262144.i256;
         v321.i256 = and v318 -2.i256;
@@ -158,7 +161,7 @@ func private %main_root() {
 
     block77:
         v292.i1 = extract_value v230 2.i256;
-        br v292 block76 block95;
+        br v292 block76 block75;
 
     block84:
         v226.@layout_2 = obj.load v8;
@@ -226,9 +229,6 @@ func private %main_root() {
     block93:
         enum.set_tag v202 #BlockedPath;
         jump block84;
-
-    block95:
-        jump block76;
 
     block2:
         v331.@layout_5 = phi (v229 block53) (v327 block76);
