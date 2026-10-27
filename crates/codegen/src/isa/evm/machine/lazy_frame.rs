@@ -13,8 +13,9 @@ use crate::{
 
 use super::module::FuncMachineMap;
 use crate::isa::evm::{
-    MachineFuncPlan, ObjLoc,
+    DYN_SP_SLOT, MachineFuncPlan, ObjLoc,
     emit::{fold_stack_actions, split_at_continuation},
+    prepare::value_imm_u32,
     ptr_provenance::Provenance,
 };
 
@@ -456,9 +457,15 @@ fn collect_dep_points(
     );
 
     let machine_isa = sonatina_ir::isa::evm::EvmMachine::new(function.dfg.ctx.triple);
+    let mut dyn_sp_reads = Vec::new();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
+            if let EvmMachineInstKind::EvmMload(load) = &data
+                && value_imm_u32(function, *load.addr()) == Some(DYN_SP_SLOT as u32)
+            {
+                dyn_sp_reads.push((block, inst));
+            }
             // Phis emit no code, so their values need the frame only where
             // their inputs are defined and their results used.
             if matches!(data, EvmMachineInstKind::Phi(_)) {
@@ -519,6 +526,41 @@ fn collect_dep_points(
                 );
             }
         }
+    }
+
+    // A heap malloc clamps its base to the dynamic SP. Read before the frame is
+    // entered, that SP lies below the frame, so a frame entered later would land
+    // on the buffer. Such a read needs the frame when another dependency can
+    // follow it.
+    let mut reaches_dep = FxHashSet::default();
+    let mut work: Vec<BlockId> = deps.points.iter().map(|point| point.block).collect();
+    while let Some(block) = work.pop() {
+        for &pred in cfg.preds_of(block) {
+            if reaches_dep.insert(pred) {
+                work.push(pred);
+            }
+        }
+    }
+    let dyn_sp_deps: Vec<_> = dyn_sp_reads
+        .into_iter()
+        .filter(|&(block, read)| {
+            let read_order = order.key(
+                block,
+                FrameInjectionPoint::BeforeSite(FrameSite::PreInst(read)),
+            );
+            reaches_dep.contains(&block)
+                || deps
+                    .points
+                    .iter()
+                    .any(|point| point.block == block && point.exit.order > read_order)
+        })
+        .collect();
+    for (block, read) in dyn_sp_deps {
+        deps.push(
+            block,
+            FrameInjectionPoint::BeforeSite(FrameSite::PreInst(read)),
+            FrameInjectionPoint::BeforeSite(FrameSite::PostInst(read)),
+        );
     }
     Some(deps.points)
 }
