@@ -1,4 +1,5 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
     ControlFlowGraph, Function, Module, ValueId,
     inst::{control_flow, data},
@@ -19,9 +20,10 @@ use crate::{
 /// instance lives until its function returns or its allocation runs again.
 /// Frontends guarantee the rule, so native code gives each allocation one
 /// stack slot without an escape proof. This finds only uses the IR itself
-/// commits to: a return of a reference into a local allocation, and a
-/// reference to an earlier instance that is still live when its allocation
-/// runs again. References with unknown provenance are trusted.
+/// commits to: a return of a reference into a local allocation, directly or
+/// in a field of a returned SSA aggregate, and a reference to an earlier
+/// instance that is still live when its allocation runs again. References
+/// with unknown provenance are trusted.
 pub(crate) fn check_frame_lifetimes(module: &Module) -> Result<(), String> {
     let effects = compute_object_effect_summaries(module);
     for func in module.funcs() {
@@ -69,20 +71,62 @@ fn check_function(function: &Function, effects: &ObjectEffectSummaryMap) -> Resu
                     }
                 }
             }
-            if let Some(ret) = function.dfg.downcast::<&control_flow::Return>(inst)
-                && let Some(root) = ret.args().iter().find_map(|&value| {
-                    facts
-                        .may()
-                        .may_roots(value)
-                        .observed()
-                        .iter()
-                        .find(|root| is_allocation(root.value()))
-                })
-            {
-                return Err(format!(
-                    "{inst:?} returns a reference to local object {:?}",
-                    root.value()
-                ));
+            let Some(ret) = function.dfg.downcast::<&control_flow::Return>(inst) else {
+                continue;
+            };
+            // A returned SSA aggregate also returns the references that its
+            // `insert_value` and `enum.make` operands put in fields no later
+            // `insert_value` overwrites. Each value carries the constant
+            // indices overwritten above it; a dynamic index may overwrite any
+            // field, so nothing below it is certainly returned.
+            let mut returned: Vec<(ValueId, SmallVec<[u32; 4]>)> = ret
+                .args()
+                .iter()
+                .map(|&value| (value, SmallVec::new()))
+                .collect();
+            let mut seen = FxHashSet::default();
+            while let Some((value, overwritten)) = returned.pop() {
+                if !seen.insert((value, overwritten.clone())) {
+                    continue;
+                }
+                if let Some(root) = facts
+                    .may()
+                    .may_roots(value)
+                    .observed()
+                    .iter()
+                    .find(|root| is_allocation(root.value()))
+                {
+                    return Err(format!(
+                        "{inst:?} returns a reference to local object {:?}",
+                        root.value()
+                    ));
+                }
+                let Some(def) = function.dfg.value_inst(value) else {
+                    continue;
+                };
+                if let Some(insert) = function.dfg.downcast::<&data::InsertValue>(def) {
+                    let index = shape::const_u32(&function.dfg, *insert.idx());
+                    if index.map_or(overwritten.is_empty(), |index| {
+                        !overwritten.contains(&index)
+                    }) {
+                        returned.push((*insert.value(), SmallVec::new()));
+                    }
+                    if let Some(index) = index {
+                        let mut overwritten = overwritten;
+                        if let Err(at) = overwritten.binary_search(&index) {
+                            overwritten.insert(at, index);
+                        }
+                        returned.push((*insert.dest(), overwritten));
+                    }
+                } else if let Some(make) = function.dfg.downcast::<&data::EnumMake>(def) {
+                    returned.extend(make.values().iter().map(|&value| (value, SmallVec::new())));
+                } else if let Some(phi) = function.dfg.downcast::<&control_flow::Phi>(def) {
+                    returned.extend(
+                        phi.args()
+                            .iter()
+                            .map(|&(arg, _)| (arg, overwritten.clone())),
+                    );
+                }
             }
         }
     }
@@ -302,6 +346,40 @@ block2:
     }
 
     #[test]
+    fn accepts_returned_aggregates_without_local_references() {
+        for source in [
+            // A later insert overwrites the local reference.
+            r#"type @pair = { i64, objref<i64> };
+func private %f(v0.objref<i64>) -> @pair {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    v2.@pair = insert_value undef.@pair 1.i64 v1;
+    v3.@pair = insert_value v2 0.i64 7.i64;
+    v4.@pair = insert_value v3 1.i64 v0;
+    return v4;
+}"#,
+            // A loop-carried aggregate holds only an argument's reference.
+            r#"type @pair = { i64, objref<i64> };
+func private %f(v0.objref<i64>, v1.i64) -> @pair {
+block0:
+    v2.@pair = insert_value undef.@pair 1.i64 v0;
+    jump block1;
+block1:
+    v3.@pair = phi (v2 block0) (v5 block1);
+    v4.i64 = phi (0.i64 block0) (v6 block1);
+    v5.@pair = insert_value v3 0.i64 v4;
+    v6.i64 = add v4 1.i64;
+    v7.i1 = lt v6 v1;
+    br v7 block1 block2;
+block2:
+    return v5;
+}"#,
+        ] {
+            check_frame_lifetimes(&verified_module(source)).unwrap();
+        }
+    }
+
+    #[test]
     fn rejects_returned_references_to_local_objects() {
         for source in [
             r#"func private %f() -> objref<i64> {
@@ -343,6 +421,43 @@ block1:
     v1.objref<i64> = obj.alloc i64;
     br v0 block1 block2;
 block2:
+    return v1;
+}"#,
+            r#"type @pair = { i64, objref<i64> };
+func private %f() -> @pair {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.@pair = insert_value undef.@pair 1.i64 v0;
+    v2.@pair = insert_value v1 0.i64 7.i64;
+    return v2;
+}"#,
+            r#"func private %f(v0.i64) -> [*i64; 2] {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    v2.*i64 = obj.materialize.stack v1;
+    v3.[*i64; 2] = insert_value undef.[*i64; 2] v0 v2;
+    return v3;
+}"#,
+            r#"type @pair = { i64, objref<i64> };
+type @outer = { @pair, i64 };
+func private %f(v0.i1, v1.@pair) -> @outer {
+block0:
+    br v0 block1 block2;
+block1:
+    v2.objref<i64> = obj.alloc i64;
+    v3.@pair = insert_value v1 1.i64 v2;
+    jump block2;
+block2:
+    v4.@pair = phi (v1 block0) (v3 block1);
+    v5.@outer = insert_value undef.@outer 0.i64 v4;
+    v6.@outer = insert_value v5 1.i64 7.i64;
+    return v6;
+}"#,
+            r#"type @choice = enum { #None, #Some(objref<i64>) };
+func private %f() -> @choice {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.@choice = enum.make @choice #Some (v0);
     return v1;
 }"#,
         ] {
