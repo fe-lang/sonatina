@@ -6,6 +6,8 @@ use sonatina_ir::{
     inst::{BinaryInstKind, InstClassKind, logic::And},
 };
 
+use sonatina_triple::Architecture;
+
 use crate::{
     analysis::{
         definedness::value_may_be_undef,
@@ -257,16 +259,19 @@ fn has_variable_shift(func: &Function) -> bool {
 /// A shift whose variable count range analysis proves below the width, as
 /// in `if n < 256 { x << n }`, with the mask `width - 1` its count can take.
 /// Masking makes the bound visible to known bits, so a native backend skips
-/// its handling of oversized counts.
+/// its handling of oversized counts; EVM shifts handle them natively, so the
+/// mask would only cost there.
 fn bounded_shift_count(
     func: &Function,
     env: &RangeEnv,
     inst: InstId,
 ) -> Option<(InstId, ValueId, Immediate)> {
-    if !matches!(
-        func.dfg.inst(inst).kind(),
-        InstClassKind::Binary(BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar)
-    ) {
+    if matches!(func.ctx().triple.architecture, Architecture::Evm)
+        || !matches!(
+            func.dfg.inst(inst).kind(),
+            InstClassKind::Binary(BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar)
+        )
+    {
         return None;
     }
     let [count, _] = func.dfg.inst(inst).collect_values()[..] else {
