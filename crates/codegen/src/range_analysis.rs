@@ -1425,36 +1425,48 @@ fn compare_truth_in_env(
     }
 }
 
-/// `value` as `base + offset` when it adds or subtracts an immediate that
-/// `base`'s range keeps from wrapping; otherwise `value` itself at offset zero.
+/// `value` as `base + offset`, following adds and subtracts of immediates
+/// that their operand's range keeps from wrapping, such as `(len - 1) - 2`;
+/// otherwise `value` itself at offset zero.
 fn unsigned_base_offset(func: &Function, env: &RangeEnv, value: ValueId) -> (ValueId, i128) {
-    let plain = (value, 0);
-    let Some(inst) = func.dfg.value_inst(value) else {
-        return plain;
-    };
+    let (mut base, mut offset) = (value, 0i128);
+    while let Some((next, step)) = unsigned_offset_step(func, env, base)
+        && let Some(sum) = offset.checked_add(step)
+    {
+        (base, offset) = (next, sum);
+    }
+    (base, offset)
+}
+
+/// `value` as `operand + step` when it adds or subtracts an immediate that
+/// `operand`'s range keeps from wrapping.
+fn unsigned_offset_step(
+    func: &Function,
+    env: &RangeEnv,
+    value: ValueId,
+) -> Option<(ValueId, i128)> {
+    let inst = func.dfg.value_inst(value)?;
     let InstClassKind::Binary(kind @ (BinaryInstKind::Add | BinaryInstKind::Sub)) =
         func.dfg.inst(inst).kind()
     else {
-        return plain;
+        return None;
     };
     let args = func.dfg.inst(inst).collect_values();
-    let [base, step] = args.as_slice() else {
-        return plain;
+    let [operand, step] = args.as_slice() else {
+        return None;
     };
-    let Some(step) = func.dfg.value_imm(*step) else {
-        return plain;
-    };
-    let ty = func.dfg.value_ty(value);
-    let step = imm_to_unsigned(step);
+    let step = imm_to_unsigned(func.dfg.value_imm(*step)?);
     if step > U256::from(i128::MAX as u128) {
-        return plain;
+        return None;
     }
-    let base_range = fact_for_value(func, env, *base).unsigned;
+    let range = fact_for_value(func, env, *operand).unsigned;
     let offset = step.low_u128() as i128;
     match kind {
-        BinaryInstKind::Sub if base_range.lo >= step => (*base, -offset),
-        BinaryInstKind::Add if !unsigned_add(base_range.hi, step, ty).1 => (*base, offset),
-        _ => plain,
+        BinaryInstKind::Sub if range.lo >= step => Some((*operand, -offset)),
+        BinaryInstKind::Add if !unsigned_add(range.hi, step, func.dfg.value_ty(value)).1 => {
+            Some((*operand, offset))
+        }
+        _ => None,
     }
 }
 
