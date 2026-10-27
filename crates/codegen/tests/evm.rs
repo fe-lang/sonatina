@@ -3091,22 +3091,36 @@ fn memory_planning_at_all_optimization_levels() {
             include_str!("../test_files/evm/dyn_frame_derived_addresses.sntn"),
         ),
     ] {
-        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
-            let parsed = parse_sona(source);
-            let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments).unwrap();
-            let compiler =
-                Compile::new(parsed.module, EvmCompiler::default()).with_opt_level(level);
-            let artifacts = compiler.compile().expect("memory fixture compiles");
-            let runtime = artifacts[0]
-                .sections
-                .iter()
-                .find(|(name, _)| name.0 == "runtime")
-                .unwrap();
-            for case in cases {
-                let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
-                let result = harness.call(&case.calldata);
-                assert_case(&case, &result, &format!("{name} {level:?}"));
-            }
+        assert_evm_cases_at_all_optimization_levels(name, source);
+    }
+}
+
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/test_files/evm_execution",
+    glob: "*.sntn"
+)]
+fn test_evm_execution(fixture: Fixture<&str>) {
+    assert_evm_cases_at_all_optimization_levels(fixture.path(), fixture.content());
+}
+
+fn assert_evm_cases_at_all_optimization_levels(name: &str, source: &str) {
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let parsed = parse_sona(source);
+        let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments).unwrap();
+        assert!(!cases.is_empty(), "{name}: missing evm.case directives");
+        let compiler = Compile::new(parsed.module, EvmCompiler::default()).with_opt_level(level);
+        let artifacts = compiler
+            .compile()
+            .unwrap_or_else(|errors| panic!("{name} {level:?}: {errors:?}"));
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        for case in cases {
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            let result = harness.call(&case.calldata);
+            assert_case(&case, &result, &format!("{name} {level:?}"));
         }
     }
 }
