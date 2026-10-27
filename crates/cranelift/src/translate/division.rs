@@ -22,53 +22,76 @@ use super::{
     store_limbs, sub_borrow, ult,
 };
 
-/// The divider takes one pointer to a buffer of an eight-limb numerator
-/// and a four-limb divisor, which it overwrites with the quotient and the
-/// remainder. The divisor must be nonzero.
+/// A divider takes one pointer to a buffer of an up to eight-limb
+/// numerator and a four-limb divisor, which it overwrites with the quotient
+/// and the remainder. The divisor must be nonzero.
 const NUMERATOR_LIMBS: usize = 2 * LIMBS;
 const DIVISOR_OFFSET: i32 = 8 * NUMERATOR_LIMBS as i32;
 const BUFFER_BYTES: u32 = 8 * (NUMERATOR_LIMBS + LIMBS) as u32;
 
-/// The module's out-of-line divider, declared on first use and defined
-/// after the functions that call it, with the current function's
-/// reference to it.
-#[derive(Default)]
-pub(super) struct Divider {
-    id: Option<FuncId>,
-    call: Option<DividerCall>,
+/// The numerators a divider takes: a word for division, and two words for
+/// modular sums and products. A word divider loads, normalizes and clears
+/// half as many limbs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Numerator {
+    Word,
+    Double,
 }
 
-/// The divider as called from one function: its reference and the stack
-/// buffer for its operands and results.
+impl Numerator {
+    const ALL: [Self; 2] = [Self::Word, Self::Double];
+
+    fn limbs(self) -> usize {
+        match self {
+            Self::Word => LIMBS,
+            Self::Double => NUMERATOR_LIMBS,
+        }
+    }
+}
+
+/// The module's out-of-line dividers, declared on first use and defined
+/// after the functions that call them, with the current function's
+/// references to them.
+#[derive(Default)]
+pub(super) struct Divider {
+    ids: [Option<FuncId>; 2],
+    calls: [Option<DividerCall>; 2],
+}
+
+/// A divider as called from one function: its reference, the stack buffer
+/// for its operands and results, and the numerator it takes.
 #[derive(Clone, Copy)]
 pub(super) struct DividerCall {
     func: clif::FuncRef,
     buffer: clif::StackSlot,
+    numerator: Numerator,
 }
 
 impl Divider {
-    /// Forgets the previous function's reference to the divider.
+    /// Forgets the previous function's references to the dividers.
     pub fn start_function(&mut self) {
-        self.call = None;
+        self.calls = [None; 2];
     }
 
-    /// The divider call for the function being built.
+    /// The call of the divider for `numerator` in the function being built.
     pub fn call(
         &mut self,
         clif_module: &mut impl ClifModule,
         builder: &mut FunctionBuilder,
+        numerator: Numerator,
     ) -> Result<DividerCall, String> {
-        if let Some(call) = self.call {
+        let index = numerator as usize;
+        if let Some(call) = self.calls[index] {
             return Ok(call);
         }
-        let id = match self.id {
+        let id = match self.ids[index] {
             Some(id) => id,
             None => {
                 let signature = signature(clif_module);
                 let id = clif_module
                     .declare_anonymous_function(&signature)
                     .map_err(|error| format!("failed to declare the divider: {error}"))?;
-                *self.id.insert(id)
+                *self.ids[index].insert(id)
             }
         };
         let call = DividerCall {
@@ -78,28 +101,34 @@ impl Divider {
                 BUFFER_BYTES,
                 4,
             )),
+            numerator,
         };
-        self.call = Some(call);
+        self.calls[index] = Some(call);
         Ok(call)
     }
 
-    /// The divider's id and CLIF, if any function calls it.
-    pub fn finish(self, clif_module: &impl ClifModule) -> Option<(FuncId, Context)> {
-        let id = self.id?;
-        let mut ctx = clif_module.make_context();
-        ctx.func.signature = signature(clif_module);
-        let mut builder_ctx = FunctionBuilderContext::new();
-        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
-        build_divider(&mut builder);
-        builder.seal_all_blocks();
-        builder.finalize(clif_module.target_config());
-        if std::env::var("DUMP_CLIF").is_ok() {
-            eprintln!(
-                "[cranelift] CLIF IR for the divider:\n{}",
-                ctx.func.display()
-            );
-        }
-        Some((id, ctx))
+    /// The ids and CLIF of the dividers some function calls.
+    pub fn finish(self, clif_module: &impl ClifModule) -> Vec<(FuncId, Context)> {
+        Numerator::ALL
+            .into_iter()
+            .zip(self.ids)
+            .filter_map(|(numerator, id)| {
+                let mut ctx = clif_module.make_context();
+                ctx.func.signature = signature(clif_module);
+                let mut builder_ctx = FunctionBuilderContext::new();
+                let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+                build_divider(numerator.limbs(), &mut builder);
+                builder.seal_all_blocks();
+                builder.finalize(clif_module.target_config());
+                if std::env::var("DUMP_CLIF").is_ok() {
+                    eprintln!(
+                        "[cranelift] CLIF IR for the divider:\n{}",
+                        ctx.func.display()
+                    );
+                }
+                Some((id?, ctx))
+            })
+            .collect()
     }
 }
 
@@ -227,7 +256,7 @@ fn call_divider(
         .iter()
         .chain(std::iter::repeat_n(
             &zero,
-            NUMERATOR_LIMBS - numerator.len(),
+            call.numerator.limbs() - numerator.len(),
         ))
         .enumerate()
     {
@@ -487,14 +516,15 @@ struct Normalized {
 }
 
 /// Emits the divider's body (see `Divider`).
-fn build_divider(builder: &mut FunctionBuilder) {
+fn build_divider(numerator_limbs: usize, builder: &mut FunctionBuilder) {
     let flags = MemFlagsData::trusted();
     let entry = builder.create_block();
     builder.append_block_params_for_function_params(entry);
     builder.switch_to_block(entry);
     let buffer = builder.block_params(entry)[0];
-    let numerator: [clif::Value; NUMERATOR_LIMBS] =
-        std::array::from_fn(|limb| builder.ins().load(I64, flags, buffer, 8 * limb as i32));
+    let numerator: Vec<_> = (0..numerator_limbs)
+        .map(|limb| builder.ins().load(I64, flags, buffer, 8 * limb as i32))
+        .collect();
     let divisor = load_limbs(buffer, DIVISOR_OFFSET, flags, builder);
 
     // `n` divisor and `m` numerator limbs are significant. Each select
@@ -515,8 +545,9 @@ fn build_divider(builder: &mut FunctionBuilder) {
     let m = count(&numerator, 0, builder);
     let zero = builder.ins().iconst(I64, 0);
     // Quotient digits above the computed ones are zero.
-    store_limbs([zero; LIMBS], buffer, 0, flags, builder);
-    store_limbs([zero; LIMBS], buffer, 8 * LIMBS as i32, flags, builder);
+    for offset in (0..numerator_limbs).step_by(LIMBS) {
+        store_limbs([zero; LIMBS], buffer, 8 * offset as i32, flags, builder);
+    }
     // A numerator smaller than the divisor is the remainder.
     let smaller = builder.create_block();
     let divide = builder.create_block();
@@ -550,17 +581,18 @@ fn build_divider(builder: &mut FunctionBuilder) {
         0 => builder.ins().ishl(divisor[0], shift),
         _ => funnel(divisor[limb], divisor[limb - 1], builder),
     });
-    let normalized_numerator: [clif::Value; NUMERATOR_LIMBS + 1] =
-        std::array::from_fn(|limb| match limb {
+    let normalized_numerator: Vec<_> = (0..=numerator_limbs)
+        .map(|limb| match limb {
             0 => builder.ins().ishl(numerator[0], shift),
             _ => {
                 let high = numerator.get(limb).copied().unwrap_or(zero);
                 funnel(high, numerator[limb - 1], builder)
             }
-        });
+        })
+        .collect();
     let slot = builder.create_sized_stack_slot(StackSlotData::new(
         StackSlotKind::ExplicitSlot,
-        8 * (NUMERATOR_LIMBS as u32 + 1),
+        8 * (numerator_limbs as u32 + 1),
         3,
     ));
     let normalized = builder.ins().stack_addr(I64, slot, 0);
