@@ -79,8 +79,11 @@ and results are normalized to their low bit.
 
 Indirect value arguments point to caller-owned readable storage for the
 whole value. Passing that pointer does not turn the value into a mutable
-reference or transfer ownership. Keep its contents stable for the call.
-Value-producing loads and updates create independent snapshots; private
+reference or transfer ownership. Keep its contents stable for the call and
+distinct from any memory the callee writes, such as through a pointer
+argument: the callee may read or copy the value at any point of the call,
+and its copies assume no overlap. Value-producing loads and updates create
+independent snapshots; private
 object references instead preserve mutation aliases.
 
 A single indirect return uses a caller-allocated, writable, suitably aligned
