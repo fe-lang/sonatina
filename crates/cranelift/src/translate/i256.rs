@@ -204,7 +204,7 @@ pub(super) fn add_carry(
     (from_halves(low, high, builder), carry)
 }
 
-fn sub(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> Limbs {
+pub(super) fn sub(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> Limbs {
     let (lhs_low, lhs_high) = halves(lhs, builder);
     let (rhs_low, rhs_high) = halves(rhs, builder);
     let (low, borrow) = builder.ins().usub_overflow(lhs_low, rhs_low);
@@ -437,7 +437,7 @@ fn signed_bound(negative: clif::Value, builder: &mut FunctionBuilder) -> Limbs {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ShiftKind {
+pub(super) enum ShiftKind {
     Shl,
     Shr,
     Sar,
@@ -551,7 +551,7 @@ fn shift_by_constant(
 /// Shifts by a variable amount below 256 (callers handle larger amounts):
 /// a funnel shift of every limb by `amount % 64`, then limb moves by one
 /// and two places selected from the amount's bits 6 and 7.
-fn shift_by_variable(
+pub(super) fn shift_by_variable(
     value: Limbs,
     amount: clif::Value,
     kind: ShiftKind,

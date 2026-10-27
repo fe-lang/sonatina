@@ -1,9 +1,9 @@
 //! Wide unsigned division. Division sites handle a zero divisor, a smaller
-//! numerator and single-limb operands inline, and modular sites a zero
-//! modulus; everything else calls the module's divider: Knuth's algorithm D
-//! on 64-bit limbs, with quotient digits from a 128/64-bit division by
-//! reciprocal (Möller and Granlund, "Improved division by invariant
-//! integers").
+//! numerator, single-limb operands, power-of-two divisors and one-limb
+//! divisors inline, and modular sites a zero modulus; everything else calls
+//! the module's divider: Knuth's algorithm D on 64-bit limbs. Quotient
+//! digits come from a 128/64-bit division by reciprocal (Möller and
+//! Granlund, "Improved division by invariant integers").
 
 use cranelift_codegen::{
     Context,
@@ -18,8 +18,8 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Module as ClifModule};
 
 use super::{
-    DivRemKind, LIMBS, Limbs, abs, add_carry, is_zero, load_limbs, mul_limbs, neg, select, sign,
-    store_limbs, sub_borrow, ult,
+    DivRemKind, LIMBS, Limbs, ShiftKind, abs, add_carry, is_zero, load_limbs, mul_limbs, neg,
+    select, shift_by_variable, sign, store_limbs, sub, sub_borrow, ult,
 };
 
 /// A divider takes one pointer to a buffer of an up to eight-limb
@@ -200,7 +200,44 @@ fn udivrem(
         &exit_with([quotient, zero, zero, zero], [remainder, zero, zero, zero]),
     );
 
+    // A power-of-two divisor shifts the numerator right by its trailing
+    // zeros, as many as the ones of `divisor - 1`, which masks the
+    // remainder.
     builder.switch_to_block(wide);
+    let one = builder.ins().iconst(I64, 1);
+    let mask = sub(divisor, [one, zero, zero, zero], builder);
+    let overlap = std::array::from_fn(|limb| builder.ins().band(divisor[limb], mask[limb]));
+    let power = is_zero(overlap, builder);
+    let shifted = builder.create_block();
+    let not_power = builder.create_block();
+    builder.ins().brif(power, shifted, &[], not_power, &[]);
+
+    builder.switch_to_block(shifted);
+    let amount = mask
+        .map(|limb| builder.ins().popcnt(limb))
+        .into_iter()
+        .reduce(|sum, ones| builder.ins().iadd(sum, ones))
+        .unwrap();
+    let quotient = shift_by_variable(numerator, amount, ShiftKind::Shr, zero, builder);
+    let remainder = std::array::from_fn(|limb| builder.ins().band(numerator[limb], mask[limb]));
+    builder.ins().jump(exit, &exit_with(quotient, remainder));
+
+    builder.switch_to_block(not_power);
+    let one_limb = builder.create_block();
+    let call_block = builder.create_block();
+    let divisor_high = builder.ins().bor(divisor[1], divisor[2]);
+    let divisor_high = builder.ins().bor(divisor_high, divisor[3]);
+    builder
+        .ins()
+        .brif(divisor_high, call_block, &[], one_limb, &[]);
+
+    builder.switch_to_block(one_limb);
+    let (quotient, remainder) = divide_by_limb(numerator, divisor[0], builder);
+    builder
+        .ins()
+        .jump(exit, &exit_with(quotient, [remainder, zero, zero, zero]));
+
+    builder.switch_to_block(call_block);
     let buffer = call_divider(&numerator, divisor, call, builder);
     let quotient = load_limbs(buffer, 0, MemFlagsData::trusted(), builder);
     let remainder = load_limbs(buffer, DIVISOR_OFFSET, MemFlagsData::trusted(), builder);
@@ -209,6 +246,54 @@ fn udivrem(
     builder.switch_to_block(exit);
     let [q0, q1, q2, q3, r0, r1, r2, r3] = results;
     ([q0, q1, q2, q3], [r0, r1, r2, r3])
+}
+
+/// The quotient and remainder of `numerator` by a nonzero one-limb
+/// divisor: a digit per limb, each a 128/64-bit division of the normalized
+/// operands by the divisor's reciprocal.
+fn divide_by_limb(
+    numerator: Limbs,
+    divisor: clif::Value,
+    builder: &mut FunctionBuilder,
+) -> (Limbs, clif::Value) {
+    let shift = builder.ins().clz(divisor);
+    let inverse = builder.ins().bxor_imm_s(shift, 63);
+    let normalized = builder.ins().ishl(divisor, shift);
+    let reciprocal = reciprocal(normalized, builder);
+    // The bits shifted out of the top limb start the remainder, below the
+    // normalized divisor's set top bit.
+    let top = builder.ins().ushr_imm_s(numerator[LIMBS - 1], 1);
+    let mut remainder = builder.ins().ushr(top, inverse);
+    let mut quotient = numerator;
+    for limb in (0..LIMBS).rev() {
+        let low = match limb {
+            0 => builder.ins().ishl(numerator[0], shift),
+            _ => funnel(
+                numerator[limb],
+                numerator[limb - 1],
+                shift,
+                inverse,
+                builder,
+            ),
+        };
+        (quotient[limb], remainder) = div2by1(remainder, low, normalized, reciprocal, builder);
+    }
+    (quotient, builder.ins().ushr(remainder, shift))
+}
+
+/// `(high << shift) | (low >> (64 - shift))`, also for a zero shift, given
+/// `inverse = 63 - shift`.
+fn funnel(
+    high: clif::Value,
+    low: clif::Value,
+    shift: clif::Value,
+    inverse: clif::Value,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    let high = builder.ins().ishl(high, shift);
+    let low = builder.ins().ushr_imm_s(low, 1);
+    let low = builder.ins().ushr(low, inverse);
+    builder.ins().bor(high, low)
 }
 
 /// Divides i256 operands. Signed division divides magnitudes: the quotient
@@ -570,23 +655,16 @@ fn build_divider(numerator_limbs: usize, builder: &mut FunctionBuilder) {
     });
     let shift = builder.ins().clz(top);
     let inverse = builder.ins().bxor_imm_s(shift, 63);
-    // `(high << shift) | (low >> (64 - shift))`, also for a zero shift.
-    let funnel = |high, low, builder: &mut FunctionBuilder| {
-        let high = builder.ins().ishl(high, shift);
-        let low = builder.ins().ushr_imm_s(low, 1);
-        let low = builder.ins().ushr(low, inverse);
-        builder.ins().bor(high, low)
-    };
     let normalized_divisor: Limbs = std::array::from_fn(|limb| match limb {
         0 => builder.ins().ishl(divisor[0], shift),
-        _ => funnel(divisor[limb], divisor[limb - 1], builder),
+        _ => funnel(divisor[limb], divisor[limb - 1], shift, inverse, builder),
     });
     let normalized_numerator: Vec<_> = (0..=numerator_limbs)
         .map(|limb| match limb {
             0 => builder.ins().ishl(numerator[0], shift),
             _ => {
                 let high = numerator.get(limb).copied().unwrap_or(zero);
-                funnel(high, numerator[limb - 1], builder)
+                funnel(high, numerator[limb - 1], shift, inverse, builder)
             }
         })
         .collect();
