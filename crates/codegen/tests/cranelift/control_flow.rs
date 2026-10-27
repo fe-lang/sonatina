@@ -532,6 +532,20 @@ fn br_table_holes_in_dense_keys_take_the_default() {
 }
 
 #[test]
+fn br_table_opcode_dispatch_keys_take_one_table_with_default_holes() {
+    // Clusters like an interpreter's opcodes: 37% of 0..=255 are keys, so
+    // one table with default holes covers them all, from zero.
+    let keys: Vec<_> = (0..12)
+        .chain(0x10..0x1e)
+        .chain([0x50])
+        .chain(0x5f..0xa0)
+        .chain([0xf3])
+        .chain(0xfd..=0xff)
+        .collect();
+    check_br_table(Type::I32, &keys, &[0x20], &(-3..=300).collect::<Vec<_>>());
+}
+
+#[test]
 fn br_table_sparse_keys() {
     let keys = [
         -5,

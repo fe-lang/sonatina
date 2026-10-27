@@ -14,6 +14,7 @@ use cranelift_codegen::{
     Context,
     control::ControlPlane,
     ir::{self as clif, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC},
+    settings,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
 use cranelift_module::{FuncId, Linkage, Module as ClifModule, ModuleReloc};
@@ -268,6 +269,12 @@ fn translate_function(
 
     let frame = FrameSlots::new(function, &cfg, &block_order, sret_ptr, &mut builder)?;
     let mut known_bits = None;
+    // A jump table's entries per key: at least 10% of a run's entries are
+    // keys when optimizing for speed and 40% for size, as in LLVM.
+    let (table_entries, per_keys) = match clif_module.isa().flags().opt_level() {
+        settings::OptLevel::SpeedAndSize => (5, 2),
+        settings::OptLevel::None | settings::OptLevel::Speed => (10, 1),
+    };
     for &block in &block_order {
         let clif_block = block_map[&block];
         for inst_id in function.layout.iter_inst(block) {
@@ -853,9 +860,11 @@ fn translate_function(
                     };
                     // From four keys up, Cranelift's switch gives each run of
                     // consecutive keys a jump table and searches the runs; a
-                    // run's holes take the default while at least 40% of its
-                    // entries are keys, so one table covers it. Fewer keys,
-                    // or i256 keys beyond the low limb, are compared in turn.
+                    // run's holes take the default while it stays dense
+                    // enough, so one table covers it, and a run that may
+                    // start at zero does, saving its lower bound check.
+                    // Fewer keys, or i256 keys beyond the low limb, are
+                    // compared in turn.
                     if keys.len() >= 4
                         && limbs.is_none_or(|_| keys.iter().all(|(key, _)| key.0[1..] == [0; 3]))
                     {
@@ -875,14 +884,15 @@ fn translate_function(
                         let mut sorted: Vec<_> =
                             keys.iter().map(|(key, _)| key.low_u128()).collect();
                         sorted.sort_unstable();
+                        let dense = |first: u128, last: u128, count: u128| {
+                            (last - first).saturating_add(1).saturating_mul(per_keys)
+                                <= count * table_entries
+                        };
                         let mut runs = Vec::new();
                         let mut run: Option<(u128, u128, u128)> = None;
                         for key in sorted {
                             run = match run {
-                                Some((first, _, count))
-                                    if (key - first).saturating_add(1).saturating_mul(2)
-                                        <= (count + 1) * 5 =>
-                                {
+                                Some((first, _, count)) if dense(first, key, count + 1) => {
                                     Some((first, key, count + 1))
                                 }
                                 _ => {
@@ -892,6 +902,11 @@ fn translate_function(
                             };
                         }
                         runs.extend(run);
+                        if let Some((first, last, count)) = runs.first_mut()
+                            && dense(0, *last, *count)
+                        {
+                            *first = 0;
+                        }
                         for (first, last, _) in runs {
                             for hole in first..=last {
                                 if !switch.entries().contains_key(&hole) {
