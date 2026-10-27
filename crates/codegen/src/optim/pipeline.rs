@@ -39,6 +39,7 @@ use super::{
     cfg_cleanup::CfgCleanup,
     checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
     code_sink::CodeSink,
+    compare_sub_fusion::CompareSubFusion,
     dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     gvn::GvnSolver,
@@ -103,6 +104,9 @@ pub enum Pass {
     /// Turn trees of branches on comparisons of one integer with constants into
     /// a `br_table` (native pipelines only).
     SwitchFormation,
+    /// Fuse an unsigned comparison with the subtractions of its operands it
+    /// dominates into `usubo` (native pipelines only).
+    CompareSubFusion,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
     /// Use after passes that can leave stale user entries
@@ -219,6 +223,11 @@ impl Pass {
                 name: "switch_formation",
                 needs_func_behavior: false,
                 invalidates_func_behavior: true,
+            },
+            Pass::CompareSubFusion => PassInfo {
+                name: "compare_sub_fusion",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
             },
             Pass::RebuildUsers => PassInfo {
                 name: "rebuild_users",
@@ -531,7 +540,8 @@ impl Pipeline {
     ///
     /// O2 runs the speed schedule with an inliner tuned for native code. O1
     /// stops that schedule after its second of four inline rounds, for
-    /// quicker builds. Both end by forming switches from comparison trees.
+    /// quicker builds. Both end by forming switches from comparison trees and
+    /// fusing comparisons with the subtractions they guard.
     /// Os is the size pipeline.
     pub fn native(level: OptLevel) -> Self {
         let mut pipeline = match level {
@@ -540,7 +550,10 @@ impl Pipeline {
             OptLevel::Os => return Self::size(),
             OptLevel::O2 => Self::optimized(native_inliner_config(), true, true),
         };
-        pipeline.add_step(Step::FuncPasses(vec![Pass::SwitchFormation]));
+        pipeline.add_step(Step::FuncPasses(vec![
+            Pass::SwitchFormation,
+            Pass::CompareSubFusion,
+        ]));
         pipeline
     }
 
@@ -919,6 +932,12 @@ fn run_pass(
         Pass::SwitchFormation => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.switch_formation").entered();
             SwitchFormation::new().run(func)
+        }
+        Pass::CompareSubFusion => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.compare_sub_fusion").entered();
+            ctx.cfg.compute(func);
+            ctx.domtree.compute(&ctx.cfg);
+            CompareSubFusion::new().run(func, &ctx.domtree)
         }
         Pass::RangeBranchSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.range_branch_simplify").entered();
@@ -2674,8 +2693,11 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 .map(|step| format!("{step:?}"))
                 .collect()
         };
-        // Both end by forming switches.
-        let switches = format!("{:?}", Step::FuncPasses(vec![Pass::SwitchFormation]));
+        // Both end by forming switches and fusing comparisons with subtractions.
+        let switches = format!(
+            "{:?}",
+            Step::FuncPasses(vec![Pass::SwitchFormation, Pass::CompareSubFusion])
+        );
         let mut o1 = steps(&Pipeline::native(OptLevel::O1));
         let mut o2 = steps(&Pipeline::native(OptLevel::O2));
         assert_eq!(o1.pop(), Some(switches.clone()));
