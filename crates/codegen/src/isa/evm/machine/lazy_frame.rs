@@ -6,6 +6,7 @@ use sonatina_ir::{
 };
 
 use crate::{
+    cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
     post_domtree::{PDTIdom, PostDomTree},
     stackalloc::{Action, Allocator},
@@ -239,7 +240,21 @@ fn compute_lazy_frame_plan_inner(
         return None;
     }
 
-    let entry_block = nearest_common_dominator(&dom, &dep_blocks)?;
+    // The frame is entered and left at most once per call. An enter or exit
+    // inside a cycle would leave the frame between iterations while its data
+    // may still be live in the next one, and a call or malloc in between would
+    // overwrite it. So the region grows until both ends lie outside every
+    // cycle, and then contains each cycle with a dependency.
+    let mut sccs = CfgSccAnalysis::new();
+    sccs.compute(&cfg);
+    let in_cycle = |block| {
+        sccs.scc_of(block)
+            .is_some_and(|scc| sccs.scc_data(scc).is_cycle)
+    };
+    let nearest = nearest_common_dominator(&dom, &dep_blocks)?;
+    let entry_block = dom_chain(&dom, nearest)
+        .into_iter()
+        .find(|&block| !in_cycle(block))?;
     if !dep_blocks
         .iter()
         .all(|&block| dom.dominates(entry_block, block))
@@ -247,8 +262,22 @@ fn compute_lazy_frame_plan_inner(
         return None;
     }
 
-    let enter = earliest_point_in_block(&dep_points, entry_block)?;
-    let exits = match nearest_common_postdominator(&post_dom, &dep_blocks)? {
+    let enter = if entry_block == nearest {
+        earliest_point_in_block(&dep_points, entry_block)?
+    } else {
+        // A hoisted entry block has no dependencies of its own.
+        dep_blocks.push(entry_block);
+        FrameInjectionPoint::BeforeSite(FrameSite::PreInst(
+            function.layout.last_inst_of(entry_block)?,
+        ))
+    };
+    let exit_node = match nearest_common_postdominator(&post_dom, &dep_blocks)? {
+        PostNode::Real(block) => postdom_chain(&post_dom, block)
+            .into_iter()
+            .find(|node| !matches!(*node, PostNode::Real(block) if in_cycle(block)))?,
+        node => node,
+    };
+    let exits = match exit_node {
         PostNode::Real(exit_block) if dom.dominates(entry_block, exit_block) => {
             vec![latest_point_in_block_or_entry(&dep_points, exit_block)]
         }
