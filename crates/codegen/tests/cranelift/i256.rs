@@ -567,6 +567,38 @@ fn i256_division_reaches_every_divider_step() {
     }
 }
 
+#[test]
+fn i256_division_by_powers_of_two_and_one_limb_divisors() {
+    // Wider numerators shift for a power-of-two divisor and take four
+    // inline digits for another one-limb divisor; signed operands divide
+    // their magnitudes.
+    let numerators = [
+        word([u64::MAX; 4]),
+        word([1, 2, 3, 4]),
+        word([0x0123_4567_89ab_cdef, u64::MAX, 0, 1 << 63]),
+        word([5, 1, 0, 0]),
+        word([u64::MAX, u64::MAX, 0, 0]),
+        word([7, 0, 0, 0x7fff_ffff_ffff_ffff]),
+    ];
+    let mut divisors: Vec<U256> = (0..256).map(|bit| U256::one() << bit).collect();
+    divisors.extend(
+        [
+            3,
+            10,
+            1_000_000,
+            (1 << 63) + 1,
+            u64::MAX,
+            0x8000_0000_0000_0000,
+        ]
+        .map(U256::from),
+    );
+    divisors.extend([U256::one() << 200, U256::from(1_000_000), U256::from(3)].map(neg));
+    let cases = pairs(&numerators, &divisors);
+    for op in ["udiv", "umod", "sdiv", "smod"] {
+        check(&binary(op), &cases, |[a, b, _]| (divided(op, a, b), false));
+    }
+}
+
 /// `(a op b) % m` at full precision; a zero modulus gives zero.
 fn modular(a: U256, b: U256, m: U256, multiply: bool) -> U256 {
     if m.is_zero() {
