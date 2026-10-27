@@ -16,6 +16,7 @@ use sonatina_ir::{
 };
 
 use super::{ValueMap, resolve_i256, scalar_constant};
+use crate::analysis::known_bits::KnownBitsQuery;
 
 pub(super) const LIMBS: usize = 4;
 pub(super) type Limbs = [clif::Value; LIMBS];
@@ -444,15 +445,17 @@ pub(super) enum ShiftKind {
 }
 
 /// A shift amount: a constant (`None` when at least 256), or a variable
-/// amount with its truncation to 64 bits and whether it is at least 256.
+/// amount with its truncation to 64 bits and whether it is at least 256,
+/// unless known bits keep it below.
 enum ShiftAmount {
     Constant(Option<u32>),
-    Variable(clif::Value, clif::Value),
+    Variable(clif::Value, Option<clif::Value>),
 }
 
 fn shift_amount(
     function: &Function,
     bits: ValueId,
+    bounded: bool,
     value_map: &ValueMap,
     builder: &mut FunctionBuilder,
 ) -> Result<ShiftAmount, String> {
@@ -464,12 +467,15 @@ fn shift_amount(
     }
     // The verifier gives a shift amount the type of the shifted value.
     let limbs = resolve_i256(function, bits, value_map, builder)?;
+    if bounded {
+        return Ok(ShiftAmount::Variable(limbs[0], None));
+    }
     let high_nonzero = any_nonzero(&limbs[1..], builder);
     let too_large = builder
         .ins()
         .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, limbs[0], 256);
     let too_large = builder.ins().bor(too_large, high_nonzero);
-    Ok(ShiftAmount::Variable(limbs[0], too_large))
+    Ok(ShiftAmount::Variable(limbs[0], Some(too_large)))
 }
 
 fn shift(
@@ -490,7 +496,12 @@ fn shift(
         }
         ShiftAmount::Variable(amount, too_large) => {
             let shifted = shift_by_variable(value, amount, kind, fill, builder);
-            std::array::from_fn(|limb| builder.ins().select(too_large, fill, shifted[limb]))
+            match too_large {
+                Some(too_large) => {
+                    std::array::from_fn(|limb| builder.ins().select(too_large, fill, shifted[limb]))
+                }
+                None => shifted,
+            }
         }
     }
 }
@@ -609,6 +620,7 @@ pub(super) fn translate_i256_op(
     inst: InstId,
     value_map: &mut ValueMap,
     builder: &mut FunctionBuilder,
+    known_bits: &mut Option<KnownBitsQuery>,
 ) -> Result<bool, String> {
     enum Output {
         Limbs(Limbs),
@@ -639,13 +651,16 @@ pub(super) fn translate_i256_op(
         let (lhs, rhs) = binary(lhs, rhs, value_map, builder)?;
         Ok(Output::Flag(icmp(cc, lhs, rhs, builder)))
     };
-    let shift_op = |value: &ValueId,
-                    bits: &ValueId,
-                    kind: ShiftKind,
-                    value_map: &ValueMap,
-                    builder: &mut FunctionBuilder| {
+    let mut shift_op = |value: &ValueId,
+                        bits: &ValueId,
+                        kind: ShiftKind,
+                        value_map: &ValueMap,
+                        builder: &mut FunctionBuilder| {
         let value = resolve_i256(function, *value, value_map, builder)?;
-        let amount = shift_amount(function, *bits, value_map, builder)?;
+        let bounded = known_bits
+            .get_or_insert_with(|| KnownBitsQuery::new(function))
+            .fits_in_low_bits(function, *bits, 8);
+        let amount = shift_amount(function, *bits, bounded, value_map, builder)?;
         Ok::<_, String>(Output::Limbs(shift(value, amount, kind, builder)))
     };
     let bitwise = |lhs: &ValueId,

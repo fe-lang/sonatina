@@ -2,19 +2,19 @@ use std::cell::RefCell;
 
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    ControlFlowGraph, Function, Immediate, InstId, ValueId,
-    inst::{BinaryInstKind, InstClassKind},
+    ControlFlowGraph, Function, I256, Immediate, InstId, U256, Value, ValueId,
+    inst::{BinaryInstKind, InstClassKind, logic::And},
 };
 
 use crate::{
     analysis::{
         definedness::value_may_be_undef,
-        known_bits::{KnownBits, type_mask},
+        known_bits::{KnownBits, type_bits, type_mask},
         scalar_facts::ScalarFacts,
     },
     domtree::DomTree,
     loop_analysis::LoopTree,
-    range_analysis::{RangeAnalysis, RangeEnv, RangeFact},
+    range_analysis::{RangeAnalysis, RangeEnv, RangeFact, fact_for_value},
 };
 
 use super::simplify_expr::{
@@ -89,7 +89,7 @@ impl KnownBitsSimplify {
 
         let scalar_facts = ScalarFacts::new(func);
         let mut range_analysis = None;
-        if has_integral_and(func) {
+        if has_integral_and(func) || has_variable_shift(func) {
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(func);
 
@@ -105,6 +105,7 @@ impl KnownBitsSimplify {
         }
 
         let may_be_undef = RefCell::default();
+        let mut counts = Vec::new();
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
             let mut range_env = range_analysis
@@ -122,6 +123,11 @@ impl KnownBitsSimplify {
                 if let Some(plan) = self.plan_inst(func, &facts, inst) {
                     self.plans.push(plan);
                 }
+                if let Some(range_env) = range_env.as_ref()
+                    && let Some(count) = bounded_shift_count(func, range_env, inst)
+                {
+                    counts.push(count);
+                }
 
                 if let Some(analysis) = &range_analysis
                     && let Some(range_env) = range_env.as_mut()
@@ -132,8 +138,13 @@ impl KnownBitsSimplify {
             }
         }
 
+        let masked = !counts.is_empty();
+        for (inst, count, mask) in counts {
+            mask_shift_count(func, inst, count, mask);
+        }
+
         if self.plans.is_empty() {
-            return false;
+            return masked;
         }
 
         let resolved = resolve_replacements(&self.plans);
@@ -225,6 +236,84 @@ impl KnownBitsSimplify {
             SimplifiedResult::NoChange => None,
         }
     }
+}
+
+fn has_variable_shift(func: &Function) -> bool {
+    func.layout.iter_block().any(|block| {
+        func.layout.iter_inst(block).any(|inst| {
+            matches!(
+                func.dfg.inst(inst).kind(),
+                InstClassKind::Binary(
+                    BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar
+                )
+            ) && func
+                .dfg
+                .value_imm(func.dfg.inst(inst).collect_values()[0])
+                .is_none()
+        })
+    })
+}
+
+/// A shift whose variable count range analysis proves below the width, as
+/// in `if n < 256 { x << n }`, with the mask `width - 1` its count can take.
+/// Masking makes the bound visible to known bits, so a native backend skips
+/// its handling of oversized counts.
+fn bounded_shift_count(
+    func: &Function,
+    env: &RangeEnv,
+    inst: InstId,
+) -> Option<(InstId, ValueId, Immediate)> {
+    if !matches!(
+        func.dfg.inst(inst).kind(),
+        InstClassKind::Binary(BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar)
+    ) {
+        return None;
+    }
+    let [count, _] = func.dfg.inst(inst).collect_values()[..] else {
+        return None;
+    };
+    let ty = func.dfg.value_ty(count);
+    if !ty.is_integral() || func.dfg.value_imm(count).is_some() {
+        return None;
+    }
+    let width = U256::from(type_bits(ty));
+    let mask = Immediate::from_i256(I256::from(width - 1), ty);
+    let already_masked = func.dfg.value_inst(count).is_some_and(|def| {
+        func.dfg.inst(def).kind() == InstClassKind::Binary(BinaryInstKind::And)
+            && func.dfg.inst(def).collect_values().iter().any(|&operand| {
+                func.dfg
+                    .value_imm(operand)
+                    .is_some_and(|imm| imm.as_i256().to_u256() < width)
+            })
+    });
+    (!already_masked && fact_for_value(func, env, count).unsigned.hi < width)
+        .then_some((inst, count, mask))
+}
+
+/// Rewrites the count of `inst` to `count & mask`.
+fn mask_shift_count(func: &mut Function, inst: InstId, count: ValueId, mask: Immediate) {
+    let mask = func.dfg.make_imm_value(mask);
+    let ty = func.dfg.value_ty(count);
+    let and = func
+        .dfg
+        .make_inst(And::new_unchecked(func.inst_set(), count, mask));
+    let masked = func.dfg.make_value(Value::Inst {
+        inst: and,
+        result_idx: 0,
+        ty,
+    });
+    func.dfg.attach_result(and, masked);
+    func.layout.insert_inst_before(and, inst);
+    func.propagate_inst_attribution(and, inst);
+    let mut data = func.dfg.clone_inst(inst);
+    let mut first = true;
+    data.for_each_value_mut(&mut |operand| {
+        if first {
+            *operand = masked;
+            first = false;
+        }
+    });
+    func.dfg.replace_inst(inst, data);
 }
 
 fn has_integral_and(func: &Function) -> bool {
