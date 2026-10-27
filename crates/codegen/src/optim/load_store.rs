@@ -742,9 +742,9 @@ fn transfer_forward(
         }
 
         kill_aliasing_key(state, analysis, &key);
-        // A read is never undef, so it cannot take a stored value that may be;
-        // the first read then serves the later ones.
-        if !taint.scalar_may_be_undef(func, stored_value) {
+        // A read is never undef, so it cannot take a stored value that may be,
+        // even in one field; the first read then serves the later ones.
+        if !taint.holds_undef(func, stored_value) {
             state.exact.insert(key, stored_value);
         }
     }
@@ -1215,6 +1215,49 @@ mod tests {
         },
         isa::Isa,
     };
+
+    /// Stores `{7, field}` to a slot, reads it back and returns field 1.
+    fn forward_pair_read(field: &str) -> String {
+        let module = crate::test_support::parse_test_module(&format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = {{i256, i256}};
+type @nested = {{i256, @pair}};
+
+func public %f(v0.i256) -> i256 {{
+block0:
+    v1.*@nested = alloca @nested;
+    v2.@pair = insert_value undef.@pair 0.i8 7.i256;
+    v3.@pair = insert_value v2 1.i8 {field};
+    v4.@nested = insert_value undef.@nested 1.i8 v3;
+    v5.@nested = insert_value v4 0.i8 v0;
+    mstore v1 v5 @nested;
+    v6.@nested = mload v1 @nested;
+    v7.@pair = extract_value v6 1.i8;
+    v8.i256 = extract_value v7 1.i8;
+    return v8;
+}}
+"#
+        ));
+        let func_ref = crate::test_support::lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            LoadStoreSolver::new().run(func, &mut cfg);
+        });
+        crate::test_support::dump_func(&module, func_ref)
+    }
+
+    #[test]
+    fn reads_keep_stored_aggregates_with_undefined_fields() {
+        // A read is never undef, so a nested field that is stays behind the read.
+        let dumped = forward_pair_read("undef.i256");
+        assert!(dumped.contains("mload v1 @nested;"), "{dumped}");
+
+        let dumped = forward_pair_read("v0");
+        assert!(!dumped.contains("mload"), "{dumped}");
+    }
 
     #[test]
     fn rewrite_ignores_deleted_available_values() {

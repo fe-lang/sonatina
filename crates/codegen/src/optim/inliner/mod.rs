@@ -523,7 +523,8 @@ impl Inliner {
                         Err(full::FullInlineFail::CallGone)
                         | Err(full::FullInlineFail::NotCall)
                         | Err(full::FullInlineFail::CalleeMismatch)
-                        | Err(full::FullInlineFail::MalformedCallee) => {}
+                        | Err(full::FullInlineFail::MalformedCallee)
+                        | Err(full::FullInlineFail::UndefinedEnum) => {}
                     }
                 }
 

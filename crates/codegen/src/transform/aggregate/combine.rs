@@ -274,8 +274,9 @@ impl AggregateCombine {
                 && let Some(value) =
                     enum_payload_value(&state.facts, object, *projection.variant(), field)
                 && self.payload_is_readable(func, value)
-                // A read is never undef, so a scalar that may be stays a read.
-                && !self.taint.scalar_may_be_undef(func, value)
+                // A read is never undef, so a value that may be, even in one
+                // field, stays a read.
+                && !self.taint.holds_undef(func, value)
                 && func
                     .dfg
                     .inst_result(inst)

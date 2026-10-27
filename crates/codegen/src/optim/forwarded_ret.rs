@@ -6,7 +6,7 @@ use sonatina_ir::{
     module::{FuncRef, Module},
 };
 
-use crate::analysis::definedness::{UndefTaint, freeze_before};
+use crate::analysis::definedness::UndefTaint;
 
 use super::{
     dead_func::collect_object_roots,
@@ -87,7 +87,7 @@ pub fn run_forwarded_ret_elim(
             module.func_store.modify(func_ref, Function::rebuild_users);
         }
 
-        let mut plans = collect_plans(module, config);
+        let mut plans = collect_plans(module, config, &undefinable_args(module));
         plans.retain(|func, _| !roots.contains(func));
         if config.require_higher_order_safe {
             let before: Vec<_> = plans.keys().copied().collect();
@@ -134,7 +134,36 @@ enum ForwardState {
     NotForwarded,
 }
 
-fn collect_plans(module: &Module, config: ForwardedRetElimConfig) -> FxHashMap<FuncRef, FuncPlan> {
+/// The arguments some direct call passes with an enum part that may be undef.
+/// No freeze defines one for the call result to take, so a lane forwarding it
+/// keeps the result.
+fn undefinable_args(module: &Module) -> FxHashSet<(FuncRef, usize)> {
+    let mut undefinable = FxHashSet::default();
+    for func_ref in module.funcs() {
+        module.func_store.view(func_ref, |function| {
+            let taint = UndefTaint::default();
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    let Some(call) = function.dfg.cast_call(inst) else {
+                        continue;
+                    };
+                    for (idx, &arg) in call.args().iter().enumerate() {
+                        if !taint.can_define(function, arg) {
+                            undefinable.insert((*call.callee(), idx));
+                        }
+                    }
+                }
+            }
+        });
+    }
+    undefinable
+}
+
+fn collect_plans(
+    module: &Module,
+    config: ForwardedRetElimConfig,
+    undefinable: &FxHashSet<(FuncRef, usize)>,
+) -> FxHashMap<FuncRef, FuncPlan> {
     let mut plans = FxHashMap::default();
 
     for func_ref in module.funcs() {
@@ -186,7 +215,11 @@ fn collect_plans(module: &Module, config: ForwardedRetElimConfig) -> FxHashMap<F
         let forwarded_args = states
             .into_iter()
             .map(|state| match state {
-                ForwardState::Arg(idx) if idx < signature.args().len() => Some(idx),
+                ForwardState::Arg(idx)
+                    if idx < signature.args().len() && !undefinable.contains(&(func_ref, idx)) =>
+                {
+                    Some(idx)
+                }
                 ForwardState::Unseen | ForwardState::Arg(_) | ForwardState::NotForwarded => None,
             })
             .collect::<Vec<_>>();
@@ -242,26 +275,25 @@ fn rewrite_calls(function: &mut Function, plans: &FxHashMap<FuncRef, FuncPlan>) 
                 let Some(arg_idx) = forwarded_arg else {
                     continue;
                 };
-                let mut replacement = call_args[*arg_idx];
-                // A call result is never undef: freeze the argument for both
-                // the callee and the result, so they see one value.
-                if taint.scalar_may_be_undef(function, replacement) {
-                    let frozen = freeze_before(function, inst, replacement);
+                let arg = call_args[*arg_idx];
+                // A call result is never undef: freeze the argument's undef parts
+                // for both the callee and the result, so they see one value.
+                let defined = taint.define_before(function, inst, arg);
+                if defined != arg {
                     let mut data = function.dfg.clone_inst(inst);
                     data.for_each_value_mut(&mut |operand| {
-                        if *operand == replacement {
-                            *operand = frozen;
+                        if *operand == arg {
+                            *operand = defined;
                         }
                     });
                     function.dfg.replace_inst(inst, data);
-                    for arg in &mut call_args {
-                        if *arg == replacement {
-                            *arg = frozen;
+                    for call_arg in &mut call_args {
+                        if *call_arg == arg {
+                            *call_arg = defined;
                         }
                     }
-                    replacement = frozen;
                 }
-                function.dfg.change_to_alias(result, replacement);
+                function.dfg.change_to_alias(result, defined);
                 replaced_results += 1;
             }
             function.dfg.retain_inst_results(inst, &plan.keep_rets);
@@ -335,6 +367,67 @@ func public %entry(v0.i32, v1.i32) -> i32 {
         let entry = dump_function(&parsed.module, "entry");
         assert!(entry.contains("v3.i32 = call %advance v0 v1;"));
         assert!(entry.contains("add v0 v3"));
+        assert_verified(&parsed.module);
+    }
+
+    #[test]
+    fn defines_undefined_parts_of_forwarded_arguments() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+type @opt = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %touch_pair(v0.@pair) -> @pair {
+    block0:
+        v1.i256 = extract_value v0 0.i8;
+        evm_sstore 0.i256 v1;
+        return v0;
+}
+
+func private %touch_opt(v0.@opt, v1.@opt) -> (@opt, @opt) {
+    block0:
+        evm_sstore 0.i256 1.i256;
+        return (v0, v1);
+}
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.@pair = insert_value undef.@pair 0.i8 v0;
+        v2.@pair = call %touch_pair v1;
+        v3.i256 = extract_value v2 1.i8;
+        v4.@opt = enum.make @opt #Some (undef.i256);
+        v5.@opt = enum.make @opt #Some (v0);
+        (v6.@opt, v7.@opt) = call %touch_opt v4 v5;
+        enum.assert_variant v6 #Some;
+        v8.i256 = enum.extract v6 #Some 0.i8;
+        enum.assert_variant v7 #Some;
+        v9.i256 = enum.extract v7 #Some 0.i8;
+        v10.i256 = add v3 v8;
+        v11.i256 = add v10 v9;
+        return v11;
+}
+"#,
+        );
+
+        let stats = run_forwarded_ret_elim(&parsed.module, &[], ForwardedRetElimConfig::default());
+
+        // A call result is never undef: the pair's undefined field is frozen
+        // for both the callee and the result, and the enum that may be undef
+        // keeps its lane.
+        assert_eq!(stats.removed_rets, 2);
+        let entry = dump_function(&parsed.module, "entry");
+        assert!(entry.contains("freeze undef.i256"), "{entry}");
+        assert!(!entry.contains("call %touch_pair v1;"), "{entry}");
+        assert!(
+            entry.contains("v6.@opt = call %touch_opt v4 v5;"),
+            "{entry}"
+        );
+        assert!(entry.contains("enum.extract v5 #Some"), "{entry}");
         assert_verified(&parsed.module);
     }
 

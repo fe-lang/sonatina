@@ -6,7 +6,7 @@ use sonatina_ir::{
 };
 
 use crate::{
-    analysis::definedness::{UndefTaint, freeze_before},
+    analysis::definedness::UndefTaint,
     cfg_edit::{CfgEditor, CleanupMode},
 };
 
@@ -20,6 +20,9 @@ pub(super) enum FullInlineFail {
     NoBody,
     SignatureMismatch,
     MalformedCallee,
+    /// An argument or returned value has an enum part that may be undef,
+    /// which no freeze can define.
+    UndefinedEnum,
 }
 
 pub(super) struct FullInlineResult {
@@ -121,16 +124,14 @@ pub(super) fn try_inline_callsite_full(
         validated_callees.insert(callee_key);
     }
 
-    // A parameter is never undef, so the callee body sees a frozen argument.
+    // A parameter is never undef, so the callee body sees its arguments with
+    // their undef parts frozen.
+    if !call_args.iter().all(|&arg| taint.can_define(caller, arg)) {
+        return Err(FullInlineFail::UndefinedEnum);
+    }
     let call_args: SmallVec<[ValueId; 8]> = call_args
         .iter()
-        .map(|&arg| {
-            if taint.scalar_may_be_undef(caller, arg) {
-                freeze_before(caller, call_inst, arg)
-            } else {
-                arg
-            }
-        })
+        .map(|&arg| taint.define_before(caller, call_inst, arg))
         .collect();
 
     let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
@@ -313,7 +314,7 @@ pub(super) fn try_inline_callsite_full(
                         .copied()
                         .filter(|&value| func.dfg.value_ty(value) == call_result_ty)
                         .unwrap_or_else(|| func.dfg.make_undef_value(call_result_ty));
-                    let value = frozen_result(func, cont_block, value, taint);
+                    let value = defined_result(func, cont_block, value, taint);
                     func.dfg.change_to_alias(call_result, value);
                 }
                 _ => {
@@ -342,7 +343,7 @@ pub(super) fn try_inline_callsite_full(
                         ty: call_result_ty,
                     });
                     func.dfg.attach_result(phi_inst, phi_value);
-                    let value = frozen_result(func, cont_block, phi_value, taint);
+                    let value = defined_result(func, cont_block, phi_value, taint);
                     func.dfg.change_to_alias(call_result, value);
                     inserted_insts += 1;
                 }
@@ -422,27 +423,8 @@ impl Visitor for OperandValidator<'_> {
 /// value operand is an argument, a constant, or a result defined earlier in
 /// reverse post-order. A phi operand may instead be a result of a later
 /// reachable block. A callee that passes cannot fail partway through the
-/// rewrite. Other malformations are copied as they are and left to the module
-/// verifier.
-/// A call result is never undef, so a returned value that may be is frozen
-/// where the call's continuation starts.
-fn frozen_result(
-    func: &mut Function,
-    cont_block: BlockId,
-    value: ValueId,
-    taint: &UndefTaint,
-) -> ValueId {
-    if !taint.scalar_may_be_undef(func, value) {
-        return value;
-    }
-    let first = func
-        .layout
-        .iter_inst(cont_block)
-        .find(|&inst| !func.dfg.is_phi(inst))
-        .expect("a continuation block ends in a terminator");
-    freeze_before(func, first, value)
-}
-
+/// rewrite, nor return an enum part that may be undef. Other malformations are
+/// copied as they are and left to the module verifier.
 fn validate_full_inline_callee_rewriteability(
     callee: &Function,
     rpo: &[BlockId],
@@ -510,14 +492,40 @@ fn validate_full_inline_callee_rewriteability(
         }
     }
 
-    if phi_forward_refs
+    if !phi_forward_refs
         .iter()
         .all(|value| seen_values.contains(value))
     {
-        Ok(())
-    } else {
-        Err(FullInlineFail::MalformedCallee)
+        return Err(FullInlineFail::MalformedCallee);
     }
+
+    // A call result is never undef, and no freeze in the caller defines an
+    // enum part that may be.
+    let taint = UndefTaint::default();
+    let mut returned = rpo
+        .iter()
+        .filter_map(|&block| callee.dfg.return_args(callee.layout.last_inst_of(block)?))
+        .flatten();
+    if returned.any(|&value| !taint.can_define(callee, value)) {
+        return Err(FullInlineFail::UndefinedEnum);
+    }
+    Ok(())
+}
+
+/// A call result is never undef, so a returned value's undef parts are frozen
+/// where the call's continuation starts.
+fn defined_result(
+    func: &mut Function,
+    cont_block: BlockId,
+    value: ValueId,
+    taint: &UndefTaint,
+) -> ValueId {
+    let first = func
+        .layout
+        .iter_inst(cont_block)
+        .find(|&inst| !func.dfg.is_phi(inst))
+        .expect("a continuation block ends in a terminator");
+    taint.define_before(func, first, value)
 }
 
 fn map_or_materialize(

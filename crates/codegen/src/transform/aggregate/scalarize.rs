@@ -11,7 +11,7 @@ use sonatina_ir::{
 };
 
 use crate::{
-    analysis::definedness::{UndefTaint, freeze_before, is_scalar},
+    analysis::definedness::{UndefTaint, is_scalar},
     cfg_edit::{CfgEditor, CleanupMode},
     optim::const_eval::{
         ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys, eval_const_path_subtree,
@@ -1703,7 +1703,9 @@ impl AggregateScalarize {
                     let leaf_idx = base_leaf + i;
                     let stored =
                         bitcast_before_inst(func, inst, payload_leaf, view_ty, underlying_leaf.ty);
-                    let stored = frozen_store(func, inst, taint, stored);
+                    // A slot read is never undef, so a stored leaf that may be is
+                    // frozen, and every later read of the slot sees the one value.
+                    let stored = taint.define_before(func, inst, stored);
                     ssa.def_var(promoted.leaf_vars[leaf_idx], stored, block);
                 }
                 record_modified_leaves(
@@ -1776,7 +1778,7 @@ impl AggregateScalarize {
             {
                 let var = promoted.leaf_vars[projection.slice.first_leaf + i];
                 let stored = bitcast_before_inst(func, inst, val, view_ty, underlying_leaf.ty);
-                let stored = frozen_store(func, inst, taint, stored);
+                let stored = taint.define_before(func, inst, stored);
                 ssa.def_var(var, stored, block);
             }
             record_modified_leaves(modified_leaves, projection.root_value.value(), leaf_range);
@@ -1790,7 +1792,7 @@ impl AggregateScalarize {
         let underlying_leaf = &underlying_leaves[0];
         let var = promoted.leaf_vars[projection.slice.first_leaf];
         let stored = bitcast_before_inst(func, inst, value, ty, underlying_leaf.ty);
-        let stored = frozen_store(func, inst, taint, stored);
+        let stored = taint.define_before(func, inst, stored);
         ssa.def_var(var, stored, block);
         record_modified_leaves(modified_leaves, projection.root_value.value(), leaf_range);
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -2987,15 +2989,6 @@ impl RootKind {
     }
 }
 
-/// A slot read is never undef, so a stored scalar that may be is frozen, and
-/// every later read of the slot sees the one frozen value.
-fn frozen_store(func: &mut Function, inst: InstId, taint: &UndefTaint, value: ValueId) -> ValueId {
-    if taint.scalar_may_be_undef(func, value) {
-        freeze_before(func, inst, value)
-    } else {
-        value
-    }
-}
 fn initializer_leaf_immediate(
     module: &sonatina_ir::module::ModuleCtx,
     ty: Type,
