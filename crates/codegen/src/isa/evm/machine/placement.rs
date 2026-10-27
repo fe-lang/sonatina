@@ -606,10 +606,12 @@ impl MallocPlacementRules<'_> {
                     .get(&inst)
                     .copied()
                     .unwrap_or(false);
+                // A fixed base takes no DYN_SP clamp, so it would overlap a
+                // dynamic frame live at the malloc.
                 let fixed_by_terminal_or_program_rule = transient
+                    && !heap_facts.needs_dyn_sp_clamp
                     && (heap_facts.terminal_private_mallocs.contains(&inst)
                         || (!self.free_ptr_slot_may_be_touched
-                            && !heap_facts.needs_dyn_sp_clamp
                             && !self.has_persistent_mallocs
                             // Transience proves storage is no longer needed;
                             // it does not make encoded pointer bits unobservable.
