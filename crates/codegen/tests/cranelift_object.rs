@@ -5,7 +5,7 @@ use std::{hint::black_box, time::Instant};
 #[path = "cranelift/linked.rs"]
 mod linked;
 
-use object::{Object, ObjectSection, ObjectSymbol};
+use object::{Object, ObjectSection, ObjectSymbol, RelocationFlags};
 #[cfg(feature = "cranelift-jit")]
 use sonatina_codegen::isa::cranelift::CraneliftJitBackend;
 use sonatina_codegen::{
@@ -354,18 +354,36 @@ block0:
     }
 }
 
-/// The number of relocations in text sections that refer to symbol `name`.
+/// The number of references in text sections to symbol `name`. COFF reaches
+/// an import through a `.refptr.` stub, and an aarch64 GOT load takes a page
+/// relocation and a page-offset one, of which only the page one counts.
 fn references(bytes: &[u8], name: &str) -> usize {
     let object = object::File::parse(bytes).unwrap();
+    let aarch64 = object.architecture() == object::Architecture::Aarch64;
     object
         .sections()
         .filter(|section| section.kind() == object::SectionKind::Text)
         .flat_map(|section| section.relocations())
+        .filter(|(_, relocation)| {
+            !aarch64
+                || !matches!(
+                    relocation.flags(),
+                    RelocationFlags::MachO {
+                        r_type: object::macho::ARM64_RELOC_GOT_LOAD_PAGEOFF12,
+                        ..
+                    } | RelocationFlags::Elf {
+                        r_type: object::elf::R_AARCH64_LD64_GOT_LO12_NC
+                    }
+                )
+        })
         .filter(|(_, relocation)| match relocation.target() {
             object::RelocationTarget::Symbol(index) => object
                 .symbol_by_index(index)
                 .and_then(|symbol| symbol.name())
-                .is_ok_and(|symbol| symbol.trim_start_matches('_') == name),
+                .is_ok_and(|symbol| {
+                    let symbol = symbol.strip_prefix(".refptr.").unwrap_or(symbol);
+                    symbol.trim_start_matches('_') == name
+                }),
             _ => false,
         })
         .count()
