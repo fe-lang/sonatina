@@ -122,34 +122,42 @@ pub(super) fn emit_scalar_shift(
     count: clif::Value,
     ty: Type,
     kind: ScalarShift,
+    count_in_range: bool,
     builder: &mut FunctionBuilder,
 ) -> clif::Value {
     let clif_ty = builder.func.dfg.value_type(value);
     let width = if ty == Type::I1 { 1 } else { clif_ty.bits() };
-    // Cranelift masks shift counts; Sonatina saturates oversized shifts.
-    // Compare at the original count width before any instruction narrows it.
-    let limit = scalar_constant(
-        builder.func.dfg.value_type(count),
-        i128::from(width),
-        builder,
-    );
-    let oversized = builder
-        .ins()
-        .icmp(IntCC::UnsignedGreaterThanOrEqual, count, limit);
+    // Cranelift masks shift counts; Sonatina saturates oversized shifts, so
+    // a count that may reach the width needs a fallback. Compare at the
+    // original count width before any instruction narrows it.
+    let oversized = (!count_in_range).then(|| {
+        let limit = scalar_constant(
+            builder.func.dfg.value_type(count),
+            i128::from(width),
+            builder,
+        );
+        builder
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, count, limit)
+    });
     let count = if builder.func.dfg.value_type(count) == clif::types::I128 {
         builder.ins().ireduce(clif::types::I64, count)
     } else {
         count
     };
-    let zero = scalar_constant(clif_ty, 0, builder);
-    let (shifted, fill) = match kind {
-        ScalarShift::Shl => (builder.ins().ishl(value, count), zero),
-        ScalarShift::Shr => (builder.ins().ushr(value, count), zero),
-        ScalarShift::Sar if ty == Type::I1 => (value, value),
-        ScalarShift::Sar => (
-            builder.ins().sshr(value, count),
-            builder.ins().sshr_imm_s(value, i64::from(width - 1)),
-        ),
+    let shifted = match kind {
+        ScalarShift::Shl => builder.ins().ishl(value, count),
+        ScalarShift::Shr => builder.ins().ushr(value, count),
+        ScalarShift::Sar if ty == Type::I1 => value,
+        ScalarShift::Sar => builder.ins().sshr(value, count),
+    };
+    let Some(oversized) = oversized else {
+        return shifted;
+    };
+    let fill = match kind {
+        ScalarShift::Shl | ScalarShift::Shr => scalar_constant(clif_ty, 0, builder),
+        ScalarShift::Sar if ty == Type::I1 => value,
+        ScalarShift::Sar => builder.ins().sshr_imm_s(value, i64::from(width - 1)),
     };
     builder.ins().select(oversized, fill, shifted)
 }

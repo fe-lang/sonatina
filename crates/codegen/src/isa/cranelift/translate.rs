@@ -27,6 +27,8 @@ use sonatina_ir::{
 };
 use sonatina_triple::TargetTriple;
 
+use crate::analysis::known_bits::KnownBitsQuery;
+
 use self::{
     abi::*,
     division::{Divider, DividerCall, Numerator, addmod, div_rem, div_rem_i128, mulmod},
@@ -151,6 +153,27 @@ pub(super) fn translate_module(
     Ok(defined_func_map)
 }
 
+/// Whether a shift's count is always below its operand's width, which its
+/// known bits show when every bit above the width's low bits is zero.
+fn shift_count_in_range(
+    function: &Function,
+    count: ValueId,
+    value: ValueId,
+    known_bits: &mut Option<KnownBitsQuery>,
+) -> bool {
+    let log2_width = match function.dfg.value_ty(value) {
+        Type::I8 => 3,
+        Type::I16 => 4,
+        Type::I32 => 5,
+        Type::I64 => 6,
+        Type::I128 => 7,
+        _ => return false,
+    };
+    known_bits
+        .get_or_insert_with(|| KnownBitsQuery::new(function))
+        .fits_in_low_bits(function, count, log2_width)
+}
+
 fn emit_trap(builder: &mut FunctionBuilder, code: TrapCode) {
     builder.ins().trap(code);
 }
@@ -244,6 +267,7 @@ fn translate_function(
     }
 
     let frame = FrameSlots::new(function, &cfg, &block_order, sret_ptr, &mut builder)?;
+    let mut known_bits = None;
     for &block in &block_order {
         let clif_block = block_map[&block];
         for inst_id in function.layout.iter_inst(block) {
@@ -405,6 +429,7 @@ fn translate_function(
                         bits,
                         function.dfg.value_ty(*shl.value()),
                         ScalarShift::Shl,
+                        shift_count_in_range(function, *shl.bits(), *shl.value(), &mut known_bits),
                         &mut builder,
                     );
                     if let Some(result) = function.dfg.inst_result(inst_id) {
@@ -419,6 +444,7 @@ fn translate_function(
                         bits,
                         function.dfg.value_ty(*shr.value()),
                         ScalarShift::Shr,
+                        shift_count_in_range(function, *shr.bits(), *shr.value(), &mut known_bits),
                         &mut builder,
                     );
                     if let Some(result) = function.dfg.inst_result(inst_id) {
@@ -433,6 +459,7 @@ fn translate_function(
                         bits,
                         function.dfg.value_ty(*sar.value()),
                         ScalarShift::Sar,
+                        shift_count_in_range(function, *sar.bits(), *sar.value(), &mut known_bits),
                         &mut builder,
                     );
                     if let Some(result) = function.dfg.inst_result(inst_id) {
@@ -1878,4 +1905,58 @@ fn translate_icmp(
         value_map.insert(result, result_val);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::inst::{arith::Shl, downcast};
+
+    use super::shift_count_in_range;
+
+    #[test]
+    fn masked_and_scaled_counts_stay_below_the_width() {
+        let source = r#"target = "x86_64-unknown-native"
+func public %f(v0.i64, v1.i64, v2.i32) -> i64 {
+block0:
+    v3.i64 = and v1 63.i64;
+    v4.i64 = shl v3 v0;
+    v5.i64 = and v1 7.i64;
+    v6.i64 = shl 3.i64 v5;
+    v7.i64 = shl v6 v4;
+    v8.i64 = shl v1 v7;
+    v9.i64 = and v1 64.i64;
+    v10.i64 = shl v9 v8;
+    v11.i32 = and v2 31.i32;
+    v12.i32 = shl v11 v2;
+    v13.i64 = zext v12 i64;
+    v14.i64 = add v10 v13;
+    return v14;
+}
+"#;
+        let module = sonatina_parser::parse_module(source).unwrap().module;
+        let func = module.funcs()[0];
+        module.func_store.view(func, |function| {
+            let mut known_bits = None;
+            let in_range: Vec<_> = function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .filter_map(|inst| {
+                    downcast::<&Shl>(function.inst_set(), function.dfg.inst(inst))
+                        .filter(|shl| function.dfg.value_imm(*shl.bits()).is_none())
+                        .map(|shl| {
+                            shift_count_in_range(
+                                function,
+                                *shl.bits(),
+                                *shl.value(),
+                                &mut known_bits,
+                            )
+                        })
+                })
+                .collect();
+            // `& 63`, `(& 7) << 3` and `& 31` fit; an unmasked count and
+            // `& 64`, which may equal the width, do not.
+            assert_eq!(in_range, [true, true, false, false, true]);
+        });
+    }
 }

@@ -329,6 +329,46 @@ block0:
 }
 
 #[test]
+fn shifts_by_masked_counts_match_wrapping_shifts() {
+    // Counts masked below the width skip the oversized fallback.
+    let source = r#"func public %shifts(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i64 = and v1 63.i64;
+    v3.i64 = shl v2 v0;
+    v4.i64 = shr v2 v0;
+    v5.i64 = sar v2 v0;
+    v6.i64 = xor v3 v4;
+    v7.i64 = xor v6 v5;
+    return v7;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let shifts: unsafe extern "C" fn(i64, i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("shifts").unwrap()) };
+        for value in [0, 1, -1, i64::MIN, 0x0123_4567_89ab_cdef] {
+            for count in [0, 1, 7, 63, 64, 65, 127, -1] {
+                let bits = (count & 63) as u32;
+                let expected = value.wrapping_shl(bits)
+                    ^ (value as u64).wrapping_shr(bits) as i64
+                    ^ value.wrapping_shr(bits);
+                assert_eq!(
+                    unsafe { shifts(value, count) },
+                    expected,
+                    "{level:?} {value} {count}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn scalar_signed_division_wraps_overflow() {
     for ty in [Type::I8, Type::I16, Type::I32, Type::I64, Type::I128] {
         let min = Immediate::signed_min(ty);
