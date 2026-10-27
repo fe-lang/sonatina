@@ -209,6 +209,40 @@ fn i256_arithmetic_matches_reference() {
 }
 
 #[test]
+fn i256_comparisons_with_one_limb_constants_match_reference() {
+    let values = operands();
+    let cases = pairs(&values, &[U256::zero()]);
+    type Compare = (&'static str, fn(U256, U256) -> bool);
+    let compares: [Compare; 4] = [
+        ("lt", |a, b| a < b),
+        ("gt", |a, b| a > b),
+        ("le", |a, b| a <= b),
+        ("ge", |a, b| a >= b),
+    ];
+    for constant in [
+        U256::zero(),
+        U256::one(),
+        U256::from(256),
+        U256::from(u64::MAX),
+    ] {
+        for (op, expected) in compares {
+            let body = |lhs: &str, rhs: &str| {
+                format!(
+                    "    v7.i1 = {op} {lhs} {rhs};\n    mstore v3 0.i256 i256;\n    v8.i8 = zext v7 i8;\n    return v8;"
+                )
+            };
+            let literal = format!("0x{constant:x}.i256");
+            check(&body("v4", &literal), &cases, |[a, _, _]| {
+                (U256::zero(), expected(a, constant))
+            });
+            check(&body(&literal, "v4"), &cases, |[a, _, _]| {
+                (U256::zero(), expected(constant, a))
+            });
+        }
+    }
+}
+
+#[test]
 fn i256_comparisons_match_reference() {
     let values = operands();
     let cases = pairs(&values, &values);

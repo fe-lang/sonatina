@@ -300,6 +300,49 @@ pub(super) fn ult(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> clif
     lexicographic_lt(IntCC::UnsignedLessThan, lhs, rhs, builder)
 }
 
+/// An unsigned comparison with a constant that fits one limb: the other
+/// operand's high limbs decide unless they are zero, and then its low limb
+/// does. `None` for other comparisons.
+fn one_limb_compare(
+    cc: IntCC,
+    lhs: (Limbs, Option<u64>),
+    rhs: (Limbs, Option<u64>),
+    builder: &mut FunctionBuilder,
+) -> Option<clif::Value> {
+    let (lhs, rhs, negate) = match cc {
+        IntCC::UnsignedLessThan => (lhs, rhs, false),
+        IntCC::UnsignedGreaterThan => (rhs, lhs, false),
+        IntCC::UnsignedLessThanOrEqual => (rhs, lhs, true),
+        IntCC::UnsignedGreaterThanOrEqual => (lhs, rhs, true),
+        _ => return None,
+    };
+    // `lhs < rhs`.
+    let less = match (lhs, rhs) {
+        ((value, _), (_, Some(constant))) => {
+            let high = any_nonzero(&value[1..], builder);
+            let high_zero = bool_not(high, builder);
+            let low = builder
+                .ins()
+                .icmp_imm_u(IntCC::UnsignedLessThan, value[0], constant as i64);
+            builder.ins().band(high_zero, low)
+        }
+        ((_, Some(constant)), (value, _)) => {
+            let high = any_nonzero(&value[1..], builder);
+            let low =
+                builder
+                    .ins()
+                    .icmp_imm_u(IntCC::UnsignedGreaterThan, value[0], constant as i64);
+            builder.ins().bor(high, low)
+        }
+        _ => return None,
+    };
+    Some(if negate {
+        bool_not(less, builder)
+    } else {
+        less
+    })
+}
+
 fn icmp(cc: IntCC, lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
     let (high_cc, lhs, rhs, negate) = match cc {
         IntCC::Equal => return eq(lhs, rhs, builder),
@@ -648,8 +691,17 @@ pub(super) fn translate_i256_op(
                 dfg.value_ty(*rhs)
             ));
         }
+        let one_limb = |value: &ValueId| {
+            dfg.value_imm(*value)
+                .map(|imm| imm.zext(Type::I256).as_i256().to_u256())
+                .filter(|value| *value <= U256::from(u64::MAX))
+                .map(|value| value.low_u64())
+        };
+        let (lhs_const, rhs_const) = (one_limb(lhs), one_limb(rhs));
         let (lhs, rhs) = binary(lhs, rhs, value_map, builder)?;
-        Ok(Output::Flag(icmp(cc, lhs, rhs, builder)))
+        let flag = one_limb_compare(cc, (lhs, lhs_const), (rhs, rhs_const), builder)
+            .unwrap_or_else(|| icmp(cc, lhs, rhs, builder));
+        Ok(Output::Flag(flag))
     };
     let mut shift_op = |value: &ValueId,
                         bits: &ValueId,
