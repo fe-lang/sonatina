@@ -321,7 +321,13 @@ fn translate_function(
 
         for inst_id in function.layout.iter_inst(block) {
             let inst_data = function.dfg.inst(inst_id);
-            let i256_op = translate_i256_op(function, inst_id, &mut value_map, &mut builder)?;
+            let i256_op = translate_i256_op(
+                function,
+                inst_id,
+                &mut value_map,
+                &mut builder,
+                &mut known_bits,
+            )?;
 
             match native_inst_set().resolve_inst(inst_data) {
                 _ if i256_op => {}
