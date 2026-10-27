@@ -9,7 +9,8 @@ use sonatina_ir::{
 };
 
 use crate::{
-    analysis::func_behavior::blocks_that_may_reach_commit, module_analysis,
+    analysis::{definedness::UndefTaint, func_behavior::blocks_that_may_reach_commit},
+    module_analysis,
     transform::aggregate::scalarize::AggregateScalarize,
 };
 
@@ -242,6 +243,7 @@ impl Inliner {
             let mut changed = false;
             for caller_ref in caller_order {
                 let mut reachable_blocks: Option<FxHashSet<BlockId>> = None;
+                let mut taint: Option<UndefTaint> = None;
                 let mut forced_recursive_inline_succeeded = false;
                 let sites = sites_by_caller
                     .get(&caller_ref)
@@ -354,7 +356,8 @@ impl Inliner {
                             |callee| trivial::materialize_plan(callee, &plan_summary),
                         );
                         module.func_store.modify(caller_ref, |caller| {
-                            trivial::apply_plan(caller, site.call_inst, plan, &mut stats)
+                            let taint = taint.get_or_insert_with(|| UndefTaint::new(caller));
+                            trivial::apply_plan(caller, site.call_inst, plan, taint, &mut stats)
                         })
                     } else {
                         None
@@ -448,6 +451,7 @@ impl Inliner {
                         continue;
                     }
 
+                    let taint = taint.get_or_insert_with(|| UndefTaint::new(&caller_func));
                     let full_result = if let Some(callee) = snapshot_callee {
                         full::try_inline_callsite_full(
                             module,
@@ -456,6 +460,7 @@ impl Inliner {
                             site.callee,
                             (cost::SummaryKey::Snapshot(site.callee), callee),
                             &mut validated_callees,
+                            taint,
                         )
                     } else {
                         module.func_store.view(site.callee, |callee| {
@@ -466,6 +471,7 @@ impl Inliner {
                                 site.callee,
                                 (cost::SummaryKey::Live(site.callee), callee),
                                 &mut validated_callees,
+                                taint,
                             )
                         })
                     };
@@ -731,7 +737,7 @@ fn caller_order_bottom_up_scc(
 
 #[cfg(test)]
 mod tests {
-    use super::{InlineStats, InlinerConfig, collect_iteration_call_data, trivial};
+    use super::{InlineStats, InlinerConfig, UndefTaint, collect_iteration_call_data, trivial};
     use crate::analysis::func_behavior;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -796,7 +802,8 @@ func public %caller(v0.i256) {{
                 trivial::materialize_plan(callee, &summary)
             });
             let changes = module.func_store.modify(caller, |func| {
-                trivial::apply_plan(func, site.call_inst, plan, &mut stats).unwrap()
+                let taint = UndefTaint::new(func);
+                trivial::apply_plan(func, site.call_inst, plan, &taint, &mut stats).unwrap()
             });
             changes.apply(&mut counts);
             counts.retain(|_, count| *count != 0);

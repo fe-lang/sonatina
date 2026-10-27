@@ -134,7 +134,7 @@ impl Frame {
         };
 
         for (arg_val, arg_e_val) in arg_values.iter().zip(arg_e_values) {
-            frame.map_val(*arg_val, arg_e_val);
+            frame.map_val(*arg_val, arg_e_val.fixed(func.dfg.value_ty(*arg_val)));
         }
 
         frame
@@ -165,7 +165,15 @@ impl State for Machine {
         let new_frame = Frame::new(func_ref, func, args);
         self.frames.push(new_frame);
 
-        let result = self.run_on_func();
+        let ret_tys = self
+            .module_ctx
+            .func_sig(func_ref, |sig| sig.ret_tys().to_vec());
+        let result = self
+            .run_on_func()
+            .into_iter()
+            .zip(ret_tys)
+            .map(|(value, ty)| value.fixed(ty))
+            .collect();
 
         self.frames.pop();
         self.pc = ret_addr;
@@ -183,18 +191,12 @@ impl State for Machine {
         frame.prev_block.unwrap()
     }
 
+    // Memory never written holds zeros; a read is never undef.
     fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue {
-        let Some(addr) = addr.as_imm() else {
-            return EvalValue::Undef;
-        };
-
-        let Some(addr) = nonnegative_imm_usize(addr) else {
-            return EvalValue::Undef;
+        let Some(addr) = addr.as_imm().and_then(nonnegative_imm_usize) else {
+            return EvalValue::Undef.fixed(ty);
         };
         let size = self.module_ctx.size_of_unchecked(ty);
-        if addr + size > self.memory.len() {
-            return EvalValue::Undef;
-        }
 
         // Load a value of aggregate type.
         if !(ty.is_integral() || ty.is_pointer(&self.module_ctx)) {
@@ -242,11 +244,15 @@ impl State for Machine {
             return EvalValue::Aggregate { fields, ty };
         }
 
-        // Store a value of integer/pointer type.
-        let slice = &self.memory[addr..addr + size];
+        // Load a value of integer/pointer type.
+        let mut bytes = vec![0; size];
+        let available = self.memory.len().saturating_sub(addr).min(size);
+        if available > 0 {
+            bytes[..available].copy_from_slice(&self.memory[addr..addr + available]);
+        }
         let value_i256 = match self.module_ctx.endian() {
-            Endian::Be => I256::from_be_bytes(slice),
-            Endian::Le => I256::from_le_bytes(slice),
+            Endian::Be => I256::from_be_bytes(&bytes),
+            Endian::Le => I256::from_le_bytes(&bytes),
         };
 
         let imm = Immediate::from_i256(value_i256, ty);
@@ -379,9 +385,10 @@ mod tests {
         let mut machine = Machine::new(test_module_builder().build());
         machine.memory = vec![1, 2, 3, 4];
 
+        // A read is never undef; memory it cannot reach reads as zero.
         assert_eq!(
             machine.load(EvalValue::Imm(Immediate::I8(-1)), Type::I8),
-            EvalValue::Undef
+            EvalValue::Imm(Immediate::I8(0))
         );
 
         let before = machine.memory.clone();

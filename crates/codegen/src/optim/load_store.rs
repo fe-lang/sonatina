@@ -15,6 +15,7 @@ use sonatina_ir::{
 };
 
 use super::dead_malloc::eliminate_dead_mallocs;
+use crate::analysis::definedness::UndefTaint;
 
 mod absolute;
 use absolute::{AbsoluteLocations, absolute_interval};
@@ -342,6 +343,7 @@ impl LoadStoreSolver {
             .into_iter()
             .rev()
             .collect();
+        let taint = UndefTaint::new(func);
 
         let mut in_states = SecondaryMap::<sonatina_ir::BlockId, AvailState>::new();
         let mut out_states = SecondaryMap::<sonatina_ir::BlockId, AvailState>::new();
@@ -394,7 +396,7 @@ impl LoadStoreSolver {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    transfer_forward(func, inst, analysis, &mut state, false);
+                    transfer_forward(func, inst, analysis, &mut state, &taint, false);
                 }
 
                 if !out_valid[block] || state != out_states[block] {
@@ -420,7 +422,7 @@ impl LoadStoreSolver {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
-                if transfer_forward(func, inst, analysis, &mut state, true) {
+                if transfer_forward(func, inst, analysis, &mut state, &taint, true) {
                     changed = true;
                 }
             }
@@ -683,6 +685,7 @@ fn transfer_forward(
     inst: InstId,
     analysis: &mut MemoryAccessAnalysis,
     state: &mut AvailState,
+    taint: &UndefTaint,
     rewrite: bool,
 ) -> bool {
     let effects = func.dfg.effects(inst);
@@ -739,7 +742,11 @@ fn transfer_forward(
         }
 
         kill_aliasing_key(state, analysis, &key);
-        state.exact.insert(key, stored_value);
+        // A read is never undef, so it cannot take a stored value that may be;
+        // the first read then serves the later ones.
+        if !taint.scalar_may_be_undef(func, stored_value) {
+            state.exact.insert(key, stored_value);
+        }
     }
 
     false
@@ -1246,11 +1253,13 @@ mod tests {
         let mut state = AvailState::default();
         state.exact.insert(key.clone(), dead_load);
 
+        let taint = UndefTaint::new(&builder.func);
         assert!(!transfer_forward(
             &mut builder.func,
             live_inst,
             &mut analysis,
             &mut state,
+            &taint,
             true,
         ));
         assert!(builder.func.layout.is_inst_inserted(live_inst));

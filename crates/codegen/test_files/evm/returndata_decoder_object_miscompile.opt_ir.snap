@@ -41,8 +41,8 @@ func public %entry() {
         evm_revert 0.i256 0.i256;
 
     block20:
-        v128.i256 = mload v38 i256;
-        mstore 0.i32 v128 i256;
+        v140.i256 = mload v38 i256;
+        mstore 0.i32 v140 i256;
         evm_return 0.i8 32.i8;
 
     block2:

@@ -4,13 +4,14 @@
 use rpds::RedBlackTreeMapSync;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, Type, Value, ValueId,
+    Function, InstId, Type, Value, ValueId,
+    effects::AccessKind,
     inst::{control_flow, data, downcast},
     module::ModuleCtx,
     types::{CompoundType, EnumVariantRef},
 };
 
-use crate::analysis::definedness::{requires_definedness_evidence, value_may_be_undef};
+use crate::analysis::definedness::value_may_be_undef;
 
 use super::{
     object_tracking::root_leaf_count_for_ty,
@@ -340,9 +341,9 @@ impl ValueInitialization<'_> {
                 .map(|&(value, _)| self.value(value))
                 .reduce(|a, b| a.join(func.ctx(), &b))
                 .unwrap_or_else(|| InitializedValue::new(ty, false));
-        } else if !requires_definedness_evidence(func, inst) {
+        } else if !requires_initialization_evidence(func, inst) {
             // Both raw and high-level object reads were excluded above. Only
-            // a point-specific snapshot can establish a memory read's definedness.
+            // a point-specific snapshot can establish a memory read's initialization.
             for used in data.collect_values() {
                 self.value(used);
             }
@@ -356,6 +357,21 @@ impl ValueInitialization<'_> {
         }
         InitializedValue::new(ty, false)
     }
+}
+
+/// Reads and calls produce defined bits, but defined bits need not form a
+/// valid aggregate (an uninitialized enum read has an arbitrary tag), so their
+/// results need point-specific evidence of initialization.
+fn requires_initialization_evidence(func: &Function, inst: InstId) -> bool {
+    func.dfg.is_call(inst)
+        || func.dfg.downcast::<&data::ObjLoad>(inst).is_some()
+        || func.dfg.downcast::<&data::EnumGetTag>(inst).is_some()
+        || func
+            .dfg
+            .effects(inst)
+            .accesses
+            .iter()
+            .any(|access| access.kind == AccessKind::Read)
 }
 
 #[cfg(test)]

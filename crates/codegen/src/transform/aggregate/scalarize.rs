@@ -11,6 +11,7 @@ use sonatina_ir::{
 };
 
 use crate::{
+    analysis::definedness::{UndefTaint, freeze_before, is_scalar},
     cfg_edit::{CfgEditor, CleanupMode},
     optim::const_eval::{
         ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys, eval_const_path_subtree,
@@ -277,6 +278,7 @@ impl AggregateScalarize {
             .map(|root| (root.root_value, root))
             .collect();
 
+        let taint = UndefTaint::new(func);
         // Phi placeholders handle loop edges; other definitions precede their uses.
         for (block, insts) in blocks.into_iter().rev() {
             for inst in insts {
@@ -294,6 +296,7 @@ impl AggregateScalarize {
                     &mut scalarized_agg,
                     &mut ssa,
                     &mut modified_leaves,
+                    &taint,
                 );
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
@@ -439,6 +442,11 @@ impl AggregateScalarize {
                 let var = ssa.declare_var(leaf.ty);
                 promoted.leaf_vars.push(var);
                 let init = match promoted.init {
+                    // Fresh memory holds arbitrary but fixed bits, which every
+                    // read before the first store sees alike.
+                    RootInit::UndefFresh if is_scalar(func, leaf.ty) => {
+                        self.insert_frozen_undef_leaf(func, promoted, leaf.ty)
+                    }
                     RootInit::UndefFresh => func.dfg.make_undef_value(leaf.ty),
                     RootInit::LoadLiveIn => {
                         if promoted
@@ -1508,6 +1516,7 @@ impl AggregateScalarize {
         scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
         ssa: &mut SsaBuilder,
         modified_leaves: &mut FxHashMap<ValueId, FxHashSet<usize>>,
+        taint: &UndefTaint,
     ) {
         if let Some((projection_value, ty, result)) = func
             .dfg
@@ -1694,6 +1703,7 @@ impl AggregateScalarize {
                     let leaf_idx = base_leaf + i;
                     let stored =
                         bitcast_before_inst(func, inst, payload_leaf, view_ty, underlying_leaf.ty);
+                    let stored = frozen_store(func, inst, taint, stored);
                     ssa.def_var(promoted.leaf_vars[leaf_idx], stored, block);
                 }
                 record_modified_leaves(
@@ -1766,6 +1776,7 @@ impl AggregateScalarize {
             {
                 let var = promoted.leaf_vars[projection.slice.first_leaf + i];
                 let stored = bitcast_before_inst(func, inst, val, view_ty, underlying_leaf.ty);
+                let stored = frozen_store(func, inst, taint, stored);
                 ssa.def_var(var, stored, block);
             }
             record_modified_leaves(modified_leaves, projection.root_value.value(), leaf_range);
@@ -1779,6 +1790,7 @@ impl AggregateScalarize {
         let underlying_leaf = &underlying_leaves[0];
         let var = promoted.leaf_vars[projection.slice.first_leaf];
         let stored = bitcast_before_inst(func, inst, value, ty, underlying_leaf.ty);
+        let stored = frozen_store(func, inst, taint, stored);
         ssa.def_var(var, stored, block);
         record_modified_leaves(modified_leaves, projection.root_value.value(), leaf_range);
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -2689,6 +2701,28 @@ impl AggregateScalarize {
         shape::is_leaf_reifiable_ty(module, ty) || scalarizable[value]
     }
 
+    fn insert_frozen_undef_leaf(
+        &self,
+        func: &mut Function,
+        promoted: &PromotableRoot,
+        ty: Type,
+    ) -> ValueId {
+        let before = first_non_phi_inst(func, promoted.seed_block);
+        let loc = before
+            .and_then(|inst| func.layout.prev_inst_of(inst))
+            .map_or(
+                CursorLocation::BlockTop(promoted.seed_block),
+                CursorLocation::At,
+            );
+        let mut cursor = InstInserter::at_location(loc);
+        let undef = func.dfg.make_undef_value(ty);
+        let freeze =
+            cursor.insert_inst_data(func, data::Freeze::new_unchecked(func.inst_set(), undef));
+        let result = cursor.make_result(func, freeze, ty);
+        cursor.attach_result(func, freeze, result);
+        result
+    }
+
     fn insert_live_in_leaf_load(
         &self,
         func: &mut Function,
@@ -2953,6 +2987,15 @@ impl RootKind {
     }
 }
 
+/// A slot read is never undef, so a stored scalar that may be is frozen, and
+/// every later read of the slot sees the one frozen value.
+fn frozen_store(func: &mut Function, inst: InstId, taint: &UndefTaint, value: ValueId) -> ValueId {
+    if taint.scalar_may_be_undef(func, value) {
+        freeze_before(func, inst, value)
+    } else {
+        value
+    }
+}
 fn initializer_leaf_immediate(
     module: &sonatina_ir::module::ModuleCtx,
     ty: Type,
@@ -3345,6 +3388,15 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A fresh slot's seed: one arbitrary value, `freeze undef`.
+    fn is_fresh_seed(func: &Function, value: ValueId) -> bool {
+        func.dfg.value_inst(value).is_some_and(|inst| {
+            func.dfg
+                .downcast::<&data::Freeze>(inst)
+                .is_some_and(|freeze| matches!(func.dfg.value(*freeze.arg()), Value::Undef { .. }))
+        })
     }
 
     #[test]
@@ -5169,18 +5221,21 @@ func private %f(v0.i1) -> i256 {
                     let has_undef = phi
                         .args()
                         .iter()
-                        .any(|(value, _)| matches!(func.dfg.value(*value), Value::Undef { .. }));
+                        .any(|(value, _)| is_fresh_seed(func, *value));
                     let has_non_undef = phi
                         .args()
                         .iter()
-                        .any(|(value, _)| !matches!(func.dfg.value(*value), Value::Undef { .. }));
+                        .any(|(value, _)| !is_fresh_seed(func, *value));
                     if has_undef && has_non_undef {
                         found = true;
                     }
                 }
             }
 
-            assert!(found, "expected scalar phi merging stored and undef paths");
+            assert!(
+                found,
+                "expected scalar phi merging stored and `freeze undef` paths"
+            );
         });
     }
 
@@ -5250,11 +5305,11 @@ func private %f() -> i256 {
                     let has_undef = phi
                         .args()
                         .iter()
-                        .any(|(value, _)| matches!(func.dfg.value(*value), Value::Undef { .. }));
+                        .any(|(value, _)| is_fresh_seed(func, *value));
                     let has_non_undef = phi
                         .args()
                         .iter()
-                        .any(|(value, _)| !matches!(func.dfg.value(*value), Value::Undef { .. }));
+                        .any(|(value, _)| !is_fresh_seed(func, *value));
                     if has_undef && has_non_undef {
                         found = true;
                     }
@@ -5263,7 +5318,7 @@ func private %f() -> i256 {
 
             assert!(
                 found,
-                "loop-local promoted alloca should re-seed to undef at its alloca point"
+                "loop-local promoted alloca should re-seed to `freeze undef` at its alloca point"
             );
         });
     }

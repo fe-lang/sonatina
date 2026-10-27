@@ -5,7 +5,10 @@ use sonatina_ir::{
     module::FuncRef, visitor::Visitor,
 };
 
-use crate::cfg_edit::{CfgEditor, CleanupMode};
+use crate::{
+    analysis::definedness::{UndefTaint, freeze_before},
+    cfg_edit::{CfgEditor, CleanupMode},
+};
 
 use super::{CallChanges, cost::SummaryKey, rewrite::OperandRewriter};
 
@@ -51,6 +54,7 @@ pub(super) fn try_inline_callsite_full(
     callee_ref: FuncRef,
     callee: (SummaryKey, &Function),
     validated_callees: &mut FxHashSet<SummaryKey>,
+    taint: &UndefTaint,
 ) -> Result<FullInlineResult, FullInlineFail> {
     let (callee_key, callee) = callee;
     if !caller.layout.is_inst_inserted(call_inst) {
@@ -116,6 +120,18 @@ pub(super) fn try_inline_callsite_full(
         validate_full_inline_callee_rewriteability(callee, &rpo, &reachable)?;
         validated_callees.insert(callee_key);
     }
+
+    // A parameter is never undef, so the callee body sees a frozen argument.
+    let call_args: SmallVec<[ValueId; 8]> = call_args
+        .iter()
+        .map(|&arg| {
+            if taint.scalar_may_be_undef(caller, arg) {
+                freeze_before(caller, call_inst, arg)
+            } else {
+                arg
+            }
+        })
+        .collect();
 
     let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
     let (callsite_block, cont_block) = editor.split_block_at(call_inst);
@@ -297,6 +313,7 @@ pub(super) fn try_inline_callsite_full(
                         .copied()
                         .filter(|&value| func.dfg.value_ty(value) == call_result_ty)
                         .unwrap_or_else(|| func.dfg.make_undef_value(call_result_ty));
+                    let value = frozen_result(func, cont_block, value, taint);
                     func.dfg.change_to_alias(call_result, value);
                 }
                 _ => {
@@ -325,7 +342,8 @@ pub(super) fn try_inline_callsite_full(
                         ty: call_result_ty,
                     });
                     func.dfg.attach_result(phi_inst, phi_value);
-                    func.dfg.change_to_alias(call_result, phi_value);
+                    let value = frozen_result(func, cont_block, phi_value, taint);
+                    func.dfg.change_to_alias(call_result, value);
                     inserted_insts += 1;
                 }
             }
@@ -406,6 +424,25 @@ impl Visitor for OperandValidator<'_> {
 /// reachable block. A callee that passes cannot fail partway through the
 /// rewrite. Other malformations are copied as they are and left to the module
 /// verifier.
+/// A call result is never undef, so a returned value that may be is frozen
+/// where the call's continuation starts.
+fn frozen_result(
+    func: &mut Function,
+    cont_block: BlockId,
+    value: ValueId,
+    taint: &UndefTaint,
+) -> ValueId {
+    if !taint.scalar_may_be_undef(func, value) {
+        return value;
+    }
+    let first = func
+        .layout
+        .iter_inst(cont_block)
+        .find(|&inst| !func.dfg.is_phi(inst))
+        .expect("a continuation block ends in a terminator");
+    freeze_before(func, first, value)
+}
+
 fn validate_full_inline_callee_rewriteability(
     callee: &Function,
     rpo: &[BlockId],

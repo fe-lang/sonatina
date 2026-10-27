@@ -28,6 +28,15 @@ impl Interpret for BlackBox {
     }
 }
 
+impl Interpret for Freeze {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+        let ty = state.dfg().value_ty(*self.arg());
+        let value = state.lookup_val(*self.arg());
+        single_result(state.freeze(value, ty))
+    }
+}
+
 impl Interpret for Gep {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);

@@ -280,6 +280,10 @@ impl KnownBitsQuery {
         if let Some(load) = downcast::<&data::ConstLoad>(func.inst_set(), inst_data) {
             return self.const_load_known_bits(func, *load.object(), ty);
         }
+        // A frozen value is one of its argument's.
+        if let Some(freeze) = downcast::<&data::Freeze>(func.inst_set(), inst_data) {
+            return self.known_of(func, *freeze.arg());
+        }
 
         let args = inst_data.collect_values();
         match inst_data.kind() {

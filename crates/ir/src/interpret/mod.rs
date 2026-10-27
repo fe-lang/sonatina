@@ -81,6 +81,7 @@ pub trait Interpret {
         inst::data::Mload,
         inst::data::Mstore,
         inst::data::BlackBox,
+        inst::data::Freeze,
         inst::data::Gep,
         inst::data::GetFunctionPtr,
         inst::data::Alloca,
@@ -153,6 +154,13 @@ pub trait State {
     fn alloca(&mut self, ty: Type) -> EvalValue;
 
     fn dfg(&self) -> &DataFlowGraph;
+
+    /// The value `freeze` gives for `value` of type `ty`. Running code fixes
+    /// undef to zero; an abstract state, whose undef can stand for a value it
+    /// does not know yet, keeps it.
+    fn freeze(&mut self, value: EvalValue, ty: Type) -> EvalValue {
+        value.fixed(ty)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +187,17 @@ pub enum EvalValue {
 }
 
 impl EvalValue {
+    /// One fixed value of `ty` for `self`: undef becomes zero where `ty` has
+    /// one, as `freeze`, memory reads and call boundaries never pass undef on.
+    pub fn fixed(self, ty: Type) -> Self {
+        match self {
+            EvalValue::Undef if ty.is_integral() || ty.is_enum_tag() => {
+                EvalValue::Imm(Immediate::zero(ty))
+            }
+            value => value,
+        }
+    }
+
     pub fn with_imm<F, R>(self, f: F) -> Self
     where
         F: FnOnce(Immediate) -> R,
