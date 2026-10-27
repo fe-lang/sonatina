@@ -79,16 +79,20 @@ and results are normalized to their low bit.
 
 Indirect value arguments point to caller-owned readable storage for the
 whole value. Passing that pointer does not turn the value into a mutable
-reference or transfer ownership. Keep its contents stable for the call.
-Value-producing loads and updates create independent snapshots; private
+reference or transfer ownership. Keep its contents stable for the call and
+distinct from any memory the callee writes, such as through a pointer
+argument: the callee may read or copy the value at any point of the call,
+and its copies assume no overlap. Value-producing loads and updates create
+independent snapshots; private
 object references instead preserve mutation aliases.
 
 A single indirect return uses a caller-allocated, writable, suitably aligned
 buffer large enough for the complete native value, including padding. Its
 pointer is the first CLIF parameter with the `StructReturn` purpose, not
 necessarily an ordinary first machine argument: AArch64 uses `x8`, for
-example. Keep it distinct from live argument storage. The callee copies the
-value into this buffer, so no result depends on a dead callee stack frame.
+example. Keep it distinct from argument storage and any other memory the
+callee reads: the callee may build the value in this buffer at any point of
+the call, and no result depends on a dead callee stack frame.
 Even zero-sized indirect values retain the pointer parameter; provide a
 valid aligned address, although no bytes are copied.
 
@@ -162,7 +166,8 @@ visible to that resolver: it must be exported for dynamic lookup. There is
 no user-supplied JIT symbol map in this API. Unresolved JIT symbols can panic
 during finalization in upstream Cranelift; do not treat this as a recoverable
 symbol-registration interface. Native memory helpers may require platform
-libc symbols such as `memset`.
+libc symbols: aggregate copies and zero fills above 128 bytes call `memcpy` and
+`memset`.
 
 Representable `undef` values surviving to native translation are materialized
 as zero, null or zero-filled aggregate storage. This is a backend choice,

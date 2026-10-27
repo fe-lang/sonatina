@@ -5,7 +5,7 @@ use std::{hint::black_box, time::Instant};
 #[path = "cranelift/linked.rs"]
 mod linked;
 
-use object::{Object, ObjectSection, ObjectSymbol};
+use object::{Object, ObjectSection, ObjectSymbol, RelocationFlags};
 #[cfg(feature = "cranelift-jit")]
 use sonatina_codegen::isa::cranelift::CraneliftJitBackend;
 use sonatina_codegen::{
@@ -180,6 +180,280 @@ fn aggregate_construction_has_linear_code_size_and_executes_large_arrays() {
                     }
                 }
             }
+        }
+    }
+}
+
+fn text_size(bytes: &[u8]) -> u64 {
+    object::File::parse(bytes)
+        .unwrap()
+        .sections()
+        .filter(|section| section.kind() == object::SectionKind::Text)
+        .map(|section| section.size())
+        .sum()
+}
+
+fn imports(bytes: &[u8], name: &str) -> bool {
+    object::File::parse(bytes).unwrap().symbols().any(|symbol| {
+        symbol.is_undefined()
+            && symbol
+                .name()
+                .is_ok_and(|symbol| symbol.trim_start_matches('_') == name)
+    })
+}
+
+#[test]
+fn large_aggregate_copies_have_constant_code_size() {
+    // Snapshot loads, chain-head copies, return buffers, stores and undef
+    // zero fills of every length share one bounded code size.
+    for length in [8, 4096] {
+        let triple = native_isa(host_architecture()).triple();
+        let source = format!(
+            r#"target = "{triple}"
+type @Pair = {{[i64; {length}], [i64; {length}]}};
+func inline(never) private %update(v0.[i64; {length}], v1.i64) -> [i64; {length}] {{
+block0:
+    v2.[i64; {length}] = insert_value v0 1.i64 v1;
+    return v2;
+}}
+func public %copy(v0.*[i64; {length}], v1.*[i64; {length}], v2.*@Pair) {{
+block0:
+    v3.[i64; {length}] = mload v0 [i64; {length}];
+    mstore v0 undef.[i64; {length}] [i64; {length}];
+    v4.[i64; {length}] = call %update v3 99.i64;
+    mstore v1 v4 [i64; {length}];
+    v5.@Pair = insert_value undef.@Pair 0.i64 v3;
+    mstore v2 v5 @Pair;
+    return;
+}}
+"#
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let artifact = Compile::new(
+                module.clone_for_funcs(&module.funcs()),
+                CraneliftObjectBackend::new(),
+            )
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+            let bytes = artifact.as_bytes();
+            let text_size = text_size(bytes);
+            assert!(
+                text_size > 0 && text_size < 4096,
+                "[i64; {length}] copies at {level:?} emitted {text_size} text bytes"
+            );
+            // 64-byte arrays and 128-byte pairs stay inline; 32 KiB ones call libc.
+            assert_eq!(imports(bytes, "memcpy"), length > 16, "{length} {level:?}");
+            assert_eq!(imports(bytes, "memset"), length > 16, "{length} {level:?}");
+            #[cfg(feature = "cranelift-jit")]
+            {
+                let artifact = Compile::new(
+                    module.clone_for_funcs(&module.funcs()),
+                    CraneliftJitBackend::new(),
+                )
+                .with_opt_level(level)
+                .compile()
+                .unwrap();
+                let copy: unsafe extern "C" fn(*mut i64, *mut i64, *mut i64) =
+                    unsafe { std::mem::transmute(artifact.function_address("copy").unwrap()) };
+                let length = length as usize;
+                let original: Vec<i64> = (0..length as i64).map(|i| i * 3 - 7).collect();
+                let mut source = original.clone();
+                let mut updated = vec![-1; length];
+                let mut pair = vec![-1; length * 2];
+                unsafe { copy(source.as_mut_ptr(), updated.as_mut_ptr(), pair.as_mut_ptr()) };
+                assert!(source.iter().all(|&word| word == 0), "{level:?}");
+                let mut expected = original.clone();
+                expected[1] = 99;
+                assert_eq!(updated, expected, "{level:?}");
+                assert_eq!(pair[..length], original[..], "{level:?}");
+                assert!(pair[length..].iter().all(|&word| word == 0), "{level:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn undef_insert_chains_zero_only_unwritten_bytes() {
+    // A chain that writes both halves needs no zero fill, one that writes a
+    // half zeroes the other, and padding is zeroed inline.
+    let triple = native_isa(host_architecture()).triple();
+    let cases = [
+        (
+            "v3.@T = insert_value undef.@T 0.i64 v2;\n    v4.@T = insert_value v3 1.i64 v2;",
+            false,
+        ),
+        ("v4.@T = insert_value undef.@T 1.i64 v2;", true),
+    ];
+    for (inserts, zero_fill) in cases {
+        let source = format!(
+            r#"target = "{triple}"
+type @T = {{[i64; 32], [i64; 32]}};
+type @Padded = {{i8, [i64; 32]}};
+func public %build(v0.*[i64; 32], v1.*@T) {{
+block0:
+    v2.[i64; 32] = mload v0 [i64; 32];
+    {inserts}
+    mstore v1 v4 @T;
+    return;
+}}
+func public %pad(v0.*[i64; 32], v1.i8, v2.*@Padded) {{
+block0:
+    v3.[i64; 32] = mload v0 [i64; 32];
+    v4.@Padded = insert_value undef.@Padded 1.i64 v3;
+    v5.@Padded = insert_value v4 0.i64 v1;
+    mstore v2 v5 @Padded;
+    return;
+}}
+"#
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        let artifact = CraneliftObjectBackend::new()
+            .compile_module(
+                &module,
+                &BackendOptions {
+                    opt_level: OptLevel::O2,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            imports(artifact.as_bytes(), "memset"),
+            zero_fill,
+            "{inserts}"
+        );
+        #[cfg(feature = "cranelift-jit")]
+        {
+            let artifact = CraneliftJitBackend::new()
+                .compile_module(
+                    &module,
+                    &BackendOptions {
+                        opt_level: OptLevel::O2,
+                    },
+                )
+                .unwrap();
+            let build: unsafe extern "C" fn(*const i64, *mut i64) =
+                unsafe { std::mem::transmute(artifact.function_address("build").unwrap()) };
+            let pad: unsafe extern "C" fn(*const i64, u8, *mut u8) =
+                unsafe { std::mem::transmute(artifact.function_address("pad").unwrap()) };
+            let input: Vec<i64> = (1..=32).collect();
+            let mut output = vec![-1; 64];
+            unsafe { build(input.as_ptr(), output.as_mut_ptr()) };
+            let first: &[i64] = if zero_fill { &[0; 32] } else { &input };
+            assert_eq!(output[..32], first[..], "{inserts}");
+            assert_eq!(output[32..], input[..], "{inserts}");
+            let mut padded = vec![0xa5u8; 8 + 256];
+            unsafe { pad(input.as_ptr(), 7, padded.as_mut_ptr()) };
+            assert_eq!(padded[..8], [7, 0, 0, 0, 0, 0, 0, 0]);
+            assert_eq!(padded[8..16], 1i64.to_le_bytes());
+        }
+    }
+}
+
+/// The number of references in text sections to symbol `name`. COFF reaches
+/// an import through a `.refptr.` stub, and an aarch64 GOT load takes a page
+/// relocation and a page-offset one, of which only the page one counts.
+fn references(bytes: &[u8], name: &str) -> usize {
+    let object = object::File::parse(bytes).unwrap();
+    let aarch64 = object.architecture() == object::Architecture::Aarch64;
+    object
+        .sections()
+        .filter(|section| section.kind() == object::SectionKind::Text)
+        .flat_map(|section| section.relocations())
+        .filter(|(_, relocation)| {
+            !aarch64
+                || !matches!(
+                    relocation.flags(),
+                    RelocationFlags::MachO {
+                        r_type: object::macho::ARM64_RELOC_GOT_LOAD_PAGEOFF12,
+                        ..
+                    } | RelocationFlags::Elf {
+                        r_type: object::elf::R_AARCH64_LD64_GOT_LO12_NC
+                    }
+                )
+        })
+        .filter(|(_, relocation)| match relocation.target() {
+            object::RelocationTarget::Symbol(index) => object
+                .symbol_by_index(index)
+                .and_then(|symbol| symbol.name())
+                .is_ok_and(|symbol| {
+                    let symbol = symbol.strip_prefix(".refptr.").unwrap_or(symbol);
+                    symbol.trim_start_matches('_') == name
+                }),
+            _ => false,
+        })
+        .count()
+}
+
+#[test]
+fn aggregates_skip_temporary_copies() {
+    // Each case's only memcpy calls are the copies its result needs: paths
+    // build results in the return buffer, and a single-use load copies
+    // straight from memory into its consumer.
+    let cases = [
+        (
+            "func private %pair(v0.i1, v1.[i64; 32], v2.[i64; 32]) -> @Pair {
+block0:
+    br v0 block1 block2;
+block1:
+    v3.@Pair = insert_value undef.@Pair 0.i64 v1;
+    v4.@Pair = insert_value v3 1.i64 v2;
+    return v4;
+block2:
+    v5.@Pair = insert_value undef.@Pair 0.i64 v2;
+    v6.@Pair = insert_value v5 1.i64 v1;
+    return v6;
+}",
+            4,
+        ),
+        (
+            "func private %load(v0.*[i64; 32]) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = mload v0 [i64; 32];
+    return v1;
+}",
+            1,
+        ),
+        (
+            "func private %wrap(v0.*[i64; 32], v1.*@Pair) {
+block0:
+    v2.[i64; 32] = mload v0 [i64; 32];
+    v3.@Pair = insert_value undef.@Pair 1.i64 v2;
+    mstore v1 v3 @Pair;
+    return;
+}",
+            2,
+        ),
+        (
+            "func private %update(v0.*@Pair, v1.[i64; 32]) -> @Pair {
+block0:
+    v2.@Pair = mload v0 @Pair;
+    v3.@Pair = insert_value v2 0.i64 v1;
+    return v3;
+}",
+            2,
+        ),
+    ];
+    let triple = native_isa(host_architecture()).triple();
+    for (function, copies) in cases {
+        let source =
+            format!("target = \"{triple}\"\ntype @Pair = {{[i64; 32], [i64; 32]}};\n{function}\n");
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let artifact = CraneliftObjectBackend::new()
+                .compile_module(&module, &BackendOptions { opt_level: level })
+                .unwrap();
+            assert_eq!(
+                references(artifact.as_bytes(), "memcpy"),
+                copies,
+                "{level:?}\n{function}"
+            );
         }
     }
 }

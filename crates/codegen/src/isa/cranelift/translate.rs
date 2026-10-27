@@ -1,14 +1,14 @@
 mod abi;
+mod frame;
 mod globals;
 mod i256;
 mod memory;
+mod phi;
 mod scalar;
 
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::{
-    self as clif, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC, instructions::BlockArg,
-};
+use cranelift_codegen::ir::{self as clif, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Linkage, Module as ClifModule};
 
@@ -20,7 +20,7 @@ use sonatina_ir::{
 };
 use sonatina_triple::TargetTriple;
 
-use self::{abi::*, globals::*, i256::*, memory::*, scalar::*};
+use self::{abi::*, frame::FrameSlots, globals::*, i256::*, memory::*, phi::Edges, scalar::*};
 
 pub(super) fn translate_module(
     module: &Module,
@@ -166,43 +166,31 @@ fn translate_function(
         }
     }
 
-    let inst_set = function.inst_set();
-    let mut indirect_phi_stores: HashMap<BlockId, Vec<_>> = HashMap::new();
-
+    let frame = FrameSlots::new(function, &cfg, &block_order, sret_ptr, &mut builder)?;
     for &block in &block_order {
         let clif_block = block_map[&block];
         for inst_id in function.layout.iter_inst(block) {
-            let inst_data = function.dfg.inst(inst_id);
-            if <&sonatina_ir::inst::control_flow::Phi as sonatina_ir::InstDowncast>::downcast(
-                inst_set, inst_data,
-            )
-            .is_some()
-            {
-                let result = function
-                    .dfg
-                    .inst_result(inst_id)
-                    .ok_or("phi has no result")?;
-                let ty = function.dfg.value_ty(result);
-                if uses_indirect_value_representation(&module.ctx, ty) {
-                    let addr = create_stack_slot_for_type(ty, &module.ctx, &mut builder)?;
-                    value_map.insert(result, addr);
-                    for (offset, chunk_ty) in storage_chunks(value_storage_size(ty, &module.ctx)?) {
-                        let param = builder.append_block_param(clif_block, chunk_ty);
-                        indirect_phi_stores
-                            .entry(block)
-                            .or_default()
-                            .push((addr, param, offset));
-                    }
-                } else {
-                    let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_type)?;
-                    let param = builder.append_block_param(clif_block, clif_ty);
-                    value_map.insert(result, param);
-                }
-            } else {
+            if !function.dfg.is_phi(inst_id) {
                 break;
+            }
+            let result = function
+                .dfg
+                .inst_result(inst_id)
+                .ok_or("phi has no result")?;
+            let ty = function.dfg.value_ty(result);
+            if !uses_indirect_value_representation(&module.ctx, ty) {
+                let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_type)?;
+                let param = builder.append_block_param(clif_block, clif_ty);
+                value_map.insert(result, param);
             }
         }
     }
+    let edges = Edges {
+        function,
+        block_map: &block_map,
+        frame: &frame,
+        config: target_config,
+    };
 
     if clif_entry != block_map[&entry] {
         builder.ins().jump(block_map[&entry], &[]);
@@ -213,14 +201,16 @@ fn translate_function(
         if clif_block != clif_entry {
             builder.switch_to_block(clif_block);
         }
-        // Incoming contents are SSA block parameters, not pointers into a
-        // previous iteration's reusable result slots. Capture all phi inputs
-        // on the edge before writing any destination, including phi swaps.
-        if let Some(stores) = indirect_phi_stores.get(&block) {
-            for &(addr, param, offset) in stores {
-                builder
-                    .ins()
-                    .store(MemFlagsData::new(), param, addr, offset);
+        // Incoming edges copy aggregate phi inputs into the phis' own slots,
+        // never aliasing the reusable result slot of an input's producer.
+        for inst_id in function.layout.iter_inst(block) {
+            if !function.dfg.is_phi(inst_id) {
+                break;
+            }
+            if let Some(result) = function.dfg.inst_result(inst_id)
+                && uses_indirect_value_representation(&module.ctx, function.dfg.value_ty(result))
+            {
+                value_map.insert(result, frame.address(result, &mut builder)?);
             }
         }
 
@@ -740,13 +730,19 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::Bitcast(bitcast) => {
-                    let val = resolve_value(function, *bitcast.from(), &value_map, &mut builder)?;
+                    let val = resolve_operand(
+                        function,
+                        *bitcast.from(),
+                        &value_map,
+                        target_config,
+                        &mut builder,
+                    )?;
                     let result_val = translate_bitcast(
                         val,
                         function.dfg.value_ty(*bitcast.from()),
                         *bitcast.ty(),
                         &module.ctx,
-                        pointer_type,
+                        target_config,
                         &mut builder,
                     )?;
                     if let Some(result) = function.dfg.inst_result(inst_id) {
@@ -784,40 +780,17 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::Jump(jump) => {
-                    let dest = block_map[jump.dest()];
-                    let phi_args = collect_phi_args_for_block(
-                        function,
-                        *jump.dest(),
-                        block,
-                        inst_set,
-                        &value_map,
-                        &mut builder,
-                    )?;
-                    builder.ins().jump(dest, &phi_args);
+                    edges.jump(block, *jump.dest(), &value_map, &mut builder)?;
                 }
                 NativeInstKind::Br(br) => {
                     let cond = resolve_value(function, *br.cond(), &value_map, &mut builder)?;
-                    let nz_block = block_map[br.nz_dest()];
-                    let z_block = block_map[br.z_dest()];
-                    let nz_args = collect_phi_args_for_block(
-                        function,
-                        *br.nz_dest(),
-                        block,
-                        inst_set,
-                        &value_map,
-                        &mut builder,
-                    )?;
-                    let z_args = collect_phi_args_for_block(
-                        function,
-                        *br.z_dest(),
-                        block,
-                        inst_set,
-                        &value_map,
-                        &mut builder,
-                    )?;
+                    let nz = edges.target(block, *br.nz_dest(), &value_map, &mut builder)?;
+                    let z = edges.target(block, *br.z_dest(), &value_map, &mut builder)?;
                     builder
                         .ins()
-                        .brif(cond, nz_block, &nz_args, z_block, &z_args);
+                        .brif(cond, nz.block, &nz.args, z.block, &z.args);
+                    edges.fill(nz, block, *br.nz_dest(), &value_map, &mut builder)?;
+                    edges.fill(z, block, *br.z_dest(), &value_map, &mut builder)?;
                 }
                 NativeInstKind::BrTable(br_table) => {
                     let scrutinee_id = *br_table.scrutinee();
@@ -838,15 +811,7 @@ fn translate_function(
                         let default = br_table
                             .default()
                             .ok_or("empty br_table requires a default destination")?;
-                        let default_args = collect_phi_args_for_block(
-                            function,
-                            default,
-                            block,
-                            inst_set,
-                            &value_map,
-                            &mut builder,
-                        )?;
-                        builder.ins().jump(block_map[&default], &default_args);
+                        edges.jump(block, default, &value_map, &mut builder)?;
                     } else {
                         for (idx, &(case, dest)) in br_table.table().iter().enumerate() {
                             let cond = if scrutinee_ty == Type::I256 {
@@ -863,33 +828,17 @@ fn translate_function(
                                 )?;
                                 builder.ins().icmp(IntCC::Equal, scrutinee, case)
                             };
-                            let dest_block = block_map[&dest];
-                            let dest_args = collect_phi_args_for_block(
-                                function,
-                                dest,
-                                block,
-                                inst_set,
-                                &value_map,
-                                &mut builder,
-                            )?;
+                            let target = edges.target(block, dest, &value_map, &mut builder)?;
                             let next_block = builder.create_block();
                             builder
                                 .ins()
-                                .brif(cond, dest_block, &dest_args, next_block, &[]);
+                                .brif(cond, target.block, &target.args, next_block, &[]);
+                            edges.fill(target, block, dest, &value_map, &mut builder)?;
                             builder.switch_to_block(next_block);
 
                             if idx + 1 == br_table.table().len() {
                                 if let Some(default) = br_table.default() {
-                                    let default_block = block_map[default];
-                                    let default_args = collect_phi_args_for_block(
-                                        function,
-                                        *default,
-                                        block,
-                                        inst_set,
-                                        &value_map,
-                                        &mut builder,
-                                    )?;
-                                    builder.ins().jump(default_block, &default_args);
+                                    edges.jump(block, *default, &value_map, &mut builder)?;
                                 } else {
                                     emit_trap(&mut builder, TrapCode::user(3).unwrap());
                                 }
@@ -902,16 +851,20 @@ fn translate_function(
                         let [val_id] = ret.args().as_slice() else {
                             return Err("indirect return requires exactly one value".to_string());
                         };
-                        let val = resolve_value(function, *val_id, &value_map, &mut builder)?;
                         let val_ty = function.dfg.value_ty(*val_id);
                         let storage_ty = indirect_return_storage_type(&module.ctx, val_ty)
                             .ok_or("indirect return value has no storage type")?;
-                        copy_bytes(
-                            val,
-                            sret,
-                            value_storage_size(storage_ty, &module.ctx)?,
-                            &mut builder,
-                        );
+                        if !frame.in_return_buffer(*val_id) {
+                            store_indirect(
+                                function,
+                                *val_id,
+                                sret,
+                                value_storage_size(storage_ty, &module.ctx)?,
+                                &value_map,
+                                target_config,
+                                &mut builder,
+                            )?;
+                        }
                         builder.ins().return_(&[]);
                     } else {
                         let args: Result<Vec<_>, _> = ret
@@ -942,9 +895,15 @@ fn translate_function(
 
                     let mut call_args = Vec::new();
                     let sret_slot = if let Some(storage_ty) = indirect_storage_ty {
-                        let slot = builder
-                            .create_sized_stack_slot(stack_slot_data(storage_ty, &module.ctx)?);
-                        let addr = builder.ins().stack_addr(pointer_type, slot, 0);
+                        // A constref result's copy of its referent stays
+                        // in a slot of its own.
+                        let addr = if storage_ty == function.dfg.value_ty(ir_results[0]) {
+                            frame.address(ir_results[0], &mut builder)?
+                        } else {
+                            let slot = builder
+                                .create_sized_stack_slot(stack_slot_data(storage_ty, &module.ctx)?);
+                            builder.ins().stack_addr(pointer_type, slot, 0)
+                        };
                         call_args.push(addr);
                         Some(addr)
                     } else {
@@ -954,7 +913,15 @@ fn translate_function(
                     let args: Result<Vec<_>, _> = call
                         .args()
                         .iter()
-                        .map(|value| resolve_value(function, *value, &value_map, &mut builder))
+                        .map(|value| {
+                            resolve_operand(
+                                function,
+                                *value,
+                                &value_map,
+                                target_config,
+                                &mut builder,
+                            )
+                        })
                         .collect();
                     call_args.extend(args?);
 
@@ -1369,13 +1336,15 @@ fn translate_function(
                         resolve_value(function, *obj_load.object(), &value_map, &mut builder)?;
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let result_ty = function.dfg.value_ty(result);
-                        if uses_indirect_value_representation(&module.ctx, result_ty) {
-                            let result_addr =
-                                create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?;
+                        if frame.forwards(result) {
+                            value_map.insert(result, addr);
+                        } else if uses_indirect_value_representation(&module.ctx, result_ty) {
+                            let result_addr = frame.address(result, &mut builder)?;
                             copy_bytes(
                                 addr,
                                 result_addr,
                                 value_storage_size(result_ty, &module.ctx)?,
+                                target_config,
                                 &mut builder,
                             );
                             value_map.insert(result, result_addr);
@@ -1387,7 +1356,13 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::ExtractValue(extract) => {
-                    let base = resolve_value(function, *extract.dest(), &value_map, &mut builder)?;
+                    let base = resolve_operand(
+                        function,
+                        *extract.dest(),
+                        &value_map,
+                        target_config,
+                        &mut builder,
+                    )?;
                     let idx = constant_value_index(function, *extract.idx(), "extract_value")?;
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let result_ty = function.dfg.value_ty(result);
@@ -1417,35 +1392,49 @@ fn translate_function(
                     };
                     let result_ty = function.dfg.value_ty(result);
                     let source_value = *insert.dest();
-                    let source = resolve_value(function, source_value, &value_map, &mut builder)?;
-                    // An insert result owns its storage. Its sole consumer can
-                    // continue construction in that storage without changing an
-                    // observable SSA snapshot. Stay in the same block: a use in
-                    // a nested loop can execute repeatedly for one definition.
-                    // Other sources (including extracted views and arguments)
-                    // do not carry this ownership guarantee.
-                    let reuse = function
-                        .dfg
-                        .value_inst(source_value)
-                        .is_some_and(|source_inst| {
-                            function.layout.inst_block(source_inst) == block
-                                && function.dfg.users(source_value).copied().eq([inst_id])
-                                && matches!(
-                                    native_inst_set().resolve_inst(function.dfg.inst(source_inst)),
-                                    NativeInstKind::InsertValue(_)
-                                )
-                        });
-                    let result_addr = if reuse {
-                        source
+                    // An insert result owns its storage. Its sole consumer in
+                    // the same block continues construction there without
+                    // changing an observable SSA snapshot (see `FrameSlots`).
+                    let result_addr = if frame.continues_source(inst_id, source_value) {
+                        resolve_value(function, source_value, &value_map, &mut builder)?
                     } else {
-                        let address =
-                            create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?;
-                        copy_bytes(
-                            source,
-                            address,
-                            value_storage_size(result_ty, &module.ctx)?,
-                            &mut builder,
-                        );
+                        let address = frame.address(result, &mut builder)?;
+                        let size = value_storage_size(result_ty, &module.ctx)?;
+                        if is_undef(function, source_value) {
+                            // An undef source is zero, but only the bytes no
+                            // insert of the chain writes need zeroing.
+                            let written = frame
+                                .insert_chain(function, inst_id)
+                                .map(|inst| {
+                                    let NativeInstKind::InsertValue(insert) =
+                                        native_inst_set().resolve_inst(function.dfg.inst(inst))
+                                    else {
+                                        return Err(
+                                            "insert chain continues past insert_value".to_string()
+                                        );
+                                    };
+                                    let idx = constant_value_index(
+                                        function,
+                                        *insert.idx(),
+                                        "insert_value",
+                                    )?;
+                                    let (offset, elem_ty) =
+                                        aggregate_elem_offset(&module.ctx, result_ty, idx)?;
+                                    Ok((offset as u32, value_storage_size(elem_ty, &module.ctx)?))
+                                })
+                                .collect::<Result<_, String>>()?;
+                            zero_unwritten(address, size, written, target_config, &mut builder);
+                        } else {
+                            store_indirect(
+                                function,
+                                source_value,
+                                address,
+                                size,
+                                &value_map,
+                                target_config,
+                                &mut builder,
+                            )?;
+                        }
                         address
                     };
 
@@ -1458,16 +1447,20 @@ fn translate_function(
                         ));
                     }
 
-                    let value = resolve_value(function, *insert.value(), &value_map, &mut builder)?;
                     if uses_indirect_value_representation(&module.ctx, value_ty) {
                         let field_addr = builder.ins().iadd_imm_s(result_addr, i64::from(offset));
-                        copy_bytes(
-                            value,
+                        store_indirect(
+                            function,
+                            *insert.value(),
                             field_addr,
                             value_storage_size(value_ty, &module.ctx)?,
+                            &value_map,
+                            target_config,
                             &mut builder,
-                        );
+                        )?;
                     } else {
+                        let value =
+                            resolve_value(function, *insert.value(), &value_map, &mut builder)?;
                         builder
                             .ins()
                             .store(MemFlagsData::new(), value, result_addr, offset);
@@ -1502,16 +1495,29 @@ fn translate_function(
                         pointer_type,
                         &mut builder,
                     )?;
-                    let val = resolve_value(function, *mstore.value(), &value_map, &mut builder)?;
                     let store_ty = *mstore.ty();
-                    if uses_indirect_value_representation(&module.ctx, store_ty) {
-                        copy_bytes(
-                            val,
+                    if frame.forwards(*mstore.value()) {
+                        let src =
+                            resolve_value(function, *mstore.value(), &value_map, &mut builder)?;
+                        move_bytes(
+                            src,
                             addr,
                             value_storage_size(store_ty, &module.ctx)?,
                             &mut builder,
                         );
+                    } else if uses_indirect_value_representation(&module.ctx, store_ty) {
+                        store_indirect(
+                            function,
+                            *mstore.value(),
+                            addr,
+                            value_storage_size(store_ty, &module.ctx)?,
+                            &value_map,
+                            target_config,
+                            &mut builder,
+                        )?;
                     } else {
+                        let val =
+                            resolve_value(function, *mstore.value(), &value_map, &mut builder)?;
                         builder.ins().store(MemFlagsData::new(), val, addr, 0);
                     }
                 }
@@ -1543,13 +1549,15 @@ fn translate_function(
                     )?;
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let result_ty = function.dfg.value_ty(result);
-                        if uses_indirect_value_representation(&module.ctx, result_ty) {
-                            let result_addr =
-                                create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?;
+                        if frame.forwards(result) {
+                            value_map.insert(result, addr);
+                        } else if uses_indirect_value_representation(&module.ctx, result_ty) {
+                            let result_addr = frame.address(result, &mut builder)?;
                             copy_bytes(
                                 addr,
                                 result_addr,
                                 value_storage_size(result_ty, &module.ctx)?,
+                                target_config,
                                 &mut builder,
                             );
                             value_map.insert(result, result_addr);
@@ -1563,17 +1571,29 @@ fn translate_function(
                 NativeInstKind::ObjStore(obj_store) => {
                     let dest =
                         resolve_value(function, *obj_store.object(), &value_map, &mut builder)?;
-                    let val =
-                        resolve_value(function, *obj_store.value(), &value_map, &mut builder)?;
                     let val_ty = function.dfg.value_ty(*obj_store.value());
-                    if uses_indirect_value_representation(&module.ctx, val_ty) {
-                        copy_bytes(
-                            val,
+                    if frame.forwards(*obj_store.value()) {
+                        let src =
+                            resolve_value(function, *obj_store.value(), &value_map, &mut builder)?;
+                        move_bytes(
+                            src,
                             dest,
                             value_storage_size(val_ty, &module.ctx)?,
                             &mut builder,
                         );
+                    } else if uses_indirect_value_representation(&module.ctx, val_ty) {
+                        store_indirect(
+                            function,
+                            *obj_store.value(),
+                            dest,
+                            value_storage_size(val_ty, &module.ctx)?,
+                            &value_map,
+                            target_config,
+                            &mut builder,
+                        )?;
                     } else {
+                        let val =
+                            resolve_value(function, *obj_store.value(), &value_map, &mut builder)?;
                         builder.ins().store(MemFlagsData::new(), val, dest, 0);
                     }
                 }
@@ -1892,47 +1912,4 @@ fn translate_icmp(
         value_map.insert(result, result_val);
     }
     Ok(())
-}
-
-fn collect_phi_args_for_block(
-    function: &Function,
-    target_block: BlockId,
-    source_block: BlockId,
-    inst_set: &dyn sonatina_ir::InstSetBase,
-    value_map: &HashMap<ValueId, clif::Value>,
-    builder: &mut FunctionBuilder,
-) -> Result<Vec<BlockArg>, String> {
-    let mut args = Vec::new();
-    for inst_id in function.layout.iter_inst(target_block) {
-        let inst_data = function.dfg.inst(inst_id);
-        if let Some(phi) =
-            <&sonatina_ir::inst::control_flow::Phi as sonatina_ir::InstDowncast>::downcast(
-                inst_set, inst_data,
-            )
-        {
-            for &(value, from_block) in phi.args() {
-                if from_block == source_block {
-                    let clif_val = resolve_value(function, value, value_map, builder)?;
-                    let ty = function.dfg.value_ty(value);
-                    if uses_indirect_value_representation(function.ctx(), ty) {
-                        for (offset, chunk_ty) in
-                            storage_chunks(value_storage_size(ty, function.ctx())?)
-                        {
-                            let chunk =
-                                builder
-                                    .ins()
-                                    .load(chunk_ty, MemFlagsData::new(), clif_val, offset);
-                            args.push(BlockArg::Value(chunk));
-                        }
-                    } else {
-                        args.push(BlockArg::Value(clif_val));
-                    }
-                    break;
-                }
-            }
-        } else {
-            break;
-        }
-    }
-    Ok(args)
 }
