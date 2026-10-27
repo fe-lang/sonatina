@@ -1,0 +1,86 @@
+target = "evm-ethereum-osaka"
+
+type @Opt = enum {
+    #None,
+    #Some(i256),
+};
+
+# A join that rebuilds an option from its predecessors and matches it again
+# sends each predecessor straight to the arm of the variant it built. The
+# matched arm's reads of the joined option take that predecessor's value.
+# sameln: func public %rewrap_then_match(v0.i256, v1.i1) -> i256 {
+# check:   block3:
+# nextln:      v4.@Opt = enum.make @Opt #Some v0;
+# check:       jump block6;
+# check:   block4:
+# check:       jump block7;
+# check:   block2:
+# check:       jump block7;
+# check:   block6:
+# nextln:      enum.assert_variant v4 #Some;
+# nextln:      v9.i256 = enum.extract v4 #Some 0.i256;
+# not:     block5:
+func public %rewrap_then_match(v0.i256, v1.i1) -> i256 {
+block0:
+    v2.i1 = lt v0 10.i256;
+    br v2 block1 block2;
+
+block1:
+    br v1 block3 block4;
+
+block3:
+    v4.@Opt = enum.make @Opt #Some v0;
+    jump block5;
+
+block4:
+    v5.@Opt = enum.make @Opt #None;
+    jump block5;
+
+block2:
+    v6.@Opt = enum.make @Opt #None;
+    jump block5;
+
+block5:
+    v7.@Opt = phi (v4 block3) (v5 block4) (v6 block2);
+    v8.enumtag(@Opt) = enum.tag v7;
+    br_table v8 (1.enumtag(@Opt) block6) (0.enumtag(@Opt) block7);
+
+block6:
+    enum.assert_variant v7 #Some;
+    v9.i256 = enum.extract v7 #Some 0.i256;
+    return v9;
+
+block7:
+    return 0.i256;
+}
+
+# A value of the join used below a successor with other predecessors cannot
+# take a phi there, so the join stays.
+# sameln: func public %shared_successor_keeps_join(v0.i256, v1.i1) -> i256 {
+# check:       enum.tag
+# check:       br_table
+func public %shared_successor_keeps_join(v0.i256, v1.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    v2.@Opt = enum.make @Opt #Some v0;
+    jump block3;
+
+block2:
+    v3.@Opt = enum.make @Opt #None;
+    jump block3;
+
+block3:
+    v4.@Opt = phi (v2 block1) (v3 block2);
+    v5.enumtag(@Opt) = enum.tag v4;
+    br_table v5 (1.enumtag(@Opt) block4) (0.enumtag(@Opt) block5);
+
+block4:
+    jump block5;
+
+block5:
+    v6.i1 = enum.is_variant v4 #Some;
+    v7.i256 = zext v6 i256;
+    return v7;
+}
