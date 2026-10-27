@@ -6,16 +6,16 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 500 bytes
-  total: 500 bytes
+  section runtime: 497 bytes
+  total: 497 bytes
 
 functions:
   mem: global_dyn_base=0x2e0 arena_base=0x0 scratch_peak_words=23 stable_chain_peak_words=0
-  main_root: ir_blocks=33 ir_insts=91 vcode_ops=285 fixups=26 imm_bytes=72
+  main_root: ir_blocks=33 ir_insts=90 vcode_ops=283 fixups=26 imm_bytes=71
     mem: scratch_words=23 stable_words=0 stable_mode=None entry_abs_words=23 abs_words_end=23
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=22435 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1435
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=22399 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1399
 
 
 --------------- DEBUG ---------------
@@ -26,7 +26,7 @@ main_root:
     PUSH1 0x7 (7)  // evm_mstore 704.i256 7.i256;
     PUSH2 0x2c0 (704)
     MSTORE
-  block4:
+  block2:
     JUMPDEST
     PUSH2 0x2c0 (704)  // v8.i256 = evm_mload 704.i256;
     MLOAD
@@ -35,19 +35,17 @@ main_root:
     PUSH1 0x1 (1)  // v12.i256 = gt v10 1.i256;
     DUP2
     GT
-    ISZERO  // br v12 block1 block7;
+    ISZERO  // br v12 block3 block7;
     PUSH1 block7
     JUMPI
-  block1:
+  block3:
     PUSH1 0x1 (1)  // v13.i256 = sub v10 1.i256;
     SWAP1
     SUB
-    PUSH1 0xff (255)  // v14.i256 = and v13 255.i256;
-    AND
-    DUP1  // evm_mstore 704.i256 v14;
+    DUP1  // evm_mstore 704.i256 v13;
     PUSH2 0x2c0 (704)
     MSTORE
-    PUSH1 0x3 (3)  // v16.i256 = shl 3.i256 v14;
+    PUSH1 0x3 (3)  // v16.i256 = shl 3.i256 v13;
     SHL
     PUSH1 0xff (255)  // v17.i256 = and v16 255.i256;
     DUP2
@@ -55,9 +53,9 @@ main_root:
     DUP1  // v18.i256 = eq v16 v17;
     SWAP2
     EQ
-    PUSH1 block5  // br v18 block5 block2;
+    PUSH1 block5  // br v18 block5 block4;
     JUMPI
-  block2:
+  block4:
     PUSH4 0x4e487b71 (1313373041)  // evm_mstore v3 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
     PUSH1 0xe0 (224)
     SHL
@@ -79,7 +77,7 @@ main_root:
     PUSH1 0xf (15)  // v28.i256 = and v26 15.i256;
     AND
     ISZERO  // br v28 block6 block33;
-    PUSH1 block4
+    PUSH1 block2
     JUMPI
   block6:
     PUSH0  // evm_mstore v4 v3;
@@ -118,19 +116,19 @@ main_root:
     JUMPDEST
     PUSH1 0x80 (128)  // v46.i256 = evm_mload v4;
     MLOAD
-    PUSH0  // br_table v46 block26 (v3 block27) (1.i256 block28);
-    DUP2
-    EQ
-    PUSH1 block27
-    JUMPI
-    PUSH1 0x1 (1)
+    PUSH0  // br_table v46 block27 (v3 block28) (1.i256 block29);
     DUP2
     EQ
     PUSH1 block28
     JUMPI
-  block26:
-    INVALID  // unreachable;
+    PUSH1 0x1 (1)
+    DUP2
+    EQ
+    PUSH1 block29
+    JUMPI
   block27:
+    INVALID  // unreachable;
+  block28:
     JUMPDEST
     POP  // evm_mstore 416.i256 v3;
     PUSH0
@@ -138,7 +136,7 @@ main_root:
     MSTORE
     PUSH1 0xa0 (160)  // v48.i256 = evm_mload 160.i256;
     MLOAD
-    PUSH0  // br_table v48 block29 (v3 block38) (1.i256 block39) (2.i256 block40) (3.i256 block41) (4.i256 block42);
+    PUSH0  // br_table v48 block30 (v3 block38) (1.i256 block39) (2.i256 block40) (3.i256 block41) (4.i256 block42);
     DUP2
     EQ
     PUSH1 block38
@@ -163,34 +161,34 @@ main_root:
     EQ
     PUSH1 block42
     JUMPI
-  block29:
+  block30:
     INVALID  // unreachable;
   block38:
     JUMPDEST
-    POP  // jump block25;
-    PUSH1 block25
+    POP  // jump block26;
+    PUSH1 block26
     JUMP
   block39:
     JUMPDEST
-    POP  // jump block25;
-    PUSH1 block25
+    POP  // jump block26;
+    PUSH1 block26
     JUMP
   block40:
     JUMPDEST
-    POP  // jump block25;
-    PUSH1 block25
+    POP  // jump block26;
+    PUSH1 block26
     JUMP
   block41:
     JUMPDEST
-    POP  // jump block25;
-    PUSH1 block25
+    POP  // jump block26;
+    PUSH1 block26
     JUMP
   block42:
     JUMPDEST
-    POP  // jump block25;
-    PUSH1 block25
+    POP  // jump block26;
+    PUSH1 block26
     JUMP
-  block28:
+  block29:
     JUMPDEST
     POP  // evm_mstore 416.i256 1.i256;
     PUSH1 0x1 (1)
@@ -200,7 +198,7 @@ main_root:
     DUP1
     PUSH2 0x1e0 (480)
     MCOPY
-  block25:
+  block26:
     JUMPDEST
     PUSH2 0x1a0 (416)  // v67.i256 = evm_mload 416.i256;
     MLOAD
@@ -287,26 +285,26 @@ main_root:
     OR
   block15:
     JUMPDEST
-    SWAP2  // br v73 block35 block19;
+    SWAP2  // br v73 block35 block20;
     PUSH1 block35
     JUMPI
-  block19:
-    PUSH1 block36  // br v71 block36 block30;
+  block20:
+    PUSH1 block36  // br v71 block36 block18;
     JUMPI
-  block30:
-    PUSH2 0x200 (512)  // jump block18;
-    PUSH1 block18
+  block18:
+    PUSH2 0x200 (512)  // jump block19;
+    PUSH1 block19
     JUMP
   block36:
     JUMPDEST
-    PUSH0  // jump block18;
-    PUSH1 block18
+    PUSH0  // jump block19;
+    PUSH1 block19
     JUMP
   block35:
     JUMPDEST
-    POP  // jump block18;
+    POP  // jump block19;
     PUSH0
-  block18:
+  block19:
     JUMPDEST
     SWAP1  // v93.i256 = and v1 -130561.i256;
     PUSH3 0x1fe00 (130560)

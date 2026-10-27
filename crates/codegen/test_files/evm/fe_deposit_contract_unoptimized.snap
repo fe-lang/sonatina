@@ -6,9 +6,9 @@ input_file: test_files/evm/fe_deposit_contract_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 2441 bytes
-  section runtime: 2363 bytes
-  total: 4804 bytes
+  section init: 2433 bytes
+  section runtime: 2355 bytes
+  total: 4788 bytes
 
 functions:
   mem: global_dyn_base=0x1c0 arena_base=0x60 scratch_peak_words=5 stable_chain_peak_words=6
@@ -16,17 +16,17 @@ functions:
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=2
   contract_runtime_root_DepositContract: ir_blocks=138 ir_insts=475 vcode_ops=1490 fixups=90 imm_bytes=403
     mem: scratch_words=5 stable_words=6 stable_mode=StableAbs(base=0x100) entry_abs_words=5 abs_words_end=11
-  core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7: ir_blocks=23 ir_insts=54 vcode_ops=144 fixups=9 imm_bytes=29
+  core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7: ir_blocks=20 ir_insts=50 vcode_ops=138 fixups=8 imm_bytes=29
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=1264160 gas_refunded=0 logs=0 output=create len=2363 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=1262432 gas_refunded=0 logs=0 output=create len=2355 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case supports_interface_erc165: calldata_len=36 success reason=Return gas_used=21478 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=238
   case supports_interface_deposit: calldata_len=36 success reason=Return gas_used=21508 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=268
   case supports_interface_unknown: calldata_len=36 success reason=Return gas_used=21497 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=257
   case get_deposit_root_empty: calldata_len=4 success reason=Return gas_used=102322 gas_refunded=0 logs=0 output=call len=32 tx_gas=21064 runtime_gas=81258
   case get_deposit_count_empty: calldata_len=4 success reason=Return gas_used=23526 gas_refunded=0 logs=0 output=call len=96 tx_gas=21064 runtime_gas=2462
-  case deposit_rejects_zero_value: calldata_len=420 revert gas_used=26827 output_len=132 tx_gas=25296 runtime_gas=1531
+  case deposit_rejects_zero_value: calldata_len=420 revert gas_used=26752 output_len=132 tx_gas=25296 runtime_gas=1456
 
 
 --------------- DEBUG ---------------
@@ -1368,9 +1368,9 @@ core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7:
     DUP2  // v7.i256 = lt v6 v1;
     DUP2
     LT
-    PUSH1 block6  // br v7 block19 block18;
+    PUSH1 block4  // br v7 block16 block15;
     JUMPI
-  block18:
+  block15:
     DUP3  // v8.i256 = gt v6 v2;
     SWAP1
     GT
@@ -1380,9 +1380,9 @@ core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7:
     JUMPDEST
     DUP1  // v12.i256 = evm_calldata_load v1;
     CALLDATALOAD
-    DUP1  // br v12 block3 block23;
+    DUP1  // br v12 block3 block20;
     ISZERO
-    PUSH1 block23
+    PUSH1 block20
     JUMPI
   block3:
     PUSH1 0x1 (1)  // v17.i256 = sub v12 v14;
@@ -1391,26 +1391,19 @@ core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7:
     PUSH1 0x5 (5)  // v20.i256 = shr v18 v17;
     SHR
     PUSH1 0x1 (1)  // v15.i256 = add v20 v14;
-    DUP2
     ADD
-    SWAP1  // v16.i256 = lt v15 v20;
-    DUP2
-    LT
-    PUSH1 block6  // br v16 block24 block7;
-    JUMPI
-  block7:
-    DUP1  // v40.i256 = shl v18 v15;
+    DUP1  // v16.i256 = shl v18 v15;
     PUSH1 0x5 (5)
     SHL
-    DUP1  // v41.i256 = shr v18 v40;
+    DUP1  // v39.i256 = shr v18 v16;
     PUSH1 0x5 (5)
     SHR
-    SWAP1  // v19.i256 = eq v41 v15;
+    SWAP1  // v40.i256 = eq v39 v15;
     SWAP2
     EQ
-    PUSH1 block10  // br v19 block26 block25;
+    PUSH1 block7  // br v40 block21 block4;
     JUMPI
-  block6:
+  block4:
     JUMPDEST
     PUSH4 0x4e487b71 (1313373041)  // evm_mstore v10 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
     PUSH1 0xe0 (224)
@@ -1423,63 +1416,63 @@ core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7:
     PUSH1 0x24 (36)  // evm_revert v10 36.i256;
     PUSH0
     REVERT
-  block23:
+  block20:
     JUMPDEST
-    PUSH0  // jump block10;
-  block10:
+    PUSH0  // jump block7;
+  block7:
     JUMPDEST
-    PUSH1 0x20 (32)  // v24.i256 = add v4 v3;
+    PUSH1 0x20 (32)  // v23.i256 = add v4 v3;
     ADD
-    PUSH1 0x20 (32)  // v25.i256 = lt v24 v4;
+    PUSH1 0x20 (32)  // v24.i256 = lt v23 v4;
     DUP2
     LT
-    PUSH1 block6  // br v25 block27 block17;
+    PUSH1 block4  // br v24 block22 block14;
     JUMPI
-  block17:
-    DUP1  // v26.i256 = add v1 v24;
+  block14:
+    DUP1  // v25.i256 = add v1 v23;
     DUP4
     ADD
-    DUP4  // v27.i256 = lt v26 v1;
+    DUP4  // v26.i256 = lt v25 v1;
     DUP2
     LT
-    PUSH1 block6  // br v27 block29 block13;
+    PUSH1 block4  // br v26 block24 block10;
     JUMPI
-  block13:
-    SWAP4  // v28.i256 = gt v26 v2;
+  block10:
+    SWAP4  // v27.i256 = gt v25 v2;
     SWAP1
     SWAP4
     GT
-    PUSH1 __evm_shared_tail_0  // br v28 block11 block12;
+    PUSH1 __evm_shared_tail_0  // br v27 block8 block9;
     JUMPI
-  block12:
-    PUSH1 0x40 (64)  // v30.i256 = evm_mload 64.i256;
+  block9:
+    PUSH1 0x40 (64)  // v29.i256 = evm_mload 64.i256;
     MLOAD
-    PUSH2 0x1bf (447)  // v33.i256 = gt v30 447.i256;
+    PUSH2 0x1bf (447)  // v32.i256 = gt v29 447.i256;
     DUP2
     GT
-    PUSH1 block22  // br v33 block28 block21;
+    PUSH1 block19  // br v32 block23 block18;
     JUMPI
-  block21:
-    POP  // jump block22;
+  block18:
+    POP  // jump block19;
     PUSH2 0x1c0 (448)
-  block22:
+  block19:
     JUMPDEST
-    PUSH1 0x1f (31)  // v36.i256 = add v24 31.i256;
+    PUSH1 0x1f (31)  // v35.i256 = add v23 31.i256;
     DUP5
     ADD
-    PUSH1 0x1f (31)  // v38.i256 = and v36 -32.i256;
+    PUSH1 0x1f (31)  // v37.i256 = and v35 -32.i256;
     NOT
     AND
-    DUP2  // v39.i256 = add v34 v38;
+    DUP2  // v38.i256 = add v33 v37;
     ADD
-    PUSH1 0x40 (64)  // evm_mstore 64.i256 v39;
+    PUSH1 0x40 (64)  // evm_mstore 64.i256 v38;
     MSTORE
-    SWAP3  // evm_calldata_copy v34 v1 v24;
+    SWAP3  // evm_calldata_copy v33 v1 v23;
     DUP1
     SWAP3
     DUP5
     CALLDATACOPY
-    SWAP1  // return (v34, v12, v24);
+    SWAP1  // return (v33, v12, v23);
     SWAP2
     SWAP1
     SWAP2
