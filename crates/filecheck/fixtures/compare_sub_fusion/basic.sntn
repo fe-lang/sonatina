@@ -157,3 +157,53 @@ block2:
     v3.i64 = sub v0 v1;
     return v3;
 }
+
+# A guard on a fused difference fuses with the subtractions of that
+# difference, as charging a dynamic cost after a constant one does.
+# regex: VALUE=\bv\d+\b
+# sameln: func public %chained_guards(v0.i64, v1.i64, v2.i64) -> i64 {
+# check: ($(diff=$VALUE).i64, $(borrow=$VALUE).i1) = usubo v0 v1;
+# nextln: br $borrow block1 block2;
+# check: ($(rest=$VALUE).i64, $(again=$VALUE).i1) = usubo $diff v2;
+# nextln: br $again block9 block3;
+# not: gt
+# not: sub
+func public %chained_guards(v0.i64, v1.i64, v2.i64) -> i64 {
+block0:
+    v3.i1 = gt v1 v0;
+    br v3 block1 block2;
+
+block1:
+    return 0.i64;
+
+block2:
+    v4.i64 = sub v0 v1;
+    v5.i1 = gt v2 v4;
+    br v5 block9 block3;
+
+block9:
+    return 1.i64;
+
+block3:
+    br_table v2 block4 (1.i64 block5) (2.i64 block6) (3.i64 block7);
+
+block4:
+    v6.i64 = sub v4 v2;
+    jump block8;
+
+block5:
+    v7.i64 = sub v4 v2;
+    jump block8;
+
+block6:
+    v8.i64 = sub v4 v2;
+    jump block8;
+
+block7:
+    v9.i64 = sub v4 v2;
+    jump block8;
+
+block8:
+    v10.i64 = phi (v6 block4) (v7 block5) (v8 block6) (v9 block7);
+    return v10;
+}

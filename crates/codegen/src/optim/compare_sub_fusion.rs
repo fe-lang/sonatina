@@ -44,23 +44,24 @@ impl CompareSubFusion {
         let mut compares = Vec::new();
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                let InstClassKind::Binary(kind) = func.dfg.inst(inst).kind() else {
-                    continue;
-                };
-                let [lhs, rhs] = func.dfg.inst(inst).collect_values()[..] else {
-                    continue;
-                };
-                match kind {
-                    BinaryInstKind::Sub => subs.entry((lhs, rhs)).or_default().push(inst),
-                    BinaryInstKind::Lt => compares.push((inst, lhs, rhs)),
-                    BinaryInstKind::Gt => compares.push((inst, rhs, lhs)),
+                match binary_operands(func, inst) {
+                    Some((BinaryInstKind::Sub, lhs, rhs)) => {
+                        subs.entry((lhs, rhs)).or_default().push(inst)
+                    }
+                    Some((BinaryInstKind::Lt | BinaryInstKind::Gt, ..)) => compares.push(inst),
                     _ => {}
                 }
             }
         }
 
         let mut changed = false;
-        for (compare, lhs, rhs) in compares {
+        for compare in compares {
+            // An earlier fusion renames a difference this comparison reads.
+            let (lhs, rhs) = match binary_operands(func, compare) {
+                Some((BinaryInstKind::Lt, lhs, rhs)) => (lhs, rhs),
+                Some((BinaryInstKind::Gt, lhs, rhs)) => (rhs, lhs),
+                _ => unreachable!("a collected comparison is never rewritten into another kind"),
+            };
             let fused: Vec<_> = subs
                 .get(&(lhs, rhs))
                 .into_iter()
@@ -107,7 +108,12 @@ impl CompareSubFusion {
             func.erase_inst(compare);
             for sub in fused {
                 let result = func.dfg.inst_result(sub).expect("a sub has a result");
-                func.dfg.change_to_alias(result, difference);
+                // Subtractions of the difference now subtract the `usubo`'s.
+                for user in func.dfg.change_to_alias(result, difference) {
+                    if let Some((BinaryInstKind::Sub, lhs, rhs)) = binary_operands(func, user) {
+                        subs.entry((lhs, rhs)).or_default().push(user);
+                    }
+                }
                 func.layout.remove_inst(sub);
                 func.erase_inst(sub);
             }
@@ -115,6 +121,17 @@ impl CompareSubFusion {
         }
         changed
     }
+}
+
+/// The kind and operands of a binary instruction.
+fn binary_operands(func: &Function, inst: InstId) -> Option<(BinaryInstKind, ValueId, ValueId)> {
+    let InstClassKind::Binary(kind) = func.dfg.inst(inst).kind() else {
+        return None;
+    };
+    let [lhs, rhs] = func.dfg.inst(inst).collect_values()[..] else {
+        return None;
+    };
+    Some((kind, lhs, rhs))
 }
 
 /// The blocks that use `value`, counting a phi argument as a use in its
