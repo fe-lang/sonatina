@@ -426,6 +426,19 @@ pub(super) fn mulmod(
 ) -> Limbs {
     let (exit, results) = zero_modulus_exit(modulus, builder);
     let product = mul_limbs::<NUMERATOR_LIMBS>(&lhs, &rhs, builder);
+    // A product below the modulus, as when an operand is zero, is its own
+    // remainder.
+    let low: Limbs = std::array::from_fn(|limb| product[limb]);
+    let high: Limbs = std::array::from_fn(|limb| product[LIMBS + limb]);
+    let high_zero = is_zero(high, builder);
+    let low_below = ult(low, modulus, builder);
+    let below = builder.ins().band(high_zero, low_below);
+    let divide = builder.create_block();
+    builder
+        .ins()
+        .brif(below, exit, &low.map(BlockArg::Value), divide, &[]);
+
+    builder.switch_to_block(divide);
     let result = remainder(&product, modulus, call, builder);
     builder.ins().jump(exit, &result.map(BlockArg::Value));
     builder.switch_to_block(exit);
