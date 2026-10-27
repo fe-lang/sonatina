@@ -165,7 +165,10 @@ impl<'a> DemandedBitsQuery<'a> {
             BinaryInstKind::Shl => {
                 self.add_demand(*lhs, type_mask_or_zero(self.func, *lhs), worklist, queued);
                 if let Some(shift) = constant_shift(self.func, *lhs) {
-                    self.add_demand(*rhs, demand >> shift.as_usize(), worklist, queued);
+                    let rhs_bits = type_bits(self.func.dfg.value_ty(*rhs));
+                    if shift < U256::from(rhs_bits) {
+                        self.add_demand(*rhs, demand >> shift.as_usize(), worklist, queued);
+                    }
                 } else {
                     self.add_demand(*rhs, type_mask_or_zero(self.func, *rhs), worklist, queued);
                 }
@@ -173,7 +176,10 @@ impl<'a> DemandedBitsQuery<'a> {
             BinaryInstKind::Shr => {
                 self.add_demand(*lhs, type_mask_or_zero(self.func, *lhs), worklist, queued);
                 if let Some(shift) = constant_shift(self.func, *lhs) {
-                    self.add_demand(*rhs, demand << shift.as_usize(), worklist, queued);
+                    let rhs_bits = type_bits(self.func.dfg.value_ty(*rhs));
+                    if shift < U256::from(rhs_bits) {
+                        self.add_demand(*rhs, demand << shift.as_usize(), worklist, queued);
+                    }
                 } else {
                     self.add_demand(*rhs, type_mask_or_zero(self.func, *rhs), worklist, queued);
                 }
@@ -184,10 +190,11 @@ impl<'a> DemandedBitsQuery<'a> {
                     let rhs_ty = self.func.dfg.value_ty(*rhs);
                     let rhs_mask = type_mask_or_zero(self.func, *rhs);
                     let rhs_bits = type_bits(rhs_ty);
-                    let shift = shift.as_usize();
+                    // Wider shifts only depend on the sign bit. Clamp before narrowing.
+                    let shift = shift.min(U256::from(rhs_bits)).as_usize();
                     let shifted = (demand << shift) & rhs_mask;
                     self.add_demand(*rhs, shifted, worklist, queued);
-                    let fill_mask = rhs_mask & !low_mask(rhs_bits.saturating_sub(shift as u16));
+                    let fill_mask = rhs_mask & !low_mask(rhs_bits - shift as u16);
                     if demand & fill_mask != U256::zero() {
                         self.add_demand(
                             *rhs,
@@ -345,7 +352,7 @@ mod tests {
         Function, I256, Type,
         builder::test_util::*,
         inst::{
-            arith::Shr,
+            arith::{Sar, Shl, Shr},
             cast::{Trunc, Zext},
             control_flow::Return,
             evm::EvmSignExtend,
@@ -377,6 +384,106 @@ mod tests {
         let query = DemandedBitsQuery::new(&func);
         assert_eq!(query.for_value(shr), low_mask(32));
         assert_eq!(query.for_value(arg), low_mask(256) & !low_mask(224));
+    }
+
+    #[test]
+    fn oversized_logical_shifts_demand_no_input_bits() {
+        for ty in [Type::I1, Type::I8, Type::I32, Type::I256] {
+            for shift in oversized_shifts(ty) {
+                for kind in [BinaryInstKind::Shl, BinaryInstKind::Shr] {
+                    assert_eq!(
+                        shift_input_demand(kind, ty, shift, false),
+                        U256::zero(),
+                        "{kind:?} {shift} {ty:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn oversized_sar_demands_only_the_sign_bit() {
+        for ty in [Type::I1, Type::I8, Type::I32, Type::I256] {
+            let sign_bit = U256::one() << usize::from(type_bits(ty) - 1);
+            for shift in oversized_shifts(ty) {
+                for low_bit_only in [false, true] {
+                    assert_eq!(
+                        shift_input_demand(BinaryInstKind::Sar, ty, shift, low_bit_only),
+                        sign_bit,
+                        "sar {shift} {ty:?}, low_bit_only={low_bit_only}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn in_range_shift_demands_preserve_boundary_bits() {
+        for ty in [Type::I1, Type::I8, Type::I32, Type::I256] {
+            for kind in [
+                BinaryInstKind::Shl,
+                BinaryInstKind::Shr,
+                BinaryInstKind::Sar,
+            ] {
+                assert_eq!(
+                    shift_input_demand(kind, ty, U256::zero(), false),
+                    type_mask(ty),
+                    "{kind:?} 0 {ty:?}"
+                );
+                let shift = type_bits(ty) - 1;
+                let expected = if kind == BinaryInstKind::Shl {
+                    U256::one()
+                } else {
+                    U256::one() << usize::from(shift)
+                };
+                assert_eq!(
+                    shift_input_demand(kind, ty, U256::from(shift), false),
+                    expected,
+                    "{kind:?} {shift} {ty:?}"
+                );
+            }
+        }
+    }
+
+    fn oversized_shifts(ty: Type) -> impl Iterator<Item = U256> {
+        [
+            U256::from(type_bits(ty)),
+            U256::from(type_bits(ty) + 1),
+            U256::one() << 16,
+            U256::one() << 32,
+            U256::one() << 64,
+            U256::one() << 128,
+            U256::MAX,
+        ]
+        .into_iter()
+        .filter(move |shift| *shift <= type_mask(ty))
+    }
+
+    fn shift_input_demand(kind: BinaryInstKind, ty: Type, shift: U256, low_bit_only: bool) -> U256 {
+        let mb = test_module_builder();
+        let result_ty = if low_bit_only { Type::I1 } else { ty };
+        let (evm, mut builder) = test_func_builder(&mb, &[ty], result_ty);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let arg = builder.args()[0];
+        let shift = builder.make_imm_value(sonatina_ir::Immediate::from_i256(shift.into(), ty));
+        let result = match kind {
+            BinaryInstKind::Shl => builder.insert_inst_with(|| Shl::new(is, shift, arg), ty),
+            BinaryInstKind::Shr => builder.insert_inst_with(|| Shr::new(is, shift, arg), ty),
+            BinaryInstKind::Sar => builder.insert_inst_with(|| Sar::new(is, shift, arg), ty),
+            _ => unreachable!(),
+        };
+        let result = if result_ty != ty {
+            builder.insert_inst_with(|| Trunc::new(is, result, result_ty), result_ty)
+        } else {
+            result
+        };
+        builder.insert_inst_no_result_with(|| Return::new_single(is, result));
+        builder.seal_all();
+        builder.finish();
+
+        DemandedBitsQuery::new(&only_func(&mb)).for_value(arg)
     }
 
     #[test]

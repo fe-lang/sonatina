@@ -1,0 +1,48 @@
+#! evm.case: zero
+#!   calldata: u256(0)
+#!   expect: return u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0)
+#! evm.case: one
+#!   calldata: u256(1)
+#!   expect: return u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0)
+#! evm.case: max_positive
+#!   calldata: u256(0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#!   expect: return u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0)
+#! evm.case: sign_bit
+#!   calldata: u256(0x8000000000000000000000000000000000000000000000000000000000000000)
+#!   expect: return u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0) u256(0) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0) u256(0) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0) u256(0)
+#! evm.case: max
+#!   calldata: u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#!   expect: return u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0) u256(0) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0) u256(0) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0) u256(0)
+
+# Output words are SAR, SHL, SHR for each shift count: 2^64, 2^128, 2^256 - 1.
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = sar 18446744073709551616.i256 v0;
+        v2.i256 = shl 18446744073709551616.i256 v0;
+        v3.i256 = shr 18446744073709551616.i256 v0;
+        v4.i256 = sar 340282366920938463463374607431768211456.i256 v0;
+        v5.i256 = shl 340282366920938463463374607431768211456.i256 v0;
+        v6.i256 = shr 340282366920938463463374607431768211456.i256 v0;
+        v7.i256 = sar -1.i256 v0;
+        v8.i256 = shl -1.i256 v0;
+        v9.i256 = shr -1.i256 v0;
+        evm_mstore 0.i256 v1;
+        evm_mstore 32.i256 v2;
+        evm_mstore 64.i256 v3;
+        evm_mstore 96.i256 v4;
+        evm_mstore 128.i256 v5;
+        evm_mstore 160.i256 v6;
+        evm_mstore 192.i256 v7;
+        evm_mstore 224.i256 v8;
+        evm_mstore 256.i256 v9;
+        evm_return 0.i256 288.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

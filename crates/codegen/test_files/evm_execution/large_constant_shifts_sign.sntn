@@ -1,0 +1,36 @@
+#! evm.case: zero
+#!   calldata: u256(0)
+#!   expect: return u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#! evm.case: one
+#!   calldata: u256(1)
+#!   expect: return u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#! evm.case: max_positive
+#!   calldata: u256(0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#!   expect: return u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#! evm.case: sign_bit
+#!   calldata: u256(0x8000000000000000000000000000000000000000000000000000000000000000)
+#!   expect: return u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#! evm.case: max
+#!   calldata: u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#!   expect: return u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+
+# Both shifts must preserve the sign bit set by the OR.
+# Return words correspond to shift counts 2^16 and 2^32.
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = or v0 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
+        v2.i256 = sar 65536.i256 v1;
+        v3.i256 = sar 4294967296.i256 v1;
+        evm_mstore 0.i256 v2;
+        evm_mstore 32.i256 v3;
+        evm_return 0.i256 64.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
