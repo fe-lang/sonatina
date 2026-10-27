@@ -143,7 +143,7 @@ struct ZeroComparePlan {
     swap: bool,
 }
 
-fn compare_value(
+pub(crate) fn compare_value(
     func: &Function,
     value: ValueId,
 ) -> Option<(InstId, BinaryInstKind, ValueId, ValueId)> {
@@ -326,7 +326,7 @@ fn insert_is_zero_before(
     Some(value)
 }
 
-fn remove_dead_single_result_inst(func: &mut Function, inst: InstId) {
+pub(crate) fn remove_dead_single_result_inst(func: &mut Function, inst: InstId) {
     if !func.layout.is_inst_inserted(inst) || !func.dfg.can_drop_if_unused(inst) {
         return;
     }

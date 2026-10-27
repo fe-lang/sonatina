@@ -13,15 +13,11 @@ type @OptionI256 = enum {
 
 func public %main() -> i256 {
     block0:
-        v7.@OptionI256 = enum.make @OptionI256 #Some 7.i256;
-        enum.assert_variant v7 #Some;
         return 7.i256;
 }
 
 func public %entry() {
     block0:
-        v5.@OptionI256 = enum.make @OptionI256 #Some 7.i256;
-        enum.assert_variant v5 #Some;
         mstore 0.i8 7.i256 i256;
         evm_return 0.i8 32.i8;
 }

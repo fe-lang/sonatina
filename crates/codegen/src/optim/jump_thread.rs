@@ -1,8 +1,8 @@
 //! Jump threading through blocks that branch on a phi of constants.
 //!
-//! A block `B` ending in `br c T F`, where `c` is a phi of `B`, sends every
-//! path that enters from a predecessor `P` whose incoming `c` is a constant
-//! to one known successor. The edge `P -> B` is retargeted straight to that
+//! A block `B` ending in `br c T F` or `br_table c ...`, where `c` is a phi of
+//! `B`, sends every path that enters from a predecessor `P` whose incoming `c`
+//! is a constant to one known successor. The edge `P -> B` is retargeted straight to that
 //! successor: `B`'s other instructions, which must be pure and few, are
 //! recomputed at the end of `P` from `P`'s incoming values, and the
 //! successor's phis take what `B` would have passed them. `B` is deleted
@@ -19,8 +19,10 @@
 //! loop's body would give the loop a second entry.
 
 use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, InstId, Value, ValueId, inst::control_flow::BranchKind};
+use smallvec::{SmallVec, smallvec};
+use sonatina_ir::{
+    BlockId, Function, Immediate, InstId, Value, ValueId, inst::control_flow::BranchKind,
+};
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode, clone_inst_before, defined_in},
@@ -71,8 +73,11 @@ impl JumpThread {
 /// A block that may be threaded.
 struct Candidate {
     cond_phi: InstId,
-    /// The successors for a nonzero and a zero condition.
-    dests: [BlockId; 2],
+    /// The successor for each condition value with one of its own; `br`
+    /// sends zero to its zero destination.
+    cases: SmallVec<[(Immediate, BlockId); 4]>,
+    /// The successor for any other condition value.
+    default: Option<BlockId>,
     /// The pure instructions between the block's phis and its terminator.
     body: SmallVec<[InstId; MAX_DUPLICATED_INSTS]>,
 }
@@ -89,11 +94,30 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
         return None;
     }
     let term = func.layout.last_inst_of(block)?;
-    let BranchKind::Br(br) = func.dfg.branch_info(term)?.branch_kind() else {
-        return None;
-    };
-    let (cond, nz_dest, z_dest) = (*br.cond(), *br.nz_dest(), *br.z_dest());
-    if nz_dest == z_dest || nz_dest == block || z_dest == block {
+    let (cond, cases, default): (_, SmallVec<_>, _) =
+        match func.dfg.branch_info(term)?.branch_kind() {
+            BranchKind::Br(br) => {
+                let zero = Immediate::zero(func.dfg.value_ty(*br.cond()));
+                (
+                    *br.cond(),
+                    smallvec![(zero, *br.z_dest())],
+                    Some(*br.nz_dest()),
+                )
+            }
+            BranchKind::BrTable(table) => (
+                *table.scrutinee(),
+                table
+                    .table()
+                    .iter()
+                    .map(|&(key, dest)| Some((func.dfg.value_imm(key)?, dest)))
+                    .collect::<Option<_>>()?,
+                *table.default(),
+            ),
+            BranchKind::Jump(_) => return None,
+        };
+    let dests: SmallVec<[BlockId; 4]> =
+        cases.iter().map(|&(_, dest)| dest).chain(default).collect();
+    if dests.iter().all(|&dest| dest == dests[0]) || dests.contains(&block) {
         return None;
     }
     let Some(Value::Inst { inst: cond_phi, .. }) = func.dfg.get_value(cond) else {
@@ -141,7 +165,7 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
                 if user_block == block {
                     continue;
                 }
-                let via_edge_from_block = (user_block == nz_dest || user_block == z_dest)
+                let via_edge_from_block = dests.contains(&user_block)
                     && func.dfg.cast_phi(user).is_some_and(|phi| {
                         phi.args()
                             .iter()
@@ -156,7 +180,8 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
 
     Some(Candidate {
         cond_phi,
-        dests: [nz_dest, z_dest],
+        cases,
+        default,
         body,
     })
 }
@@ -202,11 +227,12 @@ fn threadable_edge(
         .find(|(_, from)| *from == pred)
         .map(|(value, _)| *value)?;
     let imm = func.dfg.value_imm(incoming)?;
-    let dest = if imm.is_zero() {
-        cand.dests[1]
-    } else {
-        cand.dests[0]
-    };
+    let dest = cand
+        .cases
+        .iter()
+        .find(|(key, _)| *key == imm)
+        .map(|&(_, dest)| dest)
+        .or(cand.default)?;
     if dest == pred {
         return None;
     }

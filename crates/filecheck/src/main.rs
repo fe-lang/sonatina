@@ -7,6 +7,7 @@ use sonatina_filecheck::{
     licm::LicmTransformer, load_store::LoadStoreTransform, loop_rotate::LoopRotateTransform,
     loop_strength_reduce::LoopStrengthReduceTransform,
     range_branch_simplify::RangeBranchSimplifyTransform, sccp::SccpTransform,
+    switch_formation::SwitchFormationTransform,
 };
 
 fn main() {
@@ -38,6 +39,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(RangeBranchSimplifyTransform::default());
+    runner.run();
+
+    runner.attach_transformer(SwitchFormationTransform);
     runner.run();
 
     runner.attach_transformer(LoadStoreTransform::default());

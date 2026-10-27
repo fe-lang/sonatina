@@ -1326,6 +1326,18 @@ impl AggregateScalarize {
                 continue;
             }
 
+            if let Some(enum_make) = func.dfg.downcast::<&data::EnumMake>(user)
+                && enum_make.values().contains(&value)
+            {
+                let Some(res) = func.dfg.inst_result(user) else {
+                    return false;
+                };
+                if !scalarizable[res] {
+                    return false;
+                }
+                continue;
+            }
+
             if let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(user)
                 && *extract.dest() == value
             {
@@ -2064,6 +2076,26 @@ impl AggregateScalarize {
             );
             func.dfg.change_to_alias(result, replacement);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return;
+        }
+
+        if let Some(enum_assert) = func.dfg.downcast::<&data::EnumAssertVariant>(inst).cloned() {
+            // The assertion only proves extractions, which now read the
+            // scalar leaves, and has no effect of its own. Left in place, it
+            // would keep the whole enum value alive.
+            let enum_ty = func.dfg.value_ty(*enum_assert.value());
+            if self
+                .scalarized_leaves_of_value(
+                    func,
+                    module,
+                    *enum_assert.value(),
+                    enum_ty,
+                    scalarized_agg,
+                )
+                .is_some()
+            {
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            }
             return;
         }
 
