@@ -1,0 +1,125 @@
+target = "evm-ethereum-london"
+
+type @pair = {i256, i256};
+type @nested = {i256, @pair};
+type @ptr_pair = {*i8, i256};
+
+#[() -> 1.i256]
+func public %frozen_pointer() -> i256 {
+    block0:
+        v0.*i8 = freeze undef.*i8;
+        v1.i256 = ptr_to_int v0 i256;
+        v2.i1 = eq v1 0.i256;
+        br v2 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}
+
+func private %pointer_param(v0.*i8) -> i256 {
+    block0:
+        v1.i256 = ptr_to_int v0 i256;
+        v2.i1 = eq v1 0.i256;
+        br v2 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}
+
+#[() -> 1.i256]
+func public %undef_pointer_argument() -> i256 {
+    block0:
+        v0.i256 = call %pointer_param undef.*i8;
+        return v0;
+}
+
+func private %pair_param(v0.@pair) -> i256 {
+    block0:
+        v1.i256 = extract_value v0 0.i256;
+        v2.i256 = extract_value v0 1.i256;
+        v3.i1 = eq v2 0.i256;
+        br v3 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        return 0.i256;
+}
+
+#[() -> 7.i256]
+func public %undef_field_argument() -> i256 {
+    block0:
+        v0.@pair = insert_value undef.@pair 0.i256 7.i256;
+        v1.i256 = call %pair_param v0;
+        return v1;
+}
+
+#[() -> 0.i256]
+func public %undef_aggregate_argument() -> i256 {
+    block0:
+        v0.i256 = call %pair_param undef.@pair;
+        return v0;
+}
+
+func private %nested_result() -> @nested {
+    block0:
+        v0.@nested = insert_value undef.@nested 0.i256 7.i256;
+        return v0;
+}
+
+#[() -> 7.i256]
+func public %undef_nested_field_result() -> i256 {
+    block0:
+        v0.@nested = call %nested_result;
+        v1.@pair = extract_value v0 1.i256;
+        v2.i256 = extract_value v1 1.i256;
+        v3.i1 = eq v2 0.i256;
+        br v3 block1 block2;
+
+    block1:
+        v4.i256 = extract_value v0 0.i256;
+        return v4;
+
+    block2:
+        return 0.i256;
+}
+
+#[() -> 1.i256]
+func public %unwritten_pointer_load() -> i256 {
+    block0:
+        v0.**i8 = alloca *i8;
+        v1.*i8 = mload v0 *i8;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i1 = eq v2 0.i256;
+        br v3 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}
+
+#[() -> 1.i256]
+func public %unwritten_pointer_field_load() -> i256 {
+    block0:
+        v0.*@ptr_pair = alloca @ptr_pair;
+        v1.@ptr_pair = mload v0 @ptr_pair;
+        v2.*i8 = extract_value v1 0.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v4.i1 = eq v3 0.i256;
+        br v4 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}

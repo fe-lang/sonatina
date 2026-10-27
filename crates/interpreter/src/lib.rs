@@ -3,7 +3,7 @@ use std::mem;
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     BlockId, DataFlowGraph, Function, I256, Immediate, InstId, Module, Type, Value, ValueId,
-    interpret::{Action, EvalResults, EvalValue, Interpret, State},
+    interpret::{Action, EvalResults, EvalValue, Interpret, State, imm_ty},
     isa::Endian,
     module::{FuncRef, ModuleCtx, RoFuncStore},
     prelude::*,
@@ -134,7 +134,10 @@ impl Frame {
         };
 
         for (arg_val, arg_e_val) in arg_values.iter().zip(arg_e_values) {
-            frame.map_val(*arg_val, arg_e_val.fixed(func.dfg.value_ty(*arg_val)));
+            frame.map_val(
+                *arg_val,
+                arg_e_val.fixed(func.ctx(), func.dfg.value_ty(*arg_val)),
+            );
         }
 
         frame
@@ -172,7 +175,7 @@ impl State for Machine {
             .run_on_func()
             .into_iter()
             .zip(ret_tys)
-            .map(|(value, ty)| value.fixed(ty))
+            .map(|(value, ty)| value.fixed(&self.module_ctx, ty))
             .collect();
 
         self.frames.pop();
@@ -194,7 +197,7 @@ impl State for Machine {
     // Memory never written holds zeros; a read is never undef.
     fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue {
         let Some(addr) = addr.as_imm().and_then(nonnegative_imm_usize) else {
-            return EvalValue::Undef.fixed(ty);
+            return EvalValue::Undef.fixed(&self.module_ctx, ty);
         };
         let size = self.module_ctx.size_of_unchecked(ty);
 
@@ -255,7 +258,7 @@ impl State for Machine {
             Endian::Le => I256::from_le_bytes(&bytes),
         };
 
-        let imm = Immediate::from_i256(value_i256, ty);
+        let imm = Immediate::from_i256(value_i256, imm_ty(&self.module_ctx, ty));
         EvalValue::Imm(imm)
     }
 

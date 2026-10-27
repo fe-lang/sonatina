@@ -3,7 +3,11 @@ use std::fmt;
 use macros::inst_prop;
 use smallvec::{SmallVec, smallvec};
 
-use crate::{BlockId, DataFlowGraph, Immediate, Type, ValueId, inst, module::FuncRef};
+use crate::{
+    BlockId, DataFlowGraph, Immediate, Type, ValueId, inst,
+    module::{FuncRef, ModuleCtx},
+    types::CompoundType,
+};
 
 mod arith;
 mod cast;
@@ -159,7 +163,17 @@ pub trait State {
     /// undef to zero; an abstract state, whose undef can stand for a value it
     /// does not know yet, keeps it.
     fn freeze(&mut self, value: EvalValue, ty: Type) -> EvalValue {
-        value.fixed(ty)
+        value.fixed(&self.dfg().ctx, ty)
+    }
+}
+
+/// The type of the immediate that holds a scalar of `ty`: a pointer is held in
+/// the target's pointer representation.
+pub fn imm_ty(ctx: &ModuleCtx, ty: Type) -> Type {
+    if ty.is_pointer(ctx) {
+        ctx.type_layout.pointer_repl()
+    } else {
+        ty
     }
 }
 
@@ -187,14 +201,36 @@ pub enum EvalValue {
 }
 
 impl EvalValue {
-    /// One fixed value of `ty` for `self`: undef becomes zero where `ty` has
-    /// one, as `freeze`, memory reads and call boundaries never pass undef on.
-    pub fn fixed(self, ty: Type) -> Self {
-        match self {
-            EvalValue::Undef if ty.is_integral() || ty.is_enum_tag() => {
-                EvalValue::Imm(Immediate::zero(ty))
+    /// One fixed value of `ty` for `self`, as `freeze`, memory reads and call
+    /// boundaries never pass undef on: an undefined scalar becomes zero, and
+    /// each field of a struct or array is fixed in turn, keeping those already
+    /// set.
+    pub fn fixed(self, ctx: &ModuleCtx, ty: Type) -> Self {
+        let field_tys = match ty.resolve_compound(ctx) {
+            Some(CompoundType::Struct(s)) => s.fields,
+            Some(CompoundType::Array { elem, len }) => vec![elem; len],
+            _ => {
+                let imm_ty = imm_ty(ctx, ty);
+                return match self {
+                    EvalValue::Undef if imm_ty.is_integral() || imm_ty.is_enum_tag() => {
+                        EvalValue::Imm(Immediate::zero(imm_ty))
+                    }
+                    value => value,
+                };
             }
-            value => value,
+        };
+        let fields = match self {
+            EvalValue::Aggregate { fields, .. } => fields,
+            EvalValue::Undef => vec![EvalValue::Undef; field_tys.len()],
+            value @ EvalValue::Imm(_) => return value,
+        };
+        EvalValue::Aggregate {
+            fields: fields
+                .into_iter()
+                .zip(field_tys)
+                .map(|(field, ty)| field.fixed(ctx, ty))
+                .collect(),
+            ty,
         }
     }
 
