@@ -13,7 +13,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     Function, InstId, Type, ValueId,
     effects::{AccessKind, AccessLoc, MemoryAccess},
-    inst::{cast, control_flow, data, downcast},
+    inst::{cast, control_flow, data, downcast, evm},
     module::ModuleCtx,
 };
 
@@ -72,9 +72,13 @@ impl ObjectReachability {
         for &root in &this.roots {
             let value = root.value();
             this.references[value].roots.insert(root);
+            // A caller's object may hold any reference. Code outside this
+            // function reaches it too, unless it is a `noalias` argument.
             if !this.aliases.is_fresh(root) {
-                this.exposed.insert(root);
                 this.contents.entry(root).or_default().external = true;
+                if !this.aliases.is_noalias(root) {
+                    this.exposed.insert(root);
+                }
             }
         }
         // Whether a value can carry a reference depends only on its type.
@@ -93,6 +97,7 @@ impl ObjectReachability {
         }
         // Only values without definitions start unknown. Recognized producers
         // grow from bottom; an unrelated unresolved SSA value is not published.
+        // A raw pointer immediate or `undef` reaches only published objects.
         for value in func.dfg.value_ids() {
             if this.aliases.is_fresh(RootValue::new(value)) {
                 this.references[value].roots.insert(RootValue::new(value));
@@ -101,7 +106,11 @@ impl ObjectReachability {
                 && func.dfg.value_inst(value).is_none()
                 && !func.arg_values.contains(&value)
             {
-                this.references[value].unknown = true;
+                if func.dfg.value_ty(value).is_pointer(func.ctx()) {
+                    this.references[value].external = true;
+                } else {
+                    this.references[value].unknown = true;
+                }
             }
         }
         loop {
@@ -119,8 +128,9 @@ impl ObjectReachability {
             }
             if !changed {
                 // Cyclic or unsupported source chains can converge at bottom.
-                // Bottom is not an exhaustive empty set for a direct reference.
-                // Widen only after propagation, then close exposure again.
+                // Bottom is not an exhaustive empty set for a direct object
+                // reference. A raw pointer without roots reaches only published
+                // objects. Widen only after propagation, then close exposure.
                 for value in func.dfg.value_ids() {
                     let ty = func.dfg.value_ty(value);
                     let refs = &mut this.references[value];
@@ -129,7 +139,11 @@ impl ObjectReachability {
                         && !refs.external
                         && !refs.unknown
                     {
-                        refs.unknown = true;
+                        if ty.is_pointer(func.ctx()) {
+                            refs.external = true;
+                        } else {
+                            refs.unknown = true;
+                        }
                         changed = true;
                     }
                 }
@@ -141,7 +155,9 @@ impl ObjectReachability {
     }
 
     pub(crate) fn exposed(&self, root: RootValue) -> bool {
-        self.unknown_published || !self.aliases.is_fresh(root) || self.exposed.contains(&root)
+        self.unknown_published
+            || !(self.aliases.is_fresh(root) || self.aliases.is_noalias(root))
+            || self.exposed.contains(&root)
     }
 
     fn expose(&mut self, references: &References) -> bool {
@@ -153,6 +169,21 @@ impl ObjectReachability {
             self.exposed.extend(self.roots.iter().copied());
         }
         changed || old_len != self.exposed.len()
+    }
+
+    /// Stores `value` into `object`, or publishes it if it is a raw pointer.
+    fn store_or_publish(
+        &mut self,
+        object: ValueId,
+        value: ValueId,
+        raw_pointer: impl Fn(ValueId) -> bool,
+    ) -> bool {
+        let references = self.references[value].clone();
+        if raw_pointer(value) {
+            self.expose(&references)
+        } else {
+            self.store_references(object, &references)
+        }
     }
 
     fn store_references(&mut self, object: ValueId, contents: &References) -> bool {
@@ -180,27 +211,52 @@ impl ObjectReachability {
     ) -> bool {
         let data = func.dfg.inst(inst);
         let is = func.inst_set();
+        let raw_pointer = |value| func.dfg.value_ty(value).is_pointer(func.ctx());
         let mut changed = false;
         if let Some(store) = downcast::<&data::ObjStore>(is, data) {
-            changed |=
-                self.store_references(*store.object(), &self.references[*store.value()].clone());
+            changed |= self.store_or_publish(*store.object(), *store.value(), raw_pointer);
         } else if let Some(store) = downcast::<&data::EnumWriteVariant>(is, data) {
-            for value in store.values() {
-                changed |= self.store_references(*store.object(), &self.references[*value].clone());
+            for &value in store.values() {
+                changed |= self.store_or_publish(*store.object(), value, raw_pointer);
+            }
+        } else if let Some(insert) = downcast::<&data::InsertValue>(is, data) {
+            if raw_pointer(*insert.value()) {
+                changed |= self.expose(&self.references[*insert.value()].clone());
+            }
+        } else if let Some(make) = downcast::<&data::EnumMake>(is, data) {
+            for &value in make.values().iter().filter(|&&value| raw_pointer(value)) {
+                changed |= self.expose(&self.references[value].clone());
             }
         } else if let Some(mat) = downcast::<&data::ObjMaterializeStack>(is, data) {
             changed |= self.expose(&self.references[*mat.object()].clone());
+        } else if let Some(from) = downcast::<&cast::PtrToInt>(is, data)
+            .map(|cast| *cast.from())
+            .or_else(|| {
+                downcast::<&cast::Bitcast>(is, data)
+                    .filter(|_| {
+                        func.dfg
+                            .inst_result(inst)
+                            .is_some_and(|result| !bears_reference[result])
+                    })
+                    .map(|cast| *cast.from())
+            })
+        {
+            // An address that becomes an integer may come back as any pointer.
+            changed |= self.expose(&self.references[from].clone());
         } else if let Some(call) = downcast::<&control_flow::Call>(is, data) {
             let summary = summaries.and_then(|summaries| summaries.get(call.callee()));
+            // A callee publishing what external memory already reaches cannot
+            // publish an argument; `escapes` covers what it does with those.
             for (index, &arg) in call.args().iter().enumerate() {
-                if summary.is_none_or(|summary| {
-                    summary.non_arg.external.publishes
-                        || summary.non_arg.unknown.publishes
-                        || summary
-                            .arg_effects
-                            .get(index)
-                            .is_none_or(|effect| effect.needs_unknown_object_barrier())
-                }) {
+                if raw_pointer(arg)
+                    || summary.is_none_or(|summary| {
+                        summary.non_arg.unknown.publishes
+                            || summary
+                                .arg_effects
+                                .get(index)
+                                .is_none_or(|effect| effect.needs_unknown_object_barrier())
+                    })
+                {
                     changed |= self.expose(&self.references[arg].clone());
                 }
             }
@@ -240,7 +296,24 @@ impl ObjectReachability {
                 continue;
             }
             let mut next = References::default();
-            if let Some(load) = downcast::<&data::ObjLoad>(is, data) {
+            if downcast::<&data::MemAllocDynamic>(is, data).is_some()
+                || downcast::<&evm::EvmMalloc>(is, data).is_some()
+            {
+                // Fresh heap memory holds no reference until a raw store
+                // publishes one.
+                next.external = true;
+            } else if downcast::<&data::Mload>(is, data).is_some()
+                || raw_pointer(result)
+                    && downcast::<&data::Gep>(is, data).is_none()
+                    && downcast::<&cast::Bitcast>(is, data).is_none()
+                    && downcast::<&control_flow::Phi>(is, data).is_none()
+                    && downcast::<&data::ObjMaterializeStack>(is, data).is_none()
+            {
+                // Only SSA carries a raw pointer's roots; anything else that
+                // holds one published them.
+                next.external = true;
+                next.unknown = self.unknown_published;
+            } else if let Some(load) = downcast::<&data::ObjLoad>(is, data) {
                 let address = &self.references[*load.object()];
                 next.external =
                     address.external || address.roots.iter().any(|&root| self.exposed(root));
@@ -295,9 +368,6 @@ impl ObjectReachability {
                         next.unknown |= self.unknown_published;
                     }
                 }
-            } else if downcast::<&data::Mload>(is, data).is_some() {
-                next.external = true;
-                next.unknown = self.unknown_published;
             } else if downcast::<&data::ObjProj>(is, data).is_some()
                 || downcast::<&data::ObjIndex>(is, data).is_some()
                 || downcast::<&data::EnumProj>(is, data).is_some()
@@ -312,8 +382,13 @@ impl ObjectReachability {
                 || downcast::<&data::EnumExtract>(is, data).is_some()
                 || downcast::<&data::EnumAssertVariant>(is, data).is_some()
             {
+                // An aggregate does not carry a raw pointer it received.
+                let aggregate = downcast::<&data::InsertValue>(is, data).is_some()
+                    || downcast::<&data::EnumMake>(is, data).is_some();
                 for value in data.collect_values() {
-                    next.union_with(&self.references[value]);
+                    if !(aggregate && raw_pointer(value)) {
+                        next.union_with(&self.references[value]);
+                    }
                 }
             } else {
                 next.unknown = true;
@@ -349,12 +424,21 @@ impl ObjectReachability {
     }
 }
 
-pub(crate) fn reference_bearing(func: &Function, value: ValueId) -> bool {
-    reference_bearing_ty(func.ctx(), func.dfg.value_ty(value))
+fn reference_bearing_ty(ctx: &ModuleCtx, ty: Type) -> bool {
+    ty.is_pointer(ctx) || object_reference_bearing_ty(ctx, ty)
 }
 
-fn reference_bearing_ty(ctx: &ModuleCtx, ty: Type) -> bool {
-    ty.is_obj_ref(ctx) || ty.is_pointer(ctx) || shape::is_reference_aggregate(ctx, ty)
+/// Whether `value` can hold an object reference that memory, aggregates and
+/// calls carry. A raw pointer carries roots only within SSA: storing it,
+/// putting it in an aggregate, passing, returning or converting it publishes
+/// what it reaches, so a raw pointer from anywhere else reaches only published
+/// objects.
+pub(crate) fn object_reference_bearing(func: &Function, value: ValueId) -> bool {
+    object_reference_bearing_ty(func.ctx(), func.dfg.value_ty(value))
+}
+
+fn object_reference_bearing_ty(ctx: &ModuleCtx, ty: Type) -> bool {
+    ty.is_obj_ref(ctx) || shape::is_reference_aggregate(ctx, ty)
 }
 
 /// Raw bytes have no typed-leaf coordinates. Only the bounded direct-allocation

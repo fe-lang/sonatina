@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
@@ -6,8 +8,10 @@ use sonatina_ir::{
     types::{CompoundType, EnumData, EnumVariantRef, TypeStore},
 };
 
-// References embedded in SSA aggregates have no object slice/capture identity.
-// Classify by type so arguments, phi results and call returns share the boundary.
+// Object references embedded in SSA aggregates have no object slice/capture
+// identity. Classify by type so arguments, phi results and call returns share
+// the boundary. A raw pointer publishes what it reaches when it enters an
+// aggregate, so it does not make one a reference aggregate.
 pub(crate) fn is_reference_aggregate(module: &ModuleCtx, ty: Type) -> bool {
     module.with_ty_store(|types| {
         if !matches!(
@@ -23,9 +27,7 @@ pub(crate) fn is_reference_aggregate(module: &ModuleCtx, ty: Type) -> bool {
                 continue;
             }
             match compound_ty(types, ty) {
-                Some(
-                    CompoundType::ObjRef(_) | CompoundType::Ptr(_) | CompoundType::ConstRef(_),
-                ) => {
+                Some(CompoundType::ObjRef(_) | CompoundType::ConstRef(_)) => {
                     return true;
                 }
                 Some(CompoundType::Array { elem, len }) if *len != 0 => pending.push(*elem),
@@ -66,6 +68,35 @@ pub struct AggregateSlice {
     pub ty: Type,
     pub first_leaf: usize,
     pub leaf_count: usize,
+}
+
+/// An arbitrary total order, which lets a set of slices take one canonical
+/// order. `Type`'s own partial order compares integer widths.
+impl Ord for AggregateSlice {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let key = |slice: &Self| {
+            let ty = match slice.ty {
+                Type::I1 => (0, None),
+                Type::I8 => (1, None),
+                Type::I16 => (2, None),
+                Type::I32 => (3, None),
+                Type::I64 => (4, None),
+                Type::I128 => (5, None),
+                Type::I256 => (6, None),
+                Type::EnumTag(compound) => (7, Some(compound)),
+                Type::Compound(compound) => (8, Some(compound)),
+                Type::Unit => (9, None),
+            };
+            (ty, slice.first_leaf, slice.leaf_count)
+        };
+        key(self).cmp(&key(other))
+    }
+}
+
+impl PartialOrd for AggregateSlice {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

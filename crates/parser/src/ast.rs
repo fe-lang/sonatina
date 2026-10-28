@@ -364,8 +364,23 @@ pub struct FuncSignature {
     pub linkage: Linkage,
     pub inline_hint: InlineHint,
     pub name: FunctionName,
-    pub params: Vec<ValueDeclaration>,
+    pub params: Vec<FuncParam>,
     pub ret_types: Vec<Type>,
+}
+
+#[derive(Debug)]
+pub struct FuncParam {
+    pub noalias: bool,
+    pub decl: ValueDeclaration,
+}
+
+impl FromSyntax<Error> for FuncParam {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        FuncParam {
+            noalias: node.get_opt(Rule::noalias).is_some(),
+            decl: node.single(Rule::value_declaration),
+        }
+    }
 }
 
 impl FromSyntax<Error> for FuncSignature {
@@ -376,7 +391,7 @@ impl FromSyntax<Error> for FuncSignature {
             linkage,
             inline_hint: node.single_opt(Rule::inline_hint).unwrap_or_default(),
             name: node.single(Rule::function_identifier),
-            params: node.descend_into(Rule::function_params, |n| n.multi(Rule::value_declaration)),
+            params: node.descend_into(Rule::function_params, |n| n.multi(Rule::function_param)),
             ret_types: node
                 .descend_into_opt(Rule::function_ret_type, |n| n.multi(Rule::type_name))
                 .unwrap_or_default(),

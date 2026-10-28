@@ -26,30 +26,36 @@ Module {
                     ..
                 },
                 params: [
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v0",
-                            ..
-                        },
-                        Type {
-                            kind: Int(
-                                I32,
-                            ),
-                            ..
-                        },
-                    ),
-                    ValueDeclaration(
-                        ValueName {
-                            string: "v1",
-                            ..
-                        },
-                        Type {
-                            kind: Int(
-                                I32,
-                            ),
-                            ..
-                        },
-                    ),
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v0",
+                                ..
+                            },
+                            Type {
+                                kind: Int(
+                                    I32,
+                                ),
+                                ..
+                            },
+                        ),
+                    },
+                    FuncParam {
+                        noalias: false,
+                        decl: ValueDeclaration(
+                            ValueName {
+                                string: "v1",
+                                ..
+                            },
+                            Type {
+                                kind: Int(
+                                    I32,
+                                ),
+                                ..
+                            },
+                        ),
+                    },
                 ],
                 ret_types: [],
             },

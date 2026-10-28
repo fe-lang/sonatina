@@ -14,7 +14,9 @@ use sonatina_ir::{
 use super::{
     LocalObjectArgInfo, ObjectEffectSummaryMap, SliceSet,
     object_effects::{ObjectCaptureDestination, ObjectEffectSummary},
-    object_reachability::{ObjectReachability, raw_access_may_reach_objects, reference_bearing},
+    object_reachability::{
+        ObjectReachability, object_reference_bearing, raw_access_may_reach_objects,
+    },
     object_tracking::{
         AggregateFacts, ObjectSlice, TrackedObject, collect_tracked_objects, enum_tag_object_slice,
     },
@@ -92,7 +94,11 @@ impl ObjectAccessFacts {
             .root_slices()
             .keys()
             .copied()
-            .filter(|&root| self.reachability.aliases.is_fresh(RootValue::new(root)))
+            .filter(|&root| {
+                let root = RootValue::new(root);
+                self.reachability.aliases.is_fresh(root)
+                    || self.reachability.aliases.is_noalias(root)
+            })
             .collect();
         if let Some(local_args) = local_args {
             eligible.extend(
@@ -238,6 +244,12 @@ impl ObjectAccessFacts {
 
     pub(crate) fn exposed(&self, root: RootValue) -> bool {
         self.reachability.exposed(root)
+    }
+
+    /// Whether code reads `root` after the function returns: it is exposed
+    /// to other code, or a caller's object, including a `noalias` one.
+    pub(crate) fn observed_after_return(&self, root: RootValue) -> bool {
+        self.exposed(root) || !self.reachability.aliases.is_fresh(root)
     }
 
     pub(crate) fn may_overlap(&self, access: ObjectAccess, target: ObjectSlice) -> bool {
@@ -414,7 +426,7 @@ impl ObjectAccessFacts {
                 None,
                 ObjectInitializationSource::Value(*store.value()),
             );
-            if reference_bearing(func, *store.value()) {
+            if object_reference_bearing(func, *store.value()) {
                 effects.captures.push((
                     self.access(*store.object(), None),
                     self.reachable_access(*store.value()),
@@ -458,7 +470,7 @@ impl ObjectAccessFacts {
                             ObjectInitializationSource::Value(store.values()[index]),
                         );
                         let value = store.values()[index];
-                        if reference_bearing(func, value) {
+                        if object_reference_bearing(func, value) {
                             effects.captures.push((
                                 self.access(*store.object(), Some(field)),
                                 self.reachable_access(value),
@@ -656,7 +668,7 @@ block0:
     }
 
     #[test]
-    fn publishing_unresolved_pointer_cannot_leave_an_empty_alternative() {
+    fn unresolved_raw_pointers_settle_as_external() {
         check(
             r#"
 target = "evm-ethereum-osaka"
@@ -669,8 +681,215 @@ block0:
 }
 "#,
             |_, facts, _| {
-                assert!(facts.reachability.references[ValueId::from_u32(2)].unknown);
-                assert!(facts.may_overlap(ObjectAccess::External, location(facts, 1)));
+                let pointer = &facts.reachability.references[ValueId::from_u32(2)];
+                assert!(pointer.external && !pointer.unknown);
+                assert!(!facts.may_overlap(ObjectAccess::External, location(facts, 1)));
+            },
+        );
+    }
+
+    #[test]
+    fn opaque_calls_with_heap_and_integer_pointers_spare_unpublished_fresh_roots() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+declare external %release(*i8);
+func private %f(v0.i256) {
+block0:
+    v1.objref<i256> = obj.alloc i256;
+    obj.store v1 11.i256;
+    v2.*i8 = mem.alloc_dynamic 64.i256;
+    call %release v2;
+    v3.*i8 = evm_malloc 32.i256;
+    call %release v3;
+    v4.*i8 = int_to_ptr v0 *i8;
+    call %release v4;
+    return;
+}
+"#,
+            |func, facts, summaries| {
+                assert!(!facts.exposed(RootValue::new(ValueId::from_u32(1))));
+                for call in func
+                    .layout
+                    .iter_all_insts()
+                    .filter(|&inst| func.dfg.call_info(inst).is_some())
+                {
+                    let effects = facts.effects(func, call, Some(summaries));
+                    for accesses in [&effects.reads, &effects.writes] {
+                        assert!(
+                            !accesses
+                                .iter()
+                                .any(|&access| facts.may_overlap(access, location(facts, 1)))
+                        );
+                    }
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn pointers_converted_to_integers_expose_their_roots() {
+        for convert in ["ptr_to_int v0 i256", "bitcast v0 i256"] {
+            check(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+declare external %opaque(*i256);
+func private %f() {{
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = {convert};
+    v2.*i256 = int_to_ptr v1 *i256;
+    call %opaque v2;
+    return;
+}}
+"#
+                ),
+                |_, facts, _| {
+                    assert!(
+                        facts.exposed(RootValue::new(ValueId::from_u32(0))),
+                        "{convert}"
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn raw_pointers_entering_objects_or_aggregates_publish_their_roots() {
+        for publish in [
+            "v2.objref<*i256> = obj.alloc *i256;\n    obj.store v2 v1;",
+            "v2.@Holder = insert_value undef.@Holder 0.i256 v1;",
+        ] {
+            check(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+type @Holder = {{ *i256 }};
+func private %f() {{
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    v1.*i256 = alloca i256;
+    {publish}
+    return;
+}}
+"#
+                ),
+                |_, facts, _| {
+                    assert!(
+                        facts.exposed(RootValue::new(ValueId::from_u32(1))),
+                        "{publish}"
+                    );
+                    assert!(
+                        !facts.exposed(RootValue::new(ValueId::from_u32(0))),
+                        "{publish}"
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn undefined_raw_pointers_are_external() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+declare external %release(*i8);
+func private %f() {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    call %release undef.*i8;
+    return;
+}
+"#,
+            |_, facts, _| {
+                assert!(!facts.exposed(RootValue::new(ValueId::from_u32(0))));
+            },
+        );
+    }
+
+    #[test]
+    fn raw_pointers_loaded_from_objects_are_external() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f() {
+block0:
+    v0.objref<*i256> = obj.alloc *i256;
+    v1.objref<i256> = obj.alloc i256;
+    v2.*i256 = obj.load v0;
+    return;
+}
+"#,
+            |_, facts, _| {
+                let pointer = &facts.reachability.references[ValueId::from_u32(2)];
+                assert!(pointer.external && !pointer.unknown && pointer.roots.is_empty());
+                assert!(!facts.exposed(RootValue::new(ValueId::from_u32(1))));
+            },
+        );
+    }
+
+    #[test]
+    fn integer_pointers_reach_materialized_roots() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f() {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    v1.objref<i256> = obj.alloc i256;
+    v2.*i256 = obj.materialize.stack v0;
+    v3.i256 = ptr_to_int v2 i256;
+    v4.*i256 = int_to_ptr v3 *i256;
+    mstore v4 11.i256 i256;
+    return;
+}
+"#,
+            |_, facts, _| {
+                let pointer = ValueId::from_u32(4);
+                assert!(!facts.reachability.references[pointer].unknown);
+                assert!(
+                    facts
+                        .reachability
+                        .may_reach(pointer, RootValue::new(ValueId::from_u32(0)))
+                );
+                assert!(
+                    !facts
+                        .reachability
+                        .may_reach(pointer, RootValue::new(ValueId::from_u32(1)))
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn calls_into_helpers_that_reach_opaque_code_spare_unescaped_arguments() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+declare external %opaque();
+func private %helper(v0.objref<i256>) -> i256 {
+block0:
+    v1.i256 = obj.load v0;
+    call %opaque;
+    return v1;
+}
+func private %f() {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    obj.store v0 11.i256;
+    v1.i256 = call %helper v0;
+    return;
+}
+"#,
+            |_, facts, summaries| {
+                let helper = summaries
+                    .values()
+                    .find(|summary| summary.arg_effects.len() == 1)
+                    .expect("helper summary");
+                assert!(helper.non_arg.external.publishes);
+                assert!(!helper.arg_effects[0].escapes);
+                assert!(!facts.exposed(RootValue::new(ValueId::from_u32(0))));
             },
         );
     }
