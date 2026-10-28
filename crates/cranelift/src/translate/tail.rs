@@ -2,10 +2,11 @@
 //! Cranelift `return_call` when the callee cannot reach the caller's frame,
 //! which the call then replaces.
 //!
-//! Cranelift tail-calls only between functions of its `tail` calling
-//! convention, which keeps the platform's callee-saved registers. The
-//! functions on either side of a tail call use it; the rest keep the
-//! platform convention, as external code calls public functions.
+//! Only functions in a recursive cycle make tail calls, which keep that
+//! recursion in constant stack. Cranelift tail-calls only between functions
+//! of its `tail` calling convention, which saves no registers. The functions
+//! on either side of a tail call use it; the rest keep the platform
+//! convention, as external code calls public functions.
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,6 +17,8 @@ use sonatina_ir::{
     types::CompoundType,
 };
 use sonatina_triple::TargetTriple;
+
+use sonatina_codegen::module_analysis::analyze_module;
 
 /// The tail calls of a module.
 #[derive(Default)]
@@ -45,8 +48,17 @@ impl TailCalls {
         if module.ctx.triple == TargetTriple::SP1 {
             return tail_calls;
         }
+        // Only recursion needs a call to replace its caller's frame. Every
+        // caller of a tail-convention function keeps its own registers
+        // across the call, so elsewhere a tail call would cost more than the
+        // return it saves. A function in a recursive cycle tail-calls, its
+        // cycle's members and the functions it leaves the cycle through
+        // alike.
+        let sccs = analyze_module(module).scc;
         for func_ref in module.funcs() {
-            if !module.ctx.func_linkage(func_ref).is_private() {
+            if !module.ctx.func_linkage(func_ref).is_private()
+                || !sccs.scc_info(sccs.scc_ref(func_ref)).is_cycle
+            {
                 continue;
             }
             let sites: Vec<_> = module.func_store.view(func_ref, |function| {
@@ -312,30 +324,48 @@ mod tests {
         (module, tail_calls)
     }
 
-    /// The names of the functions using the `tail` convention.
-    fn tail_functions(source: &str) -> Vec<String> {
-        let (module, tail_calls) = tail_calls(source);
-        let mut names: Vec<_> = module
-            .funcs()
-            .into_iter()
-            .filter(|&func| tail_calls.uses_tail_convention(func))
-            .map(|func| module.ctx.func_sig(func, |sig| sig.name().to_string()))
-            .collect();
-        names.sort();
-        names
+    /// How many of `name`'s calls are tail calls.
+    fn tail_call_count(module: &Module, tail_calls: &TailCalls, name: &str) -> usize {
+        let func = lookup_func(module, name);
+        module.func_store.view(func, |function| {
+            function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .filter(|&inst| tail_calls.is_tail_call(func, inst))
+                .count()
+        })
     }
 
     #[test]
-    fn returned_call_results_are_tail_calls() {
-        let names = tail_functions(
+    fn recursive_calls_returning_their_results_are_tail_calls() {
+        let (module, tail_calls) = tail_calls(
             r#"
 func private %f(v0.i64) -> i64 {
     block0:
-        v1.i64 = call %g v0;
-        return v1;
+        v1.i1 = eq v0 0.i64;
+        br v1 block1 block2;
+    block1:
+        return v0;
+    block2:
+        v2.i64 = sub v0 1.i64;
+        v3.i64 = call %g v2;
+        return v3;
 }
 
 func private %g(v0.i64) -> i64 {
+    block0:
+        v1.i64 = call %f v0;
+        return v1;
+}
+
+func private %helper(v0.i64) -> i64 {
+    block0:
+        v1.i64 = call %leaf v0;
+        return v1;
+}
+
+func private %leaf(v0.i64) -> i64 {
     block0:
         return v0;
 }
@@ -343,12 +373,15 @@ func private %g(v0.i64) -> i64 {
 func public %entry(v0.i64) -> i64 {
     block0:
         v1.i64 = call %f v0;
-        return v1;
+        v2.i64 = call %helper v1;
+        return v2;
 }
 "#,
         );
-        // A public caller keeps the platform convention and calls normally.
-        assert_eq!(names, ["f", "g"]);
+        let tail = |name| tail_calls.uses_tail_convention(lookup_func(&module, name));
+        assert!(tail("f") && tail("g"));
+        // Outside a cycle, and from a public caller, calls stay calls.
+        assert!(!tail("helper") && !tail("leaf") && !tail("entry"));
     }
 
     #[test]
@@ -375,7 +408,8 @@ func private %dispatch(v0.i64, v1.i64) -> i64 {
 func private %inc(v0.i64) -> i64 {
     block0:
         v1.i64 = add v0 1.i64;
-        return v1;
+        v2.i64 = call %dispatch v1 v1;
+        return v2;
 }
 
 func private %dec(v0.i64) -> i64 {
@@ -385,58 +419,41 @@ func private %dec(v0.i64) -> i64 {
 }
 "#,
         );
-        let dispatch = lookup_func(&module, "dispatch");
-        let calls: Vec<_> = module.func_store.view(dispatch, |function| {
-            function
-                .layout
-                .iter_block()
-                .flat_map(|block| function.layout.iter_inst(block))
-                .filter(|&inst| tail_calls.is_tail_call(dispatch, inst))
-                .map(|inst| function.layout.inst_block(inst))
-                .collect()
-        });
         // `dec`'s result is used before the join.
-        assert_eq!(calls.len(), 1);
+        assert_eq!(tail_call_count(&module, &tail_calls, "dispatch"), 1);
         assert!(tail_calls.uses_tail_convention(lookup_func(&module, "inc")));
         assert!(!tail_calls.uses_tail_convention(lookup_func(&module, "dec")));
     }
 
     #[test]
     fn used_results_and_frame_arguments_are_not_tail_calls() {
-        let names = tail_functions(
+        let (module, tail_calls) = tail_calls(
             r#"
 func private %adds(v0.i64) -> i64 {
     block0:
-        v1.i64 = call %g v0;
+        v1.i64 = call %adds v0;
         v2.i64 = add v1 1.i64;
         return v2;
 }
 
 func private %wide(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %h v0;
+        v1.i256 = call %wide v0;
         return v1;
 }
 
 func private %narrows(v0.i64) -> i32 {
     block0:
-        v1.i64 = call %g v0;
-        v2.i32 = trunc v1 i32;
-        return v2;
-}
-
-func private %g(v0.i64) -> i64 {
-    block0:
-        return v0;
-}
-
-func private %h(v0.i256) -> i256 {
-    block0:
-        return v0;
+        v1.i32 = call %narrows v0;
+        v2.i64 = zext v1 i64;
+        v3.i32 = trunc v2 i32;
+        return v3;
 }
 "#,
         );
-        assert!(names.is_empty(), "{names:?}");
+        for name in ["adds", "wide", "narrows"] {
+            assert_eq!(tail_call_count(&module, &tail_calls, name), 0, "{name}");
+        }
     }
 
     #[test]
@@ -462,14 +479,19 @@ func private %passes_result(v0.i64) -> i64 {
 
 func private %first(v0.constref<@pair>, v1.i64) -> i64 {
     block0:
-        v2.constref<i64> = const.proj v0 0.i256;
-        v3.i64 = const.load v2;
+        v2.i1 = eq v1 0.i64;
+        br v2 block1 block2;
+    block1:
+        v3.i64 = call %passes_argument v0 v1;
         return v3;
+    block2:
+        v4.i64 = call %passes_result v1;
+        return v4;
 }
 "#,
         );
-        assert!(tail_calls.uses_tail_convention(lookup_func(&module, "passes_argument")));
-        assert!(!tail_calls.uses_tail_convention(lookup_func(&module, "passes_result")));
+        assert_eq!(tail_call_count(&module, &tail_calls, "passes_argument"), 1);
+        assert_eq!(tail_call_count(&module, &tail_calls, "passes_result"), 0);
     }
 
     #[test]
@@ -495,7 +517,9 @@ func private %switch(v0.i64, v1.i64) -> i64 {{
 
 func private %f(v0.i64, v1.i64) -> i64 {{
     block0:
-        return v1;
+        v2.i64 = sub v0 1.i64;
+        v3.i64 = call %switch v2 v1;
+        return v3;
 }}
 
 func private %g(v0.i64, v1.i64) -> i64 {{
@@ -526,12 +550,12 @@ func private %g(v0.i64, v1.i64) -> i64 {{
     fn escaped_allocations_keep_calls() {
         let (module, tail_calls) = tail_calls(
             r#"
-func private %passes_reference() -> i64 {
+func private %passes_reference(v0.i64) -> i64 {
     block0:
-        v0.objref<i64> = obj.alloc i64;
-        obj.store v0 42.i64;
-        v1.i64 = call %read v0;
-        return v1;
+        v1.objref<i64> = obj.alloc i64;
+        obj.store v1 v0;
+        v2.i64 = call %read v1;
+        return v2;
 }
 
 func private %local_only(v0.i64) -> i64 {
@@ -547,18 +571,18 @@ func private %local_only(v0.i64) -> i64 {
 func private %read(v0.objref<i64>) -> i64 {
     block0:
         v1.i64 = obj.load v0;
-        return v1;
+        v2.i64 = call %passes_reference v1;
+        return v2;
 }
 
 func private %g(v0.i64) -> i64 {
     block0:
-        return v0;
+        v1.i64 = call %local_only v0;
+        return v1;
 }
 "#,
         );
-        let passes_reference = lookup_func(&module, "passes_reference");
-        let local_only = lookup_func(&module, "local_only");
-        assert!(!tail_calls.uses_tail_convention(passes_reference));
-        assert!(tail_calls.uses_tail_convention(local_only));
+        assert_eq!(tail_call_count(&module, &tail_calls, "passes_reference"), 0);
+        assert_eq!(tail_call_count(&module, &tail_calls, "local_only"), 1);
     }
 }
