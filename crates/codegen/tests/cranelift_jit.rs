@@ -18,6 +18,8 @@ mod object_alias;
 mod references;
 #[path = "cranelift/scalar.rs"]
 mod scalar;
+#[path = "cranelift/tail_calls.rs"]
+mod tail_calls;
 #[path = "cranelift/control_flow.rs"]
 mod wide_control_flow;
 

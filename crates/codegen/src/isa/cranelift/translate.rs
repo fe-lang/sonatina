@@ -6,6 +6,7 @@ mod i256;
 mod memory;
 mod phi;
 mod scalar;
+mod tail;
 mod values;
 
 use std::collections::HashMap;
@@ -14,6 +15,7 @@ use cranelift_codegen::{
     Context,
     control::ControlPlane,
     ir::{self as clif, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC},
+    isa::CallConv,
     settings,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
@@ -39,6 +41,7 @@ use self::{
     memory::*,
     phi::Edges,
     scalar::*,
+    tail::TailCalls,
     values::*,
 };
 
@@ -52,14 +55,11 @@ pub(super) fn translate_module(
 
     let funcs = module.funcs();
     let mut divider = Divider::default();
+    let tail_calls = TailCalls::new(module);
 
     for &func_ref in &funcs {
-        let (name, sig) = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
-            validate_cranelift_signature(&module.ctx, sig)?;
-            let name = sig.name().to_string();
-            let clif_sig = sonatina_sig_to_clif(&module.ctx, sig, clif_module);
-            Ok((name, clif_sig))
-        })?;
+        let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
+        let sig = clif_signature(module, func_ref, &tail_calls, clif_module)?;
 
         let linkage = translate_linkage(module.ctx.func_linkage(func_ref));
         let func_id = clif_module
@@ -87,6 +87,7 @@ pub(super) fn translate_module(
                         module,
                         function,
                         func_ref,
+                        &tail_calls,
                         &func_id_map,
                         &data_ids,
                         &mut divider,
@@ -187,11 +188,30 @@ fn translate_linkage(linkage: SonatinaLinkage) -> Linkage {
     }
 }
 
+/// The Cranelift signature of `func_ref`, in the `tail` calling convention
+/// when it takes part in a tail call.
+fn clif_signature(
+    module: &Module,
+    func_ref: FuncRef,
+    tail_calls: &TailCalls,
+    clif_module: &impl ClifModule,
+) -> Result<clif::Signature, String> {
+    let mut sig = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
+        validate_cranelift_signature(&module.ctx, sig)?;
+        Ok(sonatina_sig_to_clif(&module.ctx, sig, clif_module))
+    })?;
+    if tail_calls.uses_tail_convention(func_ref) {
+        sig.call_conv = CallConv::Tail;
+    }
+    Ok(sig)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn translate_function(
     module: &Module,
     function: &Function,
     func_ref: FuncRef,
+    tail_calls: &TailCalls,
     func_id_map: &HashMap<FuncRef, FuncId>,
     data_ids: &GlobalDataMap,
     divider: &mut Divider,
@@ -200,11 +220,7 @@ fn translate_function(
     let target_config = clif_module.target_config();
     let pointer_type = target_config.pointer_type();
     let mut ctx = clif_module.make_context();
-    let sig = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
-        validate_cranelift_signature(&module.ctx, sig)?;
-        Ok(sonatina_sig_to_clif(&module.ctx, sig, clif_module))
-    })?;
-    ctx.func.signature = sig;
+    ctx.func.signature = clif_signature(module, func_ref, tail_calls, clif_module)?;
 
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
@@ -994,8 +1010,13 @@ fn translate_function(
                         _ => None,
                     };
 
+                    let tail_call = tail_calls.is_tail_call(func_ref, inst_id);
                     let mut call_args = Vec::new();
-                    let sret_slot = if let Some(storage_ty) = indirect_storage_ty {
+                    let sret_slot = if tail_call {
+                        // An indirect result goes to the caller's own buffer.
+                        call_args.extend(sret_ptr);
+                        None
+                    } else if let Some(storage_ty) = indirect_storage_ty {
                         let result_ty = function.dfg.value_ty(ir_results[0]);
                         // A constref result's copy of its referent stays
                         // in a slot of its own.
@@ -1031,6 +1052,11 @@ fn translate_function(
                         call_args.push(value);
                     }
 
+                    if tail_call {
+                        builder.ins().return_call(clif_func_ref, &call_args);
+                        // The tail call replaces the block's `return`.
+                        break;
+                    }
                     let clif_call = builder.ins().call(clif_func_ref, &call_args);
                     if let Some(sret_addr) = sret_slot {
                         let result = ir_results[0];

@@ -1,0 +1,161 @@
+use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend};
+
+use super::parse_verified_native_module;
+
+/// Deep enough that the test thread's stack overflows unless each call
+/// replaces its caller's frame.
+const DEPTH: i64 = 10_000_000;
+
+#[test]
+fn mutually_recursive_tail_calls_reuse_the_frame() {
+    let source = r#"
+func private %even(v0.i64) -> i64 {
+block0:
+    v1.i1 = eq v0 0.i64;
+    br v1 block1 block2;
+block1:
+    return 1.i64;
+block2:
+    v2.i64 = sub v0 1.i64;
+    v3.i64 = call %odd v2;
+    return v3;
+}
+
+func private %odd(v0.i64) -> i64 {
+block0:
+    v1.i1 = eq v0 0.i64;
+    br v1 block1 block2;
+block1:
+    return 0.i64;
+block2:
+    v2.i64 = sub v0 1.i64;
+    v3.i64 = call %even v2;
+    return v3;
+}
+
+func public %is_even(v0.i64) -> i64 {
+block0:
+    v1.i64 = call %even v0;
+    return v1;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let is_even: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("is_even").unwrap()) };
+        assert_eq!(unsafe { is_even(DEPTH) }, 1, "{level:?}");
+        assert_eq!(unsafe { is_even(DEPTH + 1) }, 0, "{level:?}");
+    }
+}
+
+#[test]
+fn tail_calls_pass_the_result_buffer_on() {
+    // An i256 result is written through the caller's buffer, which each
+    // tail call hands to its callee.
+    let source = r#"
+func private %down(v0.i64, v1.i64) -> i256 {
+block0:
+    v2.i1 = eq v0 0.i64;
+    br v2 block1 block2;
+block1:
+    v3.i256 = zext v1 i256;
+    v4.i256 = shl 192.i256 v3;
+    v5.i256 = or v4 v3;
+    return v5;
+block2:
+    v6.i64 = sub v0 1.i64;
+    v7.i64 = add v1 1.i64;
+    v8.i256 = call %down v6 v7;
+    return v8;
+}
+
+func public %run(v0.i64, v1.*i256) {
+block0:
+    v2.i256 = call %down v0 0.i64;
+    mstore v1 v2 i256;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let run: unsafe extern "C" fn(i64, *mut u64) =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        let mut result = [0u64; 4];
+        unsafe { run(DEPTH, result.as_mut_ptr()) };
+        let depth = DEPTH as u64;
+        assert_eq!(result, [depth, 0, 0, depth], "{level:?}");
+    }
+}
+
+#[test]
+fn dispatch_arms_tail_call_through_their_join() {
+    // A `match` whose arms make calls joins their results in a block that
+    // returns them, as an interpreter's dispatch does.
+    let source = r#"
+func private %dispatch(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i1 = eq v0 0.i64;
+    br v2 block4 block1;
+block1:
+    v3.i64 = and v0 1.i64;
+    br_table v3 block3 (0.i64 block2);
+block2:
+    v4.i64 = call %even v0 v1;
+    jump block5;
+block3:
+    v5.i64 = call %odd v0 v1;
+    jump block5;
+block4:
+    jump block5;
+block5:
+    v6.i64 = phi (v4 block2) (v5 block3) (v1 block4);
+    return v6;
+}
+
+func private %even(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i64 = sub v0 1.i64;
+    v3.i64 = add v1 1.i64;
+    v4.i64 = call %dispatch v2 v3;
+    return v4;
+}
+
+func private %odd(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i64 = sub v0 1.i64;
+    v3.i64 = add v1 2.i64;
+    v4.i64 = call %dispatch v2 v3;
+    return v4;
+}
+
+func public %run(v0.i64) -> i64 {
+block0:
+    v1.i64 = call %dispatch v0 0.i64;
+    return v1;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let run: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        assert_eq!(unsafe { run(DEPTH) }, DEPTH / 2 * 3, "{level:?}");
+    }
+}
