@@ -174,7 +174,8 @@ fn low_mask_bits(func: &Function, value: ValueId) -> Option<u16> {
 /// EVM values are concrete words and no later pass chooses a value per use,
 /// so a frozen value is its argument, and `freeze undef` is zero, or the
 /// null pointer.
-fn lower_freeze(func: &mut Function, inst: InstId, arg: ValueId) {
+fn lower_freeze(func: &mut Function, inst: InstId) {
+    let arg = *func.dfg.downcast::<&Freeze>(inst).expect("a freeze").arg();
     let replacement = match *func.dfg.value(arg) {
         Value::Undef { ty } if ty.is_pointer(func.ctx()) => {
             let zero = func.dfg.make_imm_value(I256::zero());
@@ -193,15 +194,16 @@ fn lower_freeze(func: &mut Function, inst: InstId, arg: ValueId) {
 
 /// Lowers the freezes passes insert after legalization, such as scalarizing a
 /// slot read before its first store, which machine lowering cannot take.
+/// Lowering a freeze replaces its result in a later freeze of it.
 pub(crate) fn lower_late_freezes(func: &mut Function) {
     let freezes: Vec<_> = func
         .layout
         .iter_block()
         .flat_map(|block| func.layout.iter_inst(block))
-        .filter_map(|inst| Some((inst, *func.dfg.downcast::<&Freeze>(inst)?.arg())))
+        .filter(|&inst| func.dfg.downcast::<&Freeze>(inst).is_some())
         .collect();
-    for (inst, arg) in freezes {
-        lower_freeze(func, inst, arg);
+    for inst in freezes {
+        lower_freeze(func, inst);
     }
 }
 
@@ -590,10 +592,8 @@ impl<'a> FunctionLegalizer<'a> {
             downcast::<&logic::Bswap>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
         {
             self.rewrite_bswap(inst, arg);
-        } else if let Some(arg) =
-            downcast::<&Freeze>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
-        {
-            lower_freeze(self.func, inst, arg);
+        } else if downcast::<&Freeze>(is, self.func.dfg.inst(inst)).is_some() {
+            lower_freeze(self.func, inst);
         } else if let Some((lhs, rhs)) =
             downcast::<&cmp::Slt>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
@@ -2538,6 +2538,28 @@ block0:
             dump_func(function, func_ref)
         });
         assert_frozen_undef_lowered(&dumped);
+    }
+
+    #[test]
+    fn late_freezes_of_frozen_values_lower() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i256 {
+block0:
+    v0.i256 = freeze undef.i256;
+    v1.i256 = freeze v0;
+    return v1;
+}
+"#,
+        );
+        let func_ref = find_func(&parsed, "entry");
+        let dumped = parsed.module.func_store.modify(func_ref, |function| {
+            super::lower_late_freezes(function);
+            dump_func(function, func_ref)
+        });
+        assert!(dumped.contains("return 0.i256;"), "{dumped}");
     }
 
     #[test]
