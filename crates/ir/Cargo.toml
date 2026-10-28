@@ -11,6 +11,7 @@ repository = "https://github.com/fe-lang/sonatina"
 description = "Intermediate representation for sonatina code generator"
 categories = ["compilers", "wasm"]
 keywords = ["compiler", "evm", "wasm", "smart-contract"]
+include = ["src/**"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

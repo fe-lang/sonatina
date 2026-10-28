@@ -11,6 +11,7 @@ repository = "https://github.com/fe-lang/sonatina"
 description = "Parser for sonatina-ir text format"
 categories = ["compilers", "parser", "wasm"]
 keywords = ["compiler", "evm", "wasm", "smart-contract"]
+include = ["src/**", "/build.rs"]
 
 [dependencies]
 ir = { package = "sonatina-ir", path = "../ir", version = "0.1.0" }
