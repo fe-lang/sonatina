@@ -226,3 +226,119 @@ int main(void) {
         );
     }
 }
+
+#[test]
+fn linked_tail_call_switches_relocate_their_tables() {
+    // An interpreter whose dispatch tail-calls through a table of handler
+    // addresses, which the linker relocates in an executable.
+    let triple = native_isa(host_architecture()).triple();
+    let source = r#"
+func private %dispatch(v0.*i8, v1.i64, v2.i64) -> i64 {
+block0:
+    v3.i64 = ptr_to_int v0 i64;
+    v4.i64 = add v3 v1;
+    v5.*i8 = int_to_ptr v4 *i8;
+    v6.i8 = mload v5 i8;
+    v7.i32 = zext v6 i32;
+    br_table v7 block4 (0.i32 block1) (1.i32 block2) (2.i32 block3);
+block1:
+    v8.i64 = call %halt v0 v1 v2;
+    return v8;
+block2:
+    v9.i64 = call %inc v0 v1 v2;
+    return v9;
+block3:
+    v10.i64 = call %double v0 v1 v2;
+    return v10;
+block4:
+    v11.i64 = call %invalid v0 v1 v2;
+    return v11;
+}
+
+func private %halt(v0.*i8, v1.i64, v2.i64) -> i64 {
+block0:
+    return v2;
+}
+
+func private %inc(v0.*i8, v1.i64, v2.i64) -> i64 {
+block0:
+    v3.i64 = add v1 1.i64;
+    v4.i64 = add v2 1.i64;
+    v5.i64 = call %dispatch v0 v3 v4;
+    return v5;
+}
+
+func private %double(v0.*i8, v1.i64, v2.i64) -> i64 {
+block0:
+    v3.i64 = add v1 1.i64;
+    v4.i64 = mul v2 2.i64;
+    v5.i64 = call %dispatch v0 v3 v4;
+    return v5;
+}
+
+func private %invalid(v0.*i8, v1.i64, v2.i64) -> i64 {
+block0:
+    return -1.i64;
+}
+
+func public %run(v0.*i8) -> i64 {
+block0:
+    v1.i64 = call %dispatch v0 0.i64 0.i64;
+    return v1;
+}
+"#;
+    let c_source = r#"
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+extern int64_t run(const uint8_t *code);
+int main(void) {
+    size_t n = 1000000;
+    uint8_t *code = malloc(n);
+    if (!code) return 2;
+    memset(code, 1, n);
+    code[n - 2] = 2;
+    code[n - 1] = 0;
+    if (run(code) != (int64_t)(n - 2) * 2) return 3;
+    code[n / 2] = 7;
+    if (run(code) != -1) return 4;
+    free(code);
+    return 0;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let module = sonatina_parser::parse_module(&format!("target = \"{triple}\"\n{source}"))
+            .unwrap()
+            .module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        let artifact = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+        let directory = Builder::new()
+            .prefix("sonatina-native-tail-switch-")
+            .tempdir()
+            .unwrap();
+        let object = directory.path().join("dispatch.o");
+        let harness = directory.path().join("main.c");
+        let executable = directory.path().join("dispatch");
+        fs::write(&object, artifact.as_bytes()).unwrap();
+        fs::write(&harness, c_source).unwrap();
+        let link = Command::new("cc")
+            .args(["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"])
+            .arg(&harness)
+            .arg(&object)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            link.status.success(),
+            "{}",
+            String::from_utf8_lossy(&link.stderr)
+        );
+        let run = Command::new(&executable).output().unwrap();
+        assert!(run.status.success(), "{level:?}: {run:?}");
+    }
+}

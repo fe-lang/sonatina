@@ -22,6 +22,18 @@ use sonatina_triple::TargetTriple;
 pub(super) struct TailCalls {
     sites: HashMap<FuncRef, HashSet<InstId>>,
     functions: HashSet<FuncRef>,
+    switches: HashMap<(FuncRef, InstId), TailSwitch>,
+}
+
+/// A `br_table` each of whose destinations, the default included, begins
+/// with a tail call taking the same arguments. It becomes one indirect tail
+/// call through a table of the callees, as an interpreter's dispatch wants.
+pub(super) struct TailSwitch {
+    /// Each key with its destination's callee.
+    pub(super) keys: Vec<(u64, FuncRef)>,
+    pub(super) default: FuncRef,
+    /// One of the calls, whose arguments every callee takes.
+    pub(super) call: InstId,
 }
 
 impl TailCalls {
@@ -51,8 +63,28 @@ impl TailCalls {
                 tail_calls.sites.entry(func_ref).or_default().insert(call);
                 tail_calls.functions.extend([func_ref, callee]);
             }
+            let Some(sites) = tail_calls.sites.get(&func_ref) else {
+                continue;
+            };
+            let switches: Vec<_> = module.func_store.view(func_ref, |function| {
+                function
+                    .layout
+                    .iter_block()
+                    .filter_map(|block| {
+                        let inst = function.layout.last_inst_of(block)?;
+                        Some((inst, tail_switch(function, sites, inst)?))
+                    })
+                    .collect()
+            });
+            for (inst, switch) in switches {
+                tail_calls.switches.insert((func_ref, inst), switch);
+            }
         }
         tail_calls
+    }
+
+    pub(super) fn tail_switch(&self, func: FuncRef, br_table: InstId) -> Option<&TailSwitch> {
+        self.switches.get(&(func, br_table))
     }
 
     /// Whether `func` takes part in a tail call, and so uses the `tail`
@@ -95,6 +127,41 @@ fn tail_call(
         && same_returns
         && args_outside_frame)
         .then_some((call_inst, callee))
+}
+
+/// The tail switch `inst` ends its block with, if it is one.
+fn tail_switch(function: &Function, sites: &HashSet<InstId>, inst: InstId) -> Option<TailSwitch> {
+    let table = function.dfg.downcast::<&control_flow::BrTable>(inst)?;
+    // The call a destination begins with, if it is a tail call; a phi
+    // would come first.
+    let dest_call = |dest: BlockId| {
+        let call_inst = function
+            .layout
+            .first_inst_of(dest)
+            .filter(|call_inst| sites.contains(call_inst))?;
+        let call = function.dfg.downcast::<&control_flow::Call>(call_inst)?;
+        Some((call_inst, *call.callee(), call.args().as_slice()))
+    };
+    let (call, default, args) = dest_call((*table.default())?)?;
+    let keys = table
+        .table()
+        .iter()
+        .map(|&(key, dest)| {
+            let (_, callee, dest_args) = dest_call(dest)?;
+            let key = function
+                .dfg
+                .value_imm(key)?
+                .zext(Type::I256)
+                .as_i256()
+                .to_u256();
+            (dest_args == args && key.0[1..] == [0; 3]).then_some((key.0[0], callee))
+        })
+        .collect::<Option<_>>()?;
+    Some(TailSwitch {
+        keys,
+        default,
+        call,
+    })
 }
 
 /// Whether `last`, which ends `block`, returns `results` right away: a
@@ -390,6 +457,56 @@ func private %first(v0.constref<@pair>, v1.i64) -> i64 {
         );
         assert!(tail_calls.uses_tail_convention(lookup_func(&module, "passes_argument")));
         assert!(!tail_calls.uses_tail_convention(lookup_func(&module, "passes_result")));
+    }
+
+    #[test]
+    fn switches_of_like_tail_calls_are_tail_switches() {
+        let source = |second_args: &str, default: &str| {
+            format!(
+                r#"
+func private %switch(v0.i64, v1.i64) -> i64 {{
+    block0:
+        br_table v0 {default} (0.i64 block1) (2.i64 block2);
+    block1:
+        v2.i64 = call %f v0 v1;
+        return v2;
+    block2:
+        v3.i64 = call %g {second_args};
+        return v3;
+    block3:
+        v4.i64 = call %f v0 v1;
+        return v4;
+    block4:
+        return 0.i64;
+}}
+
+func private %f(v0.i64, v1.i64) -> i64 {{
+    block0:
+        return v1;
+}}
+
+func private %g(v0.i64, v1.i64) -> i64 {{
+    block0:
+        return v0;
+}}
+"#
+            )
+        };
+        let switch_of = |source: String| {
+            let (module, tail_calls) = tail_calls(&source);
+            let switch = lookup_func(&module, "switch");
+            let br_table = module.func_store.view(switch, |function| {
+                let entry = function.layout.entry_block().unwrap();
+                function.layout.last_inst_of(entry).unwrap()
+            });
+            tail_calls
+                .tail_switch(switch, br_table)
+                .map(|switch| switch.keys.iter().map(|&(key, _)| key).collect::<Vec<_>>())
+        };
+        assert_eq!(switch_of(source("v0 v1", "block3")), Some(vec![0, 2]));
+        // Different arguments, or a default that is no tail call.
+        assert_eq!(switch_of(source("v1 v0", "block3")), None);
+        assert_eq!(switch_of(source("v0 v1", "block4")), None);
     }
 
     #[test]

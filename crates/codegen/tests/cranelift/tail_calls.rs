@@ -159,3 +159,83 @@ block0:
         assert_eq!(unsafe { run(DEPTH) }, DEPTH / 2 * 3, "{level:?}");
     }
 }
+
+#[test]
+fn tail_call_switches_dispatch_through_a_table() {
+    // A byte-code interpreter: `dispatch` switches on the opcode at `pc`,
+    // and every destination tail-calls a handler with the same arguments,
+    // so dispatch becomes one indirect tail call.
+    let source = r#"
+func private %dispatch(v0.*i8, v1.i64, v2.i64) -> i64 {
+block0:
+    v3.i64 = ptr_to_int v0 i64;
+    v4.i64 = add v3 v1;
+    v5.*i8 = int_to_ptr v4 *i8;
+    v6.i8 = mload v5 i8;
+    v7.i32 = zext v6 i32;
+    br_table v7 block4 (0.i32 block1) (1.i32 block2) (2.i32 block3);
+block1:
+    v8.i64 = call %halt v0 v1 v2;
+    return v8;
+block2:
+    v9.i64 = call %inc v0 v1 v2;
+    return v9;
+block3:
+    v10.i64 = call %double v0 v1 v2;
+    return v10;
+block4:
+    v11.i64 = call %invalid v0 v1 v2;
+    return v11;
+}
+
+func private %halt(v0.*i8, v1.i64, v2.i64) -> i64 {
+block0:
+    return v2;
+}
+
+func private %inc(v0.*i8, v1.i64, v2.i64) -> i64 {
+block0:
+    v3.i64 = add v1 1.i64;
+    v4.i64 = add v2 1.i64;
+    v5.i64 = call %dispatch v0 v3 v4;
+    return v5;
+}
+
+func private %double(v0.*i8, v1.i64, v2.i64) -> i64 {
+block0:
+    v3.i64 = add v1 1.i64;
+    v4.i64 = mul v2 2.i64;
+    v5.i64 = call %dispatch v0 v3 v4;
+    return v5;
+}
+
+func private %invalid(v0.*i8, v1.i64, v2.i64) -> i64 {
+block0:
+    return -1.i64;
+}
+
+func public %run(v0.*i8) -> i64 {
+block0:
+    v1.i64 = call %dispatch v0 0.i64 0.i64;
+    return v1;
+}
+"#;
+    let mut code = vec![1u8; DEPTH as usize];
+    code[DEPTH as usize - 2] = 2;
+    *code.last_mut().unwrap() = 0;
+    let mut invalid = code.clone();
+    invalid[DEPTH as usize / 2] = 7;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let run: unsafe extern "C" fn(*const u8) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        assert_eq!(unsafe { run(code.as_ptr()) }, (DEPTH - 2) * 2, "{level:?}");
+        assert_eq!(unsafe { run(invalid.as_ptr()) }, -1, "{level:?}");
+    }
+}
