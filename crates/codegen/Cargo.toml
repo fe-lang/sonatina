@@ -35,6 +35,8 @@ vec-collections = { version = "0.4.3", default-features = false }
 hex = "0.4.3"
 insta = "1.43"
 dir-test = "0.4"
+# revm's alloy-eip7702 0.4 enables no derive_more features, and derive_more 1
+# fails to build without one.
 derive_more = { version = "1", default-features = false, features = ["full"] }
 revm = { version = "18.0.0", default-features = false, features = ["std"] }
 sonatina-parser = { path = "../parser", version = "0.1.0" }
