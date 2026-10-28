@@ -34,5 +34,7 @@ vec-collections = { version = "0.4.3", default-features = false }
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 
 [dev-dependencies]
-sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
+# sonatina-parser depends on sonatina-ir. Without a version, Cargo drops this
+# dev-dependency on publish, so sonatina-ir can be published first.
+sonatina-parser = { path = "../parser" }
 insta = { version = "1.43" }
