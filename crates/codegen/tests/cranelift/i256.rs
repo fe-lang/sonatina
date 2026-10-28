@@ -969,6 +969,19 @@ block5:
 }
 
 #[test]
+fn copied_i256_values_keep_their_limbs_and_store_order() {
+    // `v4`, `v5` and `v7` are only stored, so they move as vector halves;
+    // `v7` must hold `a` after `v3` is overwritten with `b`.
+    let body = "    mstore v3 v4 i256;
+    v7.i256 = mload v3 i256;
+    mstore v3 v5 i256;
+    mstore v3 v7 i256;
+    return 0.i8;";
+    let values = operands();
+    check(body, &pairs(&values, &values), |[a, _, _]| (a, false));
+}
+
+#[test]
 fn forwarded_i256_arguments_do_not_alias_their_source_memory() {
     // `%outer` and `%middle` forward their incoming arguments while every
     // level writes through `v0`, the memory `%apply` loaded `v4` from.

@@ -1,5 +1,5 @@
 use cranelift_codegen::{
-    ir::{self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind},
+    ir::{self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, types::I64X2},
     isa::TargetFrontendConfig,
 };
 use cranelift_frontend::FunctionBuilder;
@@ -106,7 +106,14 @@ pub(super) fn load_value(
     pointer_type: clif::Type,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
-    if ty == Type::I256 {
+    if ty == Type::I256 && value_map.is_copy(result) {
+        let halves = [0, 16].map(|half| {
+            builder
+                .ins()
+                .load(I64X2, MemFlagsData::new(), src, offset + half)
+        });
+        value_map.insert_halves(result, halves);
+    } else if ty == Type::I256 {
         let limbs = load_limbs(src, offset, MemFlagsData::new(), builder);
         value_map.insert_limbs(result, limbs);
     } else {
@@ -128,7 +135,13 @@ pub(super) fn store_value(
     value_map: &ValueMap,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
-    if function.dfg.value_ty(value) == Type::I256 {
+    if let Some(halves) = value_map.halves(&value) {
+        for (half, vector) in [0, 16].into_iter().zip(halves) {
+            builder
+                .ins()
+                .store(MemFlagsData::new(), vector, dst, offset + half);
+        }
+    } else if function.dfg.value_ty(value) == Type::I256 {
         let limbs = resolve_i256(function, value, value_map, builder)?;
         store_limbs(limbs, dst, offset, MemFlagsData::new(), builder);
     } else {

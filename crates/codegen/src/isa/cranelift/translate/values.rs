@@ -1,8 +1,15 @@
-use std::{collections::HashMap, ops::Index};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Index,
+};
 
 use cranelift_codegen::ir::{self as clif, InstBuilder};
 use cranelift_frontend::FunctionBuilder;
-use sonatina_ir::{Function, Immediate, Type, U256, Value, ValueId, inst::InstId};
+use sonatina_ir::{
+    Function, Immediate, Type, U256, Value, ValueId,
+    inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
+    isa::native::inst_set as native_inst_set,
+};
 
 use super::{
     Limbs, constant_limbs, scalar_constant, sonatina_scalar_type_to_clif_or_err,
@@ -10,15 +17,45 @@ use super::{
 };
 
 /// The Cranelift values of translated Sonatina values. An i256 value is
-/// four i64 limbs; every other value is one Cranelift value, and an
-/// aggregate's is the address of its storage.
+/// four i64 limbs, or two `i64x2` halves when it is only copied; every other
+/// value is one Cranelift value, and an aggregate's is the address of its
+/// storage.
 #[derive(Default)]
 pub(super) struct ValueMap {
     scalars: HashMap<ValueId, clif::Value>,
     limbs: HashMap<ValueId, Limbs>,
+    halves: HashMap<ValueId, [clif::Value; 2]>,
+    copies: HashSet<ValueId>,
 }
 
 impl ValueMap {
+    /// A map that moves the i256 values `function` only stores as two vector
+    /// halves when `vectors` is set.
+    pub fn new(function: &Function, vectors: bool) -> Self {
+        let copies = if vectors {
+            function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .flat_map(|inst| function.dfg.inst_results(inst).iter().copied())
+                .filter(|&value| {
+                    function.dfg.value_ty(value) == Type::I256
+                        && function.dfg.users_num(value) > 0
+                        && function
+                            .dfg
+                            .users(value)
+                            .all(|&user| stores_only_value(function, user, value))
+                })
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        Self {
+            copies,
+            ..Self::default()
+        }
+    }
+
     pub fn insert(&mut self, value: ValueId, translated: clif::Value) {
         self.scalars.insert(value, translated);
     }
@@ -27,8 +64,33 @@ impl ValueMap {
         self.limbs.insert(value, limbs);
     }
 
+    pub fn insert_halves(&mut self, value: ValueId, halves: [clif::Value; 2]) {
+        self.halves.insert(value, halves);
+    }
+
     pub fn get(&self, value: &ValueId) -> Option<&clif::Value> {
         self.scalars.get(value)
+    }
+
+    pub fn halves(&self, value: &ValueId) -> Option<[clif::Value; 2]> {
+        self.halves.get(value).copied()
+    }
+
+    /// Whether every use of the i256 `value` stores it.
+    pub fn is_copy(&self, value: ValueId) -> bool {
+        self.copies.contains(&value)
+    }
+}
+
+/// Whether `inst` uses `value` only as the value it stores.
+fn stores_only_value(function: &Function, inst: InstId, value: ValueId) -> bool {
+    match native_inst_set().resolve_inst(function.dfg.inst(inst)) {
+        NativeInstKind::ObjStore(store) => *store.value() == value && *store.object() != value,
+        NativeInstKind::Mstore(store) => *store.value() == value && *store.addr() != value,
+        NativeInstKind::InsertValue(insert) => {
+            *insert.value() == value && *insert.dest() != value && *insert.idx() != value
+        }
+        _ => false,
     }
 }
 

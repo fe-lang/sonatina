@@ -269,7 +269,7 @@ fn translate_function(
     block_order.reverse();
 
     let mut block_map: HashMap<BlockId, clif::Block> = HashMap::new();
-    let mut value_map = ValueMap::default();
+    let mut value_map = ValueMap::new(function, module.ctx.triple != TargetTriple::SP1);
     let mut i256_storage = I256Storage::default();
     for &block in &block_order {
         let clif_block = builder.create_block();
