@@ -121,6 +121,10 @@ pub(super) fn translate_module(
     // Functions compile independently; defining them in order keeps the
     // output deterministic.
     let isa = clif_module.isa();
+    // Cranelift reports each function's minimum alignment, one byte on x64.
+    // Placing functions at the ISA's preferred alignment, as Wasmtime does,
+    // keeps a function's hot code from moving with every change elsewhere.
+    let preferred_alignment = isa.function_alignment().preferred;
     let compiled = parallel::map_owned(
         &module.func_store,
         translated,
@@ -149,7 +153,7 @@ pub(super) fn translate_module(
         clif_module
             .define_function_bytes(
                 func_id,
-                code.buffer.alignment.into(),
+                code.buffer.alignment.max(preferred_alignment).into(),
                 code.code_buffer(),
                 &relocs,
             )
