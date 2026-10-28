@@ -19,13 +19,15 @@ use cranelift_codegen::{
     settings,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
-use cranelift_module::{FuncId, Linkage, Module as ClifModule, ModuleReloc};
+use cranelift_module::{
+    DataDescription, DataId, FuncId, Linkage, Module as ClifModule, ModuleReloc,
+};
 
 use sonatina_codegen::analysis::known_bits::KnownBitsQuery;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Type,
     Value, ValueId,
-    inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
+    inst::{InstId, control_flow, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
     module::FuncRef,
     parallel,
@@ -41,7 +43,7 @@ use self::{
     memory::*,
     phi::Edges,
     scalar::*,
-    tail::TailCalls,
+    tail::{TailCalls, TailSwitch},
     values::*,
 };
 
@@ -108,6 +110,7 @@ pub(super) fn translate_module(
     let funcs = module.funcs();
     let mut divider = Divider::default();
     let tail_calls = TailCalls::new(module);
+    let mut function_tables = HashMap::new();
 
     for &func_ref in &funcs {
         let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
@@ -140,6 +143,7 @@ pub(super) fn translate_module(
                         function,
                         func_ref,
                         &tail_calls,
+                        &mut function_tables,
                         &func_id_map,
                         &data_ids,
                         &mut divider,
@@ -215,6 +219,56 @@ pub(super) fn translate_module(
     Ok(defined_func_map)
 }
 
+/// The bits a tail switch's table index takes: the fewest, up to a
+/// 1024-entry table, that hold every key and every value the scrutinee's
+/// known bits allow, so the table needs no bounds check.
+fn switch_index_bits(
+    function: &Function,
+    scrutinee: ValueId,
+    switch: &TailSwitch,
+    known_bits: &mut Option<KnownBitsQuery>,
+) -> Option<u16> {
+    if !matches!(
+        function.dfg.value_ty(scrutinee),
+        Type::I8 | Type::I16 | Type::I32 | Type::I64
+    ) {
+        return None;
+    }
+    let max_key = switch.keys.iter().map(|&(key, _)| key).max().unwrap_or(0);
+    let key_bits = (u64::BITS - max_key.leading_zeros()) as u16;
+    let known_bits = known_bits.get_or_insert_with(|| KnownBitsQuery::new(function));
+    (key_bits..=10).find(|&bits| known_bits.fits_in_low_bits(function, scrutinee, bits))
+}
+
+/// The table of function addresses `entries`, defined once per module.
+fn function_table(
+    entries: Vec<FuncId>,
+    pointer_type: clif::Type,
+    function_tables: &mut HashMap<Vec<FuncId>, DataId>,
+    clif_module: &mut impl ClifModule,
+) -> Result<DataId, String> {
+    if let Some(&table) = function_tables.get(&entries) {
+        return Ok(table);
+    }
+    let table = clif_module
+        .declare_anonymous_data(false, false)
+        .map_err(|error| format!("failed to declare a function table: {error}"))?;
+    let entry_size = pointer_type.bytes() as usize;
+    let mut description = DataDescription::new();
+    // Zero-initialized data goes to `.bss`, which keeps no relocations.
+    description.define(vec![0; entries.len() * entry_size].into_boxed_slice());
+    description.set_align(entry_size as u64);
+    for (index, &entry) in entries.iter().enumerate() {
+        let entry = clif_module.declare_func_in_data(entry, &mut description);
+        description.write_function_addr((index * entry_size) as u32, entry);
+    }
+    clif_module
+        .define_data(table, &description)
+        .map_err(|error| format!("failed to define a function table: {error}"))?;
+    function_tables.insert(entries, table);
+    Ok(table)
+}
+
 /// Whether a shift's count is always below its operand's width, which its
 /// known bits show when every bit above the width's low bits is zero.
 fn shift_count_in_range(
@@ -280,6 +334,7 @@ fn translate_function(
     function: &Function,
     func_ref: FuncRef,
     tail_calls: &TailCalls,
+    function_tables: &mut HashMap<Vec<FuncId>, DataId>,
     func_id_map: &HashMap<FuncRef, FuncId>,
     data_ids: &GlobalDataMap,
     divider: &mut Divider,
@@ -896,6 +951,67 @@ fn translate_function(
                     edges.fill(z, block, *br.z_dest(), &value_map, &mut builder)?;
                 }
                 NativeInstKind::BrTable(br_table) => {
+                    if let Some(switch) = tail_calls.tail_switch(func_ref, inst_id)
+                        && let Some(bits) = switch_index_bits(
+                            function,
+                            *br_table.scrutinee(),
+                            switch,
+                            &mut known_bits,
+                        )
+                    {
+                        // Every destination tail-calls with the same
+                        // arguments: index a table of the callees and
+                        // tail-call the entry.
+                        let mut entries = vec![func_id_map[&switch.default]; 1 << bits];
+                        for &(key, callee) in &switch.keys {
+                            entries[key as usize] = func_id_map[&callee];
+                        }
+                        let table =
+                            function_table(entries, pointer_type, function_tables, clif_module)?;
+                        let table = clif_module.declare_data_in_func(table, builder.func);
+                        let base = builder.ins().symbol_value(pointer_type, table);
+                        let scrutinee = resolve_scalar_value(
+                            module,
+                            function,
+                            *br_table.scrutinee(),
+                            &value_map,
+                            pointer_type,
+                            &mut builder,
+                        )?;
+                        let index = if builder.func.dfg.value_type(scrutinee) == pointer_type {
+                            scrutinee
+                        } else {
+                            builder.ins().uextend(pointer_type, scrutinee)
+                        };
+                        let offset = builder
+                            .ins()
+                            .ishl_imm_u(index, i64::from(pointer_type.bytes().ilog2()));
+                        let entry = builder.ins().iadd(base, offset);
+                        let callee = builder.ins().load(
+                            pointer_type,
+                            MemFlagsData::trusted().with_readonly(),
+                            entry,
+                            0,
+                        );
+                        let call = function
+                            .dfg
+                            .downcast::<&control_flow::Call>(switch.call)
+                            .ok_or("a tail switch's call is not a call")?;
+                        let mut call_args: Vec<_> = sret_ptr.into_iter().collect();
+                        for &arg in call.args() {
+                            call_args.push(resolve_operand(
+                                function,
+                                arg,
+                                &value_map,
+                                target_config,
+                                &mut builder,
+                            )?);
+                        }
+                        let sig = clif_signature(module, switch.default, tail_calls, clif_module)?;
+                        let sig = builder.import_signature(sig);
+                        builder.ins().return_call_indirect(sig, callee, &call_args);
+                        continue;
+                    }
                     // A switch's branches pass no block arguments, so an edge
                     // with phi inputs runs them in a block of its own.
                     let mut edge_blocks = Vec::new();
