@@ -1,4 +1,4 @@
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 use std::{hint::black_box, time::Instant};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -6,14 +6,14 @@ use std::{hint::black_box, time::Instant};
 mod linked;
 
 use object::{Object, ObjectSection, ObjectSymbol, RelocationFlags};
-#[cfg(feature = "cranelift-jit")]
-use sonatina_codegen::isa::cranelift::CraneliftJitBackend;
 use sonatina_codegen::{
     Compile,
     backend::{Backend, BackendOptions},
     compile::OptLevel,
-    isa::cranelift::{CraneliftError, CraneliftObjectBackend},
 };
+#[cfg(feature = "jit")]
+use sonatina_cranelift::CraneliftJitBackend;
+use sonatina_cranelift::{CraneliftError, CraneliftObjectBackend};
 use sonatina_ir::{
     Linkage, Signature, Type,
     builder::ModuleBuilder,
@@ -164,7 +164,7 @@ fn aggregate_construction_has_linear_code_size_and_executes_large_arrays() {
                 text_size > 0 && text_size < length * 64 + 4096,
                 "{length}-byte construction at {level:?} emitted {text_size} text bytes"
             );
-            #[cfg(feature = "cranelift-jit")]
+            #[cfg(feature = "jit")]
             {
                 let artifact = Compile::new(module, CraneliftJitBackend::new())
                     .with_opt_level(level)
@@ -248,7 +248,7 @@ block0:
             // 64-byte arrays and 128-byte pairs stay inline; 32 KiB ones call libc.
             assert_eq!(imports(bytes, "memcpy"), length > 16, "{length} {level:?}");
             assert_eq!(imports(bytes, "memset"), length > 16, "{length} {level:?}");
-            #[cfg(feature = "cranelift-jit")]
+            #[cfg(feature = "jit")]
             {
                 let artifact = Compile::new(
                     module.clone_for_funcs(&module.funcs()),
@@ -326,7 +326,7 @@ block0:
             zero_fill,
             "{inserts}"
         );
-        #[cfg(feature = "cranelift-jit")]
+        #[cfg(feature = "jit")]
         {
             let artifact = CraneliftJitBackend::new()
                 .compile_module(
@@ -458,7 +458,7 @@ block0:
     }
 }
 
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 #[test]
 #[ignore = "manual release-profile compile/runtime measurement; run with --release --ignored --nocapture"]
 fn wide_division_release_profile() {
@@ -555,7 +555,7 @@ fn generic_pipeline_emits_a_host_object() {
 #[test]
 fn object_backend_compiles_direct_i128_signatures_and_calls() {
     let triple = native_isa(host_architecture()).triple();
-    let source = include_str!("../test_files/cranelift/i128_abi.sntn");
+    let source = include_str!("../test_files/i128_abi.sntn");
     for level in [OptLevel::O0, OptLevel::O2] {
         let module = sonatina_parser::parse_module(&format!("target = \"{triple}\"\n{source}"))
             .unwrap()
@@ -693,7 +693,7 @@ block0:
         assert!(errors.iter().any(|error| matches!(error,
             CraneliftError::Translation(message) if message.contains("signatures must not expose object references")
         )), "{errors:?}");
-        #[cfg(feature = "cranelift-jit")]
+        #[cfg(feature = "jit")]
         {
             let errors = CraneliftJitBackend::new()
                 .compile_module(&module, &BackendOptions::default())
@@ -803,7 +803,7 @@ fn function_chain(count: usize, ops: usize) -> String {
 }
 
 /// What `%f0` of `function_chain(count, ops)` returns for `input`.
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 fn function_chain_result(count: usize, ops: usize, input: i64) -> i64 {
     (0..count).fold(input, |value, _| {
         (0..ops).fold(value, |value, k| {
@@ -837,7 +837,7 @@ fn functions_compiled_in_parallel_give_deterministic_objects() {
     }
 }
 
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 #[test]
 fn jit_runs_functions_compiled_in_parallel() {
     let module = sonatina_parser::parse_module(&function_chain(80, 120))
@@ -860,7 +860,7 @@ fn parsed_native_ir_compiles_to_an_object() {
         Vendor::Unknown,
         OperatingSystem::Native,
     );
-    let source = include_str!("../test_files/cranelift/native_coverage.sntn")
+    let source = include_str!("../test_files/native_coverage.sntn")
         .replace("$NATIVE_TARGET", &triple.to_string());
     let parsed = sonatina_parser::parse_module(&source)
         .unwrap_or_else(|errors| panic!("native fixture should parse: {errors:?}"));

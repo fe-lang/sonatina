@@ -16,12 +16,6 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 [dependencies]
 cranelift-entity = "0.136.1"
-cranelift-codegen = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", default-features = false, features = ["std", "unwind", "host-arch"], optional = true }
-cranelift-frontend = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", optional = true }
-cranelift-module = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", optional = true }
-cranelift-native = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", optional = true }
-cranelift-object = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", optional = true }
-cranelift-jit = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", optional = true }
 smallvec = "1.15.1"
 rustc-hash = "2.0.0"
 rpds = "1.2.1"
@@ -42,28 +36,3 @@ dir-test = "0.4"
 derive_more = { version = "1", default-features = false, features = ["full"] }
 revm = { version = "18.0.0", default-features = false, features = ["std"] }
 sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
-object = { version = "0.39.1", default-features = false, features = ["read", "std"] }
-tempfile = "3.23"
-
-[features]
-cranelift = [
-    "dep:cranelift-codegen",
-    "dep:cranelift-frontend",
-    "dep:cranelift-module",
-    "dep:cranelift-native",
-    "dep:cranelift-object",
-]
-cranelift-jit = ["cranelift", "dep:cranelift-jit"]
-sp1 = ["cranelift", "cranelift-codegen/riscv64"]
-
-[[test]]
-name = "cranelift_sp1"
-required-features = ["sp1"]
-
-[[test]]
-name = "cranelift_object"
-required-features = ["cranelift"]
-
-[[test]]
-name = "cranelift_jit"
-required-features = ["cranelift-jit"]

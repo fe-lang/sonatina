@@ -1,4 +1,4 @@
-#![doc = include_str!("../../../docs/native.md")]
+#![doc = include_str!("../README.md")]
 
 #[cfg(feature = "sp1")]
 mod sp1;
@@ -6,28 +6,27 @@ mod translate;
 
 use std::sync::Arc;
 
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 use std::collections::HashMap;
 
 use cranelift_codegen::{
     isa as clif_isa,
     settings::{self, Configurable},
 };
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 use cranelift_jit::{JITBuilder, JITModule};
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 use cranelift_module::FuncId;
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use sonatina_ir::Module;
-use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
-use sonatina_verifier::{VerifierConfig, verify_function_signature};
-
-use crate::{
+use sonatina_codegen::{
     backend::{Backend, BackendOptions},
     compile::OptLevel,
     optim::Pipeline,
-    transform::aggregate::{EnumLowerToProduct, frame_lifetimes::check_frame_lifetimes},
+    transform::aggregate::{EnumLowerToProduct, check_frame_lifetimes},
 };
+use sonatina_ir::Module;
+use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
+use sonatina_verifier::{VerifierConfig, verify_function_signature};
 
 #[derive(Debug)]
 pub enum CraneliftError {
@@ -133,13 +132,13 @@ impl CraneliftObjectBackend {
     }
 }
 
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 pub struct CraneliftJitArtifact {
     module: JITModule,
     functions: HashMap<String, FuncId>,
 }
 
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 impl CraneliftJitArtifact {
     /// Returns the address of a finalized function while this artifact lives.
     ///
@@ -148,7 +147,7 @@ impl CraneliftJitArtifact {
     /// storage, and keep this artifact alive throughout the call. In particular,
     /// indirect results use a platform-specific hidden return buffer, not an
     /// ordinary C struct result. Prefer public scalar/pointer wrappers; see the
-    /// [module's ABI contract](crate::isa::cranelift) for the supported C subset.
+    /// [crate's ABI contract](crate) for the supported C subset.
     pub fn function_address(&self, name: &str) -> Option<*const u8> {
         self.functions
             .get(name)
@@ -156,18 +155,18 @@ impl CraneliftJitArtifact {
     }
 }
 
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 #[derive(Debug, Default)]
 pub struct CraneliftJitBackend;
 
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 impl CraneliftJitBackend {
     pub fn new() -> Self {
         Self
     }
 }
 
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 impl Backend for CraneliftJitBackend {
     type Artifact = CraneliftJitArtifact;
     type Error = CraneliftError;
@@ -204,7 +203,7 @@ impl Backend for CraneliftJitBackend {
     }
 }
 
-#[cfg(any(feature = "cranelift-jit", not(target_os = "macos")))]
+#[cfg(any(feature = "jit", not(target_os = "macos")))]
 fn build_native_isa(
     flags: settings::Flags,
 ) -> Result<Arc<dyn clif_isa::TargetIsa>, CraneliftError> {
@@ -298,13 +297,13 @@ fn host_architecture() -> Option<Architecture> {
 #[cfg(test)]
 mod tests {
     use cranelift_codegen::settings::Flags;
-
-    use super::{CraneliftObjectBackend, cranelift_opt_level};
-    use crate::{
+    use sonatina_codegen::{
         backend::{Backend, BackendOptions},
         compile::OptLevel,
         optim::Pipeline,
     };
+
+    use super::{CraneliftObjectBackend, cranelift_opt_level};
 
     #[test]
     fn native_backends_use_native_pipelines() {
@@ -316,7 +315,7 @@ mod tests {
                 ),
                 format!("{:?}", Pipeline::native(opt_level)),
             );
-            #[cfg(feature = "cranelift-jit")]
+            #[cfg(feature = "jit")]
             assert_eq!(
                 format!(
                     "{:?}",

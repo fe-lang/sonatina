@@ -130,7 +130,7 @@ pub(crate) enum CompleteRootSet<'a> {
 }
 
 impl<'a> CompleteRootSet<'a> {
-    #[cfg(all(feature = "cranelift", test))]
+    #[cfg(test)]
     pub(crate) fn iter(self) -> impl Iterator<Item = RootValue> + 'a {
         let (single, multiple) = match self {
             Self::Single(root) => (Some(root), None),

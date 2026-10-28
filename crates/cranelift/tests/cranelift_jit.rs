@@ -1,5 +1,7 @@
 #![allow(clippy::crosspointer_transmute)]
 
+// Shared with the EVM execution tests in sonatina-codegen.
+#[path = "../../codegen/tests/alias_execution/mod.rs"]
 mod alias_execution;
 
 #[path = "cranelift/abi.rs"]
@@ -21,11 +23,8 @@ mod scalar;
 #[path = "cranelift/control_flow.rs"]
 mod wide_control_flow;
 
-use sonatina_codegen::{
-    Compile, OptLevel,
-    isa::cranelift::{CraneliftError, CraneliftJitArtifact, CraneliftJitBackend},
-    transform::aggregate::EnumLowerToProduct,
-};
+use sonatina_codegen::{Compile, OptLevel, transform::aggregate::EnumLowerToProduct};
+use sonatina_cranelift::{CraneliftError, CraneliftJitArtifact, CraneliftJitBackend};
 use sonatina_ir::{
     I256, Immediate, Linkage, Signature, Type, U256,
     builder::ModuleBuilder,

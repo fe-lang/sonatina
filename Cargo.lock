@@ -2419,6 +2419,7 @@ dependencies = [
  "indexmap",
  "object",
  "sonatina-codegen",
+ "sonatina-cranelift",
  "sonatina-ir",
  "sonatina-parser",
  "sonatina-triple",
@@ -2432,20 +2433,13 @@ name = "sonatina-codegen"
 version = "0.0.3-alpha"
 dependencies = [
  "bit-set",
- "cranelift-codegen",
  "cranelift-entity 0.136.1",
- "cranelift-frontend",
- "cranelift-jit",
- "cranelift-module",
- "cranelift-native",
- "cranelift-object",
  "dashmap",
  "derive_more 1.0.0",
  "dir-test",
  "hex",
  "indexmap",
  "insta",
- "object",
  "revm",
  "rpds",
  "rustc-hash",
@@ -2455,9 +2449,30 @@ dependencies = [
  "sonatina-parser",
  "sonatina-triple",
  "sonatina-verifier",
- "tempfile",
  "tracing",
  "vec-collections",
+]
+
+[[package]]
+name = "sonatina-cranelift"
+version = "0.0.3-alpha"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-entity 0.136.1",
+ "cranelift-frontend",
+ "cranelift-jit",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
+ "object",
+ "rustc-hash",
+ "smallvec",
+ "sonatina-codegen",
+ "sonatina-ir",
+ "sonatina-parser",
+ "sonatina-triple",
+ "sonatina-verifier",
+ "tempfile",
 ]
 
 [[package]]

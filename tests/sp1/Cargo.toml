@@ -7,7 +7,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
-sonatina-codegen = { path = "../../crates/codegen", features = ["sp1"] }
+sonatina-codegen = { path = "../../crates/codegen" }
+sonatina-cranelift = { path = "../../crates/cranelift", features = ["sp1"] }
 sonatina-ir = { path = "../../crates/ir" }
 sonatina-parser = { path = "../../crates/parser" }
 sonatina-sp1 = { path = "../../crates/sp1" }

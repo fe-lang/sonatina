@@ -4,7 +4,8 @@
 
 use std::sync::OnceLock;
 
-use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftObjectBackend};
+use sonatina_codegen::{Compile, compile::OptLevel};
+use sonatina_cranelift::CraneliftObjectBackend;
 use sonatina_sp1::{Sp1Runtime, Sp1Toolchain};
 use sonatina_triple::TargetTriple;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};

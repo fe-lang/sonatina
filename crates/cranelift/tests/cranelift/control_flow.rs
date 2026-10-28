@@ -1,6 +1,5 @@
-use sonatina_codegen::{
-    Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend, optim::Pipeline,
-};
+use sonatina_codegen::{Compile, compile::OptLevel, optim::Pipeline};
+use sonatina_cranelift::CraneliftJitBackend;
 use sonatina_ir::{I256, Immediate, Type, U256, ir_writer::ModuleWriter};
 
 use super::{parse_native_module, parse_verified_native_module};

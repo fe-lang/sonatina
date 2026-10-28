@@ -4,8 +4,8 @@ use sonatina_codegen::{
     Compile,
     backend::{Backend, BackendOptions},
     compile::OptLevel,
-    isa::cranelift::CraneliftObjectBackend,
 };
+use sonatina_cranelift::CraneliftObjectBackend;
 use sonatina_ir::isa::Isa;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 use tempfile::Builder;
@@ -15,8 +15,8 @@ use super::{host_architecture, native_isa};
 #[test]
 fn linked_c_executable_exercises_native_abi_and_shared_globals() {
     let triple = native_isa(host_architecture()).triple();
-    let source = include_str!("../../test_files/cranelift/linked_abi.sntn");
-    let c_source = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/cranelift/linked_abi.c");
+    let source = include_str!("../../test_files/linked_abi.sntn");
+    let c_source = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/linked_abi.c");
     for level in [OptLevel::O0, OptLevel::O2] {
         for optimize_ir in [false, true] {
             let module = sonatina_parser::parse_module(&format!("target = \"{triple}\"\n{source}"))

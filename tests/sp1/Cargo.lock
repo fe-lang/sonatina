@@ -4220,12 +4220,7 @@ name = "sonatina-codegen"
 version = "0.0.3-alpha"
 dependencies = [
  "bit-set",
- "cranelift-codegen",
  "cranelift-entity 0.136.1",
- "cranelift-frontend",
- "cranelift-module",
- "cranelift-native",
- "cranelift-object",
  "dashmap",
  "indexmap 2.14.2",
  "rpds",
@@ -4237,6 +4232,23 @@ dependencies = [
  "sonatina-verifier",
  "tracing",
  "vec-collections",
+]
+
+[[package]]
+name = "sonatina-cranelift"
+version = "0.0.3-alpha"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-entity 0.136.1",
+ "cranelift-frontend",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
+ "rustc-hash",
+ "sonatina-codegen",
+ "sonatina-ir",
+ "sonatina-triple",
+ "sonatina-verifier",
 ]
 
 [[package]]
@@ -4307,6 +4319,7 @@ version = "0.0.0"
 dependencies = [
  "object 0.39.1",
  "sonatina-codegen",
+ "sonatina-cranelift",
  "sonatina-ir",
  "sonatina-parser",
  "sonatina-sp1",

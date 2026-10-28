@@ -1,10 +1,11 @@
-use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend};
+use sonatina_codegen::{Compile, compile::OptLevel};
+use sonatina_cranelift::CraneliftJitBackend;
 
 use super::parse_verified_native_module;
 
 #[test]
 fn direct_i128_arguments_returns_and_internal_calls_preserve_both_words() {
-    let source = include_str!("../../test_files/cranelift/i128_abi.sntn");
+    let source = include_str!("../../test_files/i128_abi.sntn");
     for level in [OptLevel::O0, OptLevel::O2] {
         let artifact = Compile::new(
             parse_verified_native_module(source),
