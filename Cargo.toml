@@ -16,3 +16,11 @@ exclude = ["tests/sp1"]
 
 [workspace.package]
 edition = "2024"
+
+[patch."https://github.com/fe-lang/wasmtime"]
+cranelift-codegen = { path = "/home/sean/code/wasmtime-fork/cranelift/codegen" }
+cranelift-frontend = { path = "/home/sean/code/wasmtime-fork/cranelift/frontend" }
+cranelift-module = { path = "/home/sean/code/wasmtime-fork/cranelift/module" }
+cranelift-native = { path = "/home/sean/code/wasmtime-fork/cranelift/native" }
+cranelift-object = { path = "/home/sean/code/wasmtime-fork/cranelift/object" }
+cranelift-jit = { path = "/home/sean/code/wasmtime-fork/cranelift/jit" }

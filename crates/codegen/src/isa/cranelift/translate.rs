@@ -149,7 +149,7 @@ pub(super) fn translate_module(
         clif_module
             .define_function_bytes(
                 func_id,
-                code.buffer.alignment.into(),
+                code.buffer.min_alignment.into(),
                 code.code_buffer(),
                 &relocs,
             )

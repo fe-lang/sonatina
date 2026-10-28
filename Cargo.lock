@@ -666,35 +666,24 @@ dependencies = [
 
 [[package]]
 name = "cranelift-assembler-x64"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 dependencies = [
  "cranelift-assembler-x64-meta",
 ]
 
 [[package]]
 name = "cranelift-assembler-x64-meta"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 dependencies = [
  "cranelift-srcgen",
 ]
 
 [[package]]
 name = "cranelift-bforest"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 dependencies = [
- "cranelift-entity 0.135.2",
- "wasmtime-internal-core 48.0.2",
-]
-
-[[package]]
-name = "cranelift-bitset"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
-dependencies = [
- "wasmtime-internal-core 48.0.2",
+ "cranelift-entity 0.137.0",
+ "wasmtime-internal-core 50.0.0",
 ]
 
 [[package]]
@@ -707,18 +696,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranelift-bitset"
+version = "0.137.0"
+dependencies = [
+ "wasmtime-internal-core 50.0.0",
+]
+
+[[package]]
 name = "cranelift-codegen"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 dependencies = [
  "bumpalo",
  "cranelift-assembler-x64",
  "cranelift-bforest",
- "cranelift-bitset 0.135.2",
+ "cranelift-bitset 0.137.0",
  "cranelift-codegen-meta",
  "cranelift-codegen-shared",
  "cranelift-control",
- "cranelift-entity 0.135.2",
+ "cranelift-entity 0.137.0",
  "cranelift-isle",
  "gimli",
  "hashbrown 0.17.1",
@@ -729,13 +724,12 @@ dependencies = [
  "serde",
  "smallvec",
  "target-lexicon",
- "wasmtime-internal-core 48.0.2",
+ "wasmtime-internal-core 50.0.0",
 ]
 
 [[package]]
 name = "cranelift-codegen-meta"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 dependencies = [
  "cranelift-assembler-x64-meta",
  "cranelift-codegen-shared",
@@ -745,24 +739,13 @@ dependencies = [
 
 [[package]]
 name = "cranelift-codegen-shared"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 
 [[package]]
 name = "cranelift-control"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 dependencies = [
  "arbitrary",
-]
-
-[[package]]
-name = "cranelift-entity"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
-dependencies = [
- "cranelift-bitset 0.135.2",
- "wasmtime-internal-core 48.0.2",
 ]
 
 [[package]]
@@ -776,9 +759,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranelift-entity"
+version = "0.137.0"
+dependencies = [
+ "cranelift-bitset 0.137.0",
+ "wasmtime-internal-core 50.0.0",
+]
+
+[[package]]
 name = "cranelift-frontend"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 dependencies = [
  "cranelift-codegen",
  "hashbrown 0.17.1",
@@ -789,18 +779,16 @@ dependencies = [
 
 [[package]]
 name = "cranelift-isle"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 
 [[package]]
 name = "cranelift-jit"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 dependencies = [
  "anyhow",
  "cranelift-codegen",
  "cranelift-control",
- "cranelift-entity 0.135.2",
+ "cranelift-entity 0.137.0",
  "cranelift-module",
  "cranelift-native",
  "libc",
@@ -814,28 +802,27 @@ dependencies = [
 
 [[package]]
 name = "cranelift-module"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 dependencies = [
  "anyhow",
  "cranelift-codegen",
  "cranelift-control",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
 name = "cranelift-native"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 dependencies = [
  "cranelift-codegen",
  "libc",
+ "mach2 0.6.0",
  "target-lexicon",
 ]
 
 [[package]]
 name = "cranelift-object"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 dependencies = [
  "anyhow",
  "cranelift-codegen",
@@ -843,14 +830,13 @@ dependencies = [
  "cranelift-module",
  "gimli",
  "log",
- "object",
+ "object 0.40.0",
  "target-lexicon",
 ]
 
 [[package]]
 name = "cranelift-srcgen"
-version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "0.137.0"
 
 [[package]]
 name = "crc32fast"
@@ -1147,7 +1133,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1531,6 +1517,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "mach2"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
+
+[[package]]
 name = "memchr"
 version = "2.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1634,6 +1626,18 @@ name = "object"
 version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "crc32fast",
+ "hashbrown 0.17.1",
+ "indexmap",
+ "memchr",
+]
+
+[[package]]
+name = "object"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd229a0361b9d0d4396176e02d65897f487eebeab7caa6d443855ee152ca0b9c"
 dependencies = [
  "crc32fast",
  "hashbrown 0.17.1",
@@ -2011,7 +2015,7 @@ checksum = "e6b6ebd13bc009aef9cd476c1310d49ac354d36e240cf1bd753290f3dc7199a7"
 dependencies = [
  "bitflags 1.3.2",
  "libc",
- "mach2",
+ "mach2 0.4.3",
  "windows-sys 0.52.0",
 ]
 
@@ -2190,7 +2194,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2417,7 +2421,7 @@ version = "0.0.3-alpha"
 dependencies = [
  "clap",
  "indexmap",
- "object",
+ "object 0.39.1",
  "sonatina-codegen",
  "sonatina-ir",
  "sonatina-parser",
@@ -2445,7 +2449,7 @@ dependencies = [
  "hex",
  "indexmap",
  "insta",
- "object",
+ "object 0.39.1",
  "revm",
  "rpds",
  "rustc-hash",
@@ -2550,7 +2554,7 @@ dependencies = [
 name = "sonatina-sp1"
 version = "0.0.3-alpha"
 dependencies = [
- "object",
+ "object 0.39.1",
  "tempfile",
  "thiserror 2.0.17",
 ]
@@ -2680,7 +2684,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2971,15 +2975,6 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-internal-core"
-version = "48.0.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
-dependencies = [
- "hashbrown 0.17.1",
- "libm",
-]
-
-[[package]]
-name = "wasmtime-internal-core"
 version = "49.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64b67114739063bb72bb8ed2b4994b8b22809d354432db68553ad529850f9536"
@@ -2989,12 +2984,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmtime-internal-core"
+version = "50.0.0"
+dependencies = [
+ "hashbrown 0.17.1",
+ "libm",
+]
+
+[[package]]
 name = "wasmtime-internal-jit-icache-coherence"
-version = "48.0.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+version = "50.0.0"
 dependencies = [
  "libc",
- "wasmtime-internal-core 48.0.2",
+ "wasmtime-internal-core 50.0.0",
  "windows-sys 0.61.2",
 ]
 
