@@ -615,6 +615,47 @@ fn generic_pipeline_emits_a_host_object() {
 }
 
 #[test]
+fn functions_start_at_the_preferred_alignment() {
+    let triple = native_isa(host_architecture()).triple();
+    let source = r#"
+func public %first(v0.i64) -> i64 {
+block0:
+    v1.i64 = add v0 1.i64;
+    return v1;
+}
+
+func public %second(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    return v1;
+}
+
+func public %third(v0.i64) -> i64 {
+block0:
+    v1.i64 = sub v0 7.i64;
+    return v1;
+}
+"#;
+    let module = sonatina_parser::parse_module(&format!("target = \"{triple}\"\n{source}"))
+        .unwrap()
+        .module;
+    let artifact = Compile::new(module, CraneliftObjectBackend::new())
+        .with_opt_level(OptLevel::O0)
+        .compile()
+        .unwrap();
+    let object = object::File::parse(artifact.as_bytes()).unwrap();
+    let functions: Vec<_> = object
+        .symbols()
+        .filter(|symbol| symbol.kind() == object::SymbolKind::Text)
+        .collect();
+    assert_eq!(functions.len(), 3);
+    // Both x86_64 and aarch64 prefer 32-byte function alignment.
+    for function in functions {
+        assert_eq!(function.address() % 32, 0, "{:?}", function.name());
+    }
+}
+
+#[test]
 fn object_backend_compiles_direct_i128_signatures_and_calls() {
     let triple = native_isa(host_architecture()).triple();
     let source = include_str!("../test_files/i128_abi.sntn");
