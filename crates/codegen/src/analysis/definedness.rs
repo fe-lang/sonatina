@@ -122,7 +122,7 @@ pub(crate) fn is_read_or_call(func: &Function, inst: InstId) -> bool {
 }
 
 /// Whether `value` is a parameter, global, immediate, read or call result.
-fn is_defined_source(func: &Function, value: ValueId) -> bool {
+pub(crate) fn is_defined_source(func: &Function, value: ValueId) -> bool {
     match func.dfg.value(value) {
         Value::Inst { inst, .. } => is_read_or_call(func, *inst),
         Value::Undef { .. } => false,
@@ -203,7 +203,12 @@ fn field_origin(func: &Function, mut aggregate: ValueId, idx: I256) -> FieldOrig
 }
 
 /// Inserts `data`, with one result of type `ty`, just before `inst`.
-fn insert_before(func: &mut Function, inst: InstId, data: impl Inst, ty: Type) -> ValueId {
+pub(crate) fn insert_before(
+    func: &mut Function,
+    inst: InstId,
+    data: impl Inst,
+    ty: Type,
+) -> ValueId {
     let loc = func.layout.prev_inst_of(inst).map_or(
         CursorLocation::BlockTop(func.layout.inst_block(inst)),
         CursorLocation::At,
