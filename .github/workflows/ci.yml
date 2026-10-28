@@ -54,6 +54,20 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-features --all-targets -- -D clippy::all
 
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Packages and builds every crate without `publish = false` the way
+      # crates.io would, without uploading.
+      - run: cargo publish --workspace --dry-run
+
   cranelift_native:
     name: Cranelift native (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
