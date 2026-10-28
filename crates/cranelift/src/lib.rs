@@ -81,8 +81,6 @@ impl CraneliftObjectBackend {
             // The native ABI passes i128 scalars directly. Cranelift's x86_64
             // calling conventions require LLVM ABI extensions for these values.
             ("enable_llvm_abi_extensions", "true"),
-            // Cranelift's tail calls rely on frame pointers.
-            ("preserve_frame_pointers", "true"),
             // Like Sonatina's own IR checks, Cranelift's verifier runs only
             // in builds with debug assertions: it can take most of the
             // backend's time.
