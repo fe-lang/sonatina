@@ -4,17 +4,19 @@
 //! memory holds arbitrary fixed bits, and an undef argument or return value
 //! reaches the other side as one arbitrary value. Undef arises only from
 //! `undef` itself and from operations with undefined results, and spreads
-//! through the instructions that use it.
+//! through the instructions that use it. A division by a divisor that may be
+//! zero has an undefined result, unless every path to it passes a branch that
+//! found the divisor nonzero, as a checked division's does.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 
 use cranelift_entity::EntityRef;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, I256, Immediate, Inst, InstId, Type, Value, ValueId,
+    ControlFlowGraph, Function, I256, Immediate, Inst, InstId, Type, Value, ValueId,
     effects::AccessKind,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{BinaryInstKind, InstClassKind, data},
+    inst::{BinaryInstKind, InstClassKind, UnaryInstKind, control_flow::Br, data},
     types::{CompoundType, EnumVariantRef, TypeStore},
 };
 
@@ -24,6 +26,7 @@ pub(crate) fn value_may_be_undef(
     cache: &mut FxHashMap<ValueId, bool>,
     mut override_value: impl FnMut(ValueId) -> Option<bool>,
 ) -> bool {
+    let guards = Guards::default();
     let mut visiting = FxHashSet::default();
     let mut stack = vec![(value, false)];
     while let Some((value, post_order)) = stack.pop() {
@@ -39,9 +42,11 @@ pub(crate) fn value_may_be_undef(
             let may_be_undef = match func.dfg.value(value) {
                 Value::Undef { .. } => true,
                 Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } => false,
-                Value::Inst { inst, .. } => inst_result_may_be_undef(func, *inst, |used| {
-                    cache.get(&used).copied().unwrap_or(true)
-                }),
+                Value::Inst { inst, .. } => {
+                    inst_result_may_be_undef(func, *inst, &guards, |used| {
+                        cache.get(&used).copied().unwrap_or(true)
+                    })
+                }
             };
             cache.insert(value, may_be_undef);
             continue;
@@ -78,6 +83,7 @@ fn is_freeze(func: &Function, inst: InstId) -> bool {
 /// reaches. Unlike [`value_may_be_undef`], a cycle
 /// of phis that no such source reaches stays defined.
 pub(crate) fn maybe_undef_values(func: &Function) -> FxHashSet<ValueId> {
+    let guards = Guards::default();
     let mut maybe_undef = FxHashSet::default();
     loop {
         let mut changed = false;
@@ -88,7 +94,9 @@ pub(crate) fn maybe_undef_values(func: &Function) -> FxHashSet<ValueId> {
                         changed |= maybe_undef.insert(value);
                     }
                 }
-                if inst_result_may_be_undef(func, inst, |value| maybe_undef.contains(&value)) {
+                if inst_result_may_be_undef(func, inst, &guards, |value| {
+                    maybe_undef.contains(&value)
+                }) {
                     for &result in func.dfg.inst_results(inst) {
                         changed |= maybe_undef.insert(result);
                     }
@@ -237,12 +245,18 @@ impl UndefTaint {
     }
 
     fn may_be_undef(&self, func: &Function, value: ValueId) -> bool {
-        self.search(func, value, &RefCell::default())
+        self.search(func, value, &RefCell::default(), &Guards::default())
     }
 
     /// Whether an `undef` or an operation with an undefined result reaches
     /// `value`. Each value is searched once; a cycle adds no undef.
-    fn search(&self, func: &Function, value: ValueId, seen: &RefCell<FxHashSet<ValueId>>) -> bool {
+    fn search(
+        &self,
+        func: &Function,
+        value: ValueId,
+        seen: &RefCell<FxHashSet<ValueId>>,
+        guards: &Guards,
+    ) -> bool {
         if value.index() < self.known {
             return self.maybe_undef.contains(&value);
         }
@@ -254,9 +268,9 @@ impl UndefTaint {
         }
         let undef = match func.dfg.value(value) {
             Value::Undef { .. } => true,
-            Value::Inst { inst, .. } => {
-                inst_result_may_be_undef(func, *inst, |used| self.search(func, used, seen))
-            }
+            Value::Inst { inst, .. } => inst_result_may_be_undef(func, *inst, guards, |used| {
+                self.search(func, used, seen, guards)
+            }),
             _ => false,
         };
         if undef {
@@ -478,6 +492,7 @@ fn variant_field_may_be_undef(
 fn inst_result_may_be_undef(
     func: &Function,
     inst: InstId,
+    guards: &Guards,
     operand_may_be_undef: impl Fn(ValueId) -> bool,
 ) -> bool {
     if is_freeze(func, inst) {
@@ -523,13 +538,86 @@ fn inst_result_may_be_undef(
                 | BinaryInstKind::Smod
         )
     {
-        let [_, rhs] = values.as_slice() else {
+        let [_, divisor] = values.as_slice() else {
             return true;
         };
-        return func.dfg.value_imm(*rhs).is_none_or(Immediate::is_zero);
+        return match func.dfg.value_imm(*divisor) {
+            Some(divisor) => divisor.is_zero(),
+            None => !guards.rule_out_zero(func, inst, *divisor),
+        };
     }
 
     false
+}
+
+/// The control flow that division guards are found in, built on first use.
+#[derive(Default)]
+struct Guards(OnceCell<ControlFlowGraph>);
+
+impl Guards {
+    /// Whether every path to the division `inst` leaves a branch that tests
+    /// `divisor` against zero along the edge where it is nonzero: the
+    /// division's block, or one in the chain of single predecessors above
+    /// it, is entered only by that edge.
+    fn rule_out_zero(&self, func: &Function, inst: InstId, divisor: ValueId) -> bool {
+        let cfg = self.0.get_or_init(|| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            cfg
+        });
+        let Some(mut block) = func.layout.try_inst_block(inst) else {
+            return false;
+        };
+        let mut visited = FxHashSet::default();
+        while visited.insert(block) {
+            let mut preds = cfg.preds_of(block);
+            let (Some(&pred), None) = (preds.next(), preds.next()) else {
+                return false;
+            };
+            if let Some(term) = func.layout.last_inst_of(pred)
+                && let Some(br) = func.dfg.downcast::<&Br>(term)
+                && br.nz_dest() != br.z_dest()
+                && let Some(holds_if_nonzero) = zero_test(func, *br.cond(), divisor)
+                && block
+                    == if holds_if_nonzero {
+                        *br.nz_dest()
+                    } else {
+                        *br.z_dest()
+                    }
+            {
+                return true;
+            }
+            block = pred;
+        }
+        false
+    }
+}
+
+/// For a branch condition comparing `value` with zero, whether the
+/// condition holds when `value` is nonzero.
+fn zero_test(func: &Function, cond: ValueId, value: ValueId) -> Option<bool> {
+    let inst = func.dfg.value_inst(cond)?;
+    let zero = |operand: ValueId| func.dfg.value_imm(operand).is_some_and(Immediate::is_zero);
+    match (
+        func.dfg.inst(inst).kind(),
+        func.dfg.inst(inst).collect_values().as_slice(),
+    ) {
+        (InstClassKind::Unary(UnaryInstKind::IsZero), &[operand]) if operand == value => {
+            Some(false)
+        }
+        (InstClassKind::Binary(kind), &[lhs, rhs]) => {
+            let compared = (lhs == value && zero(rhs)) || (rhs == value && zero(lhs));
+            match kind {
+                BinaryInstKind::Eq if compared => Some(false),
+                BinaryInstKind::Ne if compared => Some(true),
+                // Unsigned: above zero is nonzero.
+                BinaryInstKind::Gt if lhs == value && zero(rhs) => Some(true),
+                BinaryInstKind::Lt if zero(lhs) && rhs == value => Some(true),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -625,6 +713,54 @@ block5:
                 assert!(taint.can_define(func, v(n)), "v{n}");
             }
             assert!(!taint.can_define(func, v(14)));
+        });
+    }
+
+    #[test]
+    fn divisions_are_defined_past_a_nonzero_test_of_the_divisor() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i256) {
+block0:
+    v2.i256 = udiv v0 v1;
+    v3.i1 = is_zero v1;
+    br v3 block1 block2;
+
+block1:
+    v4.i256 = udiv v0 v1;
+    return;
+
+block2:
+    jump block3;
+
+block3:
+    v5.i256 = umod v0 v1;
+    v6.i1 = ne v1 0.i256;
+    br v6 block4 block5;
+
+block4:
+    v7.i256 = sdiv v0 v1;
+    jump block5;
+
+block5:
+    v8.i256 = smod v0 v1;
+    v9.i256 = udiv v0 7.i256;
+    return;
+}
+"#;
+        let parsed = parse_module(source).unwrap();
+        let func_ref = parsed.debug.func_order[0];
+        let v = |n: usize| parsed.debug.value(func_ref, &format!("v{n}")).unwrap();
+        parsed.module.func_store.view(func_ref, |func| {
+            let taint = UndefTaint::new(func);
+            // Unchecked, on the zero edge, and past a join with it.
+            for n in [2, 4, 8] {
+                assert!(taint.holds_undef(func, v(n)), "v{n}");
+            }
+            for n in [5, 7, 9] {
+                assert!(!taint.holds_undef(func, v(n)), "v{n}");
+            }
         });
     }
 
