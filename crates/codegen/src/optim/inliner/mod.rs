@@ -52,6 +52,65 @@ impl CallChanges {
     }
 }
 
+/// The functions inlined to create each call site, as LLVM's inliner keeps
+/// them. A caller outside a recursive cycle would otherwise inline one
+/// member, then the members its body calls, and so on, unrolling the
+/// recursion until the growth budget runs out. Only inlining a function in a
+/// cycle is recorded, as only those can recur along a chain.
+#[derive(Default)]
+struct InlineHistory {
+    /// Each inlined function and the history of the site it was inlined at.
+    chains: Vec<(FuncRef, Option<usize>)>,
+    sites: FxHashMap<(FuncRef, InstId), usize>,
+}
+
+impl InlineHistory {
+    /// Whether inlining `callee` at `call_inst` in `caller` repeats a
+    /// function already inlined to create that call.
+    fn contains(&self, caller: FuncRef, call_inst: InstId, callee: FuncRef) -> bool {
+        let mut chain = self.sites.get(&(caller, call_inst)).copied();
+        while let Some(index) = chain {
+            let (inlined, parent) = self.chains[index];
+            if inlined == callee {
+                return true;
+            }
+            chain = parent;
+        }
+        false
+    }
+
+    /// Records that inlining `callee` at `call_inst` in `caller` created the
+    /// caller's calls that `before`, its calls until then, lacks.
+    fn record(
+        &mut self,
+        module: &Module,
+        caller: FuncRef,
+        call_inst: InstId,
+        callee: FuncRef,
+        before: &FxHashMap<InstId, FuncRef>,
+    ) {
+        let parent = self.sites.get(&(caller, call_inst)).copied();
+        self.chains.push((callee, parent));
+        let chain = self.chains.len() - 1;
+        for (inst, target) in calls_of(module, caller) {
+            if before.get(&inst) != Some(&target) {
+                self.sites.insert((caller, inst), chain);
+            }
+        }
+    }
+}
+
+/// The calls of `func`, with their callees.
+fn calls_of(module: &Module, func: FuncRef) -> FxHashMap<InstId, FuncRef> {
+    module.func_store.view(func, |func| {
+        func.layout
+            .iter_block()
+            .flat_map(|block| func.layout.iter_inst(block))
+            .filter_map(|inst| Some((inst, func.dfg.call_info(inst)?.callee())))
+            .collect()
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct InlinerConfig {
     pub enable_noop: bool,
@@ -163,6 +222,9 @@ pub struct InlineStats {
     pub full_insts_cloned: usize,
     pub full_phi_fixups: usize,
     pub skipped_recursive_scc: usize,
+    /// Calls to a function that inlining it already produced along the same
+    /// chain, which would unroll its recursion.
+    pub skipped_inline_history: usize,
     pub skipped_recursive_guard: usize,
     pub skipped_budget: usize,
     pub skipped_cost: usize,
@@ -173,11 +235,16 @@ pub struct InlineStats {
 
 pub struct Inliner {
     pub config: InlinerConfig,
+    /// Kept across runs, as a pipeline inlines again after cleanup.
+    history: InlineHistory,
 }
 
 impl Inliner {
     pub fn new(config: InlinerConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            history: InlineHistory::default(),
+        }
     }
 
     pub fn run(&mut self, module: &mut Module) -> InlineStats {
@@ -279,6 +346,18 @@ impl Inliner {
                         stats.skipped_recursive_scc += 1;
                         continue;
                     }
+                    if self
+                        .history
+                        .contains(caller_ref, site.call_inst, site.callee)
+                    {
+                        stats.skipped_inline_history += 1;
+                        continue;
+                    }
+                    let calls_before = analysis
+                        .scc
+                        .scc_info(analysis.scc.scc_ref(site.callee))
+                        .is_cycle
+                        .then(|| calls_of(module, caller_ref));
                     let snapshot_callee = recursive_callsite.then(|| {
                         recursive_snapshots
                             .get(&site.callee)
@@ -365,6 +444,15 @@ impl Inliner {
                     if let Some(changes) = trivial_changes {
                         changed = true;
                         changes.apply(&mut call_counts);
+                        if let Some(before) = &calls_before {
+                            self.history.record(
+                                module,
+                                caller_ref,
+                                site.call_inst,
+                                site.callee,
+                                before,
+                            );
+                        }
                         inlinee_summaries.remove(&cost::SummaryKey::Live(caller_ref));
                         validated_callees.remove(&cost::SummaryKey::Live(caller_ref));
                         forced_recursive_inline_succeeded |= recursive_callsite && always_inline;
@@ -481,6 +569,15 @@ impl Inliner {
                         Ok(result) => {
                             changed = true;
                             result.call_changes.apply(&mut call_counts);
+                            if let Some(before) = &calls_before {
+                                self.history.record(
+                                    module,
+                                    caller_ref,
+                                    site.call_inst,
+                                    site.callee,
+                                    before,
+                                );
+                            }
                             inlinee_summaries.remove(&cost::SummaryKey::Live(caller_ref));
                             validated_callees.remove(&cost::SummaryKey::Live(caller_ref));
                             forced_recursive_inline_succeeded |=

@@ -91,6 +91,67 @@ func public %entry(v0.*i64) {{
 }
 
 #[test]
+fn native_pipelines_do_not_unroll_recursion_into_callers() {
+    // `dispatch` and its arms call each other. `run`, outside the cycle, may
+    // inline each member once along a chain, not the members those bodies
+    // call in turn.
+    let source = r#"
+target = "x86_64-unknown-native"
+
+func private %dispatch(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.i1 = eq v0 0.i64;
+        br v2 block4 block1;
+    block1:
+        v3.i64 = and v0 1.i64;
+        br_table v3 block3 (0.i64 block2);
+    block2:
+        v4.i64 = call %even v0 v1;
+        jump block5;
+    block3:
+        v5.i64 = call %odd v0 v1;
+        jump block5;
+    block4:
+        jump block5;
+    block5:
+        v6.i64 = phi (v4 block2) (v5 block3) (v1 block4);
+        return v6;
+}
+
+func private %even(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.i64 = sub v0 1.i64;
+        v3.i64 = add v1 1.i64;
+        v4.i64 = call %dispatch v2 v3;
+        return v4;
+}
+
+func private %odd(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.i64 = sub v0 1.i64;
+        v3.i64 = add v1 2.i64;
+        v4.i64 = call %dispatch v2 v3;
+        return v4;
+}
+
+func public %run(v0.i64) -> i64 {
+    block0:
+        v1.i64 = call %dispatch v0 0.i64;
+        return v1;
+}
+"#;
+    let mut parsed = parse_module(source).unwrap();
+    Pipeline::native(OptLevel::O2).run(&mut parsed.module);
+    verify_module_or_panic(
+        &parsed.module,
+        &VerifierConfig::for_level(VerificationLevel::Full),
+    );
+    let optimized = ModuleWriter::new(&parsed.module).dump_string();
+    let calls = optimized.matches("call %dispatch").count();
+    assert!(calls <= 4, "{calls} calls of `dispatch`:\n{optimized}");
+}
+
+#[test]
 fn native_pipelines_inline_helpers_with_slow_path_calls() {
     // Like a vector push: a bounds check, an out-of-line grow and a fault
     // flag, called from many sites. The call does not make it cold.

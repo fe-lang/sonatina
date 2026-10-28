@@ -636,6 +636,8 @@ impl Pipeline {
         )
         .entered();
         let mut func_behavior_dirty = true;
+        // One inliner for every inline step, so its history spans them.
+        let mut inliner = Inliner::new(self.inliner_config);
 
         for (step_index, step) in self.steps.iter().enumerate() {
             let _step_span = debug_span!(
@@ -652,7 +654,6 @@ impl Pipeline {
                         func_behavior::analyze_module(module);
                     }
                     let _span = debug_span!("sonatina.optim.pipeline.inline").entered();
-                    let mut inliner = Inliner::new(self.inliner_config);
                     let stats = {
                         let _span = trace_span!("sonatina.optim.pipeline.pass.inliner").entered();
                         inliner.run(module)
