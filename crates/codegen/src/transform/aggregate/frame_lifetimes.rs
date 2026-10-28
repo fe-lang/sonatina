@@ -24,7 +24,7 @@ use crate::{
 /// in a field of a returned SSA aggregate, and a reference to an earlier
 /// instance that is still live when its allocation runs again. References
 /// with unknown provenance are trusted.
-pub(crate) fn check_frame_lifetimes(module: &Module) -> Result<(), String> {
+pub fn check_frame_lifetimes(module: &Module) -> Result<(), String> {
     let effects = compute_object_effect_summaries(module);
     for func in module.funcs() {
         let sig = module.ctx.get_sig(func).expect("function signature exists");

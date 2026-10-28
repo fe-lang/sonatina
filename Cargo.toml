@@ -11,8 +11,11 @@ members = [
     "crates/interpreter",
     "crates/verifier",
     "crates/sp1",
+    "crates/cranelift",
 ]
 exclude = ["tests/sp1"]
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
+rust-version = "1.97"

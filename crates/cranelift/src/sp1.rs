@@ -4,9 +4,9 @@ use cranelift_codegen::{
     isa::{self, TargetIsa},
     settings::{self, Configurable},
 };
+use sonatina_codegen::backend::BackendOptions;
 
 use super::{CraneliftError, CraneliftObjectBackend};
-use crate::backend::BackendOptions;
 
 pub(super) fn build_isa(options: &BackendOptions) -> Result<Arc<dyn TargetIsa>, CraneliftError> {
     let mut flags = CraneliftObjectBackend::flag_builder(options, false)?;

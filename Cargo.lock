@@ -51,7 +51,7 @@ dependencies = [
  "bytes",
  "cfg-if",
  "const-hex",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "foldhash 0.1.5",
  "hashbrown 0.15.3",
  "indexmap",
@@ -656,6 +656,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "convert_case"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -961,11 +970,11 @@ dependencies = [
 
 [[package]]
 name = "derive_more"
-version = "2.0.1"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "093242cf7570c207c83073cf82f79706fe7b8317e98620a47d5be7c3d8497678"
+checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
 dependencies = [
- "derive_more-impl 2.0.1",
+ "derive_more-impl 2.1.1",
 ]
 
 [[package]]
@@ -974,7 +983,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb7330aeadfbe296029522e6c40f315320aba36fc43a5b3632f3795348f3bd22"
 dependencies = [
- "convert_case",
+ "convert_case 0.6.0",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
@@ -983,12 +992,14 @@ dependencies = [
 
 [[package]]
 name = "derive_more-impl"
-version = "2.0.1"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bda628edc44c4bb645fbe0f758797143e4e07926f7ebf4e9bdfbd3d2ce621df3"
+checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
 dependencies = [
+ "convert_case 0.10.0",
  "proc-macro2",
  "quote",
+ "rustc_version 0.4.1",
  "syn 2.0.106",
  "unicode-xid",
 ]
@@ -1038,7 +1049,8 @@ dependencies = [
 [[package]]
 name = "dot2"
 version = "1.0.0"
-source = "git+https://github.com/sanpii/dot2.rs.git#893e577cbf4dc1b72865f26af598970b9034ab9d"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "855423f2158bcc73798b3b9a666ec4204597a72370dc91dbdb8e7f9519de8cc3"
 
 [[package]]
 name = "dyn-clone"
@@ -2413,12 +2425,13 @@ dependencies = [
 
 [[package]]
 name = "sonatina-cli"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "clap",
  "indexmap",
  "object",
  "sonatina-codegen",
+ "sonatina-cranelift",
  "sonatina-ir",
  "sonatina-parser",
  "sonatina-triple",
@@ -2429,23 +2442,16 @@ dependencies = [
 
 [[package]]
 name = "sonatina-codegen"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "bit-set",
- "cranelift-codegen",
  "cranelift-entity 0.136.1",
- "cranelift-frontend",
- "cranelift-jit",
- "cranelift-module",
- "cranelift-native",
- "cranelift-object",
  "dashmap",
  "derive_more 1.0.0",
  "dir-test",
  "hex",
  "indexmap",
  "insta",
- "object",
  "revm",
  "rpds",
  "rustc-hash",
@@ -2455,14 +2461,35 @@ dependencies = [
  "sonatina-parser",
  "sonatina-triple",
  "sonatina-verifier",
- "tempfile",
  "tracing",
  "vec-collections",
 ]
 
 [[package]]
+name = "sonatina-cranelift"
+version = "0.1.0"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-entity 0.136.1",
+ "cranelift-frontend",
+ "cranelift-jit",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
+ "object",
+ "rustc-hash",
+ "smallvec",
+ "sonatina-codegen",
+ "sonatina-ir",
+ "sonatina-parser",
+ "sonatina-triple",
+ "sonatina-verifier",
+ "tempfile",
+]
+
+[[package]]
 name = "sonatina-filecheck"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "filecheck",
  "sonatina-codegen",
@@ -2475,7 +2502,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-interpreter"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "byteorder",
  "cranelift-entity 0.136.1",
@@ -2490,7 +2517,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-ir"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "bit-set",
  "bitflags 2.10.0",
@@ -2516,7 +2543,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-macros"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2525,12 +2552,12 @@ dependencies = [
 
 [[package]]
 name = "sonatina-parser"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "annotate-snippets",
  "bimap",
  "cranelift-entity 0.136.1",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "dir-test",
  "either",
  "hex",
@@ -2548,7 +2575,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-sp1"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "object",
  "tempfile",
@@ -2557,14 +2584,14 @@ dependencies = [
 
 [[package]]
 name = "sonatina-triple"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "thiserror 2.0.17",
 ]
 
 [[package]]
 name = "sonatina-verifier"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "cranelift-entity 0.136.1",
  "rpds",
@@ -2585,9 +2612,9 @@ checksum = "bceb57dc07c92cdae60f5b27b3fa92ecaaa42fe36c55e22dbfb0b44893e0b1f7"
 
 [[package]]
 name = "spin"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 
 [[package]]
 name = "spki"

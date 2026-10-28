@@ -17,7 +17,7 @@ fn separate_objects_share_globals_calls_aggregates_and_references() {
     let client = prover();
     for level in [OptLevel::O0, OptLevel::O2] {
         let library = compile(
-            include_str!("../../../../crates/codegen/test_files/cranelift/linked_abi.sntn"),
+            include_str!("../../../../crates/cranelift/test_files/linked_abi.sntn"),
             level,
         );
         let main = compile(include_str!("../../fixtures/linked.sntn"), level);

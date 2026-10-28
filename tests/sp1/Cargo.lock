@@ -1174,7 +1174,8 @@ dependencies = [
 [[package]]
 name = "dot2"
 version = "1.0.0"
-source = "git+https://github.com/sanpii/dot2.rs.git#1b4e48757c01b34a54952e4c6a7c541290a92c3b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "855423f2158bcc73798b3b9a666ec4204597a72370dc91dbdb8e7f9519de8cc3"
 
 [[package]]
 name = "downcast-rs"
@@ -4217,15 +4218,10 @@ dependencies = [
 
 [[package]]
 name = "sonatina-codegen"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "bit-set",
- "cranelift-codegen",
  "cranelift-entity 0.136.1",
- "cranelift-frontend",
- "cranelift-module",
- "cranelift-native",
- "cranelift-object",
  "dashmap",
  "indexmap 2.14.2",
  "rpds",
@@ -4240,8 +4236,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "sonatina-cranelift"
+version = "0.1.0"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-entity 0.136.1",
+ "cranelift-frontend",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
+ "rustc-hash",
+ "sonatina-codegen",
+ "sonatina-ir",
+ "sonatina-triple",
+ "sonatina-verifier",
+]
+
+[[package]]
 name = "sonatina-ir"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "bit-set",
  "bitflags",
@@ -4265,7 +4278,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-macros"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4274,7 +4287,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-parser"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "annotate-snippets",
  "bimap",
@@ -4294,7 +4307,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-sp1"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "object 0.39.1",
  "tempfile",
@@ -4307,6 +4320,7 @@ version = "0.0.0"
 dependencies = [
  "object 0.39.1",
  "sonatina-codegen",
+ "sonatina-cranelift",
  "sonatina-ir",
  "sonatina-parser",
  "sonatina-sp1",
@@ -4318,14 +4332,14 @@ dependencies = [
 
 [[package]]
 name = "sonatina-triple"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "sonatina-verifier"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "cranelift-entity 0.136.1",
  "rpds",

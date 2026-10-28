@@ -1,12 +1,12 @@
 use object::{Object, ObjectSection, ObjectSymbol, RelocationFlags, SectionKind};
-#[cfg(feature = "cranelift-jit")]
-use sonatina_codegen::isa::cranelift::{CraneliftError, CraneliftJitBackend};
 use sonatina_codegen::{
     Compile,
     backend::{Backend, BackendOptions},
     compile::OptLevel,
-    isa::cranelift::CraneliftObjectBackend,
 };
+use sonatina_cranelift::CraneliftObjectBackend;
+#[cfg(feature = "jit")]
+use sonatina_cranelift::{CraneliftError, CraneliftJitBackend};
 use sonatina_ir::{Module, Type};
 use sonatina_triple::TargetTriple;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
@@ -22,7 +22,7 @@ fn parse(source: &str) -> Module {
 #[test]
 fn emits_rv64_soft_float_elf_at_every_optimization_level() {
     for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
-        let source = include_str!("../test_files/cranelift/native_coverage.sntn")
+        let source = include_str!("../test_files/native_coverage.sntn")
             .replace("$NATIVE_TARGET", &TargetTriple::SP1.to_string());
         let module = sonatina_parser::parse_module(&source).unwrap().module;
         let artifact = Compile::new(module, CraneliftObjectBackend::new())
@@ -177,7 +177,7 @@ block0:
     assert!(count >= 5);
 }
 
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 #[test]
 fn jit_rejects_sp1_without_translating_it() {
     let module = parse("func public %main() -> i32 {\nblock0:\n    return 0.i32;\n}");

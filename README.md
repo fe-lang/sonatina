@@ -76,9 +76,9 @@ Sonatina currently performs the following optimizations:
 
 ## Host-native Backend
 
-The optional `sonatina-codegen/cranelift` feature provides host-native object
-codegen for x86_64 and AArch64 using upstream Cranelift. `cranelift-jit` adds
-in-process execution. See the [native support and ABI guide](crates/codegen/docs/native.md)
+The separate `sonatina-cranelift` crate provides host-native object codegen for
+x86_64 and AArch64 using Cranelift. Its `jit` feature adds in-process
+execution. See the [native support and ABI guide](crates/cranelift/README.md)
 for platform coverage, calling conventions and integration boundaries.
 
 ## CLI

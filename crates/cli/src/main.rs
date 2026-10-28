@@ -11,9 +11,10 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use sonatina_codegen::{
-    Compile, EvmCompile, OptLevel as CodegenOptLevel, isa::cranelift::CraneliftObjectBackend,
-    object::ObjectArtifact, optim::pipeline::Pipeline,
+    Compile, EvmCompile, OptLevel as CodegenOptLevel, object::ObjectArtifact,
+    optim::pipeline::Pipeline,
 };
+use sonatina_cranelift::CraneliftObjectBackend;
 use sonatina_ir::{ir_writer::ModuleWriter, module::Module};
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::Architecture;

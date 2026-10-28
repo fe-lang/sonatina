@@ -1,7 +1,8 @@
 [package]
 name = "sonatina-interpreter"
-version = "0.0.3-alpha"
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors = ["Sonatina Developers"]
 license = "Apache-2.0"
 readme = "../../README.md"
@@ -10,13 +11,14 @@ repository = "https://github.com/fe-lang/sonatina"
 description = "Interpreter of sonatina intermediate representation"
 categories = ["compilers", "wasm"]
 keywords = ["compiler", "evm", "wasm", "smart-contract"]
+include = ["src/**"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 byteorder = "1.5.0"
 cranelift-entity = "0.136.1"
-sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
+sonatina-ir = { path = "../ir", version = "0.1.0" }
 dashmap = "6.1"
 dyn-clone = "1.0"
 

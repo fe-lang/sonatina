@@ -54,8 +54,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-features --all-targets -- -D clippy::all
 
-  cranelift_feature_off:
-    name: Cranelift feature off
+  package:
+    name: Package
     runs-on: ubuntu-latest
 
     steps:
@@ -64,14 +64,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo check -p sonatina-codegen --no-default-features
-      - name: Check that Cranelift dependencies do not leak
-        shell: bash
-        run: |
-          if cargo tree -p sonatina-codegen --no-default-features -e normal | grep -q 'cranelift-\(codegen\|frontend\|module\|native\|object\|jit\)'; then
-            echo 'Cranelift dependencies are active without the cranelift feature'
-            exit 1
-          fi
+      # Packages and builds every crate without `publish = false` the way
+      # crates.io would, without uploading.
+      - run: cargo publish --workspace --dry-run
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      # Keep in sync with workspace.package.rust-version.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo check --workspace --all-features --all-targets
 
   cranelift_native:
     name: Cranelift native (${{ matrix.arch }})
@@ -90,10 +100,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Test object-only feature and linked C executables
-        run: cargo test -p sonatina-codegen --features cranelift --test cranelift_object
+      - name: Test object backend and linked C executables
+        run: cargo test -p sonatina-cranelift
       - name: Test host-native JIT and object backends
-        run: cargo test -p sonatina-codegen --features cranelift-jit --test cranelift_object --test cranelift_jit
+        run: cargo test -p sonatina-cranelift --features jit
 
   cranelift_windows_check:
     name: Cranelift Windows compile check
@@ -105,7 +115,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo check -p sonatina-codegen --features cranelift-jit --all-targets
+      - run: cargo check -p sonatina-cranelift --features jit --all-targets
 
   sp1_lockfile:
     name: SP1 lockfile
@@ -135,7 +145,7 @@ jobs:
             . -> target
             tests/sp1 -> target
       - name: Test SP1 objects without the Succinct toolchain
-        run: cargo test --locked -p sonatina-codegen --features sp1,cranelift-jit --test cranelift_sp1
+        run: cargo test --locked -p sonatina-cranelift --features sp1,jit --test cranelift_sp1
       - name: Install checksum-pinned Succinct toolchain
         run: bash crates/sp1/install-toolchain.sh "$SONATINA_SP1_TOOLCHAIN"
       # The SDK's prover types are generated from protobuf definitions.
@@ -167,8 +177,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # The Cranelift jobs cover sonatina-cranelift on supported hosts.
       - name: Test
-        run: cargo test --workspace --all-targets --no-fail-fast
+        run: cargo test --workspace --all-targets --no-fail-fast --exclude sonatina-cranelift
 
       - name: Filecheck
         run: cargo run -p sonatina-filecheck

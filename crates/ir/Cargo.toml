@@ -1,7 +1,8 @@
 [package]
 name = "sonatina-ir"
-version = "0.0.3-alpha"
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors = ["Sonatina Developers"]
 license = "Apache-2.0"
 readme = "../../README.md"
@@ -10,6 +11,7 @@ repository = "https://github.com/fe-lang/sonatina"
 description = "Intermediate representation for sonatina code generator"
 categories = ["compilers", "wasm"]
 keywords = ["compiler", "evm", "wasm", "smart-contract"]
+include = ["src/**"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -20,10 +22,10 @@ smallvec = "1.15.1"
 rustc-hash = "2.0.0"
 parking_lot = "0.12"
 crossbeam-utils = "0.8"
-sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
-macros = { package = "sonatina-macros", path = "../macros", version = "0.0.3-alpha" }
+sonatina-triple = { path = "../triple", version = "0.1.0" }
+macros = { package = "sonatina-macros", path = "../macros", version = "0.1.0" }
 indexmap = "2.12.1"
-dot2 = { git = "https://github.com/sanpii/dot2.rs.git" }
+dot2 = "1.0.0"
 dashmap = { version = "6.1", features = ["rayon"] }
 rayon = { version = "1" }
 dyn-clone = "1.0"
@@ -34,5 +36,7 @@ vec-collections = { version = "0.4.3", default-features = false }
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 
 [dev-dependencies]
-sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
+# sonatina-parser depends on sonatina-ir. Without a version, Cargo drops this
+# dev-dependency on publish, so sonatina-ir can be published first.
+sonatina-parser = { path = "../parser" }
 insta = { version = "1.43" }

@@ -1,6 +1,6 @@
 # SP1 RV64IM objects and executables
 
-Enable `sonatina-codegen/sp1` and use the exact target
+Enable `sonatina-cranelift/sp1` and use the exact target
 `riscv64im-succinct-zkvm-elf` (`TargetTriple::SP1`) to emit an ELF object with
 `Compile` and `CraneliftObjectBackend`. Object emission needs neither the
 Succinct toolchain nor an executor/prover SDK. The JIT remains host-native;
@@ -46,7 +46,7 @@ A zero return denotes success.
 ## Guest ABI and input format
 
 Memory is little-endian with 64-bit pointers; i128/i256 have 16-byte alignment.
-The existing [native value/reference ABI](https://github.com/fe-lang/sonatina/blob/main/crates/codegen/docs/native.md) applies
+The existing [native value/reference ABI](https://github.com/fe-lang/sonatina/blob/main/crates/cranelift/README.md) applies
 to internal Sonatina calls. External C interop is limited to fixed, non-variadic
 u32/i32, u64/i64 and pointer arguments, with no result or one scalar/pointer
 result. RV64 sign-extends 32-bit arguments and results, including u32 values.
@@ -80,9 +80,8 @@ it does not establish arbitrary input objects' instruction-set or ABI safety.
 
 This slice uses a pinned temporary fe-lang Cranelift fork based on upstream
 0.135.2 for LP64, EBREAK, checked arithmetic, and integer constant support.
-Native and SP1 share that dependency graph; enabling only `cranelift` does not
-select a separate upstream source. The optional features keep codegen/JIT out
-of default builds, not Git dependencies out of Cargo's resolution process.
+Native and SP1 share that dependency graph in `sonatina-cranelift`. The core
+crates, including `sonatina-codegen`, do not depend on it.
 
 ## Dedicated integration suite
 

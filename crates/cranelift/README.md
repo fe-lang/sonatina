@@ -1,11 +1,10 @@
 # Host-native Cranelift backend
 
-The optional `sonatina-codegen/cranelift` feature emits native object files
-through Cranelift 0.135 (Rust 1.95 or newer). This branch pins a temporary
-fe-lang fork of 0.135.2 shared with the optional SP1 target. The separate
-`cranelift-jit` feature enables in-process execution and includes `cranelift`.
-Neither feature is enabled by default; EVM users do not need the Cranelift
-code generator or JIT dependencies.
+`sonatina-cranelift` emits native object files through Cranelift 0.135 (Rust
+1.97 or newer). It pins a temporary fe-lang fork of 0.135.2 shared with the
+optional SP1 target, so it is not published to crates.io. The `jit` feature
+enables in-process execution. EVM users need only `sonatina-codegen`, which
+does not depend on Cranelift's code generator or JIT.
 
 ## Targets and artifacts
 
@@ -31,7 +30,8 @@ providing imports and selecting an executable entry point are the caller's
 responsibility. The Sonatina CLI's `build` command remains EVM-specific.
 
 ```no_run
-use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftObjectBackend};
+use sonatina_codegen::{Compile, compile::OptLevel};
+use sonatina_cranelift::CraneliftObjectBackend;
 use sonatina_ir::Module;
 
 fn compile_object(module: Module) -> Vec<u8> {

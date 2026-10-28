@@ -1,12 +1,14 @@
 [package]
 name = "sonatina-macros"
-version = "0.0.3-alpha"
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors = ["Sonatina Developers"]
 license = "Apache-2.0"
 readme = "../../README.md"
-homepage = "https://github.com/fe-lang/sonatina/tree/main/crates/ir"
+homepage = "https://github.com/fe-lang/sonatina/tree/main/crates/macros"
 repository = "https://github.com/fe-lang/sonatina"
+description = "Procedural macros for defining sonatina-ir instructions and instruction sets"
 categories = ["compilers", "wasm"]
 keywords = ["compiler", "evm", "wasm", "smart-contract"]
 

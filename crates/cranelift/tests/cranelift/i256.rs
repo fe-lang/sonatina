@@ -1,7 +1,8 @@
 //! Differential tests of native i256 operations against `U256`/`U512`
 //! reference arithmetic.
 
-use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend};
+use sonatina_codegen::{Compile, compile::OptLevel};
+use sonatina_cranelift::CraneliftJitBackend;
 use sonatina_ir::U256;
 
 use super::parse_verified_native_module;

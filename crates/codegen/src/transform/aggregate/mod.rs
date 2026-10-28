@@ -7,8 +7,7 @@ mod capture_state;
 mod cleanup;
 pub(crate) mod combine;
 pub(crate) mod enum_lowering;
-#[cfg(feature = "cranelift")]
-pub(crate) mod frame_lifetimes;
+mod frame_lifetimes;
 pub(crate) mod legalize;
 pub(crate) mod object;
 pub(crate) mod object_abi;
@@ -37,6 +36,7 @@ pub use byval_object_abi::{
     ObjectAggregateAbi, ObjectAggregateAbiConfig, ObjectByValueArgAbi, ObjectByValueArgAbiConfig,
 };
 pub use enum_lowering::{EnumLowerToProduct, EnumLoweredLayout};
+pub use frame_lifetimes::check_frame_lifetimes;
 pub use legalize::{
     AggregateLowerToMemoryLegalize, assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,
 };

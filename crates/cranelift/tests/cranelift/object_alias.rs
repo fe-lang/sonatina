@@ -1,7 +1,5 @@
-use sonatina_codegen::{
-    Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend,
-    transform::aggregate::ObjectAggregateAbi,
-};
+use sonatina_codegen::{Compile, compile::OptLevel, transform::aggregate::ObjectAggregateAbi};
+use sonatina_cranelift::CraneliftJitBackend;
 use sonatina_ir::ir_writer::ModuleWriter;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
