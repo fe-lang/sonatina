@@ -9,13 +9,15 @@ use sonatina_ir::{
 };
 
 use super::{
-    aggregate_elem_offset, translate_linkage, value_storage_alignment, value_storage_size,
+    ObjectSymbols, aggregate_elem_offset, translate_linkage, value_storage_alignment,
+    value_storage_size,
 };
 
 pub(super) type GlobalDataMap = HashMap<GlobalVariableRef, DataId>;
 
 pub(super) fn define_globals(
     ctx: &ModuleCtx,
+    symbols: &mut ObjectSymbols,
     module: &mut impl ClifModule,
 ) -> Result<GlobalDataMap, String> {
     ctx.with_gv_store(|globals| {
@@ -23,8 +25,14 @@ pub(super) fn define_globals(
         for global in globals.all_gv_refs() {
             let data = globals.gv_data(global);
             let name = &data.symbol;
+            let linkage = translate_linkage(data.linkage);
             let id = module
-                .declare_data(name, translate_linkage(data.linkage), !data.is_const, false)
+                .declare_data(
+                    &symbols.symbol(name, linkage),
+                    linkage,
+                    !data.is_const,
+                    false,
+                )
                 .map_err(|error| format!("failed to declare global {name}: {error}"))?;
             data_ids.insert(global, id);
             if data.linkage.is_external() {

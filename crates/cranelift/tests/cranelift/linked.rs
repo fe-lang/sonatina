@@ -10,7 +10,99 @@ use sonatina_ir::isa::Isa;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 use tempfile::Builder;
 
-use super::{host_architecture, native_isa};
+use super::{host_architecture, imports, native_isa};
+
+#[test]
+fn private_functions_do_not_capture_backend_calls() {
+    // The copy and the fill exceed the inline limit, so they call `memcpy`
+    // and `memset`, and the allocation calls `malloc`: the C library's, not
+    // the module's private functions of those names.
+    let triple = native_isa(host_architecture()).triple();
+    let source = r#"
+func inline(never) private %memcpy(v0.i64) -> i64 {
+block0:
+    v1.i64 = add v0 1.i64;
+    return v1;
+}
+func inline(never) private %memset(v0.i64) -> i64 {
+block0:
+    v1.i64 = add v0 2.i64;
+    return v1;
+}
+func inline(never) private %malloc(v0.i64) -> i64 {
+block0:
+    v1.i64 = add v0 3.i64;
+    return v1;
+}
+func public %run(v0.*[i64; 64], v1.*[i64; 64], v2.i64) -> *i8 {
+block0:
+    v3.[i64; 64] = mload v0 [i64; 64];
+    mstore v1 v3 [i64; 64];
+    mstore v0 undef.[i64; 64] [i64; 64];
+    v4.i64 = call %memcpy v2;
+    v5.i64 = call %memset v4;
+    v6.i64 = call %malloc v5;
+    v7.*i8 = mem.alloc_dynamic v6;
+    return v7;
+}
+"#;
+    let c_source = r#"
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+extern void *run(int64_t *source, int64_t *destination, int64_t size);
+int main(void) {
+    static int64_t source[64], destination[64];
+    for (int i = 0; i < 64; i++) source[i] = i + 1;
+    void *allocation = run(source, destination, 10);
+    if (!allocation) return 1;
+    for (int i = 0; i < 64; i++) {
+        if (destination[i] != i + 1 || source[i] != 0) return 2;
+    }
+    memset(allocation, 0xab, 16);
+    free(allocation);
+    return 0;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let module = sonatina_parser::parse_module(&format!("target = \"{triple}\"\n{source}"))
+            .unwrap()
+            .module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        let artifact = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+        for name in ["memcpy", "memset", "malloc"] {
+            assert!(imports(artifact.as_bytes(), name), "{name} at {level:?}");
+        }
+        let directory = Builder::new()
+            .prefix("sonatina-native-backend-calls-")
+            .tempdir()
+            .unwrap();
+        let object = directory.path().join("run.o");
+        let harness = directory.path().join("main.c");
+        let executable = directory.path().join("run");
+        fs::write(&object, artifact.as_bytes()).unwrap();
+        fs::write(&harness, c_source).unwrap();
+        let link = Command::new("cc")
+            .args(["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"])
+            .arg(&harness)
+            .arg(&object)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            link.status.success(),
+            "{}",
+            String::from_utf8_lossy(&link.stderr)
+        );
+        let run = Command::new(&executable).output().unwrap();
+        assert!(run.status.success(), "{level:?}: {run:?}");
+    }
+}
 
 #[test]
 fn linked_c_executable_exercises_native_abi_and_shared_globals() {

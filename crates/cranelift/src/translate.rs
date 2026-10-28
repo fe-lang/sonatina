@@ -8,7 +8,7 @@ mod phi;
 mod scalar;
 mod values;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cranelift_codegen::{
     Context,
@@ -39,13 +39,65 @@ use self::{
     values::*,
 };
 
+/// The host allocator, which dynamic allocations call.
+const HOST_ALLOCATOR: &str = "malloc";
+
+/// The object symbols of a module's functions and globals.
+///
+/// The backend calls some symbols on its own: Cranelift's libcalls and the
+/// host allocator. An object resolves such a call to any symbol of that name
+/// it defines, private ones included, so a private function or global with
+/// one of those names takes another one.
+struct ObjectSymbols {
+    taken: HashSet<String>,
+    backend: HashSet<String>,
+}
+
+impl ObjectSymbols {
+    fn new(module: &Module) -> Self {
+        let libcall_names = cranelift_module::default_libcall_names();
+        let backend = clif::LibCall::all_libcalls()
+            .iter()
+            .map(|&libcall| libcall_names(libcall))
+            .chain([HOST_ALLOCATOR.to_string()])
+            .collect::<HashSet<_>>();
+        let mut taken = module
+            .funcs()
+            .into_iter()
+            .map(|func_ref| module.ctx.func_sig(func_ref, |sig| sig.name().to_string()))
+            .collect::<HashSet<_>>();
+        module.ctx.with_gv_store(|globals| {
+            taken.extend(
+                globals
+                    .all_gv_refs()
+                    .map(|global| globals.gv_data(global).symbol.clone()),
+            )
+        });
+        taken.extend(backend.iter().cloned());
+        Self { taken, backend }
+    }
+
+    fn symbol(&mut self, name: &str, linkage: Linkage) -> String {
+        if linkage != Linkage::Local || !self.backend.contains(name) {
+            return name.to_string();
+        }
+        let symbol = (1..)
+            .map(|suffix| format!("{name}.{suffix}"))
+            .find(|symbol| !self.taken.contains(symbol))
+            .expect("some suffix is free");
+        self.taken.insert(symbol.clone());
+        symbol
+    }
+}
+
 pub(super) fn translate_module(
     module: &Module,
     clif_module: &mut impl ClifModule,
 ) -> Result<HashMap<String, FuncId>, String> {
     let mut defined_func_map: HashMap<String, FuncId> = HashMap::new();
     let mut func_id_map: HashMap<FuncRef, FuncId> = HashMap::new();
-    let data_ids = define_globals(&module.ctx, clif_module)?;
+    let mut symbols = ObjectSymbols::new(module);
+    let data_ids = define_globals(&module.ctx, &mut symbols, clif_module)?;
 
     let funcs = module.funcs();
     let mut divider = Divider::default();
@@ -60,7 +112,7 @@ pub(super) fn translate_module(
 
         let linkage = translate_linkage(module.ctx.func_linkage(func_ref));
         let func_id = clif_module
-            .declare_function(&name, linkage, &sig)
+            .declare_function(&symbols.symbol(&name, linkage), linkage, &sig)
             .map_err(|e| format!("failed to declare function {name}: {e}"))?;
 
         func_id_map.insert(func_ref, func_id);
@@ -1671,19 +1723,12 @@ fn heap_allocate(
     if module.ctx.triple == TargetTriple::SP1 {
         return Err("host heap allocation is unavailable on SP1".into());
     }
-    if module.funcs().iter().any(|&func| {
-        module.ctx.func_sig(func, |sig| {
-            sig.name() == "malloc" && !sig.linkage().is_external()
-        })
-    }) {
-        return Err("native heap allocation requires the host malloc symbol".into());
-    }
     let pointer_type = clif_module.target_config().pointer_type();
     let mut signature = clif_module.make_signature();
     signature.params.push(clif::AbiParam::new(pointer_type));
     signature.returns.push(clif::AbiParam::new(pointer_type));
     let allocator = clif_module
-        .declare_function("malloc", Linkage::Import, &signature)
+        .declare_function(HOST_ALLOCATOR, Linkage::Import, &signature)
         .map_err(|error| format!("failed to declare native allocator: {error}"))?;
     let allocator = clif_module.declare_func_in_func(allocator, builder.func);
     // Give even zero-sized allocations an address and trap on allocation failure.
