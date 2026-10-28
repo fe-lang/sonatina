@@ -1,6 +1,6 @@
 [package]
 name = "sonatina-interpreter"
-version = "0.0.3-alpha"
+version = "0.1.0"
 edition.workspace = true
 authors = ["Sonatina Developers"]
 license = "Apache-2.0"
@@ -16,7 +16,7 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 [dependencies]
 byteorder = "1.5.0"
 cranelift-entity = "0.136.1"
-sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
+sonatina-ir = { path = "../ir", version = "0.1.0" }
 dashmap = "6.1"
 dyn-clone = "1.0"
 

@@ -1,6 +1,6 @@
 [package]
 name = "sonatina-parser"
-version = "0.0.3-alpha"
+version = "0.1.0"
 edition.workspace = true
 authors = ["Sonatina Developers"]
 license = "Apache-2.0"
@@ -12,8 +12,8 @@ categories = ["compilers", "parser", "wasm"]
 keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 [dependencies]
-ir = { package = "sonatina-ir", path = "../ir", version = "0.0.3-alpha" }
-sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
+ir = { package = "sonatina-ir", path = "../ir", version = "0.1.0" }
+sonatina-triple = { path = "../triple", version = "0.1.0" }
 cranelift-entity = "0.136.1"
 pest = "2.7.10"
 pest_derive = "2.8.3"

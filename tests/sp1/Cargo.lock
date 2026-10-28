@@ -4218,7 +4218,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-codegen"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "bit-set",
  "cranelift-entity 0.136.1",
@@ -4237,7 +4237,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-cranelift"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "cranelift-codegen",
  "cranelift-entity 0.136.1",
@@ -4254,7 +4254,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-ir"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "bit-set",
  "bitflags",
@@ -4278,7 +4278,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-macros"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4287,7 +4287,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-parser"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "annotate-snippets",
  "bimap",
@@ -4307,7 +4307,7 @@ dependencies = [
 
 [[package]]
 name = "sonatina-sp1"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "object 0.39.1",
  "tempfile",
@@ -4332,14 +4332,14 @@ dependencies = [
 
 [[package]]
 name = "sonatina-triple"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "sonatina-verifier"
-version = "0.0.3-alpha"
+version = "0.1.0"
 dependencies = [
  "cranelift-entity 0.136.1",
  "rpds",

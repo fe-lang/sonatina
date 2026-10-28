@@ -1,6 +1,6 @@
 [package]
 name = "sonatina-macros"
-version = "0.0.3-alpha"
+version = "0.1.0"
 edition.workspace = true
 authors = ["Sonatina Developers"]
 license = "Apache-2.0"
