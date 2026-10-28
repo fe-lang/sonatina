@@ -1,0 +1,159 @@
+#! A phi of 1 and 0 at the join of a branch becomes a `zext` of the condition, and a branch left with no phis and empty arms becomes a jump.
+
+target = "evm-ethereum-osaka"
+
+# regex: VALUE=\bv\d+\b
+# sameln: func public %triangle(v0.i256, v1.i256) -> i256 {
+# check: v2.i1 = lt v0 v1;
+# nextln: jump block2;
+# check: block2:
+# nextln: $(value=$VALUE).i256 = zext v2 i256;
+# nextln: return $value;
+# not: block1
+# not: phi
+func public %triangle(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i1 = lt v0 v1;
+    br v2 block2 block1;
+
+block1:
+    jump block2;
+
+block2:
+    v3.i256 = phi (1.i256 block0) (0.i256 block1);
+    return v3;
+}
+
+# The arms the other way around negate the condition.
+# regex: VALUE=\bv\d+\b
+# sameln: func public %diamond_negated(v0.i32, v1.i32) -> i32 {
+# check: v2.i1 = eq v0 v1;
+# nextln: jump block3;
+# check: block3:
+# nextln: $(neg=$VALUE).i1 = is_zero v2;
+# nextln: $(value=$VALUE).i32 = zext $neg i32;
+# nextln: return $value;
+# not: phi
+func public %diamond_negated(v0.i32, v1.i32) -> i32 {
+block0:
+    v2.i1 = eq v0 v1;
+    br v2 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v3.i32 = phi (0.i32 block1) (1.i32 block2);
+    return v3;
+}
+
+# sameln: func public %boolean_phi(v0.i64, v1.i64) -> i1 {
+# check: v2.i1 = gt v0 v1;
+# nextln: jump block2;
+# check: block2:
+# nextln: return v2;
+func public %boolean_phi(v0.i64, v1.i64) -> i1 {
+block0:
+    v2.i1 = gt v0 v1;
+    br v2 block1 block2;
+
+block1:
+    jump block2;
+
+block2:
+    v3.i1 = phi (1.i1 block1) (0.i1 block0);
+    return v3;
+}
+
+# Another phi keeps the branch.
+# regex: VALUE=\bv\d+\b
+# sameln: func public %other_phi_keeps_branch(v0.i64, v1.i64) -> i64 {
+# check: br v2 block2 block1;
+# check: block2:
+# nextln: v4.i64 = phi (v0 block0) (v1 block1);
+# nextln: $(value=$VALUE).i64 = zext v2 i64;
+# nextln: v5.i64 = add v4 $value;
+func public %other_phi_keeps_branch(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i1 = lt v0 v1;
+    br v2 block2 block1;
+
+block1:
+    jump block2;
+
+block2:
+    v3.i64 = phi (1.i64 block0) (0.i64 block1);
+    v4.i64 = phi (v0 block0) (v1 block1);
+    v5.i64 = add v4 v3;
+    return v5;
+}
+
+# sameln: func public %busy_arm_stays(v0.i64, v1.i64) -> i64 {
+# check: br v2 block1 block2;
+# check: v4.i64 = phi (1.i64 block1) (0.i64 block2);
+# not: zext
+func public %busy_arm_stays(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i1 = lt v0 v1;
+    br v2 block1 block2;
+
+block1:
+    v3.i64 = add v0 v1;
+    mstore v3 v0 i64;
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v4.i64 = phi (1.i64 block1) (0.i64 block2);
+    return v4;
+}
+
+# sameln: func public %shared_join_stays(v0.i64, v1.i64, v2.i1) -> i64 {
+# check: v4.i64 = phi (1.i64 block2) (0.i64 block3) (1.i64 block1);
+# not: zext
+func public %shared_join_stays(v0.i64, v1.i64, v2.i1) -> i64 {
+block0:
+    br v2 block1 block4;
+
+block4:
+    v3.i1 = lt v0 v1;
+    br v3 block2 block3;
+
+block1:
+    jump block5;
+
+block2:
+    jump block5;
+
+block3:
+    jump block5;
+
+block5:
+    v4.i64 = phi (1.i64 block2) (0.i64 block3) (1.i64 block1);
+    return v4;
+}
+
+# A join that is the branching block itself is a loop header.
+# sameln: func public %loop_stays(v0.i64) -> i64 {
+# check: v1.i64 = phi (0.i64 block0) (1.i64 block2) (0.i64 block3);
+# not: zext
+func public %loop_stays(v0.i64) -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v1.i64 = phi (0.i64 block0) (1.i64 block2) (0.i64 block3);
+    v2.i1 = lt v1 v0;
+    br v2 block2 block3;
+
+block2:
+    jump block1;
+
+block3:
+    jump block1;
+}
