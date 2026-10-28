@@ -65,26 +65,18 @@ pub enum Value {
     },
 
     /// The value is a function argument.
-    Arg {
-        ty: Type,
-        idx: usize,
-    },
+    Arg { ty: Type, idx: usize },
 
     /// The value is immediate value.
-    Immediate {
-        imm: Immediate,
-        ty: Type,
-    },
+    Immediate { imm: Immediate, ty: Type },
 
     /// The value is global value.
-    Global {
-        gv: GlobalVariableRef,
-        ty: Type,
-    },
+    Global { gv: GlobalVariableRef, ty: Type },
 
-    Undef {
-        ty: Type,
-    },
+    /// Any value of `ty`, chosen separately at each use; `freeze` fixes one
+    /// choice for every use of its result. Undef never crosses memory or a
+    /// call: storing, passing or returning it gives one arbitrary value.
+    Undef { ty: Type },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -18,7 +18,7 @@ use crate::{
             assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,
         },
         evm::{
-            ConstDataLower, legalize_evm_section, lower_keccak256_words,
+            ConstDataLower, legalize_evm_section, lower_keccak256_words, lower_late_freezes,
             reuse_terminal_word_buffers,
         },
     },
@@ -297,6 +297,7 @@ impl EvmPipelineContext<'_> {
         }
 
         for &func in &self.funcs {
+            self.module().func_store.modify(func, lower_late_freezes);
             self.module().func_store.view(func, |function| {
                 validate_supported_lowering_ir(func, function)
             })?;

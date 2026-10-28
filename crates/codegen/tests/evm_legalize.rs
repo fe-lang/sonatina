@@ -2,6 +2,7 @@ use sonatina_codegen::{
     isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
     machinst::lower::SectionWorkModule,
     object::{CompileOptions, compile_object},
+    optim::inliner::{Inliner, InlinerConfig},
 };
 use sonatina_ir::{Module, ir_writer::ModuleWriter, isa::evm::Evm, module::FuncRef};
 use sonatina_parser::parse_module;
@@ -139,6 +140,37 @@ func public %main(v0.i8) -> i8 {
         .get_sig(find_func(&parsed.module, "main"))
         .expect("missing original main signature");
     assert_eq!(original_sig.args(), &[sonatina_ir::Type::I8]);
+}
+
+#[test]
+fn lower_function_takes_inlined_undef_pointer_arguments() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %identity(v0.*i256) -> *i256 {
+    block0:
+        return v0;
+}
+
+func public %main() -> i256 {
+    block0:
+        v0.*i256 = call %identity undef.*i256;
+        v1.i256 = ptr_to_int v0 i256;
+        return v1;
+}
+"#;
+
+    let mut module = parse_module(source).expect("module should parse").module;
+    Inliner::new(InlinerConfig::default()).run(&mut module);
+    let inlined = ModuleWriter::new(&module).dump_string();
+    assert!(inlined.contains("freeze undef.*i256"), "{inlined}");
+
+    let backend = evm_backend();
+    let main = find_func(&module, "main");
+    let prepared = prepare_root(&module, &backend, main).expect("prepare should succeed");
+    backend
+        .lower_function(&prepared, main)
+        .expect("lowering should take the frozen pointer");
 }
 
 #[test]

@@ -376,7 +376,7 @@ func public %test() -> i1 {
     }
 
     #[test]
-    fn guarded_subtraction_rejects_undef_dependent_relations() {
+    fn guarded_subtraction_keeps_undef_dependent_checks() {
         let text = optimized(
             r#"
 target = "evm-ethereum-osaka"
@@ -395,10 +395,12 @@ func public %test() -> i1 {
 }
 "#,
         );
+        // Each use of `v1` may see a different value, so the comparison
+        // proves nothing about the subtraction.
         assert!(text.contains("usubo"), "{text}");
     }
     #[test]
-    fn guarded_subtraction_checks_intrinsic_definedness() {
+    fn guarded_subtraction_keeps_intrinsically_undefined_checks() {
         for operation in [
             "udiv", "sdiv", "umod", "smod", "evm_udiv", "evm_sdiv", "evm_umod", "evm_smod",
         ] {
@@ -423,8 +425,8 @@ func public %test() -> i1 {{
                 ));
                 let defined = operation.starts_with("evm_") || divisor == "7.i256";
                 assert_eq!(
-                    !text.contains("usubo"),
-                    defined,
+                    text.contains("usubo"),
+                    !defined,
                     "{operation} {divisor}: {text}"
                 );
             }
@@ -432,7 +434,7 @@ func public %test() -> i1 {{
     }
 
     #[test]
-    fn guarded_subtraction_requires_defined_parameters() {
+    fn guarded_subtraction_trusts_parameters() {
         for linkage in ["private", "public"] {
             for (args, rhs) in [("undef.i256 7.i256", "v1"), ("7.i256 undef.i256", "v2")] {
                 let text = optimized(&format!(
@@ -456,13 +458,13 @@ func public %caller() -> i1 {{
 }}
 "#
                 ));
-                assert!(text.contains("usubo"), "{linkage}, {args}: {text}");
+                assert!(!text.contains("usubo"), "{linkage}, {args}: {text}");
             }
         }
     }
 
     #[test]
-    fn guarded_subtraction_requires_defined_call_and_read_results() {
+    fn guarded_subtraction_trusts_call_and_read_results() {
         for producer in [
             "v2.i256 = call %source;",
             "v7.objref<i256> = obj.alloc i256;\n  v2.i256 = obj.load v7;",
@@ -490,7 +492,7 @@ func private %source() -> i256 {{
 }}
 "#
             ));
-            assert!(text.contains("usubo"), "{producer}: {text}");
+            assert!(!text.contains("usubo"), "{producer}: {text}");
         }
     }
 

@@ -10,7 +10,7 @@ use sonatina_ir::{
     types::{CompoundType, EnumVariantRef},
 };
 
-use crate::analysis::definedness::{requires_definedness_evidence, value_may_be_undef};
+use crate::analysis::definedness::{is_read_or_call, value_may_be_undef};
 
 use super::{
     object_tracking::root_leaf_count_for_ty,
@@ -340,9 +340,12 @@ impl ValueInitialization<'_> {
                 .map(|&(value, _)| self.value(value))
                 .reduce(|a, b| a.join(func.ctx(), &b))
                 .unwrap_or_else(|| InitializedValue::new(ty, false));
-        } else if !requires_definedness_evidence(func, inst) {
-            // Both raw and high-level object reads were excluded above. Only
-            // a point-specific snapshot can establish a memory read's definedness.
+        } else if !is_read_or_call(func, inst) {
+            // Reads and calls produce defined bits, but defined bits need not
+            // form a valid aggregate (an uninitialized enum read has an
+            // arbitrary tag). Both raw and high-level object reads were
+            // excluded above; only a point-specific snapshot can establish a
+            // memory read's initialization.
             for used in data.collect_values() {
                 self.value(used);
             }

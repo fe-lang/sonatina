@@ -10,6 +10,7 @@ use sonatina_ir::{
 };
 
 use crate::{
+    analysis::definedness::UndefTaint,
     cfg_edit::{CfgEditor, CleanupMode},
     optim::call_purity::is_nonmutating_returning_call,
 };
@@ -168,6 +169,15 @@ pub(super) fn analyze_callee(
         );
     };
     let ret_values: ReturnedValues = ret_inst.args().iter().copied().collect();
+    // A call result is never undef, and no freeze in the caller defines an
+    // enum part that may be.
+    let taint = UndefTaint::default();
+    if !ret_values
+        .iter()
+        .all(|&value| taint.can_define(callee, value))
+    {
+        return None;
+    }
 
     // Pattern A/B/C: single return-only block.
     if insts.len() == 1 {
@@ -426,6 +436,7 @@ pub(super) fn apply_plan(
     caller: &mut Function,
     call_inst_id: InstId,
     plan: InlinePlan,
+    taint: &UndefTaint,
     stats: &mut InlineStats,
 ) -> Option<CallChanges> {
     if !caller.layout.is_inst_inserted(call_inst_id) {
@@ -436,6 +447,20 @@ pub(super) fn apply_plan(
     let (call_args, original_callee) =
         <&control_flow::Call as InstDowncast>::downcast(is, caller.dfg.inst(call_inst_id))
             .map(|call_inst| (call_inst.args().clone(), *call_inst.callee()))?;
+    // A parameter is never undef, so a body taken out of the call sees its
+    // arguments with their undef parts frozen, and keeps the call where an
+    // enum part may be undef; a rewritten call keeps the boundary.
+    let call_args: SmallVec<[ValueId; 8]> = if matches!(plan, InlinePlan::RewriteCall { .. }) {
+        call_args.into_iter().collect()
+    } else {
+        if !call_args.iter().all(|&arg| taint.can_define(caller, arg)) {
+            return None;
+        }
+        call_args
+            .iter()
+            .map(|&arg| taint.define_before(caller, call_inst_id, arg))
+            .collect()
+    };
     let call_results: ReturnedValues = caller
         .dfg
         .inst_results(call_inst_id)
@@ -481,6 +506,9 @@ pub(super) fn apply_plan(
 
             for (&call_res, tpl) in call_results.iter().zip(returned.iter()) {
                 let alias = materialize(tpl, caller, &call_args)?;
+                // A call result is never undef; `analyze_callee` keeps calls
+                // that return an enum part that may be.
+                let alias = taint.define_before(caller, call_inst_id, alias);
                 debug_assert_alias_type_match(caller, call_res, alias);
                 caller.dfg.change_to_alias(call_res, alias);
             }
@@ -517,6 +545,7 @@ pub(super) fn apply_plan(
             &call_args,
             &call_results,
             splice_plan,
+            taint,
             stats,
         ),
         InlinePlan::SpliceSingleBlockTerminator(splice_plan) => {
@@ -539,6 +568,7 @@ fn apply_splice_single_block(
     call_args: &[ValueId],
     call_results: &[ValueId],
     splice_plan: SplicePlan,
+    taint: &UndefTaint,
     stats: &mut InlineStats,
 ) -> bool {
     if call_results.len() != splice_plan.ret_values.len() {
@@ -587,6 +617,9 @@ fn apply_splice_single_block(
         let new_ret = *value_map
             .get(&old_ret)
             .expect("validated splice return value must be mapped");
+        // A call result is never undef; `analyze_callee` keeps calls that
+        // return an enum part that may be.
+        let new_ret = taint.define_before(caller, call_inst_id, new_ret);
         debug_assert_alias_type_match(caller, call_res, new_ret);
         caller.dfg.change_to_alias(call_res, new_ret);
     }

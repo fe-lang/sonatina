@@ -403,6 +403,8 @@ impl SccpSolver {
         }
 
         let result_may_divide_by_zero = self.is_arith_div_or_rem_by_zero(func, inst_id);
+        // A frozen value is one fixed value, whatever its argument.
+        let frozen = downcast::<&data::Freeze>(func.inst_set(), inst).is_some();
         {
             let mut cell_state = CellState::new(&self.lattice, &func.dfg);
             let value = InstDowncast::map(func.inst_set(), inst, |i: &dyn Interpret| {
@@ -435,9 +437,11 @@ impl SccpSolver {
                     Some(_) => cell_state.nonconst_result_cell(),
                     None => LatticeCell::Top,
                 };
-                let may_be_undef = operand_may_be_undef
-                    || result_may_divide_by_zero
-                    || (eval_value.is_some_and(EvalValue::is_undef) && !cell_state.used_has_top);
+                let may_be_undef = !frozen
+                    && (operand_may_be_undef
+                        || result_may_divide_by_zero
+                        || (eval_value.is_some_and(EvalValue::is_undef)
+                            && !cell_state.used_has_top));
                 result_states[idx] = Some((cell, may_be_undef));
             }
         }
@@ -1175,6 +1179,11 @@ impl State for CellState<'_, '_> {
         _args: Vec<EvalValue>,
     ) -> sonatina_ir::interpret::EvalResults {
         panic!("call instuctuion must not be Interpreted")
+    }
+
+    // An undef here may be a cell not evaluated yet, not a known undef.
+    fn freeze(&mut self, value: EvalValue, _ty: Type) -> EvalValue {
+        value
     }
 
     fn set_action(&mut self, action: Action) {

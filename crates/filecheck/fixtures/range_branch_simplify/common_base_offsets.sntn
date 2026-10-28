@@ -57,3 +57,27 @@ block1:
 block2:
     return v1;
 }
+
+# sameln: func public %chained_offsets_reach_their_base(v0.i64) -> i64 {
+# not:         br v4
+# check:       return v3;
+func public %chained_offsets_reach_their_base(v0.i64) -> i64 {
+block0:
+    v1.i1 = lt v0 3.i64;
+    br v1 block1 block2;
+
+block1:
+    return 0.i64;
+
+block2:
+    v2.i64 = sub v0 1.i64;
+    v3.i64 = sub v2 2.i64;
+    v4.i1 = lt v3 v0;
+    br v4 block4 block3;
+
+block3:
+    return 1.i64;
+
+block4:
+    return v3;
+}

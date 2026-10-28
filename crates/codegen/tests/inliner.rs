@@ -2018,6 +2018,121 @@ func public %caller(v0.i1, v1.i32) -> i32 {
     assert!(stats.full_calls_inlined >= call_count);
 }
 
+const UNDEFINED_PARTS: &str = r#"
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+type @nested = {i256, @pair};
+type @opt = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %pass_nested(v0.@nested) -> @nested {
+    block0:
+        return v0;
+}
+
+func private %partial_pair(v0.i256) -> @pair {
+    block0:
+        v1.@pair = insert_value undef.@pair 0.i8 v0;
+        return v1;
+}
+
+func private %pass_opt(v0.@opt) -> @opt {
+    block0:
+        return v0;
+}
+
+func private %undef_opt() -> @opt {
+    block0:
+        return undef.@opt;
+}
+
+func private %some_opt(v0.i256) -> @opt {
+    block0:
+        v1.@opt = enum.make @opt #Some (v0);
+        return v1;
+}
+
+func public %nested_argument(v0.i256) -> i256 {
+    block0:
+        v1.@pair = insert_value undef.@pair 0.i8 v0;
+        v2.@nested = insert_value undef.@nested 1.i8 v1;
+        v3.@nested = insert_value v2 0.i8 v0;
+        v4.@nested = call %pass_nested v3;
+        v5.@pair = extract_value v4 1.i8;
+        v6.i256 = extract_value v5 1.i8;
+        return v6;
+}
+
+func public %partial_result(v0.i256) -> i256 {
+    block0:
+        v1.@pair = call %partial_pair v0;
+        v2.i256 = extract_value v1 1.i8;
+        return v2;
+}
+
+func public %enum_argument() -> i256 {
+    block0:
+        v0.@opt = enum.make @opt #Some (undef.i256);
+        v1.@opt = call %pass_opt v0;
+        enum.assert_variant v1 #Some;
+        v2.i256 = enum.extract v1 #Some 0.i8;
+        return v2;
+}
+
+func public %enum_result() -> i256 {
+    block0:
+        v0.@opt = call %undef_opt;
+        enum.assert_variant v0 #Some;
+        v1.i256 = enum.extract v0 #Some 0.i8;
+        return v1;
+}
+
+func public %defined_enums(v0.i256) -> i256 {
+    block0:
+        v1.@opt = enum.make @opt #Some (v0);
+        v2.@opt = call %pass_opt v1;
+        enum.assert_variant v2 #Some;
+        v3.i256 = enum.extract v2 #Some 0.i8;
+        v4.@opt = call %some_opt v3;
+        enum.assert_variant v4 #Some;
+        v5.i256 = enum.extract v4 #Some 0.i8;
+        return v5;
+}
+"#;
+
+/// A parameter or call result is never undef: an inlined aggregate argument
+/// or result has its undefined fields frozen, and a call that passes or
+/// returns an enum part that may be undef stays.
+#[test]
+fn inlining_defines_undefined_parts_of_arguments_and_results() {
+    for config in [InlinerConfig::default(), full_only_inliner_test_config()] {
+        let mut module = sonatina_parser::parse_module(UNDEFINED_PARTS)
+            .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
+            .module;
+        Inliner::new(config).run(&mut module);
+        assert_module_verified(&module);
+
+        let dump = |name: &str| {
+            let func_ref = find_func(&module, name);
+            module.func_store.view(func_ref, |func| {
+                FuncWriter::new(func_ref, func).dump_string()
+            })
+        };
+        for name in ["nested_argument", "partial_result"] {
+            let text = dump(name);
+            assert!(!text.contains("call"), "{text}");
+            assert!(text.contains("freeze undef.i256"), "{text}");
+            assert!(!text.contains("freeze v0"), "{text}");
+        }
+        assert!(dump("enum_argument").contains("call %pass_opt"));
+        assert!(dump("enum_result").contains("call %undef_opt"));
+        assert!(!dump("defined_enums").contains("call"));
+    }
+}
+
 fn dump_module(module: &sonatina_ir::Module) -> String {
     let mut result = String::new();
     for func_ref in module.funcs() {

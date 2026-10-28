@@ -5,6 +5,7 @@ pub(crate) mod call_purity;
 pub mod cfg_cleanup;
 pub mod checked_arith_elim;
 pub mod code_sink;
+pub mod compare_sub_fusion;
 pub(crate) mod const_eval;
 pub(crate) mod constref_specialize;
 pub mod dead_arg;

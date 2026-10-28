@@ -114,6 +114,26 @@ impl FunctionVerifier<'_> {
         }
     }
 
+    /// Freezes the scalar values that memory, calls and parameters carry:
+    /// integers, pointers and enum tags.
+    fn verify_freeze(&mut self, inst_id: InstId, arg: ValueId) {
+        let location = self.inst_location(inst_id);
+        let Some(arg_ty) = self.value_ty(arg) else {
+            return;
+        };
+        if !(arg_ty.is_integral() || arg_ty.is_enum_tag() || arg_ty.is_pointer(self.ctx)) {
+            self.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "freeze operand must be an integer, pointer or enum tag",
+                    location.clone(),
+                )
+                .with_note(format!("found operand type {:?}", arg_ty)),
+            );
+        }
+        self.expect_result_ty(inst_id, arg_ty, location);
+    }
+
     fn verify_unary_integral_same(&mut self, inst_id: InstId, arg: ValueId, opname: &str) {
         let location = self.inst_location(inst_id);
         let Some(arg_ty) = self.value_ty(arg) else {

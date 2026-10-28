@@ -1,0 +1,36 @@
+#! evm.config: { vcode: true, opt: s }
+#! evm.case: frozen_values_pass_through
+#!   calldata: u256(5) u256(3)
+#!   expect: return u256(2)
+#! evm.case: frozen_undef_is_one_value
+#!   calldata: u256(3) u256(5)
+#!   expect: return u256(0)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i256 = freeze v0;
+        v3.i256 = freeze undef.i256;
+        v4.i1 = gt v2 v1;
+        br v4 block1 block2;
+
+    block1:
+        v5.i256 = sub v2 v1;
+        v6.i256 = add v5 v3;
+        mstore 0.i256 v6 i256;
+        evm_return 0.i256 32.i256;
+
+    block2:
+        v7.i256 = sub v3 v3;
+        mstore 0.i256 v7 i256;
+        evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

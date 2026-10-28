@@ -132,6 +132,15 @@ pub struct BlackBox {
     arg: ValueId,
 }
 
+/// Returns `arg` with one fixed value: where `arg` is undefined, every use of
+/// the result still sees the same, arbitrary value. Memory reads, call results
+/// and parameters are never undefined, so a transform that replaces one with
+/// a value that may be undefined freezes that value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct Freeze {
+    arg: ValueId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(arity(at_least(2)))]
 pub struct Gep {
