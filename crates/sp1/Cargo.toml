@@ -1,6 +1,6 @@
 [package]
 name = "sonatina-sp1"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license = "Apache-2.0"
 description = "Pinned guest runtime and static ELF linking for Sonatina SP1 objects"

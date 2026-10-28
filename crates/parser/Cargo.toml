@@ -1,6 +1,6 @@
 [package]
 name = "sonatina-parser"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 authors = ["Sonatina Developers"]
 license = "Apache-2.0"
