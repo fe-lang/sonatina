@@ -62,7 +62,7 @@ impl<'a> Labeller<'a> for FunctionGraph<'a> {
 
     fn edge_style(&'a self, e: &Self::Edge) -> Style {
         if e.from.block == DUMMY_BLOCK {
-            Style::Invisible
+            Style::Dotted
         } else {
             Style::None
         }

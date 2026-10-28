@@ -1038,7 +1038,8 @@ dependencies = [
 [[package]]
 name = "dot2"
 version = "1.0.0"
-source = "git+https://github.com/sanpii/dot2.rs.git#893e577cbf4dc1b72865f26af598970b9034ab9d"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "855423f2158bcc73798b3b9a666ec4204597a72370dc91dbdb8e7f9519de8cc3"
 
 [[package]]
 name = "dyn-clone"
