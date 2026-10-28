@@ -68,6 +68,21 @@ jobs:
       # crates.io would, without uploading.
       - run: cargo publish --workspace --dry-run
 
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      # Keep in sync with workspace.package.rust-version.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo check --workspace --all-features --all-targets
+
   cranelift_native:
     name: Cranelift native (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}

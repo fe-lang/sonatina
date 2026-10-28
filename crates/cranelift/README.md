@@ -1,7 +1,7 @@
 # Host-native Cranelift backend
 
 `sonatina-cranelift` emits native object files through Cranelift 0.135 (Rust
-1.95 or newer). It pins a temporary fe-lang fork of 0.135.2 shared with the
+1.97 or newer). It pins a temporary fe-lang fork of 0.135.2 shared with the
 optional SP1 target, so it is not published to crates.io. The `jit` feature
 enables in-process execution. EVM users need only `sonatina-codegen`, which
 does not depend on Cranelift's code generator or JIT.

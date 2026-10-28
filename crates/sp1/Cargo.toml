@@ -2,6 +2,7 @@
 name = "sonatina-sp1"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license = "Apache-2.0"
 description = "Pinned guest runtime and static ELF linking for Sonatina SP1 objects"
 repository = "https://github.com/fe-lang/sonatina"
