@@ -2133,6 +2133,76 @@ fn inlining_defines_undefined_parts_of_arguments_and_results() {
     }
 }
 
+const DIVISION_RESULTS: &str = r#"
+target = "evm-ethereum-osaka"
+
+type @opt = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %checked_quotient(v0.i256, v1.i256) -> @opt {
+    block0:
+        v2.i1 = is_zero v1;
+        br v2 block1 block2;
+
+    block1:
+        v3.@opt = enum.make @opt #None;
+        return v3;
+
+    block2:
+        v4.i256 = udiv v0 v1;
+        v5.@opt = enum.make @opt #Some (v4);
+        return v5;
+}
+
+func private %unchecked_quotient(v0.i256, v1.i256) -> @opt {
+    block0:
+        v2.i256 = udiv v0 v1;
+        v3.@opt = enum.make @opt #Some (v2);
+        return v3;
+}
+
+func public %checked(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.@opt = call %checked_quotient v0 v1;
+        enum.assert_variant v2 #Some;
+        v3.i256 = enum.extract v2 #Some 0.i8;
+        return v3;
+}
+
+func public %unchecked(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.@opt = call %unchecked_quotient v0 v1;
+        enum.assert_variant v2 #Some;
+        v3.i256 = enum.extract v2 #Some 0.i8;
+        return v3;
+}
+"#;
+
+/// A quotient a branch found the divisor of nonzero is defined, so an enum
+/// returning it inlines; an unchecked quotient may be undef, so its call
+/// stays.
+#[test]
+fn inlining_returns_enums_of_checked_quotients() {
+    for config in [full_inliner_test_config(), full_only_inliner_test_config()] {
+        let mut module = sonatina_parser::parse_module(DIVISION_RESULTS)
+            .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
+            .module;
+        Inliner::new(config).run(&mut module);
+        assert_module_verified(&module);
+
+        let dump = |name: &str| {
+            let func_ref = find_func(&module, name);
+            module.func_store.view(func_ref, |func| {
+                FuncWriter::new(func_ref, func).dump_string()
+            })
+        };
+        assert!(!dump("checked").contains("call"), "{}", dump("checked"));
+        assert!(dump("unchecked").contains("call %unchecked_quotient"));
+    }
+}
+
 fn dump_module(module: &sonatina_ir::Module) -> String {
     let mut result = String::new();
     for func_ref in module.funcs() {
