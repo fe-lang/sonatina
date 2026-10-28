@@ -113,6 +113,7 @@ impl Divider {
             .into_iter()
             .zip(self.ids)
             .filter_map(|(numerator, id)| {
+                let id = id?;
                 let mut ctx = clif_module.make_context();
                 ctx.func.signature = signature(clif_module);
                 let mut builder_ctx = FunctionBuilderContext::new();
@@ -126,7 +127,7 @@ impl Divider {
                         ctx.func.display()
                     );
                 }
-                Some((id?, ctx))
+                Some((id, ctx))
             })
             .collect()
     }
