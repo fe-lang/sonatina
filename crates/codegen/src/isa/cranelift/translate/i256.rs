@@ -17,7 +17,7 @@ use sonatina_ir::{
     isa::native::inst_set as native_inst_set,
 };
 
-use super::{ValueMap, resolve_i256, scalar_constant};
+use super::{ValueMap, resolve_i256};
 use crate::analysis::known_bits::KnownBitsQuery;
 
 pub(super) const LIMBS: usize = 4;
@@ -1021,13 +1021,17 @@ pub(super) fn resize_int_value(
     }
 }
 
+/// Extends a one-bit value, which every producer leaves as 0 or 1 in an I8.
 pub(super) fn bool_to_int_value(
     value: clif::Value,
     to_ty: clif::Type,
     signed: bool,
     builder: &mut FunctionBuilder,
 ) -> clif::Value {
-    let zero = scalar_constant(to_ty, 0, builder);
-    let set = scalar_constant(to_ty, if signed { -1 } else { 1 }, builder);
-    builder.ins().select(value, set, zero)
+    let value = resize_int_value(value, to_ty, false, builder);
+    if signed {
+        builder.ins().ineg(value)
+    } else {
+        value
+    }
 }
