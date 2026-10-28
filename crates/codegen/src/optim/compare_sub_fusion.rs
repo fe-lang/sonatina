@@ -15,7 +15,8 @@
 //! in each and branches on the comparison's flags, where `usub_overflow`'s
 //! borrow would take a `setb` and a `test` before the branch. A guard that
 //! exits a loop, for example, uses its difference on the back edge and on
-//! the exit.
+//! the exit. The destinations of a tail switch count as the switch's block:
+//! the backend makes their calls one indirect tail call there.
 
 use std::iter;
 
@@ -39,7 +40,21 @@ impl CompareSubFusion {
         Self
     }
 
-    pub fn run(&mut self, func: &mut Function, dom: &DomTree) -> bool {
+    /// `tail_switches` are the function's tail switches, the `br_table`s
+    /// whose destinations each tail-call with the same arguments.
+    pub fn run(&mut self, func: &mut Function, dom: &DomTree, tail_switches: &[InstId]) -> bool {
+        let switch_blocks: FxHashMap<_, _> = tail_switches
+            .iter()
+            .flat_map(|&br_table| {
+                let block = func.layout.inst_block(br_table);
+                let dests = func
+                    .dfg
+                    .branch_info(br_table)
+                    .expect("a tail switch is a branch")
+                    .dests();
+                dests.into_iter().map(move |dest| (dest, block))
+            })
+            .collect();
         let mut subs = FxHashMap::<(ValueId, ValueId), Vec<InstId>>::default();
         let mut compares = Vec::new();
         for block in func.layout.iter_block() {
@@ -77,6 +92,7 @@ impl CompareSubFusion {
                     let result = func.dfg.inst_result(sub).expect("a sub has a result");
                     use_blocks(func, result)
                 })
+                .map(|block| switch_blocks.get(&block).copied().unwrap_or(block))
                 .collect();
             if use_blocks.len() < MIN_USE_BLOCKS {
                 continue;
@@ -162,4 +178,63 @@ fn dominates(func: &Function, dom: &DomTree, inst: InstId, user: InstId) -> bool
         func.layout.next_inst_of(next)
     })
     .any(|next| next == user)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        optim::pipeline::{Pass, run_function_pass_round},
+        test_support::{dump_func_by_name, parse_test_module},
+    };
+
+    #[test]
+    fn tail_switch_destinations_count_as_one_block() {
+        // The guarded difference is an argument of each of the switch's
+        // four tail calls.
+        let fuses = |linkage: &str| {
+            let module = parse_test_module(&format!(
+                r#"
+target = "x86_64-unknown-native"
+
+func {linkage} %dispatch(v0.i64, v1.i64, v2.i64) -> i64 {{
+    block0:
+        v3.i1 = lt v1 v2;
+        br v3 block1 block2;
+    block1:
+        return v1;
+    block2:
+        v4.i64 = sub v1 v2;
+        v5.i64 = and v0 3.i64;
+        br_table v5 block6 (0.i64 block3) (1.i64 block4) (2.i64 block5);
+    block3:
+        v6.i64 = call %op v0 v4 v2;
+        return v6;
+    block4:
+        v7.i64 = call %op v0 v4 v2;
+        return v7;
+    block5:
+        v8.i64 = call %op v0 v4 v2;
+        return v8;
+    block6:
+        v9.i64 = call %op v0 v4 v2;
+        return v9;
+}}
+
+func private %op(v0.i64, v1.i64, v2.i64) -> i64 {{
+    block0:
+        v3.i64 = add v0 1.i64;
+        v4.i64 = call %dispatch v3 v1 v2;
+        return v4;
+}}
+"#
+            ));
+            run_function_pass_round(&module, &[Pass::CompareSubFusion], &mut true, None);
+            dump_func_by_name(&module, "dispatch").contains("usubo")
+        };
+        // A private dispatch tail-calls through one table, where the
+        // difference is used once.
+        assert!(!fuses("private"));
+        // A public one makes four calls.
+        assert!(fuses("public"));
+    }
 }

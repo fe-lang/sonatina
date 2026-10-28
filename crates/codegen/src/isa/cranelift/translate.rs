@@ -43,7 +43,7 @@ use self::{
     memory::*,
     phi::Edges,
     scalar::*,
-    tail::{TailCalls, TailSwitch},
+    tail::TailCalls,
     values::*,
 };
 
@@ -161,27 +161,6 @@ pub(super) fn translate_module(
     }
 
     Ok(defined_func_map)
-}
-
-/// The bits a tail switch's table index takes: the fewest, up to a
-/// 1024-entry table, that hold every key and every value the scrutinee's
-/// known bits allow, so the table needs no bounds check.
-fn switch_index_bits(
-    function: &Function,
-    scrutinee: ValueId,
-    switch: &TailSwitch,
-    known_bits: &mut Option<KnownBitsQuery>,
-) -> Option<u16> {
-    if !matches!(
-        function.dfg.value_ty(scrutinee),
-        Type::I8 | Type::I16 | Type::I32 | Type::I64
-    ) {
-        return None;
-    }
-    let max_key = switch.keys.iter().map(|&(key, _)| key).max().unwrap_or(0);
-    let key_bits = (u64::BITS - max_key.leading_zeros()) as u16;
-    let known_bits = known_bits.get_or_insert_with(|| KnownBitsQuery::new(function));
-    (key_bits..=10).find(|&bits| known_bits.fits_in_low_bits(function, scrutinee, bits))
 }
 
 /// The table of function addresses `entries`, defined once per module.
@@ -887,18 +866,11 @@ fn translate_function(
                     edges.fill(z, block, *br.z_dest(), &value_map, &mut builder)?;
                 }
                 NativeInstKind::BrTable(br_table) => {
-                    if let Some(switch) = tail_calls.tail_switch(func_ref, inst_id)
-                        && let Some(bits) = switch_index_bits(
-                            function,
-                            *br_table.scrutinee(),
-                            switch,
-                            &mut known_bits,
-                        )
-                    {
+                    if let Some(switch) = tail_calls.tail_switch(func_ref, inst_id) {
                         // Every destination tail-calls with the same
                         // arguments: index a table of the callees and
                         // tail-call the entry.
-                        let mut entries = vec![func_id_map[&switch.default]; 1 << bits];
+                        let mut entries = vec![func_id_map[&switch.default]; 1 << switch.bits];
                         for &(key, callee) in &switch.keys {
                             entries[key as usize] = func_id_map[&callee];
                         }

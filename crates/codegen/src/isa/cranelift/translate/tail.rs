@@ -10,15 +10,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use sonatina_ir::{
-    BlockId, Function, Module, Type, Value, ValueId,
-    inst::{InstId, control_flow, data},
-    module::FuncRef,
-    types::CompoundType,
-};
-use sonatina_triple::TargetTriple;
+use sonatina_ir::{Module, inst::InstId, module::FuncRef};
 
-use crate::{analysis::tail_position::returns_at_once, module_analysis::analyze_module};
+use crate::analysis::tail_position::{TailSwitch, tail_callers, tail_calls, tail_switches};
 
 /// The tail calls of a module.
 #[derive(Default)]
@@ -28,71 +22,26 @@ pub(super) struct TailCalls {
     switches: HashMap<(FuncRef, InstId), TailSwitch>,
 }
 
-/// A `br_table` each of whose destinations, the default included, begins
-/// with a tail call taking the same arguments. It becomes one indirect tail
-/// call through a table of the callees, as an interpreter's dispatch wants.
-pub(super) struct TailSwitch {
-    /// Each key with its destination's callee.
-    pub(super) keys: Vec<(u64, FuncRef)>,
-    pub(super) default: FuncRef,
-    /// One of the calls, whose arguments every callee takes.
-    pub(super) call: InstId,
-}
-
 impl TailCalls {
     pub(super) fn new(module: &Module) -> Self {
-        let mut tail_calls = Self::default();
-        // SP1 guests keep plain calls: their objects link statically into a
-        // zkVM program, where neither tail calls nor function tables are
-        // tested.
-        if module.ctx.triple == TargetTriple::SP1 {
-            return tail_calls;
-        }
-        // Only recursion needs a call to replace its caller's frame. Every
-        // caller of a tail-convention function keeps its own registers
-        // across the call, so elsewhere a tail call would cost more than the
-        // return it saves. A function in a recursive cycle tail-calls, its
-        // cycle's members and the functions it leaves the cycle through
-        // alike.
-        let sccs = analyze_module(module).scc;
-        for func_ref in module.funcs() {
-            if !module.ctx.func_linkage(func_ref).is_private()
-                || !sccs.scc_info(sccs.scc_ref(func_ref)).is_cycle
-            {
-                continue;
-            }
-            let sites: Vec<_> = module.func_store.view(func_ref, |function| {
-                if frame_storage_escapes(function) {
-                    return Vec::new();
+        let mut calls = Self::default();
+        for func_ref in tail_callers(module) {
+            module.func_store.view(func_ref, |function| {
+                let sites = tail_calls(func_ref, function);
+                if sites.is_empty() {
+                    return;
                 }
-                function
-                    .layout
-                    .iter_block()
-                    .filter_map(|block| tail_call(module, func_ref, function, block))
-                    .collect()
+                calls
+                    .functions
+                    .extend(sites.iter().flat_map(|&(_, callee)| [func_ref, callee]));
+                let sites: HashSet<_> = sites.into_iter().map(|(call, _)| call).collect();
+                for (br_table, switch) in tail_switches(function, &sites) {
+                    calls.switches.insert((func_ref, br_table), switch);
+                }
+                calls.sites.insert(func_ref, sites);
             });
-            for (call, callee) in sites {
-                tail_calls.sites.entry(func_ref).or_default().insert(call);
-                tail_calls.functions.extend([func_ref, callee]);
-            }
-            let Some(sites) = tail_calls.sites.get(&func_ref) else {
-                continue;
-            };
-            let switches: Vec<_> = module.func_store.view(func_ref, |function| {
-                function
-                    .layout
-                    .iter_block()
-                    .filter_map(|block| {
-                        let inst = function.layout.last_inst_of(block)?;
-                        Some((inst, tail_switch(function, sites, inst)?))
-                    })
-                    .collect()
-            });
-            for (inst, switch) in switches {
-                tail_calls.switches.insert((func_ref, inst), switch);
-            }
         }
-        tail_calls
+        calls
     }
 
     pub(super) fn tail_switch(&self, func: FuncRef, br_table: InstId) -> Option<&TailSwitch> {
@@ -110,155 +59,6 @@ impl TailCalls {
             .get(&func)
             .is_some_and(|sites| sites.contains(&call))
     }
-}
-
-/// The call ending `block` and its callee, if it is a tail call: the block
-/// returns the call's results right after it, and the callee is a private
-/// function returning the same types. No argument refers to the caller's
-/// frame, and an indirect result passes the caller's own result buffer on.
-fn tail_call(
-    module: &Module,
-    func_ref: FuncRef,
-    function: &Function,
-    block: BlockId,
-) -> Option<(InstId, FuncRef)> {
-    let last = function.layout.last_inst_of(block)?;
-    let call_inst = function.layout.prev_inst_of(last)?;
-    let call = function.dfg.downcast::<&control_flow::Call>(call_inst)?;
-    let callee = *call.callee();
-    let ctx = &module.ctx;
-    let same_returns = ctx.func_sig(func_ref, |caller| {
-        ctx.func_sig(callee, |callee| caller.ret_tys() == callee.ret_tys())
-    });
-    let args_outside_frame = call
-        .args()
-        .iter()
-        .all(|&arg| outside_frame(module, function, arg));
-    (ctx.func_linkage(callee).is_private()
-        && returns_at_once(function, block, last, function.dfg.inst_results(call_inst))
-        && same_returns
-        && args_outside_frame)
-        .then_some((call_inst, callee))
-}
-
-/// The tail switch `inst` ends its block with, if it is one.
-fn tail_switch(function: &Function, sites: &HashSet<InstId>, inst: InstId) -> Option<TailSwitch> {
-    let table = function.dfg.downcast::<&control_flow::BrTable>(inst)?;
-    // The call a destination begins with, if it is a tail call; a phi
-    // would come first.
-    let dest_call = |dest: BlockId| {
-        let call_inst = function
-            .layout
-            .first_inst_of(dest)
-            .filter(|call_inst| sites.contains(call_inst))?;
-        let call = function.dfg.downcast::<&control_flow::Call>(call_inst)?;
-        Some((call_inst, *call.callee(), call.args().as_slice()))
-    };
-    let (call, default, args) = dest_call((*table.default())?)?;
-    let keys = table
-        .table()
-        .iter()
-        .map(|&(key, dest)| {
-            let (_, callee, dest_args) = dest_call(dest)?;
-            let key = function
-                .dfg
-                .value_imm(key)?
-                .zext(Type::I256)
-                .as_i256()
-                .to_u256();
-            (dest_args == args && key.0[1..] == [0; 3]).then_some((key.0[0], callee))
-        })
-        .collect::<Option<_>>()?;
-    Some(TailSwitch {
-        keys,
-        default,
-        call,
-    })
-}
-
-/// Whether `arg` neither lives in the caller's frame nor refers to it. i256
-/// and aggregate arguments pass as the address of caller storage, and a
-/// constref is outside the frame only when it reaches a global or one of
-/// the caller's own arguments through projections: a constref call result
-/// is a copy in the frame.
-fn outside_frame(module: &Module, function: &Function, arg: ValueId) -> bool {
-    let ty = function.dfg.value_ty(arg);
-    match ty.resolve_compound(&module.ctx) {
-        _ if ty == Type::I256 => false,
-        Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_)) => false,
-        Some(CompoundType::ConstRef(_)) => constref_outside_frame(function, arg),
-        _ => true,
-    }
-}
-
-fn constref_outside_frame(function: &Function, value: ValueId) -> bool {
-    let Value::Inst { inst, .. } = *function.dfg.value(value) else {
-        return matches!(function.dfg.value(value), Value::Arg { .. });
-    };
-    if let Some(proj) = function.dfg.downcast::<&data::ConstProj>(inst) {
-        return constref_outside_frame(function, proj.values()[0]);
-    }
-    if let Some(index) = function.dfg.downcast::<&data::ConstIndex>(inst) {
-        return constref_outside_frame(function, *index.object());
-    }
-    function.dfg.downcast::<&data::ConstRef>(inst).is_some()
-}
-
-/// Whether a callee could reach storage in this function's frame: an
-/// `obj.alloc` whose reference, or a projection of it, is used other than as
-/// the address of an object load or store, or any `alloca` or
-/// `obj.materialize.stack`, whose addresses are raw pointers.
-fn frame_storage_escapes(function: &Function) -> bool {
-    let mut references: Vec<ValueId> = Vec::new();
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            if function.dfg.downcast::<&data::Alloca>(inst).is_some()
-                || function
-                    .dfg
-                    .downcast::<&data::ObjMaterializeStack>(inst)
-                    .is_some()
-            {
-                return true;
-            }
-            if function.dfg.downcast::<&data::ObjAlloc>(inst).is_some() {
-                references.extend(function.dfg.inst_results(inst));
-            }
-        }
-    }
-    while let Some(reference) = references.pop() {
-        for &user in function.dfg.users(reference) {
-            if !function.layout.is_inst_inserted(user) {
-                continue;
-            }
-            if let Some(load) = function.dfg.downcast::<&data::ObjLoad>(user)
-                && *load.object() == reference
-            {
-                continue;
-            }
-            if let Some(store) = function.dfg.downcast::<&data::ObjStore>(user)
-                && *store.object() == reference
-                && *store.value() != reference
-            {
-                continue;
-            }
-            if let Some(proj) = function.dfg.downcast::<&data::ObjProj>(user)
-                && proj.values().first() == Some(&reference)
-                && !proj.values()[1..].contains(&reference)
-            {
-                references.extend(function.dfg.inst_results(user));
-                continue;
-            }
-            if let Some(index) = function.dfg.downcast::<&data::ObjIndex>(user)
-                && *index.object() == reference
-                && *index.index() != reference
-            {
-                references.extend(function.dfg.inst_results(user));
-                continue;
-            }
-            return true;
-        }
-    }
-    false
 }
 
 #[cfg(test)]
@@ -446,12 +246,13 @@ func private %first(v0.constref<@pair>, v1.i64) -> i64 {
 
     #[test]
     fn switches_of_like_tail_calls_are_tail_switches() {
-        let source = |second_args: &str, default: &str| {
+        let source = |scrutinee: &str, second_args: &str, default: &str| {
             format!(
                 r#"
 func private %switch(v0.i64, v1.i64) -> i64 {{
     block0:
-        br_table v0 {default} (0.i64 block1) (2.i64 block2);
+        v5.i64 = and v0 3.i64;
+        br_table {scrutinee} {default} (0.i64 block1) (2.i64 block2);
     block1:
         v2.i64 = call %f v0 v1;
         return v2;
@@ -486,14 +287,20 @@ func private %g(v0.i64, v1.i64) -> i64 {{
                 let entry = function.layout.entry_block().unwrap();
                 function.layout.last_inst_of(entry).unwrap()
             });
-            tail_calls
-                .tail_switch(switch, br_table)
-                .map(|switch| switch.keys.iter().map(|&(key, _)| key).collect::<Vec<_>>())
+            tail_calls.tail_switch(switch, br_table).map(|switch| {
+                let keys: Vec<_> = switch.keys.iter().map(|&(key, _)| key).collect();
+                (keys, switch.bits)
+            })
         };
-        assert_eq!(switch_of(source("v0 v1", "block3")), Some(vec![0, 2]));
-        // Different arguments, or a default that is no tail call.
-        assert_eq!(switch_of(source("v1 v0", "block3")), None);
-        assert_eq!(switch_of(source("v0 v1", "block4")), None);
+        assert_eq!(
+            switch_of(source("v5", "v0 v1", "block3")),
+            Some((vec![0, 2], 2))
+        );
+        // Different arguments, a default that is no tail call, or an index
+        // too wide for a table.
+        assert_eq!(switch_of(source("v5", "v1 v0", "block3")), None);
+        assert_eq!(switch_of(source("v5", "v0 v1", "block4")), None);
+        assert_eq!(switch_of(source("v0", "v0 v1", "block3")), None);
     }
 
     #[test]
