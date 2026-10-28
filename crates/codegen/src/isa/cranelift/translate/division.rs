@@ -595,53 +595,44 @@ fn div3by2(
     reciprocal: clif::Value,
     builder: &mut FunctionBuilder,
 ) -> (clif::Value, clif::Value, clif::Value) {
+    // Two-limb values are i128s, which Cranelift adds, subtracts and compares
+    // with carry chains.
     // `(q1, q0) = reciprocal * u2 + (u2, u1)`.
-    let (q0, q1) = mul_wide(reciprocal, u2, builder);
-    let (q0, carry) = builder.ins().uadd_overflow(q0, u1);
-    let carry = builder.ins().uextend(I64, carry);
-    let q1 = builder.ins().iadd(q1, u2);
-    let q1 = builder.ins().iadd(q1, carry);
-    // `(r1, r0) = (u1 - q1 * d1, u0) - q1 * d0 - (d1, d0)`.
+    let reciprocal_wide = builder.ins().uextend(I128, reciprocal);
+    let u2_wide = builder.ins().uextend(I128, u2);
+    let q = builder.ins().imul(reciprocal_wide, u2_wide);
+    let top = builder.ins().iconcat(u1, u2);
+    let q = builder.ins().iadd(q, top);
+    let (q0, q1) = builder.ins().isplit(q);
+    // `r = (u1 - q1 * d1, u0) - q1 * d0 - (d1, d0)`.
     let product = builder.ins().imul(q1, d1);
     let r1 = builder.ins().isub(u1, product);
-    let (t0, t1) = mul_wide(d0, q1, builder);
-    let (r0, borrow) = builder.ins().usub_overflow(u0, t0);
-    let borrow = builder.ins().uextend(I64, borrow);
-    let r1 = builder.ins().isub(r1, t1);
-    let r1 = builder.ins().isub(r1, borrow);
-    let (r0, borrow) = builder.ins().usub_overflow(r0, d0);
-    let borrow = builder.ins().uextend(I64, borrow);
-    let r1 = builder.ins().isub(r1, d1);
-    let r1 = builder.ins().isub(r1, borrow);
+    let d0_wide = builder.ins().uextend(I128, d0);
+    let q1_wide = builder.ins().uextend(I128, q1);
+    let t = builder.ins().imul(d0_wide, q1_wide);
+    let divisor = builder.ins().iconcat(d0, d1);
+    let r = builder.ins().iconcat(u0, r1);
+    let r = builder.ins().isub(r, t);
+    let r = builder.ins().isub(r, divisor);
     let q1 = builder.ins().iadd_imm_s(q1, 1);
     // Too large by one when `r1 >= q0`: add the divisor back.
+    let (_, r1) = builder.ins().isplit(r);
     let over = builder
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, r1, q0);
     let decremented = builder.ins().iadd_imm_s(q1, -1);
     let q1 = builder.ins().select(over, decremented, q1);
-    let (s0, carry) = builder.ins().uadd_overflow(r0, d0);
-    let carry = builder.ins().uextend(I64, carry);
-    let s1 = builder.ins().iadd(r1, d1);
-    let s1 = builder.ins().iadd(s1, carry);
-    let r0 = builder.ins().select(over, s0, r0);
-    let r1 = builder.ins().select(over, s1, r1);
+    let restored = builder.ins().iadd(r, divisor);
+    let r = builder.ins().select(over, restored, r);
     // Rarely still at least the divisor: subtract it once more.
-    let above = builder.ins().icmp(IntCC::UnsignedGreaterThan, r1, d1);
-    let top_equal = builder.ins().icmp(IntCC::Equal, r1, d1);
-    let low_at_least = builder
+    let reaches = builder
         .ins()
-        .icmp(IntCC::UnsignedGreaterThanOrEqual, r0, d0);
-    let low_reaches = builder.ins().band(top_equal, low_at_least);
-    let reaches = builder.ins().bor(above, low_reaches);
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, r, divisor);
     let incremented = builder.ins().iadd_imm_s(q1, 1);
     let q1 = builder.ins().select(reaches, incremented, q1);
-    let (t0, borrow) = builder.ins().usub_overflow(r0, d0);
-    let borrow = builder.ins().uextend(I64, borrow);
-    let t1 = builder.ins().isub(r1, d1);
-    let t1 = builder.ins().isub(t1, borrow);
-    let r0 = builder.ins().select(reaches, t0, r0);
-    let r1 = builder.ins().select(reaches, t1, r1);
+    let reduced = builder.ins().isub(r, divisor);
+    let r = builder.ins().select(reaches, reduced, r);
+    let (r0, r1) = builder.ins().isplit(r);
     (q1, r0, r1)
 }
 
@@ -945,9 +936,10 @@ fn emit_digit_loop(n: usize, operands: &Normalized, builder: &mut FunctionBuilde
         );
         let (mut difference, overflow) =
             submul(&window[..n - 2], &divisor[..n - 2], digit, builder);
-        let (r0, borrow) = builder.ins().usub_overflow(r0, overflow);
-        let borrow = builder.ins().uextend(I64, borrow);
-        let (r1, negative) = builder.ins().usub_overflow(r1, borrow);
+        let remainder = builder.ins().iconcat(r0, r1);
+        let overflow = builder.ins().uextend(I128, overflow);
+        let (remainder, negative) = builder.ins().usub_overflow(remainder, overflow);
+        let (r0, r1) = builder.ins().isplit(remainder);
         difference.extend([r0, r1]);
         let add_back = builder.create_block();
         builder.ins().brif(

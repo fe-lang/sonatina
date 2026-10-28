@@ -520,6 +520,59 @@ fn wide_division_release_profile() {
     }
 }
 
+#[cfg(feature = "cranelift-jit")]
+#[test]
+#[ignore = "manual release-profile runtime measurement; run with --release --ignored --nocapture"]
+fn mulmod_release_profile() {
+    if cfg!(debug_assertions) {
+        panic!("measure a release-built compiler");
+    }
+    let triple = native_isa(host_architecture()).triple();
+    let source = format!(
+        r#"target = "{triple}"
+func public %mulmod(v0.*i256, v1.*i256, v2.*i256) {{
+block0:
+    v3.i256 = mload v0 i256;
+    v4.i256 = mload v1 i256;
+    v5.i256 = mload v2 i256;
+    v6.i256 = evm_mul_mod v3 v4 v5;
+    mstore v0 v6 i256;
+    return;
+}}
+"#
+    );
+    let module = sonatina_parser::parse_module(&source).unwrap().module;
+    let artifact = Compile::new(module, CraneliftJitBackend::new())
+        .with_opt_level(OptLevel::O2)
+        .compile()
+        .unwrap();
+    let mulmod: unsafe extern "C" fn(*mut [u64; 4], *const [u64; 4], *const [u64; 4]) =
+        unsafe { std::mem::transmute(artifact.function_address("mulmod").unwrap()) };
+    // The BN254 base field modulus, as weierstrudel's multiplications use.
+    let modulus: [u64; 4] = [
+        0x3c208c16d87cfd47,
+        0x97816a916871ca8d,
+        0xb85045b68181585d,
+        0x30644e72e131a029,
+    ];
+    let factor: [u64; 4] = [
+        0x1234567890abcdef,
+        0x0fedcba987654321,
+        0x2468ace013579bdf,
+        0x1357924680acebdf,
+    ];
+    let mut value = factor;
+    // Each product feeds the next, as in a field computation.
+    let start = Instant::now();
+    for _ in 0..1_000_000 {
+        unsafe { mulmod(&mut value, black_box(&factor), black_box(&modulus)) };
+    }
+    eprintln!(
+        "1000000 dependent mulmods={:?} ({value:x?})",
+        start.elapsed()
+    );
+}
+
 #[test]
 fn generic_pipeline_emits_a_host_object() {
     let isa = native_isa(host_architecture());
