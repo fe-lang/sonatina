@@ -18,7 +18,7 @@ use sonatina_ir::{
 };
 use sonatina_triple::TargetTriple;
 
-use sonatina_codegen::module_analysis::analyze_module;
+use sonatina_codegen::{analysis::tail_position::returns_at_once, module_analysis::analyze_module};
 
 /// The tail calls of a module.
 #[derive(Default)]
@@ -174,43 +174,6 @@ fn tail_switch(function: &Function, sites: &HashSet<InstId>, inst: InstId) -> Op
         default,
         call,
     })
-}
-
-/// Whether `last`, which ends `block`, returns `results` right away: a
-/// `return` of them, or a jump to a block of phis that returns the phis
-/// taking them from `block`, as a `match` whose arms make calls joins.
-fn returns_at_once(function: &Function, block: BlockId, last: InstId, results: &[ValueId]) -> bool {
-    if let Some(ret) = function.dfg.downcast::<&control_flow::Return>(last) {
-        return ret.args().as_slice() == results;
-    }
-    let Some(jump) = function.dfg.downcast::<&control_flow::Jump>(last) else {
-        return false;
-    };
-    let dest = *jump.dest();
-    let Some(ret) = function
-        .layout
-        .iter_inst(dest)
-        .find(|&inst| !function.dfg.is_phi(inst))
-        .and_then(|inst| function.dfg.downcast::<&control_flow::Return>(inst))
-    else {
-        return false;
-    };
-    ret.args().as_slice().len() == results.len()
-        && ret
-            .args()
-            .as_slice()
-            .iter()
-            .zip(results)
-            .all(|(&returned, &result)| {
-                function.dfg.value_inst(returned).is_some_and(|inst| {
-                    function.layout.inst_block(inst) == dest
-                        && function.dfg.cast_phi(inst).is_some_and(|phi| {
-                            phi.args()
-                                .iter()
-                                .any(|&(value, from)| from == block && value == result)
-                        })
-                })
-            })
 }
 
 /// Whether `arg` neither lives in the caller's frame nor refers to it. i256

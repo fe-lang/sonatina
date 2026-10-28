@@ -91,6 +91,52 @@ func public %entry(v0.*i64) {{
 }
 
 #[test]
+fn native_pipelines_keep_arguments_of_recursive_tail_callees() {
+    // `halt` ignores what `step` passes it, but `step`'s calls in tail
+    // position keep one signature for native code to dispatch through.
+    let source = r#"
+target = "x86_64-unknown-native"
+
+func private %step(v0.i64, v1.i64) -> i64 {
+    block0:
+        br_table v0 block2 (0.i64 block1);
+    block1:
+        v2.i64 = call %halt v0 v1;
+        return v2;
+    block2:
+        v3.i64 = sub v0 1.i64;
+        v4.i64 = call %step v3 v1;
+        return v4;
+}
+
+func inline(never) private %halt(v0.i64, v1.i64) -> i64 {
+    block0:
+        return 7.i64;
+}
+
+func public %run(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.i64 = call %step v0 v1;
+        return v2;
+}
+"#;
+    let halt_signature = |pipeline: Pipeline| {
+        let mut parsed = parse_module(source).unwrap();
+        pipeline.run(&mut parsed.module);
+        let optimized = ModuleWriter::new(&parsed.module).dump_string();
+        optimized
+            .lines()
+            .find(|line| line.contains("private %halt"))
+            .map(str::to_string)
+            .unwrap_or_else(|| panic!("`halt` was inlined:\n{optimized}"))
+    };
+    let native = halt_signature(Pipeline::native(OptLevel::O2));
+    assert!(native.contains("%halt(v0.i64, v1.i64)"), "{native}");
+    let speed = halt_signature(Pipeline::speed());
+    assert!(!speed.contains("v1.i64"), "{speed}");
+}
+
+#[test]
 fn native_pipelines_do_not_unroll_recursion_into_callers() {
     // `dispatch` and its arms call each other. `run`, outside the cycle, may
     // inline each member once along a chain, not the members those bodies

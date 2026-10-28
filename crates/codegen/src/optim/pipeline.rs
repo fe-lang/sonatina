@@ -18,7 +18,7 @@ use sonatina_ir::{
 use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
-    analysis::func_behavior,
+    analysis::{func_behavior, tail_position::recursive_tail_callees},
     cfg_edit::CleanupMode,
     compile::OptLevel,
     domtree::DomTree,
@@ -322,6 +322,9 @@ pub struct Pipeline {
     steps: Vec<Step>,
     /// Configuration for all [`Step::Inline`] steps in this pipeline.
     pub inliner_config: InlinerConfig,
+    /// Whether [`Step::DeadArgElim`] keeps the parameters of functions that
+    /// recursive cycles tail-call, which native code makes tail calls.
+    keep_tail_callee_args: bool,
 }
 
 const PRIMARY_FUNC_PASSES: &[Pass] = &[
@@ -517,6 +520,7 @@ impl Pipeline {
         Self {
             steps: Vec::new(),
             inliner_config: InlinerConfig::default(),
+            keep_tail_callee_args: false,
         }
     }
 
@@ -565,6 +569,7 @@ impl Pipeline {
             Pass::SwitchFormation,
             Pass::CompareSubFusion,
         ]));
+        pipeline.keep_tail_callee_args = true;
         pipeline
     }
 
@@ -681,7 +686,12 @@ impl Pipeline {
                 }
                 Step::DeadArgElim => {
                     let _span = debug_span!("sonatina.optim.pipeline.dead_arg_elim").entered();
-                    run_dead_arg_elim(module, &[], DeadArgElimConfig::default());
+                    let roots = if self.keep_tail_callee_args {
+                        recursive_tail_callees(module)
+                    } else {
+                        Vec::new()
+                    };
+                    run_dead_arg_elim(module, &roots, DeadArgElimConfig::default());
                     func_behavior_dirty = true;
                 }
                 Step::PromoteObjectArgs => {
