@@ -7,7 +7,7 @@ use crate::{
     bitset::BitSet,
     inst::{
         SideEffect, control_flow,
-        data::{self, Memzero},
+        data::{self, Memcopy, Memzero},
         evm::{
             EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash, EvmBlockHash, EvmCall,
             EvmCallCode, EvmCallValue, EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize,
@@ -755,6 +755,14 @@ fn classify_declared_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
+    if let Some(copy) = dfg.downcast::<&Memcopy>(inst_id) {
+        if !dfg.value_imm(*copy.len()).is_some_and(Immediate::is_zero) {
+            sink.read_range(MEMORY, *copy.src(), *copy.len());
+            sink.write_range(MEMORY, *copy.dest(), *copy.len());
+        }
+        return sink.finish();
+    }
+
     if let Some(memzero) = dfg.downcast::<&Memzero>(inst_id) {
         sink.write_range(MEMORY, *memzero.dest(), *memzero.len());
         return sink.finish();
@@ -1219,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn evm_mcopy_effects_require_a_potentially_nonzero_length() {
+    fn copies_require_a_potentially_nonzero_length() {
         for length in [Some(0), Some(1), Some(-1), None] {
             let mb = test_module_builder();
             let (evm, mut builder) = test_func_builder(&mb, &[Type::I256], Type::I256);
@@ -1232,20 +1240,30 @@ mod tests {
             });
             // Even a self-copy may expand memory when its length is nonzero.
             builder.insert_inst_no_result_with(|| EvmMcopy::new(is, addr, addr, len));
+            builder.insert_inst_no_result_with(|| Memcopy::new(is, addr, addr, len));
             builder.insert_inst_no_result_with(|| Return::new_single(is, len));
             builder.seal_all();
 
-            let effects = effects_for_inst::<EvmMcopy>(&builder.func);
-            let summary = summary_for_inst::<EvmMcopy>(&builder.func);
-            assert_eq!(effects.summary(), summary, "length={length:?}");
-            if length == Some(0) {
-                assert_eq!(effects, InstEffects::default());
-                assert!(!summary.has_effect());
-            } else {
-                assert_eq!(effects.accesses.len(), 2);
-                assert!(has_access(&effects, MEMORY, AccessKind::Read));
-                assert!(has_access(&effects, MEMORY, AccessKind::Write));
-                assert!(summary.may_mutate_state());
+            for (effects, summary) in [
+                (
+                    effects_for_inst::<EvmMcopy>(&builder.func),
+                    summary_for_inst::<EvmMcopy>(&builder.func),
+                ),
+                (
+                    effects_for_inst::<Memcopy>(&builder.func),
+                    summary_for_inst::<Memcopy>(&builder.func),
+                ),
+            ] {
+                assert_eq!(effects.summary(), summary, "length={length:?}");
+                if length == Some(0) {
+                    assert_eq!(effects, InstEffects::default());
+                    assert!(!summary.has_effect());
+                } else {
+                    assert_eq!(effects.accesses.len(), 2);
+                    assert!(has_access(&effects, MEMORY, AccessKind::Read));
+                    assert!(has_access(&effects, MEMORY, AccessKind::Write));
+                    assert!(summary.may_mutate_state());
+                }
             }
         }
     }

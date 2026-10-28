@@ -277,6 +277,39 @@ block0:
 }
 
 #[test]
+fn memory_copies_call_memmove_only_beyond_the_inline_limit() {
+    let triple = native_isa(host_architecture()).triple();
+    for (len, calls) in [("128.i64", false), ("129.i64", true), ("v2", true)] {
+        let source = format!(
+            r#"target = "{triple}"
+func public %copy(v0.*i8, v1.*i8, v2.i64) {{
+block0:
+    memcopy v0 v1 {len};
+    return;
+}}
+"#
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let artifact = Compile::new(
+                module.clone_for_funcs(&module.funcs()),
+                CraneliftObjectBackend::new(),
+            )
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+            assert_eq!(
+                imports(artifact.as_bytes(), "memmove"),
+                calls,
+                "{len} at {level:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn undef_insert_chains_zero_only_unwritten_bytes() {
     // A chain that writes both halves needs no zero fill, one that writes a
     // half zeroes the other, and padding is zeroed inline.

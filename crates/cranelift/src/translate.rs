@@ -19,7 +19,8 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
 use cranelift_module::{FuncId, Linkage, Module as ClifModule, ModuleReloc};
 
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, Linkage as SonatinaLinkage, Module, Type, Value, ValueId,
+    BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Type,
+    Value, ValueId,
     inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
     module::FuncRef,
@@ -1438,6 +1439,39 @@ fn translate_function(
                     )?;
                     let zero = builder.ins().iconst(clif::types::I8, 0);
                     builder.call_memset(target_config, dest, zero, len);
+                }
+                NativeInstKind::Memcopy(copy) => {
+                    let [dest, src] = [*copy.dest(), *copy.src()].map(|address| {
+                        resolve_pointer_sized_value(
+                            function,
+                            address,
+                            &value_map,
+                            pointer_type,
+                            &mut builder,
+                        )
+                    });
+                    let (dest, src) = (dest?, src?);
+                    // A short constant copy loads every byte before storing any,
+                    // so its ranges may overlap, as `memmove`'s may.
+                    match function
+                        .dfg
+                        .value_imm(*copy.len())
+                        .and_then(Immediate::to_nonnegative_usize)
+                        .and_then(|len| u32::try_from(len).ok())
+                        .filter(|&len| len <= INLINE_MEMORY_BYTES)
+                    {
+                        Some(len) => move_bytes(src, dest, len, &mut builder),
+                        None => {
+                            let len = resolve_pointer_sized_value(
+                                function,
+                                *copy.len(),
+                                &value_map,
+                                pointer_type,
+                                &mut builder,
+                            )?;
+                            builder.call_memmove(target_config, dest, src, len);
+                        }
+                    }
                 }
                 NativeInstKind::Mload(mload) => {
                     let addr = resolve_pointer_sized_value(

@@ -132,6 +132,9 @@ The `malloc` symbol must resolve to the host allocator. A private function or
 global named `malloc`, or like one of Cranelift's libcalls such as `memcpy`,
 takes another symbol in the object, so the backend's own calls never reach it.
 
+`memcopy` copies bytes between ranges that may overlap. A copy of at most 128
+constant bytes is inline; any other calls `memmove`. `memzero` calls `memset`.
+
 ## Calling from C or a JIT host
 
 The supported C interop subset is fixed, non-variadic signatures using
