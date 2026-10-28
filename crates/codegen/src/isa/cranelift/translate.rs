@@ -124,7 +124,7 @@ pub(super) fn translate_module(
     // Cranelift reports each function's minimum alignment, one byte on x64.
     // Placing functions at the ISA's preferred alignment, as Wasmtime does,
     // keeps a function's hot code from moving with every change elsewhere.
-    let preferred_alignment = isa.function_alignment().preferred;
+    let preferred_alignment = std::env::var("SONA_ALIGN").ok().and_then(|v| v.parse().ok()).unwrap_or(isa.function_alignment().preferred); // SCRATCH
     let compiled = parallel::map_owned(
         &module.func_store,
         translated,
@@ -274,6 +274,34 @@ fn translate_function(
     for &block in &block_order {
         let clif_block = builder.create_block();
         block_map.insert(block, clif_block);
+    }
+    // SCRATCH: blocks that reach no tail call are cold.
+    if std::env::var_os("SONA_NO_COLD").is_none() {
+        let mut reaches: Vec<BlockId> = block_order
+            .iter()
+            .copied()
+            .filter(|&block| {
+                function.layout.iter_inst(block).any(|inst| {
+                    tail_calls.is_tail_call(func_ref, inst)
+                        || tail_calls.tail_switch(func_ref, inst).is_some()
+                })
+            })
+            .collect();
+        if !reaches.is_empty() {
+            let mut seen: std::collections::HashSet<BlockId> = reaches.iter().copied().collect();
+            while let Some(block) = reaches.pop() {
+                for &pred in cfg.preds_of(block) {
+                    if seen.insert(pred) {
+                        reaches.push(pred);
+                    }
+                }
+            }
+            for &block in &block_order {
+                if !seen.contains(&block) {
+                    builder.set_cold_block(block_map[&block]);
+                }
+            }
+        }
     }
 
     let has_sret = module
