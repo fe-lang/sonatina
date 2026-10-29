@@ -263,7 +263,17 @@ impl AggregateLowerToMemoryLegalize {
 
         let blocks = self.prepare_legalize_block_order(func, scan.has_agg_phi);
         for block in blocks {
-            for &inst in &scan.candidates[block] {
+            // Aggregate phis lead their block's candidates and are rewritten together.
+            let candidates = &scan.candidates[block];
+            let phi_count = candidates
+                .iter()
+                .take_while(|&&inst| func.dfg.downcast::<&control_flow::Phi>(inst).is_some())
+                .count();
+            if phi_count > 0 {
+                self.rewrite_aggregate_phis(func, module, &candidates[..phi_count]);
+                self.changed = true;
+            }
+            for &inst in &candidates[phi_count..] {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
@@ -396,15 +406,6 @@ impl AggregateLowerToMemoryLegalize {
         }
         if func.dfg.downcast::<&data::ExtractValue>(inst).is_some() {
             self.rewrite_extract_value(func, module, inst);
-            return true;
-        }
-        if func.dfg.downcast::<&control_flow::Phi>(inst).is_some()
-            && func
-                .dfg
-                .inst_result(inst)
-                .is_some_and(|v| shape::is_supported_aggregate_ty(module, func.dfg.value_ty(v)))
-        {
-            self.rewrite_aggregate_phi(func, module, inst);
             return true;
         }
         if let Some(mload) = func.dfg.downcast::<&data::Mload>(inst)
@@ -862,33 +863,107 @@ impl AggregateLowerToMemoryLegalize {
         self.alias_and_remove(func, inst, result, loaded);
     }
 
-    fn rewrite_aggregate_phi(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
-        let phi = func
-            .dfg
-            .downcast::<&control_flow::Phi>(inst)
-            .expect("expected phi")
-            .clone();
-        let result = func.dfg.inst_result(inst).expect("phi must have result");
-        let agg_ty = func.dfg.value_ty(result);
-        let dst_ptr = self.materialized_ptr(func, result, module);
+    /// Copies each incoming value of a block's aggregate phis into the phi's
+    /// slot before the predecessor's terminator. The copies on one edge happen
+    /// at once: an incoming value may read another phi's slot, directly or
+    /// through an `insert_value` chain, so a slot is written only after every
+    /// copy reading it, and a cycle saves one slot to a temporary first.
+    fn rewrite_aggregate_phis(
+        &mut self,
+        func: &mut Function,
+        module: &ModuleCtx,
+        insts: &[InstId],
+    ) {
+        let mut phis = SmallVec::<[(ValueId, ValueId, Type); 4]>::new();
+        let mut edges = SmallVec::<[(BlockId, SmallVec<[(usize, ValueId); 4]>); 4]>::new();
+        for &inst in insts {
+            let phi = func
+                .dfg
+                .downcast::<&control_flow::Phi>(inst)
+                .expect("expected phi")
+                .clone();
+            let result = func.dfg.inst_result(inst).expect("phi must have result");
+            let slot = self.materialized_ptr(func, result, module);
+            let idx = phis.len();
+            phis.push((result, slot, func.dfg.value_ty(result)));
+            for &(incoming, pred) in phi.args() {
+                match edges.iter_mut().find(|(block, _)| *block == pred) {
+                    Some((_, copies)) => copies.push((idx, incoming)),
+                    None => edges.push((pred, smallvec![(idx, incoming)])),
+                }
+            }
+        }
 
-        for &(incoming, pred) in phi.args() {
+        for (pred, copies) in edges {
+            // Each pending copy, with the other phis whose slots its source reads.
+            let mut pending: SmallVec<[_; 4]> = copies
+                .into_iter()
+                .map(|(idx, incoming)| {
+                    let mut reads = SmallVec::<[usize; 2]>::new();
+                    let mut stack: SmallVec<[ValueId; 4]> = smallvec![incoming];
+                    while let Some(value) = stack.pop() {
+                        if let Some(read) = phis.iter().position(|&(result, ..)| result == value) {
+                            if read != idx && !reads.contains(&read) {
+                                reads.push(read);
+                            }
+                        } else if let Some(def) = func.dfg.value_inst(value)
+                            && let Some(insert) = func.dfg.downcast::<&data::InsertValue>(def)
+                        {
+                            stack.extend([*insert.dest(), *insert.value()]);
+                        }
+                    }
+                    (idx, incoming, reads)
+                })
+                .collect();
             let term = func
                 .layout
                 .last_inst_of(pred)
                 .unwrap_or_else(|| panic!("phi predecessor {pred:?} has no terminator"));
             let mut builder = BeforeCursor::new_before_inst(func, term);
-            self.emit_copy_aggregate_value_to_ptr(
-                func,
-                module,
-                &mut builder,
-                incoming,
-                dst_ptr,
-                agg_ty,
-            );
+            let mut saved = SmallVec::<[(ValueId, Option<ValueId>); 2]>::new();
+            while !pending.is_empty() {
+                let ready = pending.iter().position(|&(idx, ..)| {
+                    pending.iter().all(|(_, _, reads)| !reads.contains(&idx))
+                });
+                let Some(pos) = ready else {
+                    // Every pending slot is still read: copy one to a temporary
+                    // and read it from there.
+                    let idx = pending[0].0;
+                    let (result, slot, agg_ty) = phis[idx];
+                    let temp = self.create_temp_alloca(func, agg_ty);
+                    self.emit_copy_aggregate_ptr_to_ptr(
+                        func,
+                        module,
+                        &mut builder,
+                        slot,
+                        temp,
+                        agg_ty,
+                    );
+                    saved.push((result, self.materialized_addr[result].replace(temp)));
+                    for (_, _, reads) in &mut pending {
+                        reads.retain(|read| *read != idx);
+                    }
+                    continue;
+                };
+                let (idx, incoming, _) = pending.remove(pos);
+                let (_, slot, agg_ty) = phis[idx];
+                self.emit_copy_aggregate_value_to_ptr(
+                    func,
+                    module,
+                    &mut builder,
+                    incoming,
+                    slot,
+                    agg_ty,
+                );
+            }
+            for (result, addr) in saved {
+                self.materialized_addr[result] = addr;
+            }
         }
 
-        self.remove_if_results_dead(func, inst);
+        for &inst in insts {
+            self.remove_if_results_dead(func, inst);
+        }
     }
 
     fn rewrite_aggregate_mload(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
@@ -3067,5 +3142,64 @@ object @Contract {
             assert_aggregate_legalized(func, &ctx);
         });
         assert_eq!(run_contract(&module), U256::from(22));
+    }
+
+    #[test]
+    fn late_legalizer_copies_aggregate_phis_on_an_edge_at_once() {
+        // `v11` takes `v10` with field 1 set to 9. `v10` takes `v11` (a cycle,
+        // through the insert chain) or the constant struct `v4` (an order).
+        for (v10_incoming, expected) in [("v11", 193), ("v4", 195)] {
+            let module = parse_test_module(&format!(
+                r#"
+target = "evm-ethereum-osaka"
+
+type @big = {{i256, i256, i256, i256, i256, i256, [i256; 18]}};
+
+func public %entry() {{
+    block0:
+        v0.@big = insert_value undef.@big 0.i8 1.i256;
+        v1.@big = insert_value v0 1.i8 2.i256;
+        v2.@big = insert_value undef.@big 0.i8 3.i256;
+        v3.@big = insert_value v2 1.i8 4.i256;
+        v4.@big = insert_value undef.@big 0.i8 5.i256;
+        jump block1;
+
+    block1:
+        v10.@big = phi (v1 block0) ({v10_incoming} block2);
+        v11.@big = phi (v3 block0) (v14 block2);
+        v12.i256 = phi (0.i256 block0) (v13 block2);
+        v15.i1 = lt v12 1.i256;
+        br v15 block2 block3;
+
+    block2:
+        v13.i256 = add v12 1.i256;
+        v14.@big = insert_value v10 1.i8 9.i256;
+        jump block1;
+
+    block3:
+        v20.i256 = extract_value v11 0.i8;
+        v21.i256 = extract_value v11 1.i8;
+        v22.i256 = extract_value v10 0.i8;
+        v23.i256 = mul v20 100.i256;
+        v24.i256 = mul v21 10.i256;
+        v25.i256 = add v23 v24;
+        v26.i256 = add v25 v22;
+        mstore 0.i32 v26 i256;
+        evm_return 0.i8 32.i8;
+}}
+
+object @Contract {{
+  section runtime {{
+    entry %entry;
+  }}
+}}
+"#
+            ));
+            assert_eq!(
+                run_contract(&module),
+                U256::from(expected),
+                "{v10_incoming} incoming"
+            );
+        }
     }
 }
