@@ -52,13 +52,10 @@ impl EnumTypeLowerer {
             // Tags depend only on the variant count; building the product layout
             // here would recurse forever when a payload holds its own enum's tag.
             Type::EnumTag(enum_ty) => ctx.with_ty_store(|store| {
-                choose_tag_ty(
-                    store
-                        .enum_data(enum_ty)
-                        .expect("enum tag must reference an enum")
-                        .variants
-                        .len(),
-                )
+                store
+                    .enum_data(enum_ty)
+                    .expect("enum tag must reference an enum")
+                    .tag_ty()
             }),
             Type::Compound(compound) => Type::Compound(self.rewrite_compound(ctx, compound)),
             _ => ty,
@@ -73,7 +70,7 @@ impl EnumTypeLowerer {
         let data = ctx
             .with_ty_store(|store| store.enum_data(enum_ty).cloned())
             .expect("layout requested for non-enum type");
-        let tag_ty = choose_tag_ty(data.variants.len());
+        let tag_ty = data.tag_ty();
         let lowered_name = format!("__enum_lowered_{}_{}", data.name, enum_ty.as_u32());
         let lowered_cmpd = ctx.with_ty_store_mut(|store| {
             if let Some(existing) = store.lookup_struct(&lowered_name) {
@@ -698,22 +695,6 @@ fn lower_enum_make(
             insert_insert_value_before(function, inst, aggregate, slot, value, layout.lowered_ty());
     }
     aggregate
-}
-
-fn choose_tag_ty(variant_count: usize) -> Type {
-    if variant_count <= 2 {
-        Type::I1
-    } else if u8::try_from(variant_count).is_ok() {
-        Type::I8
-    } else if u16::try_from(variant_count).is_ok() {
-        Type::I16
-    } else if u32::try_from(variant_count).is_ok() {
-        Type::I32
-    } else if u64::try_from(variant_count).is_ok() {
-        Type::I64
-    } else {
-        Type::I256
-    }
 }
 
 fn insert_insert_value_before(

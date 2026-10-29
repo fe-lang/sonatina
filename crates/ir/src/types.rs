@@ -567,6 +567,26 @@ pub struct EnumData {
     pub variants: Vec<VariantData>,
 }
 
+impl EnumData {
+    /// The narrowest integer type that holds every variant's tag, its index.
+    pub fn tag_ty(&self) -> Type {
+        let max = self.variants.len().saturating_sub(1);
+        if max <= 1 {
+            Type::I1
+        } else if u8::try_from(max).is_ok() {
+            Type::I8
+        } else if u16::try_from(max).is_ok() {
+            Type::I16
+        } else if u32::try_from(max).is_ok() {
+            Type::I32
+        } else if u64::try_from(max).is_ok() {
+            Type::I64
+        } else {
+            Type::I256
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VariantData {
     pub name: String,
@@ -653,5 +673,39 @@ impl CompoundType {
 
     pub fn is_func(&self) -> bool {
         matches!(self, Self::Func { .. })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enum_tags_hold_the_largest_variant_index() {
+        let tag_ty = |count: usize| {
+            EnumData {
+                name: "E".to_string(),
+                repr: EnumReprHint::Default,
+                variants: (0..count)
+                    .map(|index| VariantData {
+                        name: index.to_string(),
+                        explicit_discriminant: None,
+                        fields: Vec::new(),
+                    })
+                    .collect(),
+            }
+            .tag_ty()
+        };
+        for (count, ty) in [
+            (1, Type::I1),
+            (2, Type::I1),
+            (3, Type::I8),
+            (256, Type::I8),
+            (257, Type::I16),
+            (65536, Type::I16),
+            (65537, Type::I32),
+        ] {
+            assert_eq!(tag_ty(count), ty, "{count} variants");
+        }
     }
 }
