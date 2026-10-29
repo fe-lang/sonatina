@@ -35,6 +35,7 @@ use super::{
         AggregateCombine, AggregateScalarize, LocalObjectArgMap, ModuleObjectFacts,
         ObjectEffectSummaryMap, ObjectLoadStore, ObjectMemoryAnalysis,
     },
+    bool_phi_fold::BoolPhiFold,
     branch_canonicalize::BranchCanonicalize,
     cfg_cleanup::CfgCleanup,
     checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
@@ -101,6 +102,9 @@ pub enum Pass {
     CodeSink,
     /// Complete Global Value Numbering (legacy sparse predicated solver).
     Gvn,
+    /// Turn a phi of 1 and 0 at the join of a branch into a `zext` of its
+    /// condition (native pipelines only).
+    BoolPhiFold,
     /// Turn trees of branches on comparisons of one integer with constants into
     /// a `br_table` (native pipelines only).
     SwitchFormation,
@@ -218,6 +222,11 @@ impl Pass {
                 name: "gvn",
                 needs_func_behavior: true,
                 invalidates_func_behavior: true,
+            },
+            Pass::BoolPhiFold => PassInfo {
+                name: "bool_phi_fold",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
             },
             Pass::SwitchFormation => PassInfo {
                 name: "switch_formation",
@@ -551,6 +560,8 @@ impl Pipeline {
             OptLevel::O2 => Self::optimized(native_inliner_config(), true, true),
         };
         pipeline.add_step(Step::FuncPasses(vec![
+            Pass::BoolPhiFold,
+            Pass::CfgCleanup,
             Pass::SwitchFormation,
             Pass::CompareSubFusion,
         ]));
@@ -929,6 +940,10 @@ fn run_pass(
         Pass::JumpThread => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.jump_thread").entered();
             JumpThread::new().run(func)
+        }
+        Pass::BoolPhiFold => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.bool_phi_fold").entered();
+            BoolPhiFold::new().run(func)
         }
         Pass::SwitchFormation => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.switch_formation").entered();
@@ -2694,10 +2709,16 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 .map(|step| format!("{step:?}"))
                 .collect()
         };
-        // Both end by forming switches and fusing comparisons with subtractions.
+        // Both end by folding boolean phis, forming switches and fusing
+        // comparisons with subtractions.
         let switches = format!(
             "{:?}",
-            Step::FuncPasses(vec![Pass::SwitchFormation, Pass::CompareSubFusion])
+            Step::FuncPasses(vec![
+                Pass::BoolPhiFold,
+                Pass::CfgCleanup,
+                Pass::SwitchFormation,
+                Pass::CompareSubFusion,
+            ])
         );
         let mut o1 = steps(&Pipeline::native(OptLevel::O1));
         let mut o2 = steps(&Pipeline::native(OptLevel::O2));

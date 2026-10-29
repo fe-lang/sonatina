@@ -1,6 +1,7 @@
 pub mod adce;
 pub mod aggregate_combine;
 pub mod aggregate_scalarize;
+pub mod bool_phi_fold;
 pub mod branch_canonicalize;
 pub mod cfg_cleanup;
 pub mod checked_arith_elim;
