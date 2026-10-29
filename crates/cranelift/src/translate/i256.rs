@@ -5,13 +5,16 @@ use std::{cmp::Ordering, collections::HashMap};
 
 use cranelift_codegen::ir::{
     self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
-    condcodes::IntCC,
+    condcodes::{CondCode, IntCC},
     types::{I64, I128},
 };
 use cranelift_frontend::FunctionBuilder;
+use sonatina_codegen::analysis::known_bits::KnownBitsQuery;
 use sonatina_ir::{
     Function, Type, U256, ValueId,
-    inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
+    inst::{
+        CastInstKind, InstClassKind, InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind,
+    },
     isa::native::inst_set as native_inst_set,
 };
 
@@ -204,7 +207,7 @@ pub(super) fn add_carry(
     (from_halves(low, high, builder), carry)
 }
 
-fn sub(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> Limbs {
+pub(super) fn sub(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> Limbs {
     let (lhs_low, lhs_high) = halves(lhs, builder);
     let (rhs_low, rhs_high) = halves(rhs, builder);
     let (low, borrow) = builder.ins().usub_overflow(lhs_low, rhs_low);
@@ -297,6 +300,94 @@ fn lexicographic_lt(
 
 pub(super) fn ult(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
     lexicographic_lt(IntCC::UnsignedLessThan, lhs, rhs, builder)
+}
+
+/// An i256 operand whose value fits its low limb: a constant, or a value
+/// zero-extended from at most 64 bits.
+#[derive(Clone, Copy)]
+enum OneLimb {
+    Constant(u64),
+    Extended,
+}
+
+/// An unsigned comparison with an operand that fits one limb: the other
+/// operand's high limbs decide unless they are zero, and then the low limbs
+/// do. `None` for other comparisons.
+fn one_limb_compare(
+    cc: IntCC,
+    lhs: (Limbs, Option<OneLimb>),
+    rhs: (Limbs, Option<OneLimb>),
+    builder: &mut FunctionBuilder,
+) -> Option<clif::Value> {
+    let (lhs, rhs, negate) = match cc {
+        IntCC::UnsignedLessThan => (lhs, rhs, false),
+        IntCC::UnsignedGreaterThan => (rhs, lhs, false),
+        IntCC::UnsignedLessThanOrEqual => (rhs, lhs, true),
+        IntCC::UnsignedGreaterThanOrEqual => (lhs, rhs, true),
+        _ => return None,
+    };
+    // Below a power of two `2^k` exactly when no bit from `k` up is set, and
+    // above `2^k - 1` exactly when one is: one comparison of the limbs, with
+    // the low one shifted, against zero.
+    let bits_from = match (lhs, rhs) {
+        ((value, _), (_, Some(OneLimb::Constant(constant)))) if constant.is_power_of_two() => {
+            Some((value, constant.trailing_zeros(), IntCC::Equal))
+        }
+        ((_, Some(OneLimb::Constant(constant))), (value, _))
+            if constant.wrapping_add(1).is_power_of_two() =>
+        {
+            Some((value, constant.trailing_ones(), IntCC::NotEqual))
+        }
+        _ => None,
+    };
+    if let Some((value, bits, cc)) = bits_from {
+        let low = builder.ins().ushr_imm_s(value[0], i64::from(bits));
+        let combined = [value[1], value[2], value[3]]
+            .into_iter()
+            .fold(low, |combined, limb| builder.ins().bor(combined, limb));
+        let cc = if negate { cc.complement() } else { cc };
+        return Some(builder.ins().icmp_imm_s(cc, combined, 0));
+    }
+    // `lhs < rhs`.
+    let low_lt =
+        |lhs: clif::Value, rhs: (clif::Value, OneLimb), builder: &mut FunctionBuilder| match rhs {
+            (_, OneLimb::Constant(constant)) => {
+                builder
+                    .ins()
+                    .icmp_imm_u(IntCC::UnsignedLessThan, lhs, constant as i64)
+            }
+            (rhs, OneLimb::Extended) => builder.ins().icmp(IntCC::UnsignedLessThan, lhs, rhs),
+        };
+    let less = match (lhs, rhs) {
+        ((value, _), (other, Some(kind))) => {
+            let high = any_nonzero(&value[1..], builder);
+            let high_zero = bool_not(high, builder);
+            let low = low_lt(value[0], (other[0], kind), builder);
+            builder.ins().band(high_zero, low)
+        }
+        ((other, Some(kind)), (value, _)) => {
+            let high = any_nonzero(&value[1..], builder);
+            let low = match kind {
+                OneLimb::Constant(constant) => {
+                    builder
+                        .ins()
+                        .icmp_imm_u(IntCC::UnsignedGreaterThan, value[0], constant as i64)
+                }
+                OneLimb::Extended => {
+                    builder
+                        .ins()
+                        .icmp(IntCC::UnsignedLessThan, other[0], value[0])
+                }
+            };
+            builder.ins().bor(high, low)
+        }
+        _ => return None,
+    };
+    Some(if negate {
+        bool_not(less, builder)
+    } else {
+        less
+    })
 }
 
 fn icmp(cc: IntCC, lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
@@ -437,22 +528,24 @@ fn signed_bound(negative: clif::Value, builder: &mut FunctionBuilder) -> Limbs {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ShiftKind {
+pub(super) enum ShiftKind {
     Shl,
     Shr,
     Sar,
 }
 
 /// A shift amount: a constant (`None` when at least 256), or a variable
-/// amount with its truncation to 64 bits and whether it is at least 256.
+/// amount with its truncation to 64 bits and whether it is at least 256,
+/// unless known bits keep it below.
 enum ShiftAmount {
     Constant(Option<u32>),
-    Variable(clif::Value, clif::Value),
+    Variable(clif::Value, Option<clif::Value>),
 }
 
 fn shift_amount(
     function: &Function,
     bits: ValueId,
+    bounded: bool,
     value_map: &ValueMap,
     builder: &mut FunctionBuilder,
 ) -> Result<ShiftAmount, String> {
@@ -464,12 +557,15 @@ fn shift_amount(
     }
     // The verifier gives a shift amount the type of the shifted value.
     let limbs = resolve_i256(function, bits, value_map, builder)?;
+    if bounded {
+        return Ok(ShiftAmount::Variable(limbs[0], None));
+    }
     let high_nonzero = any_nonzero(&limbs[1..], builder);
     let too_large = builder
         .ins()
         .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, limbs[0], 256);
     let too_large = builder.ins().bor(too_large, high_nonzero);
-    Ok(ShiftAmount::Variable(limbs[0], too_large))
+    Ok(ShiftAmount::Variable(limbs[0], Some(too_large)))
 }
 
 fn shift(
@@ -490,7 +586,12 @@ fn shift(
         }
         ShiftAmount::Variable(amount, too_large) => {
             let shifted = shift_by_variable(value, amount, kind, fill, builder);
-            std::array::from_fn(|limb| builder.ins().select(too_large, fill, shifted[limb]))
+            match too_large {
+                Some(too_large) => {
+                    std::array::from_fn(|limb| builder.ins().select(too_large, fill, shifted[limb]))
+                }
+                None => shifted,
+            }
         }
     }
 }
@@ -551,7 +652,7 @@ fn shift_by_constant(
 /// Shifts by a variable amount below 256 (callers handle larger amounts):
 /// a funnel shift of every limb by `amount % 64`, then limb moves by one
 /// and two places selected from the amount's bits 6 and 7.
-fn shift_by_variable(
+pub(super) fn shift_by_variable(
     value: Limbs,
     amount: clif::Value,
     kind: ShiftKind,
@@ -609,6 +710,7 @@ pub(super) fn translate_i256_op(
     inst: InstId,
     value_map: &mut ValueMap,
     builder: &mut FunctionBuilder,
+    known_bits: &mut Option<KnownBitsQuery>,
 ) -> Result<bool, String> {
     enum Output {
         Limbs(Limbs),
@@ -636,16 +738,36 @@ pub(super) fn translate_i256_op(
                 dfg.value_ty(*rhs)
             ));
         }
+        let one_limb = |value: &ValueId| {
+            if let Some(imm) = dfg.value_imm(*value) {
+                let value = imm.zext(Type::I256).as_i256().to_u256();
+                return (value <= U256::from(u64::MAX)).then(|| OneLimb::Constant(value.low_u64()));
+            }
+            let inst = dfg.value_inst(*value)?;
+            let source = *dfg.inst(inst).collect_values().first()?;
+            (dfg.inst(inst).kind() == InstClassKind::Cast(CastInstKind::Zext)
+                && matches!(
+                    dfg.value_ty(source),
+                    Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64
+                ))
+            .then_some(OneLimb::Extended)
+        };
+        let (lhs_const, rhs_const) = (one_limb(lhs), one_limb(rhs));
         let (lhs, rhs) = binary(lhs, rhs, value_map, builder)?;
-        Ok(Output::Flag(icmp(cc, lhs, rhs, builder)))
+        let flag = one_limb_compare(cc, (lhs, lhs_const), (rhs, rhs_const), builder)
+            .unwrap_or_else(|| icmp(cc, lhs, rhs, builder));
+        Ok(Output::Flag(flag))
     };
-    let shift_op = |value: &ValueId,
-                    bits: &ValueId,
-                    kind: ShiftKind,
-                    value_map: &ValueMap,
-                    builder: &mut FunctionBuilder| {
+    let mut shift_op = |value: &ValueId,
+                        bits: &ValueId,
+                        kind: ShiftKind,
+                        value_map: &ValueMap,
+                        builder: &mut FunctionBuilder| {
         let value = resolve_i256(function, *value, value_map, builder)?;
-        let amount = shift_amount(function, *bits, value_map, builder)?;
+        let bounded = known_bits
+            .get_or_insert_with(|| KnownBitsQuery::new(function))
+            .fits_in_low_bits(function, *bits, 8);
+        let amount = shift_amount(function, *bits, bounded, value_map, builder)?;
         Ok::<_, String>(Output::Limbs(shift(value, amount, kind, builder)))
     };
     let bitwise = |lhs: &ValueId,

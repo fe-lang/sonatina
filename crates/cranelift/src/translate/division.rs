@@ -1,9 +1,9 @@
 //! Wide unsigned division. Division sites handle a zero divisor, a smaller
-//! numerator and single-limb operands inline, and modular sites a zero
-//! modulus; everything else calls the module's divider: Knuth's algorithm D
-//! on 64-bit limbs, with quotient digits from a 128/64-bit division by
-//! reciprocal (Möller and Granlund, "Improved division by invariant
-//! integers").
+//! numerator, single-limb operands, power-of-two divisors and one-limb
+//! divisors inline, and modular sites a zero modulus; everything else calls
+//! the module's divider: Knuth's algorithm D on 64-bit limbs. Quotient
+//! digits come from a 128/64-bit division by reciprocal (Möller and
+//! Granlund, "Improved division by invariant integers").
 
 use cranelift_codegen::{
     Context,
@@ -18,57 +18,80 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Module as ClifModule};
 
 use super::{
-    DivRemKind, LIMBS, Limbs, abs, add_carry, is_zero, load_limbs, mul_limbs, neg, select, sign,
-    store_limbs, sub_borrow, ult,
+    DivRemKind, LIMBS, Limbs, ShiftKind, abs, add_carry, is_zero, load_limbs, mul_limbs, neg,
+    select, shift_by_variable, sign, store_limbs, sub, sub_borrow, ult,
 };
 
-/// The divider takes one pointer to a buffer of an eight-limb numerator
-/// and a four-limb divisor, which it overwrites with the quotient and the
-/// remainder. The divisor must be nonzero.
+/// A divider takes one pointer to a buffer of an up to eight-limb
+/// numerator and a four-limb divisor, which it overwrites with the quotient
+/// and the remainder. The divisor must be nonzero.
 const NUMERATOR_LIMBS: usize = 2 * LIMBS;
 const DIVISOR_OFFSET: i32 = 8 * NUMERATOR_LIMBS as i32;
 const BUFFER_BYTES: u32 = 8 * (NUMERATOR_LIMBS + LIMBS) as u32;
 
-/// The module's out-of-line divider, declared on first use and defined
-/// after the functions that call it, with the current function's
-/// reference to it.
-#[derive(Default)]
-pub(super) struct Divider {
-    id: Option<FuncId>,
-    call: Option<DividerCall>,
+/// The numerators a divider takes: a word for division, and two words for
+/// modular sums and products. A word divider loads, normalizes and clears
+/// half as many limbs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Numerator {
+    Word,
+    Double,
 }
 
-/// The divider as called from one function: its reference and the stack
-/// buffer for its operands and results.
+impl Numerator {
+    const ALL: [Self; 2] = [Self::Word, Self::Double];
+
+    fn limbs(self) -> usize {
+        match self {
+            Self::Word => LIMBS,
+            Self::Double => NUMERATOR_LIMBS,
+        }
+    }
+}
+
+/// The module's out-of-line dividers, declared on first use and defined
+/// after the functions that call them, with the current function's
+/// references to them.
+#[derive(Default)]
+pub(super) struct Divider {
+    ids: [Option<FuncId>; 2],
+    calls: [Option<DividerCall>; 2],
+}
+
+/// A divider as called from one function: its reference, the stack buffer
+/// for its operands and results, and the numerator it takes.
 #[derive(Clone, Copy)]
 pub(super) struct DividerCall {
     func: clif::FuncRef,
     buffer: clif::StackSlot,
+    numerator: Numerator,
 }
 
 impl Divider {
-    /// Forgets the previous function's reference to the divider.
+    /// Forgets the previous function's references to the dividers.
     pub fn start_function(&mut self) {
-        self.call = None;
+        self.calls = [None; 2];
     }
 
-    /// The divider call for the function being built.
+    /// The call of the divider for `numerator` in the function being built.
     pub fn call(
         &mut self,
         clif_module: &mut impl ClifModule,
         builder: &mut FunctionBuilder,
+        numerator: Numerator,
     ) -> Result<DividerCall, String> {
-        if let Some(call) = self.call {
+        let index = numerator as usize;
+        if let Some(call) = self.calls[index] {
             return Ok(call);
         }
-        let id = match self.id {
+        let id = match self.ids[index] {
             Some(id) => id,
             None => {
                 let signature = signature(clif_module);
                 let id = clif_module
                     .declare_anonymous_function(&signature)
                     .map_err(|error| format!("failed to declare the divider: {error}"))?;
-                *self.id.insert(id)
+                *self.ids[index].insert(id)
             }
         };
         let call = DividerCall {
@@ -78,28 +101,35 @@ impl Divider {
                 BUFFER_BYTES,
                 4,
             )),
+            numerator,
         };
-        self.call = Some(call);
+        self.calls[index] = Some(call);
         Ok(call)
     }
 
-    /// The divider's id and CLIF, if any function calls it.
-    pub fn finish(self, clif_module: &impl ClifModule) -> Option<(FuncId, Context)> {
-        let id = self.id?;
-        let mut ctx = clif_module.make_context();
-        ctx.func.signature = signature(clif_module);
-        let mut builder_ctx = FunctionBuilderContext::new();
-        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
-        build_divider(&mut builder);
-        builder.seal_all_blocks();
-        builder.finalize(clif_module.target_config());
-        if std::env::var("DUMP_CLIF").is_ok() {
-            eprintln!(
-                "[cranelift] CLIF IR for the divider:\n{}",
-                ctx.func.display()
-            );
-        }
-        Some((id, ctx))
+    /// The ids and CLIF of the dividers some function calls.
+    pub fn finish(self, clif_module: &impl ClifModule) -> Vec<(FuncId, Context)> {
+        Numerator::ALL
+            .into_iter()
+            .zip(self.ids)
+            .filter_map(|(numerator, id)| {
+                let id = id?;
+                let mut ctx = clif_module.make_context();
+                ctx.func.signature = signature(clif_module);
+                let mut builder_ctx = FunctionBuilderContext::new();
+                let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+                build_divider(numerator.limbs(), &mut builder);
+                builder.seal_all_blocks();
+                builder.finalize(clif_module.target_config());
+                if std::env::var("DUMP_CLIF").is_ok() {
+                    eprintln!(
+                        "[cranelift] CLIF IR for the divider:\n{}",
+                        ctx.func.display()
+                    );
+                }
+                Some((id, ctx))
+            })
+            .collect()
     }
 }
 
@@ -171,7 +201,44 @@ fn udivrem(
         &exit_with([quotient, zero, zero, zero], [remainder, zero, zero, zero]),
     );
 
+    // A power-of-two divisor shifts the numerator right by its trailing
+    // zeros, as many as the ones of `divisor - 1`, which masks the
+    // remainder.
     builder.switch_to_block(wide);
+    let one = builder.ins().iconst(I64, 1);
+    let mask = sub(divisor, [one, zero, zero, zero], builder);
+    let overlap = std::array::from_fn(|limb| builder.ins().band(divisor[limb], mask[limb]));
+    let power = is_zero(overlap, builder);
+    let shifted = builder.create_block();
+    let not_power = builder.create_block();
+    builder.ins().brif(power, shifted, &[], not_power, &[]);
+
+    builder.switch_to_block(shifted);
+    let amount = mask
+        .map(|limb| builder.ins().popcnt(limb))
+        .into_iter()
+        .reduce(|sum, ones| builder.ins().iadd(sum, ones))
+        .unwrap();
+    let quotient = shift_by_variable(numerator, amount, ShiftKind::Shr, zero, builder);
+    let remainder = std::array::from_fn(|limb| builder.ins().band(numerator[limb], mask[limb]));
+    builder.ins().jump(exit, &exit_with(quotient, remainder));
+
+    builder.switch_to_block(not_power);
+    let one_limb = builder.create_block();
+    let call_block = builder.create_block();
+    let divisor_high = builder.ins().bor(divisor[1], divisor[2]);
+    let divisor_high = builder.ins().bor(divisor_high, divisor[3]);
+    builder
+        .ins()
+        .brif(divisor_high, call_block, &[], one_limb, &[]);
+
+    builder.switch_to_block(one_limb);
+    let (quotient, remainder) = divide_by_limb(numerator, divisor[0], builder);
+    builder
+        .ins()
+        .jump(exit, &exit_with(quotient, [remainder, zero, zero, zero]));
+
+    builder.switch_to_block(call_block);
     let buffer = call_divider(&numerator, divisor, call, builder);
     let quotient = load_limbs(buffer, 0, MemFlagsData::trusted(), builder);
     let remainder = load_limbs(buffer, DIVISOR_OFFSET, MemFlagsData::trusted(), builder);
@@ -180,6 +247,54 @@ fn udivrem(
     builder.switch_to_block(exit);
     let [q0, q1, q2, q3, r0, r1, r2, r3] = results;
     ([q0, q1, q2, q3], [r0, r1, r2, r3])
+}
+
+/// The quotient and remainder of `numerator` by a nonzero one-limb
+/// divisor: a digit per limb, each a 128/64-bit division of the normalized
+/// operands by the divisor's reciprocal.
+fn divide_by_limb(
+    numerator: Limbs,
+    divisor: clif::Value,
+    builder: &mut FunctionBuilder,
+) -> (Limbs, clif::Value) {
+    let shift = builder.ins().clz(divisor);
+    let inverse = builder.ins().bxor_imm_s(shift, 63);
+    let normalized = builder.ins().ishl(divisor, shift);
+    let reciprocal = reciprocal(normalized, builder);
+    // The bits shifted out of the top limb start the remainder, below the
+    // normalized divisor's set top bit.
+    let top = builder.ins().ushr_imm_s(numerator[LIMBS - 1], 1);
+    let mut remainder = builder.ins().ushr(top, inverse);
+    let mut quotient = numerator;
+    for limb in (0..LIMBS).rev() {
+        let low = match limb {
+            0 => builder.ins().ishl(numerator[0], shift),
+            _ => funnel(
+                numerator[limb],
+                numerator[limb - 1],
+                shift,
+                inverse,
+                builder,
+            ),
+        };
+        (quotient[limb], remainder) = div2by1(remainder, low, normalized, reciprocal, builder);
+    }
+    (quotient, builder.ins().ushr(remainder, shift))
+}
+
+/// `(high << shift) | (low >> (64 - shift))`, also for a zero shift, given
+/// `inverse = 63 - shift`.
+fn funnel(
+    high: clif::Value,
+    low: clif::Value,
+    shift: clif::Value,
+    inverse: clif::Value,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    let high = builder.ins().ishl(high, shift);
+    let low = builder.ins().ushr_imm_s(low, 1);
+    let low = builder.ins().ushr(low, inverse);
+    builder.ins().bor(high, low)
 }
 
 /// Divides i256 operands. Signed division divides magnitudes: the quotient
@@ -227,7 +342,7 @@ fn call_divider(
         .iter()
         .chain(std::iter::repeat_n(
             &zero,
-            NUMERATOR_LIMBS - numerator.len(),
+            call.numerator.limbs() - numerator.len(),
         ))
         .enumerate()
     {
@@ -312,6 +427,19 @@ pub(super) fn mulmod(
 ) -> Limbs {
     let (exit, results) = zero_modulus_exit(modulus, builder);
     let product = mul_limbs::<NUMERATOR_LIMBS>(&lhs, &rhs, builder);
+    // A product below the modulus, as when an operand is zero, is its own
+    // remainder.
+    let low: Limbs = std::array::from_fn(|limb| product[limb]);
+    let high: Limbs = std::array::from_fn(|limb| product[LIMBS + limb]);
+    let high_zero = is_zero(high, builder);
+    let low_below = ult(low, modulus, builder);
+    let below = builder.ins().band(high_zero, low_below);
+    let divide = builder.create_block();
+    builder
+        .ins()
+        .brif(below, exit, &low.map(BlockArg::Value), divide, &[]);
+
+    builder.switch_to_block(divide);
     let result = remainder(&product, modulus, call, builder);
     builder.ins().jump(exit, &result.map(BlockArg::Value));
     builder.switch_to_block(exit);
@@ -409,6 +537,146 @@ fn div2by1(
     (quotient, remainder)
 }
 
+/// The 128-bit product of two limbs, low limb first.
+fn mul_wide(
+    lhs: clif::Value,
+    rhs: clif::Value,
+    builder: &mut FunctionBuilder,
+) -> (clif::Value, clif::Value) {
+    let lhs = builder.ins().uextend(I128, lhs);
+    let rhs = builder.ins().uextend(I128, rhs);
+    let product = builder.ins().imul(lhs, rhs);
+    builder.ins().isplit(product)
+}
+
+/// `floor((2^192 - 1) / (d1, d0)) - 2^64` for a normalized two-limb
+/// divisor `[d0, d1]`, from `d1`'s 2-by-1 reciprocal (Möller and Granlund,
+/// algorithm 6).
+fn reciprocal_3by2(
+    [d0, d1]: [clif::Value; 2],
+    reciprocal: clif::Value,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    let zero = builder.ins().iconst(I64, 0);
+    let product = builder.ins().imul(d1, reciprocal);
+    let (p, carry) = builder.ins().uadd_overflow(product, d0);
+    let at_least = builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, p, d1);
+    let twice = builder.ins().band(carry, at_least);
+    let carry_wide = builder.ins().uextend(I64, carry);
+    let twice_wide = builder.ins().uextend(I64, twice);
+    let v = builder.ins().isub(reciprocal, carry_wide);
+    let v = builder.ins().isub(v, twice_wide);
+    let first = builder.ins().select(carry, d1, zero);
+    let second = builder.ins().select(twice, d1, zero);
+    let p = builder.ins().isub(p, first);
+    let p = builder.ins().isub(p, second);
+    let (t0, t1) = mul_wide(v, d0, builder);
+    let (p, carry) = builder.ins().uadd_overflow(p, t1);
+    let above = builder.ins().icmp(IntCC::UnsignedGreaterThan, p, d1);
+    let top_equal = builder.ins().icmp(IntCC::Equal, p, d1);
+    let low_at_least = builder
+        .ins()
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, t0, d0);
+    let low_reaches = builder.ins().band(top_equal, low_at_least);
+    let reaches = builder.ins().bor(above, low_reaches);
+    let twice = builder.ins().band(carry, reaches);
+    let carry_wide = builder.ins().uextend(I64, carry);
+    let twice_wide = builder.ins().uextend(I64, twice);
+    let v = builder.ins().isub(v, carry_wide);
+    builder.ins().isub(v, twice_wide)
+}
+
+/// The base-2^64 quotient digit and two-limb remainder `(r0, r1)` of
+/// `[u0, u1, u2] / [d0, d1]` for a normalized divisor and `(u2, u1)` below
+/// it, given the divisor's 3-by-2 reciprocal (Möller and Granlund,
+/// algorithm 5).
+fn div3by2(
+    [u0, u1, u2]: [clif::Value; 3],
+    [d0, d1]: [clif::Value; 2],
+    reciprocal: clif::Value,
+    builder: &mut FunctionBuilder,
+) -> (clif::Value, clif::Value, clif::Value) {
+    // `(q1, q0) = reciprocal * u2 + (u2, u1)`.
+    let (q0, q1) = mul_wide(reciprocal, u2, builder);
+    let (q0, carry) = builder.ins().uadd_overflow(q0, u1);
+    let carry = builder.ins().uextend(I64, carry);
+    let q1 = builder.ins().iadd(q1, u2);
+    let q1 = builder.ins().iadd(q1, carry);
+    // `(r1, r0) = (u1 - q1 * d1, u0) - q1 * d0 - (d1, d0)`.
+    let product = builder.ins().imul(q1, d1);
+    let r1 = builder.ins().isub(u1, product);
+    let (t0, t1) = mul_wide(d0, q1, builder);
+    let (r0, borrow) = builder.ins().usub_overflow(u0, t0);
+    let borrow = builder.ins().uextend(I64, borrow);
+    let r1 = builder.ins().isub(r1, t1);
+    let r1 = builder.ins().isub(r1, borrow);
+    let (r0, borrow) = builder.ins().usub_overflow(r0, d0);
+    let borrow = builder.ins().uextend(I64, borrow);
+    let r1 = builder.ins().isub(r1, d1);
+    let r1 = builder.ins().isub(r1, borrow);
+    let q1 = builder.ins().iadd_imm_s(q1, 1);
+    // Too large by one when `r1 >= q0`: add the divisor back.
+    let over = builder
+        .ins()
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, r1, q0);
+    let decremented = builder.ins().iadd_imm_s(q1, -1);
+    let q1 = builder.ins().select(over, decremented, q1);
+    let (s0, carry) = builder.ins().uadd_overflow(r0, d0);
+    let carry = builder.ins().uextend(I64, carry);
+    let s1 = builder.ins().iadd(r1, d1);
+    let s1 = builder.ins().iadd(s1, carry);
+    let r0 = builder.ins().select(over, s0, r0);
+    let r1 = builder.ins().select(over, s1, r1);
+    // Rarely still at least the divisor: subtract it once more.
+    let above = builder.ins().icmp(IntCC::UnsignedGreaterThan, r1, d1);
+    let top_equal = builder.ins().icmp(IntCC::Equal, r1, d1);
+    let low_at_least = builder
+        .ins()
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, r0, d0);
+    let low_reaches = builder.ins().band(top_equal, low_at_least);
+    let reaches = builder.ins().bor(above, low_reaches);
+    let incremented = builder.ins().iadd_imm_s(q1, 1);
+    let q1 = builder.ins().select(reaches, incremented, q1);
+    let (t0, borrow) = builder.ins().usub_overflow(r0, d0);
+    let borrow = builder.ins().uextend(I64, borrow);
+    let t1 = builder.ins().isub(r1, d1);
+    let t1 = builder.ins().isub(t1, borrow);
+    let r0 = builder.ins().select(reaches, t0, r0);
+    let r1 = builder.ins().select(reaches, t1, r1);
+    (q1, r0, r1)
+}
+
+/// Subtracts `digit` times `divisor` from `window`, limb by limb, and
+/// returns the difference with the amount still to subtract from the next
+/// limb.
+fn submul(
+    window: &[clif::Value],
+    divisor: &[clif::Value],
+    digit: clif::Value,
+    builder: &mut FunctionBuilder,
+) -> (Vec<clif::Value>, clif::Value) {
+    let zero = builder.ins().iconst(I64, 0);
+    let digit_wide = builder.ins().uextend(I128, digit);
+    let mut carry = zero;
+    let mut borrow = zero;
+    let mut difference = Vec::with_capacity(window.len());
+    for (&limb, &divisor_limb) in window.iter().zip(divisor) {
+        let divisor_limb = builder.ins().uextend(I128, divisor_limb);
+        let product = builder.ins().imul(digit_wide, divisor_limb);
+        let carry_wide = builder.ins().uextend(I128, carry);
+        let product = builder.ins().iadd(product, carry_wide);
+        let (product_low, product_high) = builder.ins().isplit(product);
+        let (limb, borrow_low) = builder.ins().usub_overflow(limb, product_low);
+        let (limb, borrow_in) = builder.ins().usub_overflow(limb, borrow);
+        difference.push(limb);
+        let borrow_out = builder.ins().bor(borrow_low, borrow_in);
+        borrow = builder.ins().uextend(I64, borrow_out);
+        carry = product_high;
+    }
+    let overflow = builder.ins().iadd(carry, borrow);
+    (difference, overflow)
+}
+
 /// `floor((2^128 - 1) / divisor) - 2^64` for a normalized divisor: the
 /// quotient of `(!divisor, 2^64 - 1) / divisor`, by two base-2^32 digits
 /// from 64-bit divisions (Hacker's Delight, `divlu`).
@@ -487,14 +755,15 @@ struct Normalized {
 }
 
 /// Emits the divider's body (see `Divider`).
-fn build_divider(builder: &mut FunctionBuilder) {
+fn build_divider(numerator_limbs: usize, builder: &mut FunctionBuilder) {
     let flags = MemFlagsData::trusted();
     let entry = builder.create_block();
     builder.append_block_params_for_function_params(entry);
     builder.switch_to_block(entry);
     let buffer = builder.block_params(entry)[0];
-    let numerator: [clif::Value; NUMERATOR_LIMBS] =
-        std::array::from_fn(|limb| builder.ins().load(I64, flags, buffer, 8 * limb as i32));
+    let numerator: Vec<_> = (0..numerator_limbs)
+        .map(|limb| builder.ins().load(I64, flags, buffer, 8 * limb as i32))
+        .collect();
     let divisor = load_limbs(buffer, DIVISOR_OFFSET, flags, builder);
 
     // `n` divisor and `m` numerator limbs are significant. Each select
@@ -515,8 +784,9 @@ fn build_divider(builder: &mut FunctionBuilder) {
     let m = count(&numerator, 0, builder);
     let zero = builder.ins().iconst(I64, 0);
     // Quotient digits above the computed ones are zero.
-    store_limbs([zero; LIMBS], buffer, 0, flags, builder);
-    store_limbs([zero; LIMBS], buffer, 8 * LIMBS as i32, flags, builder);
+    for offset in (0..numerator_limbs).step_by(LIMBS) {
+        store_limbs([zero; LIMBS], buffer, 8 * offset as i32, flags, builder);
+    }
     // A numerator smaller than the divisor is the remainder.
     let smaller = builder.create_block();
     let divide = builder.create_block();
@@ -539,28 +809,22 @@ fn build_divider(builder: &mut FunctionBuilder) {
     });
     let shift = builder.ins().clz(top);
     let inverse = builder.ins().bxor_imm_s(shift, 63);
-    // `(high << shift) | (low >> (64 - shift))`, also for a zero shift.
-    let funnel = |high, low, builder: &mut FunctionBuilder| {
-        let high = builder.ins().ishl(high, shift);
-        let low = builder.ins().ushr_imm_s(low, 1);
-        let low = builder.ins().ushr(low, inverse);
-        builder.ins().bor(high, low)
-    };
     let normalized_divisor: Limbs = std::array::from_fn(|limb| match limb {
         0 => builder.ins().ishl(divisor[0], shift),
-        _ => funnel(divisor[limb], divisor[limb - 1], builder),
+        _ => funnel(divisor[limb], divisor[limb - 1], shift, inverse, builder),
     });
-    let normalized_numerator: [clif::Value; NUMERATOR_LIMBS + 1] =
-        std::array::from_fn(|limb| match limb {
+    let normalized_numerator: Vec<_> = (0..=numerator_limbs)
+        .map(|limb| match limb {
             0 => builder.ins().ishl(numerator[0], shift),
             _ => {
                 let high = numerator.get(limb).copied().unwrap_or(zero);
-                funnel(high, numerator[limb - 1], builder)
+                funnel(high, numerator[limb - 1], shift, inverse, builder)
             }
-        });
+        })
+        .collect();
     let slot = builder.create_sized_stack_slot(StackSlotData::new(
         StackSlotKind::ExplicitSlot,
-        8 * (NUMERATOR_LIMBS as u32 + 1),
+        8 * (numerator_limbs as u32 + 1),
         3,
     ));
     let normalized = builder.ins().stack_addr(I64, slot, 0);
@@ -621,6 +885,8 @@ fn emit_digit_loop(n: usize, operands: &Normalized, builder: &mut FunctionBuilde
         .ins()
         .iadd_imm_s(operands.numerator_limbs, -(n as i64));
     let address = limb_address(operands.numerator, first, builder);
+    let reciprocal = (n >= 2)
+        .then(|| reciprocal_3by2([divisor[n - 2], divisor_top], operands.reciprocal, builder));
     let initial: Vec<_> = (1..=n)
         .map(|limb| BlockArg::Value(builder.ins().load(I64, flags, address, 8 * limb as i32)))
         .collect();
@@ -655,69 +921,35 @@ fn emit_digit_loop(n: usize, operands: &Normalized, builder: &mut FunctionBuilde
             .ins()
             .jump(join, &[digit, remainder].map(BlockArg::Value));
     } else {
+        let reciprocal =
+            reciprocal.expect("a divisor of two or more limbs has a 3-by-2 reciprocal");
         let (u2, u1, u0) = (window[n], window[n - 1], window[n - 2]);
-        let zero = builder.ins().iconst(I64, 0);
-        // The remainder's top limb never exceeds the divisor's; when they
-        // are equal the estimate is the largest digit.
-        let equal = builder
-            .ins()
-            .icmp(IntCC::UnsignedGreaterThanOrEqual, u2, divisor_top);
-        let high = builder.ins().select(equal, zero, u2);
-        let (estimate, estimate_remainder) =
-            div2by1(high, u1, divisor_top, operands.reciprocal, builder);
-        let (sum, sum_overflow) = builder.ins().uadd_overflow(u1, divisor_top);
-        let all_ones = builder.ins().iconst(I64, -1);
-        let digit = builder.ins().select(equal, all_ones, estimate);
-        let rhat = builder.ins().select(equal, sum, estimate_remainder);
-        let rhat_wide = builder.ins().band(equal, sum_overflow);
-        // The estimate exceeds the digit by at most two. Knuth's test
-        // against the second divisor limb lowers it while it is provably
-        // too large (only while the partial remainder fits a limb): the
-        // first step leaves at most one excess, which adding back the
-        // divisor fixes, and the second makes that rare.
-        let divisor_second = builder.ins().uextend(I128, divisor[n - 2]);
-        let correct = |digit, rhat, rhat_wide, builder: &mut FunctionBuilder| {
-            let digit_wide = builder.ins().uextend(I128, digit);
-            let product = builder.ins().imul(digit_wide, divisor_second);
-            let bound = builder.ins().iconcat(u0, rhat);
-            let too_large = builder
-                .ins()
-                .icmp(IntCC::UnsignedGreaterThan, product, bound);
-            let narrow = builder.ins().bxor_imm_s(rhat_wide, 1);
-            let decrement = builder.ins().band(too_large, narrow);
-            let decremented = builder.ins().iadd_imm_s(digit, -1);
-            let (increased, overflow) = builder.ins().uadd_overflow(rhat, divisor_top);
-            let overflow = builder.ins().band(decrement, overflow);
-            (
-                builder.ins().select(decrement, decremented, digit),
-                builder.ins().select(decrement, increased, rhat),
-                builder.ins().bor(rhat_wide, overflow),
-            )
-        };
-        let (digit, rhat, rhat_wide) = correct(digit, rhat, rhat_wide, builder);
-        let (digit, _, _) = correct(digit, rhat, rhat_wide, builder);
+        let divisor_next = divisor[n - 2];
+        // The window's top two limbs never exceed the divisor's; when they
+        // are equal the digit is the largest.
+        let top_equal = builder.ins().icmp(IntCC::Equal, u2, divisor_top);
+        let next_equal = builder.ins().icmp(IntCC::Equal, u1, divisor_next);
+        let equal = builder.ins().band(top_equal, next_equal);
+        let estimated = builder.create_block();
+        let largest = builder.create_block();
+        builder.ins().brif(equal, largest, &[], estimated, &[]);
 
-        // Subtract `digit * divisor` from the window.
-        let digit_wide = builder.ins().uextend(I128, digit);
-        let mut carry = zero;
-        let mut borrow = zero;
-        let mut difference = Vec::with_capacity(n);
-        for (&limb, &divisor_limb) in window.iter().zip(divisor) {
-            let divisor_limb = builder.ins().uextend(I128, divisor_limb);
-            let product = builder.ins().imul(digit_wide, divisor_limb);
-            let carry_wide = builder.ins().uextend(I128, carry);
-            let product = builder.ins().iadd(product, carry_wide);
-            let (product_low, product_high) = builder.ins().isplit(product);
-            let (limb, borrow_low) = builder.ins().usub_overflow(limb, product_low);
-            let (limb, borrow_in) = builder.ins().usub_overflow(limb, borrow);
-            difference.push(limb);
-            let borrow_out = builder.ins().bor(borrow_low, borrow_in);
-            borrow = builder.ins().uextend(I64, borrow_out);
-            carry = product_high;
-        }
-        let (top, borrow_low) = builder.ins().usub_overflow(u2, carry);
-        let (_, borrow_in) = builder.ins().usub_overflow(top, borrow);
-        let negative = builder.ins().bor(borrow_low, borrow_in);
+        // The digit of the top three limbs by the top two is at most one
+        // too large for the whole divisor; its two-limb remainder takes the
+        // borrow of subtracting the digit times the lower limbs.
+        builder.switch_to_block(estimated);
+        let (digit, r0, r1) = div3by2(
+            [u0, u1, u2],
+            [divisor_next, divisor_top],
+            reciprocal,
+            builder,
+        );
+        let (mut difference, overflow) =
+            submul(&window[..n - 2], &divisor[..n - 2], digit, builder);
+        let (r0, borrow) = builder.ins().usub_overflow(r0, overflow);
+        let borrow = builder.ins().uextend(I64, borrow);
+        let (r1, negative) = builder.ins().usub_overflow(r1, borrow);
+        difference.extend([r0, r1]);
         let add_back = builder.create_block();
         builder.ins().brif(
             negative,
@@ -730,9 +962,10 @@ fn emit_digit_loop(n: usize, operands: &Normalized, builder: &mut FunctionBuilde
                 .collect::<Vec<_>>(),
         );
 
-        // The digit was one too large: add the divisor back. The carry
-        // out clears the window's top limb.
+        // The digit was one too large: add the divisor back. The carry out
+        // wraps the top limb back above zero.
         builder.switch_to_block(add_back);
+        let zero = builder.ins().iconst(I64, 0);
         let mut carry = zero;
         let mut sum = Vec::with_capacity(n);
         for (&limb, &divisor_limb) in difference.iter().zip(divisor) {
@@ -747,6 +980,18 @@ fn emit_digit_loop(n: usize, operands: &Normalized, builder: &mut FunctionBuilde
             join,
             &std::iter::once(decremented)
                 .chain(sum)
+                .map(BlockArg::Value)
+                .collect::<Vec<_>>(),
+        );
+
+        // The largest digit leaves the window below the divisor.
+        builder.switch_to_block(largest);
+        let all_ones = builder.ins().iconst(I64, -1);
+        let (difference, _) = submul(&window[..n], divisor, all_ones, builder);
+        builder.ins().jump(
+            join,
+            &std::iter::once(all_ones)
+                .chain(difference)
                 .map(BlockArg::Value)
                 .collect::<Vec<_>>(),
         );

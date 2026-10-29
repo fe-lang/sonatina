@@ -210,6 +210,90 @@ fn i256_arithmetic_matches_reference() {
 }
 
 #[test]
+fn i256_comparisons_with_one_limb_constants_match_reference() {
+    let mut values = operands();
+    // Each side of the power-of-two thresholds below, and high limbs alone.
+    values.extend(
+        [
+            31u64,
+            32,
+            33,
+            254,
+            255,
+            257,
+            (1 << 63) - 1,
+            1 << 63,
+            (1 << 63) + 1,
+        ]
+        .map(U256::from),
+    );
+    values.extend([word([0, 1, 0, 0]), word([255, 0, 0, 1 << 63])]);
+    let cases = pairs(&values, &[U256::zero()]);
+    let compares: [Compare; 4] = [
+        ("lt", |a, b| a < b),
+        ("gt", |a, b| a > b),
+        ("le", |a, b| a <= b),
+        ("ge", |a, b| a >= b),
+    ];
+    // Powers of two and one less take the shifted-limb test.
+    for constant in [
+        U256::zero(),
+        U256::one(),
+        U256::from(31),
+        U256::from(32),
+        U256::from(255),
+        U256::from(256),
+        U256::from((1u64 << 63) - 1),
+        U256::from(1u64 << 63),
+        U256::from(u64::MAX),
+    ] {
+        for (op, expected) in compares {
+            let body = |lhs: &str, rhs: &str| {
+                format!(
+                    "    v7.i1 = {op} {lhs} {rhs};\n    mstore v3 0.i256 i256;\n    v8.i8 = zext v7 i8;\n    return v8;"
+                )
+            };
+            let literal = format!("0x{constant:x}.i256");
+            check(&body("v4", &literal), &cases, |[a, _, _]| {
+                (U256::zero(), expected(a, constant))
+            });
+            check(&body(&literal, "v4"), &cases, |[a, _, _]| {
+                (U256::zero(), expected(constant, a))
+            });
+        }
+    }
+}
+
+/// An unsigned comparison's name and its reference.
+type Compare = (&'static str, fn(U256, U256) -> bool);
+
+#[test]
+fn i256_comparisons_with_extended_words_match_reference() {
+    let values = operands();
+    let cases = pairs(&values, &values);
+    let compares: [Compare; 4] = [
+        ("lt", |a, b| a < b),
+        ("gt", |a, b| a > b),
+        ("le", |a, b| a <= b),
+        ("ge", |a, b| a >= b),
+    ];
+    let low_word = |value: U256| value & U256::from(u64::MAX);
+    for (op, expected) in compares {
+        let body = |lhs: &str, rhs: &str| {
+            format!(
+                "    v8.i64 = trunc v5 i64;\n    v9.i256 = zext v8 i256;\n    v7.i1 = {op} {lhs} {rhs};\n    mstore v3 0.i256 i256;\n    v10.i8 = zext v7 i8;\n    return v10;"
+            )
+        };
+        check(&body("v4", "v9"), &cases, |[a, b, _]| {
+            (U256::zero(), expected(a, low_word(b)))
+        });
+        check(&body("v9", "v4"), &cases, |[a, b, _]| {
+            (U256::zero(), expected(low_word(b), a))
+        });
+    }
+}
+
+#[test]
 fn i256_comparisons_match_reference() {
     let values = operands();
     let cases = pairs(&values, &values);
@@ -564,6 +648,38 @@ fn i256_division_reaches_every_divider_step() {
         }
     }
     for op in ["udiv", "umod"] {
+        check(&binary(op), &cases, |[a, b, _]| (divided(op, a, b), false));
+    }
+}
+
+#[test]
+fn i256_division_by_powers_of_two_and_one_limb_divisors() {
+    // Wider numerators shift for a power-of-two divisor and take four
+    // inline digits for another one-limb divisor; signed operands divide
+    // their magnitudes.
+    let numerators = [
+        word([u64::MAX; 4]),
+        word([1, 2, 3, 4]),
+        word([0x0123_4567_89ab_cdef, u64::MAX, 0, 1 << 63]),
+        word([5, 1, 0, 0]),
+        word([u64::MAX, u64::MAX, 0, 0]),
+        word([7, 0, 0, 0x7fff_ffff_ffff_ffff]),
+    ];
+    let mut divisors: Vec<U256> = (0..256).map(|bit| U256::one() << bit).collect();
+    divisors.extend(
+        [
+            3,
+            10,
+            1_000_000,
+            (1 << 63) + 1,
+            u64::MAX,
+            0x8000_0000_0000_0000,
+        ]
+        .map(U256::from),
+    );
+    divisors.extend([U256::one() << 200, U256::from(1_000_000), U256::from(3)].map(neg));
+    let cases = pairs(&numerators, &divisors);
+    for op in ["udiv", "umod", "sdiv", "smod"] {
         check(&binary(op), &cases, |[a, b, _]| (divided(op, a, b), false));
     }
 }
