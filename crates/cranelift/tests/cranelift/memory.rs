@@ -685,3 +685,58 @@ block0:
         assert_eq!(pair[32..], original[..], "{level:?}");
     }
 }
+
+#[test]
+fn memory_copies_may_overlap() {
+    // `copy_short` stays inline; `copy` calls `memmove`, as its length is
+    // dynamic.
+    let source = r#"
+func public %copy(v0.*i8, v1.*i8, v2.i64) {
+block0:
+    memcopy v0 v1 v2;
+    return;
+}
+func public %copy_short(v0.*i8, v1.*i8) {
+block0:
+    memcopy v0 v1 100.i64;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let copy: unsafe extern "C" fn(*mut u8, *const u8, i64) =
+            unsafe { std::mem::transmute(artifact.function_address("copy").unwrap()) };
+        let copy_short: unsafe extern "C" fn(*mut u8, *const u8) =
+            unsafe { std::mem::transmute(artifact.function_address("copy_short").unwrap()) };
+        for (dest, src, len, short) in [
+            (0, 7, 100, true),
+            (7, 0, 100, true),
+            (40, 41, 100, true),
+            (3, 9, 0, false),
+            (0, 7, 100, false),
+            (7, 0, 100, false),
+            (0, 300, 300, false),
+            (300, 0, 300, false),
+            (13, 5, 500, false),
+        ] {
+            let mut bytes: Vec<u8> = (0..1000).map(|i| (i * 7 + 3) as u8).collect();
+            let mut expected = bytes.clone();
+            expected.copy_within(src..src + len, dest);
+            let base = bytes.as_mut_ptr();
+            unsafe {
+                if short {
+                    copy_short(base.add(dest), base.add(src));
+                } else {
+                    copy(base.add(dest), base.add(src), len as i64);
+                }
+            }
+            assert_eq!(bytes, expected, "{level:?} {dest} {src} {len}");
+        }
+    }
+}

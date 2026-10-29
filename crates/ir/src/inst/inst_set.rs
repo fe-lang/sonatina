@@ -64,6 +64,7 @@ define_inst_set_base! {
         data::Mload,
         data::Mstore,
         data::Memzero,
+        data::Memcopy,
         data::BlackBox,
         data::Freeze,
         data::Gep,

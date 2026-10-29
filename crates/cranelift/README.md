@@ -128,8 +128,13 @@ request one byte so they also have non-null, distinct live addresses. Allocation
 are uninitialized and use the host allocator's alignment. There is no implicit
 reclamation: the caller or runtime owns their lifetime and can release the whole
 allocation through a compatible host `free` import after all aliases are dead.
-The `malloc` symbol must resolve to the host allocator; a module definition with
-that name is rejected when heap allocation is required.
+The `malloc` symbol must resolve to the host allocator, so a module that
+allocates must not export a `malloc`. A private function or global named
+`malloc`, or like one of Cranelift's libcalls such as `memcpy`, takes another
+symbol in the object, so the backend's own calls never reach it.
+
+`memcopy` copies bytes between ranges that may overlap. A copy of at most 128
+constant bytes is inline; any other calls `memmove`. `memzero` calls `memset`.
 
 ## Calling from C or a JIT host
 

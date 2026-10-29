@@ -121,6 +121,15 @@ pub struct Memzero {
     len: ValueId,
 }
 
+/// Copies `len` bytes from `src` to `dest`. The two ranges may overlap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+pub struct Memcopy {
+    dest: ValueId,
+    src: ValueId,
+    len: ValueId,
+}
+
 /// Returns `arg` unchanged, but hides the value from the optimizer.
 ///
 /// The instruction observes and mutates opaque state, so it is never removed

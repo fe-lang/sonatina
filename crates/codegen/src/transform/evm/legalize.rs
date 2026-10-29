@@ -13,12 +13,12 @@ use sonatina_ir::{
         },
         cast::{self, Bitcast, IntToPtr, PtrToInt},
         cmp::{self, Eq, IsZero, Ne, Sgt, Slt},
-        data::{Alloca, Freeze, MemAllocDynamic, Mload, Mstore},
+        data::{Alloca, Freeze, MemAllocDynamic, Memcopy, Mload, Mstore},
         downcast,
         evm::{
-            EvmCodeLoad, EvmExp, EvmMalloc, EvmSaddsat, EvmSdiv, EvmSdivo, EvmSmod, EvmSmodo,
-            EvmSmulsat, EvmSsubsat, EvmUaddsat, EvmUdiv, EvmUdivo, EvmUmod, EvmUmodo, EvmUmulsat,
-            EvmUsubsat,
+            EvmCodeLoad, EvmExp, EvmMalloc, EvmMcopy, EvmSaddsat, EvmSdiv, EvmSdivo, EvmSmod,
+            EvmSmodo, EvmSmulsat, EvmSsubsat, EvmUaddsat, EvmUdiv, EvmUdivo, EvmUmod, EvmUmodo,
+            EvmUmulsat, EvmUsubsat,
         },
         logic::{self, And, Or, Xor},
     },
@@ -534,6 +534,15 @@ impl<'a> FunctionLegalizer<'a> {
             self.func
                 .dfg
                 .replace_inst(inst, Box::new(EvmMalloc::new(self.evm_inst_set(), size)));
+            return;
+        }
+        if let Some((dest, src, len)) = downcast::<&Memcopy>(is, self.func.dfg.inst(inst))
+            .map(|i| (*i.dest(), *i.src(), *i.len()))
+        {
+            self.func.dfg.replace_inst(
+                inst,
+                Box::new(EvmMcopy::new(self.evm_inst_set(), dest, src, len)),
+            );
             return;
         }
 
@@ -2522,6 +2531,24 @@ block0:
             "{dumped}"
         );
         assert!(dumped.contains("add v1 0.i256;"), "{dumped}");
+    }
+
+    #[test]
+    fn memory_copies_lower_to_mcopy() {
+        let dumped = legalize_and_dump(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256, v1.i256, v2.i256) {
+block0:
+    memcopy v0 v1 v2;
+    return;
+}
+"#,
+            "entry",
+        );
+        assert!(dumped.contains("evm_mcopy v0 v1 v2;"), "{dumped}");
+        assert!(!dumped.contains("memcopy"), "{dumped}");
     }
 
     #[test]
