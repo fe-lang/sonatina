@@ -1757,6 +1757,15 @@ fn heap_allocate(
     if module.ctx.triple == TargetTriple::SP1 {
         return Err("host heap allocation is unavailable on SP1".into());
     }
+    // A private `malloc` takes another symbol, but an exported one would
+    // receive the allocations.
+    if module.funcs().iter().any(|&func| {
+        module.ctx.func_sig(func, |sig| {
+            sig.name() == HOST_ALLOCATOR && matches!(sig.linkage(), SonatinaLinkage::Public)
+        })
+    }) {
+        return Err("native heap allocation requires the host malloc symbol".into());
+    }
     let pointer_type = clif_module.target_config().pointer_type();
     let mut signature = clif_module.make_signature();
     signature.params.push(clif::AbiParam::new(pointer_type));
