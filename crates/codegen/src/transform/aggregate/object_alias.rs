@@ -4,10 +4,13 @@
 //! the roots selected for an optimization. Missing origins are unknown, never
 //! evidence of separation. It contains no locality or initialization claims.
 
+use std::sync::Arc;
+
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    ControlFlowGraph, Function, ValueId,
+    ControlFlowGraph, Function, Type, ValueId,
     inst::{control_flow, data, downcast},
+    types::CompoundType,
 };
 
 use crate::cfg_scc::CfgSccAnalysis;
@@ -15,6 +18,7 @@ use crate::cfg_scc::CfgSccAnalysis;
 use super::{
     ObjectEffectSummaryMap, ObjectReturnEffect,
     provenance::{Projection, RootValue},
+    shape::{PayloadPartition, payload_partition},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -32,6 +36,8 @@ enum ObjectOrigin {
 #[derive(Clone)]
 pub(crate) struct ObjectAliasFacts {
     origins: FxHashMap<ValueId, ObjectOrigin>,
+    /// The enum payloads of each root whose object holds an enum.
+    payloads: FxHashMap<ValueId, Arc<PayloadPartition>>,
 }
 
 impl ObjectAliasFacts {
@@ -42,7 +48,20 @@ impl ObjectAliasFacts {
         effects: Option<&ObjectEffectSummaryMap>,
     ) -> Self {
         let mut origins = FxHashMap::default();
+        let mut payloads = FxHashMap::default();
+        let mut partitions = FxHashMap::<Type, Option<Arc<PayloadPartition>>>::default();
+        let mut record_payloads = |value: ValueId| {
+            let pointee = func.dfg.value_ty(value).resolve_compound(func.ctx());
+            if let Some(CompoundType::ObjRef(pointee) | CompoundType::Ptr(pointee)) = pointee
+                && let Some(partition) = partitions
+                    .entry(pointee)
+                    .or_insert_with(|| payload_partition(func.ctx(), pointee).map(Arc::new))
+            {
+                payloads.insert(value, partition.clone());
+            }
+        };
         for &arg in &func.arg_values {
+            record_payloads(arg);
             if func.dfg.value_ty(arg).is_obj_ref(func.ctx()) {
                 let noalias = func.is_noalias_arg(arg);
                 origins.insert(arg, ObjectOrigin::Incoming { noalias });
@@ -52,6 +71,11 @@ impl ObjectAliasFacts {
         let mut sccs = None;
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
+                func.dfg
+                    .inst_results(inst)
+                    .iter()
+                    .copied()
+                    .for_each(&mut record_payloads);
                 let data = func.dfg.inst(inst);
                 let fresh = downcast::<&data::ObjAlloc>(func.inst_set(), data).is_some()
                     || downcast::<&data::Alloca>(func.inst_set(), data).is_some()
@@ -76,7 +100,7 @@ impl ObjectAliasFacts {
                 }
             }
         }
-        Self { origins }
+        Self { origins, payloads }
     }
 
     pub(crate) fn is_fresh(&self, root: RootValue) -> bool {
@@ -116,12 +140,30 @@ impl ObjectAliasFacts {
         )
     }
 
+    /// Slices of one root overlap where their leaves meet, or where they lie
+    /// in different variants of one enum, whose payloads share storage.
     pub(crate) fn may_overlap(&self, lhs: Projection, rhs: Projection) -> bool {
         if lhs.root_value != rhs.root_value {
             return self.roots_may_overlap(lhs.root_value, rhs.root_value);
         }
-        lhs.slice.first_leaf < rhs.slice.first_leaf.saturating_add(rhs.slice.leaf_count)
-            && rhs.slice.first_leaf < lhs.slice.first_leaf.saturating_add(lhs.slice.leaf_count)
+        let root = lhs.root_value.value();
+        let range = |projection: Projection| {
+            let first = projection.slice.first_leaf;
+            first..first.saturating_add(projection.slice.leaf_count)
+        };
+        let (lhs, rhs) = (range(lhs), range(rhs));
+        lhs.start < rhs.end && rhs.start < lhs.end
+            || !lhs.is_empty()
+                && !rhs.is_empty()
+                && self
+                    .payloads
+                    .get(&root)
+                    .is_some_and(|payloads| payloads.separates_variants(lhs, rhs))
+    }
+
+    /// Whether `root`'s object holds an enum.
+    pub(crate) fn holds_enum(&self, root: RootValue) -> bool {
+        self.payloads.contains_key(&root.value())
     }
 
     pub(crate) fn single_instance(&self, root: RootValue) -> bool {
@@ -228,6 +270,73 @@ block0:
                         );
                     }
                 }
+            },
+        );
+    }
+
+    #[test]
+    fn different_variants_of_one_enum_overlap() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+type @Inner = enum { #None, #Some(i256) };
+type @E = enum { #A(i256, i256), #B(i256), #C(@Inner, i256) };
+type @Holder = { i256, [@E; 2] };
+func private %f(v0.objref<@Holder>) {
+block0:
+    v1.objref<[@E; 2]> = obj.proj v0 1.i8;
+    v2.objref<@E> = obj.index v1 0.i8;
+    v3.objref<@E> = obj.index v1 1.i8;
+    v4.objref<i256> = enum.proj v2 #A 0.i8;
+    v5.objref<i256> = enum.proj v2 #A 1.i8;
+    v6.objref<i256> = enum.proj v2 #B 0.i8;
+    v7.objref<i256> = enum.proj v3 #B 0.i8;
+    v8.objref<@Inner> = enum.proj v2 #C 0.i8;
+    v9.objref<i256> = enum.proj v8 #Some 0.i8;
+    v10.objref<i256> = enum.proj v2 #C 1.i8;
+    v11.objref<i256> = obj.proj v0 0.i8;
+    return;
+}
+"#,
+            |func, aliases, facts| {
+                let results: Vec<_> = func
+                    .layout
+                    .iter_all_insts()
+                    .filter_map(|inst| func.dfg.inst_result(inst))
+                    .collect();
+                let exact = |value| facts.complete().exact_projection(value).unwrap();
+                let [
+                    _,
+                    first,
+                    second,
+                    a0,
+                    a1,
+                    b0,
+                    other_b0,
+                    c0,
+                    c0_some,
+                    c1,
+                    plain,
+                ] = results.as_slice()
+                else {
+                    panic!("eleven reference results expected")
+                };
+                let overlap = |left, right| {
+                    let overlap = aliases.may_overlap(exact(left), exact(right));
+                    assert_eq!(overlap, aliases.may_overlap(exact(right), exact(left)));
+                    overlap
+                };
+                assert!(aliases.holds_enum(exact(*first).root_value));
+                assert!(overlap(*a0, *b0));
+                assert!(overlap(*a1, *b0));
+                assert!(overlap(*b0, *c0_some));
+                assert!(overlap(*a0, *c1));
+                assert!(!overlap(*a0, *a1));
+                assert!(!overlap(*c0, *c1));
+                assert!(!overlap(*c0_some, *c1));
+                assert!(!overlap(*b0, *other_b0));
+                assert!(!overlap(*first, *second));
+                assert!(!overlap(*a0, *plain));
             },
         );
     }

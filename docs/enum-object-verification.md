@@ -50,7 +50,12 @@ same tag preserves established selected-payload facts. Selecting a payloadless
 variant creates a complete enum value. A different payload-bearing tag does not
 acquire initialized fields merely because the old variant was complete.
 `Some -> None -> Some` resurrection is outside the required acceptance envelope.
-Today's separate physical payload slots do not establish such an IR guarantee.
+
+The payloads of an enum's variants share storage: every variant's fields are
+laid out from the same payload offset. A write into one variant's payload,
+including a nested enum's tag, leaves every other variant's payload
+unreadable, even if its tag is set again afterwards. Fields of the same variant
+stay disjoint.
 
 `enum.write_variant` writes the selected fields and tag. `obj.store` writes the
 destination subtree. Its initialization effects come from the written value's

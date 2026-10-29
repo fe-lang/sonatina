@@ -90,6 +90,26 @@ const CASES: &[(&str, &str, usize)] = &[
         include_str!("fixtures/enum_contract/nested-different-payload-tag.sntn"),
         1,
     ),
+    (
+        "cross-variant-write",
+        include_str!("fixtures/enum_contract/cross-variant-write.sntn"),
+        1,
+    ),
+    (
+        "cross-variant-write-retag",
+        include_str!("fixtures/enum_contract/cross-variant-write-retag.sntn"),
+        1,
+    ),
+    (
+        "nested-cross-variant-tag-write",
+        include_str!("fixtures/enum_contract/nested-cross-variant-tag-write.sntn"),
+        1,
+    ),
+    (
+        "same-variant-other-field",
+        include_str!("fixtures/enum_contract/same-variant-other-field.sntn"),
+        0,
+    ),
 ];
 
 #[test]

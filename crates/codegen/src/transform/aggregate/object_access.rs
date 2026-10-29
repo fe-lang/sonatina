@@ -255,6 +255,11 @@ impl ObjectAccessFacts {
         self.exposed(root) || !self.reachability.aliases.is_fresh(root)
     }
 
+    /// Whether `root`'s object holds an enum.
+    pub(crate) fn holds_enum(&self, root: RootValue) -> bool {
+        self.reachability.aliases.holds_enum(root)
+    }
+
     pub(crate) fn may_overlap(&self, access: ObjectAccess, target: ObjectSlice) -> bool {
         let target = Projection {
             root_value: RootValue::new(target.root),

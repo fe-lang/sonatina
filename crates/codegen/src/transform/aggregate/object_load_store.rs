@@ -186,6 +186,10 @@ impl AvailableMap {
                     for (part, available) in remaining {
                         root.insert(part.first_leaf, (part, available));
                     }
+                    if accesses.holds_enum(projection.root_value) {
+                        // Other variants' payloads share the written storage.
+                        root.retain(|_, (slice, _)| !accesses.may_overlap(write, *slice));
+                    }
                     !root.is_empty()
                 } else {
                     // Cross-root aliases, whole-root, external and unknown

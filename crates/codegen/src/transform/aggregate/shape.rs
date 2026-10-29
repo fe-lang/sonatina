@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, ops::Range};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
@@ -96,6 +96,63 @@ impl Ord for AggregateSlice {
 impl PartialOrd for AggregateSlice {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+/// Where a type's enums put their variants' payloads, in leaf coordinates.
+/// One enum's variants share payload storage, so a leaf range in one
+/// variant's payload may overlap any range in another's.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PayloadPartition {
+    /// Consecutive children, struct fields or one variant's fields: each
+    /// child's first leaf, leaf count and partition if it holds an enum.
+    Fields(Vec<(usize, usize, Option<PayloadPartition>)>),
+    Array {
+        stride: usize,
+        elem: Box<PayloadPartition>,
+    },
+    /// Each variant's fields, after the tag leaf.
+    Enum(Vec<(usize, usize, PayloadPartition)>),
+}
+
+impl PayloadPartition {
+    /// Whether leaf ranges `a` and `b`, which share no leaf, lie in the
+    /// payloads of different variants of one enum.
+    pub(crate) fn separates_variants(&self, a: Range<usize>, b: Range<usize>) -> bool {
+        let within = |first: usize, count: usize, range: &Range<usize>| {
+            first <= range.start && range.end <= first + count
+        };
+        let shift = |range: &Range<usize>, by: usize| range.start - by..range.end - by;
+        match self {
+            Self::Fields(children) => children.iter().any(|(first, count, child)| {
+                child.as_ref().is_some_and(|child| {
+                    within(*first, *count, &a)
+                        && within(*first, *count, &b)
+                        && child.separates_variants(shift(&a, *first), shift(&b, *first))
+                })
+            }),
+            Self::Array { stride, elem } => {
+                let first = a.start / stride * stride;
+                within(first, *stride, &a)
+                    && within(first, *stride, &b)
+                    && elem.separates_variants(shift(&a, first), shift(&b, first))
+            }
+            Self::Enum(variants) => {
+                let variant = |range: &Range<usize>| {
+                    variants
+                        .iter()
+                        .position(|&(first, count, _)| within(first, count, range))
+                };
+                match (variant(&a), variant(&b)) {
+                    (Some(x), Some(y)) if x != y => true,
+                    (Some(x), Some(_)) => {
+                        let (first, _, fields) = &variants[x];
+                        fields.separates_variants(shift(&a, *first), shift(&b, *first))
+                    }
+                    _ => false,
+                }
+            }
+        }
     }
 }
 
@@ -830,6 +887,58 @@ impl LayoutCtx<'_> {
         }
     }
 
+    fn payload_partition(&mut self, ty: Type) -> Option<PayloadPartition> {
+        match compound_ty(self.types, ty)? {
+            CompoundType::Struct(s) if !s.packed => {
+                let fields = s.fields.clone();
+                self.fields_partition(&fields)
+            }
+            CompoundType::Array { elem, len } if *len != 0 => {
+                let elem = *elem;
+                Some(PayloadPartition::Array {
+                    stride: self.flattened_leaf_count(elem)?,
+                    elem: Box::new(self.payload_partition(elem)?),
+                })
+            }
+            CompoundType::Enum(data) => {
+                let variants: Vec<SmallVec<[Type; 4]>> = data
+                    .variants
+                    .iter()
+                    .map(|variant| variant.fields.iter().copied().collect())
+                    .collect();
+                let mut first = 1;
+                let mut parts = Vec::with_capacity(variants.len());
+                for fields in variants {
+                    let count = fields.iter().try_fold(0usize, |count, &field| {
+                        count.checked_add(self.flattened_leaf_count(field)?)
+                    })?;
+                    let fields = self
+                        .fields_partition(&fields)
+                        .unwrap_or(PayloadPartition::Fields(Vec::new()));
+                    parts.push((first, count, fields));
+                    first += count;
+                }
+                Some(PayloadPartition::Enum(parts))
+            }
+            _ => None,
+        }
+    }
+
+    /// The partition of consecutive `fields`, if any of them holds an enum.
+    fn fields_partition(&mut self, fields: &[Type]) -> Option<PayloadPartition> {
+        let mut first = 0;
+        let mut children = Vec::with_capacity(fields.len());
+        for &field in fields {
+            let count = self.flattened_leaf_count(field)?;
+            children.push((first, count, self.payload_partition(field)));
+            first += count;
+        }
+        children
+            .iter()
+            .any(|(_, _, child)| child.is_some())
+            .then_some(PayloadPartition::Fields(children))
+    }
+
     fn compute_flattened_leaf_count(&mut self, ty: Type) -> Option<usize> {
         match compound_ty(self.types, ty) {
             Some(CompoundType::Struct(s)) => {
@@ -1485,6 +1594,11 @@ pub fn enum_tag_ty(ty: Type) -> Option<Type> {
         return None;
     };
     Some(Type::EnumTag(enum_ty))
+}
+
+/// The payload partition of `ty`, if it holds an enum.
+pub(crate) fn payload_partition(module: &ModuleCtx, ty: Type) -> Option<PayloadPartition> {
+    with_uncached_layout(module, |layout| layout.payload_partition(ty))
 }
 
 pub fn enum_slot_info(module: &ModuleCtx, enum_ty: Type, idx: u32) -> Option<EnumSlotInfo> {

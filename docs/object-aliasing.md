@@ -11,8 +11,9 @@ behavior; it grants neither no-alias nor unchanged-memory semantics.
 eligibility. Distinct fresh allocations and incoming-versus-new allocations are
 separate. Different incoming roots may overlap unless one is `noalias`. A
 missing origin or unknown provenance contributor cannot prove separation. Same-base intervals retain their
-ordinary field precision. Repeating allocation sites do not identify one dynamic
-instance and cannot establish definite overwrite.
+ordinary field precision, except that fields of different variants of one enum
+overlap: the variants share payload storage. Repeating allocation sites do not
+identify one dynamic instance and cannot establish definite overwrite.
 
 `object_access.rs::ObjectAccessFacts` combines those origins with complete/may
 provenance and reachability. Its access universe includes operands whose roots

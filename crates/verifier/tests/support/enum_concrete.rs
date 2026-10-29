@@ -181,6 +181,19 @@ impl Node {
         }
     }
 
+    /// Writing `variant`'s payload may overwrite every other variant's, whose
+    /// payloads share its storage.
+    fn overwrite_other_payloads(&mut self, variant: usize) {
+        let Data::Enum { payloads, .. } = &mut self.data else {
+            panic!("payload write to non-enum");
+        };
+        for (other, fields) in payloads.iter_mut().enumerate() {
+            if other != variant {
+                fields.iter_mut().for_each(Self::clear_readability);
+            }
+        }
+    }
+
     fn child_mut(&mut self, step: &Step) -> &mut Self {
         match (&mut self.data, step) {
             (Data::Product(fields), Step::Field(index)) => &mut fields[*index],
@@ -277,11 +290,18 @@ impl World {
             .fold(&self.objects[location.object].value, Node::child)
     }
 
-    fn at_mut(&mut self, location: &Location) -> &mut Node {
+    /// The node a write to `location` changes, after overwriting the other
+    /// variants of each enum payload on its path.
+    fn write_at(&mut self, location: &Location) -> &mut Node {
         location
             .path
             .iter()
-            .fold(&mut self.objects[location.object].value, Node::child_mut)
+            .fold(&mut self.objects[location.object].value, |node, step| {
+                if let Step::Payload(variant, _) = step {
+                    node.overwrite_other_payloads(*variant);
+                }
+                node.child_mut(step)
+            })
     }
 
     fn guards_hold(&self, view: &View) -> bool {
@@ -501,12 +521,12 @@ fn execute_block(
         } else if let Some(store) = downcast::<&data::ObjStore>(is, data) {
             let view = value(*store.object()).view();
             let stored = value(*store.value());
-            *world.at_mut(&view.location) = stored;
+            *world.write_at(&view.location) = stored;
             world.close_exposure();
             None
         } else if let Some(write) = downcast::<&data::EnumSetTag>(is, data) {
             let view = value(*write.object()).view();
-            let node = world.at_mut(&view.location);
+            let node = world.write_at(&view.location);
             let Data::Enum { tag, payloads } = &mut node.data else {
                 panic!("tag write to non-enum");
             };
@@ -522,13 +542,15 @@ fn execute_block(
         } else if let Some(write) = downcast::<&data::EnumWriteVariant>(is, data) {
             let view = value(*write.object()).view();
             let fields = write.values().iter().map(|&arg| value(arg)).collect();
-            let node = world.at_mut(&view.location);
+            let node = world.write_at(&view.location);
             let Data::Enum { tag, payloads } = &mut node.data else {
                 panic!("variant write to non-enum");
             };
             *tag = write.variant().index() as usize;
             payloads[*tag] = fields;
+            let selected = *tag;
             node.initialized = true;
+            node.overwrite_other_payloads(selected);
             world.close_exposure();
             None
         } else if let Some(insert) = downcast::<&data::InsertValue>(is, data) {
