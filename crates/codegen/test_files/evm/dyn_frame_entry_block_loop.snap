@@ -1,0 +1,244 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/dyn_frame_entry_block_loop.sntn
+---
+evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 266 bytes
+  total: 266 bytes
+
+functions:
+  mem: global_dyn_base=0xc0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=1
+  rec: ir_blocks=6 ir_insts=29 vcode_ops=185 fixups=16 imm_bytes=44
+    mem: scratch_words=0 stable_words=3 stable_mode=DynamicFrame entry_abs_words=1 abs_words_end=0
+  id: ir_blocks=1 ir_insts=1 vcode_ops=3 fixups=0 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
+  entry: ir_blocks=1 ir_insts=5 vcode_ops=17 fixups=2 imm_bytes=3
+    mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=1
+
+evm:
+  case one_level: calldata_len=192 success reason=Return gas_used=23949 gas_refunded=0 logs=0 output=call len=32 tx_gas=21840 runtime_gas=2109
+
+
+--------------- DEBUG ---------------
+
+// func private %rec(v0.i256, v1.i256) -> i256
+rec:
+  block4:
+    JUMPDEST
+    PUSH1 0x80 (128)
+    MLOAD
+    PUSH1 `pc + (5)`
+    JUMPI
+    PUSH1 0xc0 (192)
+    PUSH1 0x80 (128)
+    MSTORE
+    JUMPDEST
+    DUP1
+    PUSH1 0x80 (128)
+    MLOAD
+    DUP1
+    PUSH1 0x40 (64)
+    MLOAD
+    DUP2
+    DUP2
+    LT
+    PUSH1 `pc + (3)`
+    JUMPI
+    SWAP1
+    JUMPDEST
+    POP
+    PUSH1 0x80 (128)
+    ADD
+    DUP1
+    PUSH1 0x80 (128)
+    MSTORE
+    PUSH1 0x20 (32)
+    SWAP1
+    SUB
+    MSTORE
+    PUSH1 0x80 (128)
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MSTORE
+    DUP2
+    PUSH1 0x60 (96)
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MSTORE
+    POP  // jump block0;
+    POP
+  block0:
+    JUMPDEST
+    PUSH1 0x80 (128)  // v2.i256 = evm_mload v0;
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    MLOAD
+    PUSH1 0x1 (1)  // v4.i256 = add v2 v3;
+    ADD
+    DUP1  // evm_mstore v0 v4;
+    PUSH1 0x80 (128)
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    MSTORE
+    PUSH1 0x3 (3)  // v5.i256 = lt v4 v30;
+    SWAP1
+    LT
+    PUSH1 block0  // br v5 block5 block1;
+    JUMPI
+  block1:
+    PUSH0  // evm_mstore v0 v31;
+    PUSH1 0x80 (128)
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    MSTORE
+    PUSH1 0x20 (32)  // v32.i256 = evm_calldata_load v6;
+    CALLDATALOAD
+    PUSH1 `pc + (4)`  // v7.i256 = call %id v32;
+    SWAP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    DUP1
+    PUSH1 0x40 (64)
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MSTORE
+    PUSH1 0x40 (64)  // v8.i256 = evm_calldata_load v33;
+    CALLDATALOAD
+    PUSH1 `pc + (4)`  // v34.i256 = call %id v8;
+    SWAP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH1 0x60 (96)  // v10.i256 = evm_calldata_load v9;
+    CALLDATALOAD
+    PUSH1 `pc + (4)`  // v11.i256 = call %id v10;
+    SWAP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH1 0x80 (128)  // v13.i256 = evm_calldata_load v12;
+    CALLDATALOAD
+    PUSH1 `pc + (4)`  // v14.i256 = call %id v13;
+    SWAP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH1 0xa0 (160)  // v16.i256 = evm_calldata_load v15;
+    CALLDATALOAD
+    PUSH1 `pc + (4)`  // v17.i256 = call %id v16;
+    SWAP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH1 0x60 (96)  // v36.i256 = is_zero v1;
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    PUSH1 block3  // br v36 block2 block3;
+    JUMPI
+  block2:
+    POP  // return v1;
+    POP
+    POP
+    POP
+    POP
+    PUSH1 0x60 (96)
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    PUSH1 0x20 (32)
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    PUSH1 0x80 (128)
+    MSTORE
+    SWAP1
+    JUMP
+  block3:
+    JUMPDEST
+    PUSH1 0x1 (1)  // v24.i256 = sub v1 v3;
+    PUSH1 0x60 (96)
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    SUB
+    PUSH1 0x80 (128)  // v25.i256 = call %rec v0 v24;
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    SWAP1
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    SWAP4  // v26.i256 = add v7 v34;
+    PUSH1 0x40 (64)
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    PUSH1 0x20 (32)
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    PUSH1 0x80 (128)
+    MSTORE
+    ADD
+    SWAP1  // v27.i256 = add v26 v11;
+    SWAP3
+    ADD
+    ADD  // v28.i256 = add v27 v14;
+    ADD  // v29.i256 = add v28 v17;
+    ADD  // v35.i256 = add v29 v25;
+    SWAP1  // return v35;
+    POP
+    SWAP1
+    JUMP
+
+// func private %id(v0.i256) -> i256
+id:
+  block0:
+    JUMPDEST
+    SWAP1  // return v0;
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    PUSH0  // evm_mstore v2 v0;
+    PUSH1 0xa0 (160)
+    MSTORE
+    PUSH1 0xa0 (160)  // v3.i256 = call %rec v2 v1;
+    SWAP1
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH0  // evm_mstore v0 v3;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
+    PUSH0
+    RETURN

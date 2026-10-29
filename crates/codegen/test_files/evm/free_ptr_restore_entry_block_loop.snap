@@ -1,0 +1,148 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/free_ptr_restore_entry_block_loop.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 119 bytes
+  total: 119 bytes
+
+functions:
+  mem: global_dyn_base=0xc0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=1
+  f: ir_blocks=7 ir_insts=22 vcode_ops=57 fixups=5 imm_bytes=10
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
+  sink: ir_blocks=4 ir_insts=10 vcode_ops=22 fixups=1 imm_bytes=4
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
+  entry: ir_blocks=1 ir_insts=8 vcode_ops=24 fixups=2 imm_bytes=5
+    mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=1
+
+evm:
+  case one_iteration: calldata_len=32 success reason=Return gas_used=21480 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=340
+  case two_iterations: calldata_len=32 success reason=Return gas_used=21707 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=567
+
+
+--------------- DEBUG ---------------
+
+// func private %f(v0.i256, v1.i256) -> i256
+f:
+  block2:
+    JUMPDEST
+    PUSH1 0x40 (64)  // v3.i256 = evm_mload v2;
+    MLOAD
+  block0:
+    JUMPDEST
+    PUSH1 0x40 (64)  // v4.i256 = evm_mload v2;
+    MLOAD
+    PUSH1 0xbf (191)  // v7.i256 = gt v4 v6;
+    DUP2
+    GT
+    PUSH1 block5  // br v7 block6 block4;
+    JUMPI
+  block4:
+    POP  // jump block5;
+    PUSH1 0xc0 (192)
+  block5:
+    JUMPDEST
+    PUSH1 0x1f (31)  // v10.i256 = add v1 31.i256;
+    DUP5
+    ADD
+    PUSH1 0x1f (31)  // v12.i256 = and v10 -32.i256;
+    NOT
+    AND
+    DUP2  // v13.i256 = add v8 v12;
+    ADD
+    PUSH1 0x40 (64)  // evm_mstore v2 v13;
+    MSTORE
+    PUSH1 0x2a (42)  // evm_mstore v8 42.i256;
+    DUP2
+    MSTORE
+    DUP4  // v15.i256 = call %sink v8 v1;
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    DUP3  // v16.i256 = evm_mload v0;
+    MLOAD
+    PUSH1 0x1 (1)  // v18.i256 = add v16 1.i256;
+    ADD
+    DUP1  // evm_mstore v0 v18;
+    DUP5
+    MSTORE
+    DUP5  // v19.i256 = lt v18 v1;
+    SWAP1
+    LT
+    PUSH1 block7  // br v19 block7 block1;
+    JUMPI
+  block1:
+    SWAP1  // evm_mstore v2 v3;
+    PUSH1 0x40 (64)
+    MSTORE
+    SWAP2  // return v15;
+    POP
+    POP
+    SWAP1
+    JUMP
+  block7:
+    JUMPDEST
+    POP  // jump block0;
+    PUSH1 block0
+    JUMP
+
+// func private %sink(v0.i256, v1.i256) -> i256
+sink:
+  block0:
+    JUMPDEST
+    SWAP1  // v3.i256 = evm_mload v2;
+    POP
+    PUSH1 0x40 (64)
+    MLOAD
+    PUSH1 0xbf (191)  // v6.i256 = gt v3 191.i256;
+    DUP2
+    GT
+    PUSH1 block3  // br v6 block4 block2;
+    JUMPI
+  block2:
+    POP  // jump block3;
+    PUSH1 0xc0 (192)
+  block3:
+    JUMPDEST
+    SWAP1  // v8.i256 = evm_mload v0;
+    MLOAD
+    DUP2  // evm_mstore v7 v8;
+    MSTORE
+    PUSH1 0x20 (32)  // v10.i256 = evm_keccak256 v7 32.i256;
+    SWAP1
+    KECCAK256
+    SWAP1  // return v10;
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    PUSH0  // evm_mstore v2 v0;
+    PUSH1 0xa0 (160)
+    MSTORE
+    PUSH1 0x40 (64)  // v4.i256 = evm_mload v3;
+    MLOAD
+    PUSH1 0xa0 (160)  // v5.i256 = call %f v2 v1;
+    SWAP1
+    SWAP2
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    POP  // v6.i256 = evm_mload v3;
+    PUSH1 0x40 (64)
+    MLOAD
+    SUB  // v7.i256 = sub v6 v4;
+    PUSH0  // evm_mstore v0 v7;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
+    PUSH0
+    RETURN
