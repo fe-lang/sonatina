@@ -110,6 +110,7 @@ pub(crate) struct ProvenanceFacts {
     possible_projections: SecondaryMap<ValueId, Vec<Projection>>,
     possible_roots: SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: SecondaryMap<ValueId, bool>,
+    enclosing: SecondaryMap<ValueId, Option<Projection>>,
 }
 
 #[derive(Clone, Copy)]
@@ -224,6 +225,7 @@ impl ProvenanceFacts {
             possible_projections: secondary_value_map(value_capacity),
             possible_roots: secondary_value_map(value_capacity),
             maybe_unknown: secondary_value_map(value_capacity),
+            enclosing: secondary_value_map(value_capacity),
         }
     }
 
@@ -254,6 +256,16 @@ impl<'a> CompleteProvenance<'a> {
             return None;
         }
         self.facts.exact[value]
+    }
+
+    /// The smallest known projection containing what `value` references: its
+    /// exact projection, or, for a value below a dynamic `obj.index`, the
+    /// indexed array. Only the exact projection is a location.
+    pub(crate) fn enclosing_projection(self, value: ValueId) -> Option<Projection> {
+        if self.facts.maybe_unknown[value] {
+            return None;
+        }
+        self.facts.exact[value].or(self.facts.enclosing[value])
     }
 
     pub(crate) fn exact_root_slice(self, root: RootValue) -> Option<shape::AggregateSlice> {
@@ -557,6 +569,8 @@ impl<'a> ProvenanceSnapshot<'a> {
             &mut self.projection_transfer_cache,
             self.object_effects,
         );
+        provenance.enclosing =
+            collect_enclosing_projections(func, &provenance, &self.single_result_insts);
 
         provenance
     }
@@ -1626,6 +1640,65 @@ fn derive_exact_state(
                 value_sccs,
             )
         })
+}
+
+/// Projections containing values that have no exact one. An in-bounds
+/// dynamic `obj.index` designates some element of its array; projections and
+/// variant views of that element, and phis of such values, stay within it.
+fn collect_enclosing_projections(
+    func: &Function,
+    provenance: &ProvenanceFacts,
+    single_result_insts: &[(InstId, ValueId)],
+) -> SecondaryMap<ValueId, Option<Projection>> {
+    let mut enclosing = secondary_value_map(func.dfg.values.len());
+    let within = |enclosing: &SecondaryMap<ValueId, Option<Projection>>, value: ValueId| {
+        provenance.exact[value].or(enclosing[value])
+    };
+    loop {
+        let mut changed = false;
+        for &(inst, result) in single_result_insts {
+            if provenance.exact[result].is_some() || provenance.maybe_unknown[result] {
+                continue;
+            }
+            let next = if let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(inst) {
+                phi.args()
+                    .iter()
+                    .map(|&(arg, _)| within(&enclosing, arg))
+                    .collect::<Option<SmallVec<[Projection; 4]>>>()
+                    .and_then(|args| {
+                        args.iter().copied().find(|&outer| {
+                            args.iter().all(|&inner| projection_contains(outer, inner))
+                        })
+                    })
+            } else {
+                match projection_transfer_inst(func, inst) {
+                    Some(ProjectionTransferInst::Gep(_) | ProjectionTransferInst::Bitcast(_))
+                    | None => None,
+                    Some(transfer) => transfer
+                        .source_value()
+                        .and_then(|source| within(&enclosing, source)),
+                }
+            }
+            .filter(|projection| {
+                let roots = &provenance.possible_roots[result];
+                roots.len() == 1 && roots.contains(&projection.root_value.value())
+            });
+            if next != enclosing[result] {
+                enclosing[result] = next;
+                changed = true;
+            }
+        }
+        if !changed {
+            return enclosing;
+        }
+    }
+}
+
+fn projection_contains(outer: Projection, inner: Projection) -> bool {
+    outer.root_value == inner.root_value
+        && outer.slice.first_leaf <= inner.slice.first_leaf
+        && inner.slice.first_leaf + inner.slice.leaf_count
+            <= outer.slice.first_leaf + outer.slice.leaf_count
 }
 
 #[allow(clippy::too_many_arguments)]

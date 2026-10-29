@@ -2,7 +2,8 @@
 //!
 //! A block `B` ending in `br c T F` or `br_table c ...`, where `c` is a phi of
 //! `B`, sends every path that enters from a predecessor `P` whose incoming `c`
-//! is a constant to one known successor. The edge `P -> B` is retargeted straight to that
+//! is a constant to one known successor. So does `c = enum.tag p` for a phi
+//! `p` of `B` whose incoming value from `P` is an `enum.make`. The edge `P -> B` is retargeted straight to that
 //! successor: `B`'s other instructions, which must be pure and few, are
 //! recomputed at the end of `P` from `P`'s incoming values, and the
 //! successor's phis take what `B` would have passed them. `B` is deleted
@@ -15,13 +16,25 @@
 //! header's cursor phi then takes the latch's value on the edge where the
 //! latch's own comparison holds.
 //!
+//! Rebuilding an `Option` and matching it again is the enum shape: a join
+//! takes `enum.make` values from its predecessors and branches on their tag.
+//!
+//! `B`'s values reach the rest of the function through its successors' phis.
+//! A use below a successor entered only from `B` gets such a phi first, so
+//! threading can supply each path's value.
+//!
 //! A loop header is never threaded: retargeting an entry edge into the
 //! loop's body would give the loop a second entry.
 
 use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Function, Immediate, InstId, Value, ValueId, inst::control_flow::BranchKind,
+    BlockId, Function, I256, Immediate, InstId, Value, ValueId,
+    func_cursor::{CursorLocation, FuncCursor, InstInserter},
+    inst::{
+        control_flow::{BranchKind, Phi},
+        data,
+    },
 };
 
 use crate::{
@@ -73,6 +86,8 @@ impl JumpThread {
 /// A block that may be threaded.
 struct Candidate {
     cond_phi: InstId,
+    /// Whether the condition is the tag of `cond_phi`'s enum.
+    tag_of_phi: bool,
     /// The successor for each condition value with one of its own; `br`
     /// sends zero to its zero destination.
     cases: SmallVec<[(Immediate, BlockId); 4]>,
@@ -80,6 +95,9 @@ struct Candidate {
     default: Option<BlockId>,
     /// The pure instructions between the block's phis and its terminator.
     body: SmallVec<[InstId; MAX_DUPLICATED_INSTS]>,
+    /// Values of the block used below a successor entered only from it,
+    /// with that successor.
+    escapes: SmallVec<[(ValueId, BlockId); 2]>,
 }
 
 fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Option<Candidate> {
@@ -120,10 +138,11 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
     if dests.iter().all(|&dest| dest == dests[0]) || dests.contains(&block) {
         return None;
     }
-    let Some(Value::Inst { inst: cond_phi, .. }) = func.dfg.get_value(cond) else {
-        return None;
+    let cond_inst = func.dfg.value_inst(cond)?;
+    let (cond_phi, tag_of_phi) = match func.dfg.downcast::<&data::EnumTag>(cond_inst) {
+        Some(tag) => (func.dfg.value_inst(*tag.value())?, true),
+        None => (cond_inst, false),
     };
-    let cond_phi = *cond_phi;
     if !func.dfg.is_phi(cond_phi) || func.layout.inst_block(cond_phi) != block {
         return None;
     }
@@ -152,9 +171,11 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
         body.push(inst);
     }
 
-    // What the block defines reaches nothing but its own instructions and
-    // its successors' phis on the edges from it, so a threaded path needs
-    // only the successors' phi inputs.
+    // What the block defines reaches its own instructions and its
+    // successors' phis on the edges from it, so a threaded path needs only
+    // the successors' phi inputs. A use below a successor entered only from
+    // the block can be given such a phi.
+    let mut escapes = SmallVec::new();
     for inst in func.layout.iter_inst(block) {
         for &result in func.dfg.inst_results(inst) {
             for &user in func.dfg.users(result) {
@@ -171,8 +192,15 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
                             .iter()
                             .all(|(value, from)| *value != result || *from == block)
                     });
-                if !via_edge_from_block {
-                    return None;
+                if via_edge_from_block {
+                    continue;
+                }
+                let succ = dests.iter().copied().find(|&dest| {
+                    editor.cfg().preds_of(dest).eq([&block])
+                        && use_dominated_by(func, domtree, user, result, dest)
+                })?;
+                if !escapes.contains(&(result, succ)) {
+                    escapes.push((result, succ));
                 }
             }
         }
@@ -180,10 +208,77 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
 
     Some(Candidate {
         cond_phi,
+        tag_of_phi,
         cases,
         default,
         body,
+        escapes,
     })
+}
+
+/// Whether `user`'s uses of `value` all lie in blocks `dest` dominates: a
+/// phi's at the ends of its predecessors, any other's in its own block.
+fn use_dominated_by(
+    func: &Function,
+    domtree: &DomTree,
+    user: InstId,
+    value: ValueId,
+    dest: BlockId,
+) -> bool {
+    match func.dfg.cast_phi(user) {
+        Some(phi) => phi
+            .args()
+            .iter()
+            .all(|(input, from)| *input != value || domtree.dominates(dest, *from)),
+        None => domtree.dominates(dest, func.layout.inst_block(user)),
+    }
+}
+
+/// Gives `dest`, entered only from `block`, a phi for `value`, and moves the
+/// uses `dest` dominates onto it.
+fn route_through_phi(
+    func: &mut Function,
+    domtree: &DomTree,
+    block: BlockId,
+    value: ValueId,
+    dest: BlockId,
+) {
+    let ty = func.dfg.value_ty(value);
+    let phi = Phi::new_unchecked(func.inst_set(), smallvec![(value, block)]);
+    let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(dest));
+    let phi_inst = cursor.prepend_inst_data(func, phi);
+    let routed = func.dfg.make_value(Value::Inst {
+        inst: phi_inst,
+        result_idx: 0,
+        ty,
+    });
+    cursor.attach_result(func, phi_inst, routed);
+
+    let users: Vec<_> = func
+        .dfg
+        .users(value)
+        .copied()
+        .filter(|&user| user != phi_inst && func.layout.is_inst_inserted(user))
+        .collect();
+    for user in users {
+        if func.dfg.is_phi(user) {
+            func.dfg.edit_phi(user, |phi| {
+                for (input, from) in phi.args_mut() {
+                    if *input == value && domtree.dominates(dest, *from) {
+                        *input = routed;
+                    }
+                }
+            });
+        } else if domtree.dominates(dest, func.layout.inst_block(user)) {
+            let mut inst = func.dfg.clone_inst(user);
+            inst.for_each_value_mut(&mut |operand| {
+                if *operand == value {
+                    *operand = routed;
+                }
+            });
+            func.dfg.replace_inst(user, inst);
+        }
+    }
 }
 
 /// Threads every predecessor of `block` that can be. All are chosen before
@@ -201,10 +296,16 @@ fn thread_block(editor: &mut CfgEditor<'_>, domtree: &DomTree, block: BlockId) -
             Some((pred, edge_idx, dest))
         })
         .collect();
+    if threads.is_empty() {
+        return false;
+    }
+    for &(value, dest) in &cand.escapes {
+        route_through_phi(editor.func_mut(), domtree, block, value, dest);
+    }
     for &(pred, edge_idx, dest) in &threads {
         thread_edge(editor, block, &cand, pred, edge_idx, dest);
     }
-    !threads.is_empty()
+    true
 }
 
 /// The edge `pred -> block` and the successor its constant condition
@@ -226,7 +327,17 @@ fn threadable_edge(
         .iter()
         .find(|(_, from)| *from == pred)
         .map(|(value, _)| *value)?;
-    let imm = func.dfg.value_imm(incoming)?;
+    let imm = if cand.tag_of_phi {
+        let make = func
+            .dfg
+            .downcast::<&data::EnumMake>(func.dfg.value_inst(incoming)?)?;
+        Immediate::EnumTag {
+            enum_ty: make.variant().enum_ty(),
+            value: I256::from(u64::from(make.variant().index())),
+        }
+    } else {
+        func.dfg.value_imm(incoming)?
+    };
     let dest = cand
         .cases
         .iter()

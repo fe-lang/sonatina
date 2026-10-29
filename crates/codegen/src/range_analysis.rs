@@ -667,10 +667,9 @@ fn checked_binary_value_fact(
         BinaryInstKind::Uaddo | BinaryInstKind::Saddo => plain_add_fact(lhs, rhs, ty),
         BinaryInstKind::Usubo | BinaryInstKind::Ssubo => plain_sub_fact(lhs, rhs, ty),
         BinaryInstKind::Umulo | BinaryInstKind::Smulo => plain_mul_fact(lhs, rhs, ty),
-        BinaryInstKind::EvmUdivo
-        | BinaryInstKind::EvmUmodo
-        | BinaryInstKind::EvmSdivo
-        | BinaryInstKind::EvmSmodo => RangeFact::full_for(ty),
+        BinaryInstKind::EvmUdivo => evm_udiv_fact(lhs, rhs, ty),
+        BinaryInstKind::EvmUmodo => evm_umod_fact(lhs, rhs, ty),
+        BinaryInstKind::EvmSdivo | BinaryInstKind::EvmSmodo => RangeFact::full_for(ty),
         _ => unreachable!(),
     })
 }
@@ -1633,6 +1632,15 @@ fn transfer_binary_inst(
         }
         BinaryInstKind::Sub => transfer_plain_binary(func, env, inst, plain_sub_fact),
         BinaryInstKind::Mul => transfer_plain_binary(func, env, inst, plain_mul_fact),
+        BinaryInstKind::And => transfer_plain_binary(func, env, inst, and_fact),
+        BinaryInstKind::Or => transfer_plain_binary(func, env, inst, or_fact),
+        BinaryInstKind::Xor => transfer_plain_binary(func, env, inst, xor_fact),
+        BinaryInstKind::Shl => transfer_plain_binary(func, env, inst, shl_fact),
+        BinaryInstKind::Shr => transfer_plain_binary(func, env, inst, shr_fact),
+        BinaryInstKind::Udiv => transfer_plain_binary(func, env, inst, udiv_fact),
+        BinaryInstKind::Umod => transfer_plain_binary(func, env, inst, umod_fact),
+        BinaryInstKind::EvmUdiv => transfer_plain_binary(func, env, inst, evm_udiv_fact),
+        BinaryInstKind::EvmUmod => transfer_plain_binary(func, env, inst, evm_umod_fact),
         BinaryInstKind::Uaddo
         | BinaryInstKind::Usubo
         | BinaryInstKind::Umulo
@@ -1890,6 +1898,128 @@ fn plain_mul_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
         full.signed
     };
     RangeFact { unsigned, signed }
+}
+
+/// A result in `[lo, hi]` read as unsigned, and as signed when `hi` fits.
+fn unsigned_fact(lo: U256, hi: U256, ty: Type) -> RangeFact {
+    let signed = if hi <= signed_max(ty).to_u256() {
+        SignedInterval {
+            lo: I256::from(lo),
+            hi: I256::from(hi),
+        }
+    } else {
+        RangeFact::full_for(ty).signed
+    };
+    RangeFact {
+        unsigned: UnsignedInterval { lo, hi },
+        signed,
+    }
+}
+
+/// `x & y` lies between zero and either operand; a nonnegative operand keeps
+/// it nonnegative.
+fn and_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
+    let mut fact = unsigned_fact(U256::zero(), lhs.unsigned.hi.min(rhs.unsigned.hi), ty);
+    if let Some(hi) = [lhs.signed, rhs.signed]
+        .into_iter()
+        .filter(|signed| signed.lo >= I256::zero())
+        .map(|signed| signed.hi)
+        .min()
+    {
+        fact.signed = SignedInterval {
+            lo: I256::zero(),
+            hi: fact.signed.hi.min(hi),
+        };
+    }
+    fact
+}
+
+/// The largest value with no bit above the highest bit either operand may set.
+fn bit_span(lhs: RangeFact, rhs: RangeFact) -> U256 {
+    match lhs.unsigned.hi.max(rhs.unsigned.hi).bits() {
+        256 => !U256::zero(),
+        bits => (U256::one() << bits) - U256::one(),
+    }
+}
+
+/// `x | y` is at least either operand and sets no higher bit than they may.
+fn or_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
+    unsigned_fact(lhs.unsigned.lo.max(rhs.unsigned.lo), bit_span(lhs, rhs), ty)
+}
+
+fn xor_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
+    unsigned_fact(U256::zero(), bit_span(lhs, rhs), ty)
+}
+
+/// `value << bits` when no set bit can leave the type.
+fn shl_fact(bits: RangeFact, value: RangeFact, ty: Type) -> RangeFact {
+    let width = usize::from(type_bits(ty));
+    if bits.unsigned.hi >= U256::from(width)
+        || value.unsigned.hi.bits() + bits.unsigned.hi.as_usize() > width
+    {
+        return RangeFact::full_for(ty);
+    }
+    unsigned_fact(
+        value.unsigned.lo << bits.unsigned.lo.as_usize(),
+        value.unsigned.hi << bits.unsigned.hi.as_usize(),
+        ty,
+    )
+}
+
+/// `value >> bits`, which is zero once `bits` reaches the width.
+fn shr_fact(bits: RangeFact, value: RangeFact, ty: Type) -> RangeFact {
+    let width = U256::from(type_bits(ty));
+    let shift = |value: U256, bits: U256| {
+        if bits >= width {
+            U256::zero()
+        } else {
+            value >> bits.as_usize()
+        }
+    };
+    unsigned_fact(
+        shift(value.unsigned.lo, bits.unsigned.hi),
+        shift(value.unsigned.hi, bits.unsigned.lo),
+        ty,
+    )
+}
+
+/// `lhs / rhs`, with EVM's zero quotient for a zero divisor.
+fn evm_udiv_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
+    let lo = if rhs.unsigned.lo.is_zero() {
+        U256::zero()
+    } else {
+        lhs.unsigned.lo / rhs.unsigned.hi
+    };
+    unsigned_fact(lo, lhs.unsigned.hi / rhs.unsigned.lo.max(U256::one()), ty)
+}
+
+/// `lhs % rhs`, with EVM's zero remainder for a zero divisor.
+fn evm_umod_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
+    if lhs.unsigned.hi < rhs.unsigned.lo {
+        return lhs;
+    }
+    let hi = lhs
+        .unsigned
+        .hi
+        .min(rhs.unsigned.hi.saturating_sub(U256::one()));
+    unsigned_fact(U256::zero(), hi, ty)
+}
+
+/// A zero divisor makes `udiv` and `umod` undefined.
+fn udiv_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
+    if rhs.unsigned.lo.is_zero() {
+        RangeFact::full_for(ty)
+    } else {
+        evm_udiv_fact(lhs, rhs, ty)
+    }
+}
+
+fn umod_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
+    if rhs.unsigned.lo.is_zero() {
+        RangeFact::full_for(ty)
+    } else {
+        evm_umod_fact(lhs, rhs, ty)
+    }
 }
 
 fn signed_mul_corners(lhs: SignedInterval, rhs: SignedInterval, ty: Type) -> Option<[I256; 4]> {

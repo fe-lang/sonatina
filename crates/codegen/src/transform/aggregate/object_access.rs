@@ -27,6 +27,9 @@ use super::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ObjectAccess {
     Exact(Projection),
+    /// Some part of this projection, such as the element a dynamic
+    /// `obj.index` selects. It bounds the access; it never locates a write.
+    Within(Projection),
     Root(RootValue),
     External,
     Unknown,
@@ -262,7 +265,7 @@ impl ObjectAccessFacts {
             },
         };
         match access {
-            ObjectAccess::Exact(projection) => {
+            ObjectAccess::Exact(projection) | ObjectAccess::Within(projection) => {
                 self.reachability.aliases.may_overlap(projection, target)
             }
             ObjectAccess::Root(root) => self
@@ -306,6 +309,14 @@ impl ObjectAccessFacts {
             return smallvec![ObjectAccess::Exact(exact)];
         }
         let refs = &self.reachability.references[value];
+        if let Some(projection) = self.facts.complete().enclosing_projection(value)
+            && !refs.external
+            && !refs.unknown
+            && refs.roots.len() == 1
+            && refs.roots.contains(&projection.root_value)
+        {
+            return smallvec![ObjectAccess::Within(projection)];
+        }
         let mut out: AccessSet = refs.roots.iter().copied().map(ObjectAccess::Root).collect();
         if refs.external {
             out.push(ObjectAccess::External);
@@ -573,7 +584,8 @@ impl ObjectAccessFacts {
         let mut cache = AggregateLayoutCache::default();
         let reads = effects.reads.clone();
         for read in reads {
-            if let ObjectAccess::Exact(projection) = read {
+            // A bounded read covers the guards inside its bound, not those above.
+            if let ObjectAccess::Exact(projection) | ObjectAccess::Within(projection) = read {
                 for ancestor in self.ancestor_tag_reads(func, projection, &mut cache) {
                     if !effects.reads.contains(&ancestor) {
                         effects.reads.push(ancestor);
@@ -663,6 +675,53 @@ block0:
                 );
                 assert!(effects.overwrites.is_empty());
                 assert!(effects.initialization.is_empty());
+            },
+        );
+    }
+
+    #[test]
+    fn dynamic_index_accesses_stay_within_the_indexed_array() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+type @pair = { i256, i256 };
+type @state = { [@pair; 4], i256 };
+func private %f(v0.objref<@state>, v1.i256, v2.i1) {
+block0:
+    v3.objref<[@pair; 4]> = obj.proj v0 0.i8;
+    v4.objref<i256> = obj.proj v0 1.i8;
+    v5.objref<@pair> = obj.index v3 v1;
+    v6.objref<i256> = obj.proj v5 1.i8;
+    br v2 block1 block2;
+block1:
+    v7.objref<@pair> = obj.index v3 0.i8;
+    v8.objref<i256> = obj.proj v7 0.i8;
+    jump block2;
+block2:
+    v9.objref<i256> = phi (v6 block0) (v8 block1);
+    obj.store v9 1.i256;
+    return;
+}
+"#,
+            |func, accesses, summaries| {
+                let store = func
+                    .layout
+                    .iter_block()
+                    .flat_map(|block| func.layout.iter_inst(block))
+                    .find(|&inst| func.dfg.downcast::<&data::ObjStore>(inst).is_some())
+                    .unwrap();
+                let effects = accesses.effects(func, store, Some(summaries));
+                let array = location(accesses, 3);
+                assert!(matches!(
+                    effects.writes.as_slice(),
+                    [ObjectAccess::Within(projection)]
+                        if projection.slice.first_leaf == array.first_leaf
+                            && projection.slice.leaf_count == array.leaf_count
+                ));
+                assert!(effects.overwrites.is_empty());
+                assert!(effects.initialization.is_empty());
+                assert!(accesses.may_overlap(effects.writes[0], location(accesses, 8)));
+                assert!(!accesses.may_overlap(effects.writes[0], location(accesses, 4)));
             },
         );
     }

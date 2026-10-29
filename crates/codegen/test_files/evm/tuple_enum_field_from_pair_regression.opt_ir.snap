@@ -24,22 +24,15 @@ func public %entry() {
         v11.@Pair = obj.load v1;
         v13.@E = extract_value v11 1.i256;
         v14.enumtag(@E) = enum.tag v13;
-        br_table v14 block11 (0.enumtag(@E) block12) (1.enumtag(@E) block10);
-
-    block10:
-        jump block12;
+        v25.[i256; 2] = extract_value v11 0.i256;
+        v26.i256 = extract_value v25 0.i256;
+        br_table v14 block11 (0.enumtag(@E) block13) (1.enumtag(@E) block15);
 
     block11:
         unreachable;
 
-    block12:
-        v23.i1 = phi (1.i1 block0) (0.i1 block10);
-        v12.[i256; 2] = extract_value v11 0.i256;
-        v18.i256 = extract_value v12 0.i256;
-        br v23 block13 block15;
-
     block13:
-        v20.i1 = eq v18 5.i256;
+        v20.i1 = eq v26 5.i256;
         br v20 block1 block15;
 
     block15:
