@@ -25,7 +25,7 @@ fn check_scalar_cases(op: &str, ty: Type, cases: &[(Immediate, Immediate, Immedi
     let expression = match op {
         "snego" => format!("(v5.{ty_name}, v6.i1) = snego v3;"),
         _ if overflow_op => format!("(v5.{ty_name}, v6.i1) = {op} v3 v4;"),
-        "not" | "neg" | "bswap" | "is_zero" => format!("v5.{result_name} = {op} v3;"),
+        "not" | "neg" | "bswap" | "evm_clz" | "is_zero" => format!("v5.{result_name} = {op} v3;"),
         "shl" | "shr" | "sar" => format!("v5.{ty_name} = {op} v4 v3;"),
         _ => format!("v5.{result_name} = {op} v3 v4;"),
     };
@@ -114,7 +114,7 @@ fn integer_operations_match_ir_at_every_width() {
             "add", "sub", "mul", "neg", "not", "and", "or", "xor", "udiv", "sdiv", "umod", "smod",
             "eq", "ne", "lt", "gt", "le", "ge", "slt", "sgt", "sle", "sge", "is_zero", "uaddo",
             "saddo", "usubo", "ssubo", "umulo", "smulo", "snego", "uaddsat", "saddsat", "usubsat",
-            "ssubsat", "umulsat", "smulsat", "bswap",
+            "ssubsat", "umulsat", "smulsat", "bswap", "evm_clz",
         ] {
             if ty == Type::I1 && (op.ends_with("sat") || op == "bswap") {
                 continue;
@@ -141,6 +141,15 @@ fn integer_operations_match_ir_at_every_width() {
                                 "neg" => -lhs,
                                 "not" => !lhs,
                                 "bswap" => lhs.bswap(),
+                                // Leading zeros within the type: those of the
+                                // zero-extended word, less those of all ones.
+                                "evm_clz" => {
+                                    let word = |imm: Immediate| {
+                                        imm.zext(Type::I256).as_i256().to_u256().leading_zeros()
+                                    };
+                                    let zeros = word(lhs) - word(Immediate::all_one(ty));
+                                    Immediate::from_i256(I256::from(zeros), ty)
+                                }
                                 "and" => lhs & rhs,
                                 "or" => lhs | rhs,
                                 "xor" => lhs ^ rhs,

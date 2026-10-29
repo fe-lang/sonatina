@@ -129,6 +129,31 @@ block0:
 }
 
 #[test]
+fn leading_zero_counts_compile_without_a_count_instruction() {
+    let source = r#"
+func public %count(v0.*i256, v1.*i64, v2.*i8) {
+block0:
+    v3.i256 = mload v0 i256;
+    v4.i256 = evm_clz v3;
+    mstore v0 v4 i256;
+    v5.i64 = mload v1 i64;
+    v6.i64 = evm_clz v5;
+    mstore v1 v6 i64;
+    v7.i8 = mload v2 i8;
+    v8.i8 = evm_clz v7;
+    mstore v2 v8 i8;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        Compile::new(parse(source), CraneliftObjectBackend::new())
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+    }
+}
+
+#[test]
 fn imports_globals_and_memory_helpers_use_pc_relative_relocations() {
     let source = r#"
 global external i64 $imported;
