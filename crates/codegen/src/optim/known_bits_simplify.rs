@@ -194,6 +194,11 @@ impl KnownBitsSimplify {
                     Some(*inner_arg)
                 })
             }
+            InstClassKind::Binary(BinaryInstKind::And)
+                if masks_native_shift_counts(func, *result) =>
+            {
+                SimplifiedResult::NoChange
+            }
             InstClassKind::Binary(kind) => {
                 let args = inst_data.collect_values();
                 let [lhs, rhs] = args.as_slice() else {
@@ -293,6 +298,22 @@ fn bounded_shift_count(
     });
     (!already_masked && fact_for_value(func, env, count).unsigned.hi < width)
         .then_some((inst, count, mask))
+}
+
+/// Whether every use of `value` is the count of a native shift. Such a mask
+/// stays even when range analysis makes it redundant: known bits, which
+/// native lowering uses, see the bound only through it.
+fn masks_native_shift_counts(func: &Function, value: ValueId) -> bool {
+    !matches!(func.ctx().triple.architecture, Architecture::Evm)
+        && func.dfg.users_num(value) > 0
+        && func.dfg.users(value).all(|&user| {
+            matches!(
+                func.dfg.inst(user).kind(),
+                InstClassKind::Binary(
+                    BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar
+                )
+            ) && func.dfg.inst(user).collect_values()[0] == value
+        })
 }
 
 /// Rewrites the count of `inst` to `count & mask`.
