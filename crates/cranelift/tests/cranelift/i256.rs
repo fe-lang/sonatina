@@ -235,16 +235,23 @@ fn i256_comparisons_with_one_limb_constants_match_reference() {
         ("le", |a, b| a <= b),
         ("ge", |a, b| a >= b),
     ];
-    // Powers of two and one less take the shifted-limb test.
+    // Powers of two and one less take the shifted-limb test; the others
+    // compare the saturated low limb, except `u64::MAX` below a wide value.
     for constant in [
         U256::zero(),
         U256::one(),
+        U256::from(3),
+        U256::from(30),
         U256::from(31),
         U256::from(32),
+        U256::from(33),
         U256::from(255),
         U256::from(256),
+        U256::from(1000),
         U256::from((1u64 << 63) - 1),
         U256::from(1u64 << 63),
+        U256::from((1u64 << 63) + 1),
+        U256::from(u64::MAX - 1),
         U256::from(u64::MAX),
     ] {
         for (op, expected) in compares {
@@ -277,19 +284,23 @@ fn i256_comparisons_with_extended_words_match_reference() {
         ("le", |a, b| a <= b),
         ("ge", |a, b| a >= b),
     ];
-    let low_word = |value: U256| value & U256::from(u64::MAX);
-    for (op, expected) in compares {
-        let body = |lhs: &str, rhs: &str| {
-            format!(
-                "    v8.i64 = trunc v5 i64;\n    v9.i256 = zext v8 i256;\n    v7.i1 = {op} {lhs} {rhs};\n    mstore v3 0.i256 i256;\n    v10.i8 = zext v7 i8;\n    return v10;"
-            )
-        };
-        check(&body("v4", "v9"), &cases, |[a, b, _]| {
-            (U256::zero(), expected(a, low_word(b)))
-        });
-        check(&body("v9", "v4"), &cases, |[a, b, _]| {
-            (U256::zero(), expected(low_word(b), a))
-        });
+    // A word narrower than 64 bits is below `u64::MAX`, which lets it compare
+    // with a saturated wide value in either order.
+    for (ty, bits) in [("i64", 64), ("i32", 32)] {
+        let low_bits = |value: U256| value & ((U256::one() << bits) - 1);
+        for (op, expected) in compares {
+            let body = |lhs: &str, rhs: &str| {
+                format!(
+                    "    v8.{ty} = trunc v5 {ty};\n    v9.i256 = zext v8 i256;\n    v7.i1 = {op} {lhs} {rhs};\n    mstore v3 0.i256 i256;\n    v10.i8 = zext v7 i8;\n    return v10;"
+                )
+            };
+            check(&body("v4", "v9"), &cases, |[a, b, _]| {
+                (U256::zero(), expected(a, low_bits(b)))
+            });
+            check(&body("v9", "v4"), &cases, |[a, b, _]| {
+                (U256::zero(), expected(low_bits(b), a))
+            });
+        }
     }
 }
 
