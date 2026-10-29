@@ -46,6 +46,7 @@ pub(crate) fn verify_machine_function(
     }
 
     let is = EvmMachine::new(function.ctx().triple).inst_set();
+    let entry = function.layout.entry_block();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let inst_data = function.dfg.inst(inst);
@@ -54,6 +55,16 @@ pub(crate) fn verify_machine_function(
                     "EVM machine IR contains unsupported instruction at inst{}: {}",
                     inst.as_u32(),
                     inst_data.as_text()
+                ));
+            }
+            // What runs once per call sits at the top of the entry block.
+            if let Some(branch) = function.dfg.branch_info(inst)
+                && branch.dests().into_iter().any(|dest| Some(dest) == entry)
+            {
+                return Err(format!(
+                    "EVM machine entry block in func {} is the target of inst{}",
+                    func_ref.as_u32(),
+                    inst.as_u32()
                 ));
             }
             match is.resolve_inst(function.dfg.inst(inst)) {

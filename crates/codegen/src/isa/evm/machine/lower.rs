@@ -148,7 +148,9 @@ fn lower_function(
 ) -> Result<(Function, FuncMachineMap), String> {
     let sig = machine_module.func_sig(func_ref, Clone::clone);
     let machine = Function::new(machine_module, &sig);
-    let source_block_order = source_lowering_order(source);
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(source);
+    let source_block_order = source_lowering_order(source, &cfg);
     let mut ctx = FuncLowerCtx {
         func_ref,
         source,
@@ -170,7 +172,7 @@ fn lower_function(
     ctx.map_args()?;
     ctx.create_source_blocks();
     ctx.create_phi_stubs()?;
-    ctx.lower_non_phi_insts()?;
+    ctx.lower_non_phi_insts(&cfg)?;
     ctx.patch_phi_args()?;
 
     Ok((ctx.machine, ctx.map))
@@ -234,15 +236,31 @@ impl FuncLowerCtx<'_> {
         Ok(())
     }
 
-    fn lower_non_phi_insts(&mut self) -> Result<(), String> {
+    fn lower_non_phi_insts(&mut self, cfg: &ControlFlowGraph) -> Result<(), String> {
+        if let Some(source_entry) = self.source.layout.entry_block() {
+            // The free-pointer save and the prologue that emission adds (frame
+            // entry, DYN_SP initialization, argument spills) run once per call,
+            // at the top of the machine entry block. A back edge to the source
+            // entry block would run them again, so give it a fresh entry block.
+            let body = self.machine_block(source_entry)?;
+            let entry = if cfg.pred_num_of(source_entry) > 0 {
+                let entry = self.machine.dfg.make_block();
+                self.machine.layout.insert_block_before(entry, body);
+                entry
+            } else {
+                body
+            };
+            self.current_block = Some(entry);
+            if self.placement.restores_free_ptr {
+                self.entry_free_ptr = Some(self.emit_mload_abs(FREE_PTR_SLOT as u32));
+            }
+            if entry != body {
+                self.append_inst_no_result_to(entry, control_flow::Jump::new(self.is, body));
+            }
+        }
         for source_block in self.source_block_order.clone() {
             let start_block = self.machine_block(source_block)?;
             self.current_block = Some(start_block);
-            if self.placement.restores_free_ptr
-                && Some(source_block) == self.source.layout.entry_block()
-            {
-                self.entry_free_ptr = Some(self.emit_mload_abs(FREE_PTR_SLOT as u32));
-            }
             for source_inst in self.source.layout.iter_inst(source_block) {
                 if self.source.dfg.is_phi(source_inst) {
                     continue;
@@ -1175,11 +1193,9 @@ impl FuncLowerCtx<'_> {
     }
 }
 
-fn source_lowering_order(source: &Function) -> Vec<BlockId> {
-    let mut cfg = ControlFlowGraph::new();
-    cfg.compute(source);
+fn source_lowering_order(source: &Function, cfg: &ControlFlowGraph) -> Vec<BlockId> {
     let mut dom = DomTree::new();
-    dom.compute(&cfg);
+    dom.compute(cfg);
 
     let mut order = dom.rpo().to_owned();
     for block in source.layout.iter_block() {

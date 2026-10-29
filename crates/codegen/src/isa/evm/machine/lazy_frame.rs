@@ -6,6 +6,7 @@ use sonatina_ir::{
 };
 
 use crate::{
+    cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
     post_domtree::{PDTIdom, PostDomTree},
     stackalloc::{Action, Allocator},
@@ -13,8 +14,9 @@ use crate::{
 
 use super::module::FuncMachineMap;
 use crate::isa::evm::{
-    MachineFuncPlan, ObjLoc,
+    DYN_SP_SLOT, MachineFuncPlan, ObjLoc,
     emit::{fold_stack_actions, split_at_continuation},
+    prepare::value_imm_u32,
     ptr_provenance::Provenance,
 };
 
@@ -239,7 +241,21 @@ fn compute_lazy_frame_plan_inner(
         return None;
     }
 
-    let entry_block = nearest_common_dominator(&dom, &dep_blocks)?;
+    // The frame is entered and left at most once per call. An enter or exit
+    // inside a cycle would leave the frame between iterations while its data
+    // may still be live in the next one, and a call or malloc in between would
+    // overwrite it. So the region grows until both ends lie outside every
+    // cycle, and then contains each cycle with a dependency.
+    let mut sccs = CfgSccAnalysis::new();
+    sccs.compute(&cfg);
+    let in_cycle = |block| {
+        sccs.scc_of(block)
+            .is_some_and(|scc| sccs.scc_data(scc).is_cycle)
+    };
+    let nearest = nearest_common_dominator(&dom, &dep_blocks)?;
+    let entry_block = dom_chain(&dom, nearest)
+        .into_iter()
+        .find(|&block| !in_cycle(block))?;
     if !dep_blocks
         .iter()
         .all(|&block| dom.dominates(entry_block, block))
@@ -247,8 +263,22 @@ fn compute_lazy_frame_plan_inner(
         return None;
     }
 
-    let enter = earliest_point_in_block(&dep_points, entry_block)?;
-    let exits = match nearest_common_postdominator(&post_dom, &dep_blocks)? {
+    let enter = if entry_block == nearest {
+        earliest_point_in_block(&dep_points, entry_block)?
+    } else {
+        // A hoisted entry block has no dependencies of its own.
+        dep_blocks.push(entry_block);
+        FrameInjectionPoint::BeforeSite(FrameSite::PreInst(
+            function.layout.last_inst_of(entry_block)?,
+        ))
+    };
+    let exit_node = match nearest_common_postdominator(&post_dom, &dep_blocks)? {
+        PostNode::Real(block) => postdom_chain(&post_dom, block)
+            .into_iter()
+            .find(|node| !matches!(*node, PostNode::Real(block) if in_cycle(block)))?,
+        node => node,
+    };
+    let exits = match exit_node {
         PostNode::Real(exit_block) if dom.dominates(entry_block, exit_block) => {
             vec![latest_point_in_block_or_entry(&dep_points, exit_block)]
         }
@@ -456,9 +486,15 @@ fn collect_dep_points(
     );
 
     let machine_isa = sonatina_ir::isa::evm::EvmMachine::new(function.dfg.ctx.triple);
+    let mut dyn_sp_reads = Vec::new();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
+            if let EvmMachineInstKind::EvmMload(load) = &data
+                && value_imm_u32(function, *load.addr()) == Some(DYN_SP_SLOT as u32)
+            {
+                dyn_sp_reads.push((block, inst));
+            }
             // Phis emit no code, so their values need the frame only where
             // their inputs are defined and their results used.
             if matches!(data, EvmMachineInstKind::Phi(_)) {
@@ -519,6 +555,41 @@ fn collect_dep_points(
                 );
             }
         }
+    }
+
+    // A heap malloc clamps its base to the dynamic SP. Read before the frame is
+    // entered, that SP lies below the frame, so a frame entered later would land
+    // on the buffer. Such a read needs the frame when another dependency can
+    // follow it.
+    let mut reaches_dep = FxHashSet::default();
+    let mut work: Vec<BlockId> = deps.points.iter().map(|point| point.block).collect();
+    while let Some(block) = work.pop() {
+        for &pred in cfg.preds_of(block) {
+            if reaches_dep.insert(pred) {
+                work.push(pred);
+            }
+        }
+    }
+    let dyn_sp_deps: Vec<_> = dyn_sp_reads
+        .into_iter()
+        .filter(|&(block, read)| {
+            let read_order = order.key(
+                block,
+                FrameInjectionPoint::BeforeSite(FrameSite::PreInst(read)),
+            );
+            reaches_dep.contains(&block)
+                || deps
+                    .points
+                    .iter()
+                    .any(|point| point.block == block && point.exit.order > read_order)
+        })
+        .collect();
+    for (block, read) in dyn_sp_deps {
+        deps.push(
+            block,
+            FrameInjectionPoint::BeforeSite(FrameSite::PreInst(read)),
+            FrameInjectionPoint::BeforeSite(FrameSite::PostInst(read)),
+        );
     }
     Some(deps.points)
 }

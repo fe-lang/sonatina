@@ -1,0 +1,47 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false }
+#! evm.case: two
+#!   calldata: u256(2)
+#!   expect: return u256(206)
+
+target = "evm-ethereum-osaka"
+
+# `v1`'s malloc runs before the lazy frame is entered, and its buffer is still
+# read after the frame object `v2` is written. The frame must not be placed on
+# the buffer.
+func private %f(v0.i256) -> i256 {
+block0:
+    v20.i256 = add v0 32.i256;
+    v1.*i256 = evm_malloc v20;
+    mstore v1 v0 i256;
+    v2.*i256 = alloca i256;
+    v21.i256 = add v0 100.i256;
+    mstore v2 v21 i256;
+    v3.i256 = mload v1 i256;
+    v4.i1 = eq v0 0.i256;
+    br v4 block1 block2;
+
+block1:
+    return v3;
+
+block2:
+    v5.i256 = sub v0 1.i256;
+    v6.i256 = call %f v5;
+    v7.i256 = mload v2 i256;
+    v8.i256 = add v6 v7;
+    v9.i256 = add v8 v3;
+    return v9;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i32;
+    v1.i256 = call %f v0;
+    mstore 0.i32 v1 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

@@ -1,0 +1,47 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false }
+#! evm.case: two_iterations
+#!   calldata: u256(2)
+#!   expect: return u256(5)
+
+target = "evm-ethereum-osaka"
+
+# The frame object is re-created in the loop header and read in the latch after
+# a recursive call. The frame must stay entered across the whole loop, or the
+# callee's frame lands on the caller's object.
+func private %f(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (0.i256 block0) (v7 block2);
+    v2.i256 = phi (0.i256 block0) (v6 block2);
+    v3.*i256 = alloca i256;
+    v4.i256 = add v1 v0;
+    mstore v3 v4 i256;
+    v5.i1 = lt v1 v0;
+    br v5 block2 block3;
+
+block2:
+    v8.i256 = call %f 0.i256;
+    v9.i256 = mload v3 i256;
+    v6.i256 = add v2 v9;
+    v7.i256 = add v1 1.i256;
+    jump block1;
+
+block3:
+    return v2;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i32;
+    v1.i256 = call %f v0;
+    mstore 0.i32 v1 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

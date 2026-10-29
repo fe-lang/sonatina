@@ -6,36 +6,38 @@ input_file: test_files/evm/final_spill_share_entry_loop.sntn
 evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false mem_plan_detail=true
 
 object: Contract
-  section runtime: 238 bytes
-  total: 238 bytes
+  section runtime: 261 bytes
+  total: 261 bytes
 
 functions:
-  mem: global_dyn_base=0x180 arena_base=0xa0 scratch_peak_words=2 stable_chain_peak_words=5
+  mem: global_dyn_base=0x1c0 arena_base=0xa0 scratch_peak_words=2 stable_chain_peak_words=7
   entry: ir_blocks=1 ir_insts=9 vcode_ops=34 fixups=2 imm_bytes=7
     mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xe0) entry_abs_words=2 abs_words_end=3
-  spin: ir_blocks=3 ir_insts=39 vcode_ops=139 fixups=6 imm_bytes=25
-    mem: scratch_words=0 stable_words=4 stable_mode=StableAbs(base=0x100) entry_abs_words=3 abs_words_end=7
+  spin: ir_blocks=4 ir_insts=40 vcode_ops=150 fixups=6 imm_bytes=31
+    mem: scratch_words=0 stable_words=6 stable_mode=StableAbs(base=0x100) entry_abs_words=3 abs_words_end=9
   one: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
-    mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=2
+    mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=9 abs_words_end=2
 
 mem plan detail:
-evm mem plan: global_dyn_base=0x180 arena_base=0xa0 scratch_peak_words=2 stable_chain_peak_words=5
+evm mem plan: global_dyn_base=0x1c0 arena_base=0xa0 scratch_peak_words=2 stable_chain_peak_words=7
 evm mem plan: entry scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xe0) entry_abs_words=2 abs_words_end=3
-evm mem plan: spin scratch_words=0 stable_words=4 stable_mode=StableAbs(base=0x100) entry_abs_words=3 abs_words_end=7
+evm mem plan: spin scratch_words=0 stable_words=6 stable_mode=StableAbs(base=0x100) entry_abs_words=3 abs_words_end=9
   scratch_spill v18 slot=0 addr=0x0
   scratch_spill v20 slot=1 addr=0x20
-  spill v2 offset_words=0 loc=StableAbs(0) addr=0x100
-  spill v3 offset_words=1 loc=StableAbs(1) addr=0x120
-  spill v4 offset_words=2 loc=StableAbs(2) addr=0x140
-  spill v5 offset_words=3 loc=StableAbs(3) addr=0x160
+  spill v0 offset_words=0 loc=StableAbs(0) addr=0x100
+  spill v1 offset_words=1 loc=StableAbs(1) addr=0x120
+  spill v2 offset_words=2 loc=StableAbs(2) addr=0x140
+  spill v3 offset_words=3 loc=StableAbs(3) addr=0x160
+  spill v4 offset_words=4 loc=StableAbs(4) addr=0x180
+  spill v5 offset_words=5 loc=StableAbs(5) addr=0x1a0
   spill v22 offset_words=0 loc=StableAbs(0) addr=0x100
   spill v24 offset_words=1 loc=StableAbs(1) addr=0x120
   spill v30 offset_words=2 loc=StableAbs(2) addr=0x140
-evm mem plan: one scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=2
+evm mem plan: one scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=9 abs_words_end=2
 
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=22265 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1125
+  case ok: calldata_len=32 success reason=Return gas_used=22220 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1080
 
 
 --------------- DEBUG ---------------
@@ -80,59 +82,71 @@ entry:
 
 // func private %spin(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) -> i256
 spin:
-  block0:
+  block2:
     JUMPDEST
-    DUP3
+    DUP1
     PUSH2 0x100 (256)
     MSTORE
-    DUP4
+    DUP2
     PUSH2 0x120 (288)
     MSTORE
-    DUP5
+    DUP3
     PUSH2 0x140 (320)
     MSTORE
-    DUP6
+    DUP4
     PUSH2 0x160 (352)
     MSTORE
-    DUP1  // v6.i256 = evm_mload v0;
+    DUP5
+    PUSH2 0x180 (384)
+    MSTORE
+    DUP6
+    PUSH2 0x1a0 (416)
+    MSTORE
+    POP  // jump block0;
+    POP
+    POP
+    POP
+    POP
+    POP
+  block0:
+    JUMPDEST
+    PUSH2 0x100 (256)  // v6.i256 = evm_mload v0;
+    MLOAD
     MLOAD
     PUSH1 `pc + (3)`  // v7.i256 = call %one;
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH2 0x160 (352)  // v28.i256 = add v5 v7;
+    PUSH2 0x1a0 (416)  // v28.i256 = add v5 v7;
     MLOAD
     ADD
-    PUSH2 0x140 (320)  // v29.i256 = add v28 v4;
+    PUSH2 0x180 (384)  // v29.i256 = add v28 v4;
     MLOAD
     ADD
-    PUSH2 0x120 (288)  // v30.i256 = add v29 v3;
+    PUSH2 0x160 (352)  // v30.i256 = add v29 v3;
     MLOAD
     ADD
-    PUSH2 0x100 (256)  // v31.i256 = add v30 v2;
+    PUSH2 0x140 (320)  // v31.i256 = add v30 v2;
     MLOAD
     ADD
-    DUP4  // v32.i256 = add v31 v1;
+    PUSH2 0x120 (288)  // v32.i256 = add v31 v1;
+    MLOAD
     ADD
     ADD  // v8.i256 = add v6 v32;
     DUP1  // evm_mstore v0 v8;
-    DUP3
+    PUSH2 0x100 (256)
+    MLOAD
     MSTORE
     PUSH1 0xc8 (200)  // v14.i256 = lt v8 v9;
     DUP2
     LT
-    PUSH1 block2  // br v14 block2 block1;
+    PUSH1 block3  // br v14 block3 block1;
     JUMPI
   block1:
-    SWAP1  // v15.i256 = add v8 v1;
-    POP
+    PUSH2 0x120 (288)  // v15.i256 = add v8 v1;
+    MLOAD
     ADD
-    SWAP4  // v17.i256 = add v15 v16;
-    POP
-    POP
-    POP
-    POP
-    PUSH1 0x1 (1)
+    PUSH1 0x1 (1)  // v17.i256 = add v15 v16;
     DUP2
     ADD
     DUP1
@@ -217,7 +231,7 @@ spin:
     XOR  // v49.i256 = xor v48 v17;
     SWAP1  // return v49;
     JUMP
-  block2:
+  block3:
     JUMPDEST
     POP  // jump block0;
     PUSH1 block0

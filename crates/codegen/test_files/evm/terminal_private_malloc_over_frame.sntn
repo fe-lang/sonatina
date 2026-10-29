@@ -1,0 +1,67 @@
+#! evm.config: { stack_reach: 4, vcode: true }
+#! evm.case: one
+#!   calldata: u256(1)
+#!   expect: return u256(27)
+
+target = "evm-ethereum-osaka"
+
+# `%rec` keeps six values in its dynamic frame across the recursive call, then
+# builds its return payload in a terminal-private malloc. The payload buffer
+# must not overlap the frame the reloaded values come from.
+func private %rec(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    v2.i256 = add v0 2.i256;
+    v3.i256 = add v0 3.i256;
+    v4.i256 = add v0 4.i256;
+    v5.i256 = add v0 5.i256;
+    v6.i256 = add v0 6.i256;
+    v7.i1 = eq v0 0.i256;
+    br v7 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v8.i256 = sub v0 1.i256;
+    v9.i256 = call %rec v8;
+    v40.*[i256; 8] = evm_malloc 256.i256;
+    v50.*i256 = gep v40 0.i256 0.i256;
+    mstore v50 0.i256 i256;
+    v51.*i256 = gep v40 0.i256 1.i256;
+    mstore v51 0.i256 i256;
+    v52.*i256 = gep v40 0.i256 2.i256;
+    mstore v52 0.i256 i256;
+    v53.*i256 = gep v40 0.i256 3.i256;
+    mstore v53 0.i256 i256;
+    v54.*i256 = gep v40 0.i256 4.i256;
+    mstore v54 0.i256 i256;
+    v55.*i256 = gep v40 0.i256 5.i256;
+    mstore v55 0.i256 i256;
+    v56.*i256 = gep v40 0.i256 6.i256;
+    mstore v56 0.i256 i256;
+    v57.*i256 = gep v40 0.i256 7.i256;
+    mstore v57 0.i256 i256;
+    v20.i256 = add v1 v2;
+    v21.i256 = add v20 v3;
+    v22.i256 = add v21 v4;
+    v23.i256 = add v22 v5;
+    v24.i256 = add v23 v6;
+    v25.i256 = add v24 v9;
+    mstore v50 v25 i256;
+    evm_return v40 32.i256;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i32;
+    v1.i256 = call %rec v0;
+    mstore 0.i32 v1 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

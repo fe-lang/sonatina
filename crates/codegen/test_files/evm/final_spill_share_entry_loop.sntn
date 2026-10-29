@@ -3,9 +3,9 @@
 #!   calldata: u256(10)
 #!   expect: return u256(2541)
 
-# `%spin`'s entry block is a loop header. Its argument spills are stored on
-# entry, so the back edge to block0 re-runs those stores. The spills after the
-# loop reuse the argument words, which are dead by then.
+# `%spin`'s entry block is a loop header. The machine function gets a fresh
+# entry block, so the argument spills are stored once, before the loop, and
+# stay live across it.
 
 target = "evm-ethereum-osaka"
 
