@@ -260,23 +260,32 @@ pub(super) fn select(
     })
 }
 
-fn any_nonzero(limbs: &[clif::Value], builder: &mut FunctionBuilder) -> clif::Value {
+/// Compares the bitwise or of `limbs` with zero by `cc`: one `icmp`, which a
+/// branch on it uses directly.
+fn compare_zero(cc: IntCC, limbs: &[clif::Value], builder: &mut FunctionBuilder) -> clif::Value {
     let combined = limbs
         .iter()
         .copied()
         .reduce(|lhs, rhs| builder.ins().bor(lhs, rhs))
         .expect("at least one limb");
-    builder.ins().icmp_imm_s(IntCC::NotEqual, combined, 0)
+    builder.ins().icmp_imm_s(cc, combined, 0)
+}
+
+fn any_nonzero(limbs: &[clif::Value], builder: &mut FunctionBuilder) -> clif::Value {
+    compare_zero(IntCC::NotEqual, limbs, builder)
 }
 
 pub(super) fn is_zero(value: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
-    let nonzero = any_nonzero(&value, builder);
-    bool_not(nonzero, builder)
+    compare_zero(IntCC::Equal, &value, builder)
+}
+
+fn difference(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> Limbs {
+    std::array::from_fn(|limb| builder.ins().bxor(lhs[limb], rhs[limb]))
 }
 
 pub(super) fn eq(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
-    let diff: Limbs = std::array::from_fn(|limb| builder.ins().bxor(lhs[limb], rhs[limb]));
-    is_zero(diff, builder)
+    let difference = difference(lhs, rhs, builder);
+    is_zero(difference, builder)
 }
 
 /// Compares the high halves with `high_cc` and, when they are equal, the
@@ -303,11 +312,21 @@ pub(super) fn ult(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> clif
 }
 
 /// An i256 operand whose value fits its low limb: a constant, or a value
-/// zero-extended from at most 64 bits.
+/// zero-extended from at most 64 bits, `narrow` when from fewer.
 #[derive(Clone, Copy)]
 enum OneLimb {
     Constant(u64),
-    Extended,
+    Extended { narrow: bool },
+}
+
+impl OneLimb {
+    /// Whether the value is known to be below `u64::MAX`.
+    fn below_max(self) -> bool {
+        match self {
+            OneLimb::Constant(constant) => constant < u64::MAX,
+            OneLimb::Extended { narrow } => narrow,
+        }
+    }
 }
 
 /// An unsigned comparison with an operand that fits one limb: the other
@@ -348,45 +367,36 @@ fn one_limb_compare(
         let cc = if negate { cc.complement() } else { cc };
         return Some(builder.ins().icmp_imm_s(cc, combined, 0));
     }
-    // `lhs < rhs`.
-    let low_lt =
-        |lhs: clif::Value, rhs: (clif::Value, OneLimb), builder: &mut FunctionBuilder| match rhs {
-            (_, OneLimb::Constant(constant)) => {
-                builder
-                    .ins()
-                    .icmp_imm_u(IntCC::UnsignedLessThan, lhs, constant as i64)
-            }
-            (rhs, OneLimb::Extended) => builder.ins().icmp(IntCC::UnsignedLessThan, lhs, rhs),
-        };
-    let less = match (lhs, rhs) {
-        ((value, _), (other, Some(kind))) => {
-            let high = any_nonzero(&value[1..], builder);
-            let high_zero = bool_not(high, builder);
-            let low = low_lt(value[0], (other[0], kind), builder);
-            builder.ins().band(high_zero, low)
+    // The wide operand saturated to its low limb, `u64::MAX` when a high limb
+    // is set, compares with the one-limb operand as the wide operand does:
+    // `wide < one` always, and `one < wide` when `one` is below `u64::MAX`.
+    // One comparison, which a branch on it uses directly.
+    let (wide, (one, kind), cc) = match (lhs, rhs) {
+        ((value, _), (other, Some(kind))) => (value, (other[0], kind), IntCC::UnsignedLessThan),
+        ((other, Some(kind)), (value, _)) if kind.below_max() => {
+            (value, (other[0], kind), IntCC::UnsignedGreaterThan)
         }
-        ((other, Some(kind)), (value, _)) => {
+        ((other, Some(_)), (value, _)) => {
             let high = any_nonzero(&value[1..], builder);
-            let low = match kind {
-                OneLimb::Constant(constant) => {
-                    builder
-                        .ins()
-                        .icmp_imm_u(IntCC::UnsignedGreaterThan, value[0], constant as i64)
-                }
-                OneLimb::Extended => {
-                    builder
-                        .ins()
-                        .icmp(IntCC::UnsignedLessThan, other[0], value[0])
-                }
-            };
-            builder.ins().bor(high, low)
+            let low = builder
+                .ins()
+                .icmp(IntCC::UnsignedLessThan, other[0], value[0]);
+            let less = builder.ins().bor(high, low);
+            return Some(if negate {
+                bool_not(less, builder)
+            } else {
+                less
+            });
         }
         _ => return None,
     };
-    Some(if negate {
-        bool_not(less, builder)
-    } else {
-        less
+    let high = any_nonzero(&wide[1..], builder);
+    let max = builder.ins().iconst(I64, -1);
+    let saturated = builder.ins().select(high, max, wide[0]);
+    let cc = if negate { cc.complement() } else { cc };
+    Some(match kind {
+        OneLimb::Constant(constant) => builder.ins().icmp_imm_u(cc, saturated, constant as i64),
+        OneLimb::Extended { .. } => builder.ins().icmp(cc, saturated, one),
     })
 }
 
@@ -394,8 +404,8 @@ fn icmp(cc: IntCC, lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> cli
     let (high_cc, lhs, rhs, negate) = match cc {
         IntCC::Equal => return eq(lhs, rhs, builder),
         IntCC::NotEqual => {
-            let equal = eq(lhs, rhs, builder);
-            return bool_not(equal, builder);
+            let difference = difference(lhs, rhs, builder);
+            return any_nonzero(&difference, builder);
         }
         IntCC::UnsignedLessThan => (IntCC::UnsignedLessThan, lhs, rhs, false),
         IntCC::UnsignedGreaterThan => (IntCC::UnsignedLessThan, rhs, lhs, false),
@@ -745,12 +755,15 @@ pub(super) fn translate_i256_op(
             }
             let inst = dfg.value_inst(*value)?;
             let source = *dfg.inst(inst).collect_values().first()?;
+            let source_ty = dfg.value_ty(source);
             (dfg.inst(inst).kind() == InstClassKind::Cast(CastInstKind::Zext)
                 && matches!(
-                    dfg.value_ty(source),
+                    source_ty,
                     Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64
                 ))
-            .then_some(OneLimb::Extended)
+            .then_some(OneLimb::Extended {
+                narrow: source_ty != Type::I64,
+            })
         };
         let (lhs_const, rhs_const) = (one_limb(lhs), one_limb(rhs));
         let (lhs, rhs) = binary(lhs, rhs, value_map, builder)?;
