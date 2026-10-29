@@ -148,6 +148,10 @@ impl CraneliftJitArtifact {
     /// indirect results use a platform-specific hidden return buffer, not an
     /// ordinary C struct result. Prefer public scalar/pointer wrappers; see the
     /// [crate's ABI contract](crate) for the supported C subset.
+    ///
+    /// Private functions that make or take tail calls use Cranelift's `tail`
+    /// convention, which no native caller can use, so they have no address
+    /// here.
     pub fn function_address(&self, name: &str) -> Option<*const u8> {
         self.functions
             .get(name)

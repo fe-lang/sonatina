@@ -11,6 +11,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use rustc_hash::FxHashSet;
 use sonatina_ir::{
     ControlFlowGraph, Function,
     module::{FuncRef, Module},
@@ -18,7 +19,10 @@ use sonatina_ir::{
 use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
-    analysis::func_behavior,
+    analysis::{
+        func_behavior,
+        tail_position::{recursive_tail_callees, tail_callers, tail_calls, tail_switches},
+    },
     cfg_edit::CleanupMode,
     compile::OptLevel,
     domtree::DomTree,
@@ -322,6 +326,9 @@ pub struct Pipeline {
     steps: Vec<Step>,
     /// Configuration for all [`Step::Inline`] steps in this pipeline.
     pub inliner_config: InlinerConfig,
+    /// Whether [`Step::DeadArgElim`] keeps the parameters of functions that
+    /// recursive cycles tail-call, which native code makes tail calls.
+    keep_tail_callee_args: bool,
 }
 
 const PRIMARY_FUNC_PASSES: &[Pass] = &[
@@ -517,6 +524,7 @@ impl Pipeline {
         Self {
             steps: Vec::new(),
             inliner_config: InlinerConfig::default(),
+            keep_tail_callee_args: false,
         }
     }
 
@@ -569,6 +577,7 @@ impl Pipeline {
             Pass::SwitchFormation,
             Pass::CompareSubFusion,
         ]));
+        pipeline.keep_tail_callee_args = true;
         pipeline
     }
 
@@ -685,7 +694,12 @@ impl Pipeline {
                 }
                 Step::DeadArgElim => {
                     let _span = debug_span!("sonatina.optim.pipeline.dead_arg_elim").entered();
-                    run_dead_arg_elim(module, &[], DeadArgElimConfig::default());
+                    let roots = if self.keep_tail_callee_args {
+                        recursive_tail_callees(module)
+                    } else {
+                        Vec::new()
+                    };
+                    run_dead_arg_elim(module, &roots, DeadArgElimConfig::default());
                     func_behavior_dirty = true;
                 }
                 Step::PromoteObjectArgs => {
@@ -784,6 +798,11 @@ fn run_module_pass(
     // This map is owned by this one batch, never by the reusable round cache.
     let arg_invariance = (pass == Pass::AggregateScalarize)
         .then(|| compute_arg_invariance(module, round_facts.objects.as_ref().unwrap()));
+    let tail_callers: FxHashSet<_> = if pass == Pass::CompareSubFusion {
+        tail_callers(module).into_iter().collect()
+    } else {
+        FxHashSet::default()
+    };
     let changed = AtomicBool::new(false);
     let run_on = |func_ref: FuncRef, func: &mut Function| {
         let _span = debug_span!(
@@ -802,6 +821,7 @@ fn run_module_pass(
             arg_invariance
                 .as_ref()
                 .and_then(|proofs| proofs.get(&func_ref)),
+            tail_callers.contains(&func_ref),
         )
         .changed
         {
@@ -833,6 +853,7 @@ struct PassContext {
 
 /// Dispatch a single pass, recomputing any required analyses from the
 /// current function state.
+#[allow(clippy::too_many_arguments)]
 fn run_pass(
     pass: Pass,
     func_ref: Option<FuncRef>,
@@ -841,6 +862,7 @@ fn run_pass(
     local_object_args: Option<&LocalObjectArgMap>,
     object_effects: Option<&ObjectEffectSummaryMap>,
     arg_invariance: Option<&FunctionArgInvariance>,
+    tail_caller: bool,
 ) -> PassResult {
     let _span = trace_span!("sonatina.optim.pipeline.pass", pass = pass.as_str()).entered();
     let changed = match pass {
@@ -957,7 +979,17 @@ fn run_pass(
             let _span = trace_span!("sonatina.optim.pipeline.pass.compare_sub_fusion").entered();
             ctx.cfg.compute(func);
             ctx.domtree.compute(&ctx.cfg);
-            CompareSubFusion::new().run(func, &ctx.domtree)
+            let switches: Vec<_> = match func_ref.filter(|_| tail_caller) {
+                Some(func_ref) => {
+                    let sites = tail_calls(func_ref, func)
+                        .into_iter()
+                        .map(|(call, _)| call)
+                        .collect();
+                    tail_switches(func, &sites).into_keys().collect()
+                }
+                None => Vec::new(),
+            };
+            CompareSubFusion::new().run(func, &ctx.domtree, &switches)
         }
         Pass::RangeBranchSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.range_branch_simplify").entered();

@@ -15,7 +15,7 @@ impl FuncTransform for CompareSubFusionTransform {
     fn transform(&mut self, func: &mut Function) {
         self.cfg.compute(func);
         self.domtree.compute(&self.cfg);
-        CompareSubFusion::new().run(func, &self.domtree);
+        CompareSubFusion::new().run(func, &self.domtree, &[]);
     }
 
     fn test_root(&self) -> PathBuf {

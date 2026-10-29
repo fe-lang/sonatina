@@ -16,13 +16,13 @@ keywords = ["compiler", "cranelift", "native", "sp1"]
 publish = false
 
 [dependencies]
-cranelift-codegen = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", default-features = false, features = ["std", "unwind", "host-arch"] }
+cranelift-codegen = { git = "https://github.com/fe-lang/wasmtime", rev = "94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1", default-features = false, features = ["std", "unwind", "host-arch"] }
 cranelift-entity = "0.136.1"
-cranelift-frontend = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe" }
-cranelift-jit = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", optional = true }
-cranelift-module = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe" }
-cranelift-native = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe" }
-cranelift-object = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe" }
+cranelift-frontend = { git = "https://github.com/fe-lang/wasmtime", rev = "94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1" }
+cranelift-jit = { git = "https://github.com/fe-lang/wasmtime", rev = "94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1", optional = true }
+cranelift-module = { git = "https://github.com/fe-lang/wasmtime", rev = "94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1" }
+cranelift-native = { git = "https://github.com/fe-lang/wasmtime", rev = "94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1" }
+cranelift-object = { git = "https://github.com/fe-lang/wasmtime", rev = "94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1" }
 rustc-hash = "2.0.0"
 sonatina-codegen = { path = "../codegen", version = "0.1.0" }
 sonatina-ir = { path = "../ir", version = "0.1.0" }
