@@ -281,6 +281,47 @@ block0:
 }
 
 #[test]
+fn gep_indices_with_constant_terms_address_their_elements() {
+    // `v2` and `v6` move their constant terms into the address displacement,
+    // including a negative one and one under a shift.
+    let source = r#"
+func public %read(v0.*i64, v1.i64) -> i64 {
+block0:
+    v2.i64 = sub v1 2.i64;
+    v3.*i64 = gep v0 v2;
+    v4.i64 = mload v3 i64;
+    v5.i64 = add v1 1.i64;
+    v6.i64 = shl 1.i64 v5;
+    v7.*i64 = gep v0 v6;
+    v8.i64 = mload v7 i64;
+    v9.i64 = mul v4 100.i64;
+    v10.i64 = add v9 v8;
+    return v10;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let read: unsafe extern "C" fn(*const i64, i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("read").unwrap()) };
+        let values: Vec<i64> = (0..15).collect();
+        for index in 0..5 {
+            let expected = (2 + index) * 100 + 4 + 2 * (index + 1);
+            assert_eq!(
+                unsafe { read(values.as_ptr().add(4), index) },
+                expected,
+                "{level:?} {index}"
+            );
+        }
+    }
+}
+
+#[test]
 fn gep_treats_true_as_signed_negative_one() {
     let source = r#"
 func public %read(v0.*i64, v1.*i1) -> i64 {

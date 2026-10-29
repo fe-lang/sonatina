@@ -3,7 +3,12 @@ use cranelift_codegen::{
     isa::TargetFrontendConfig,
 };
 use cranelift_frontend::FunctionBuilder;
-use sonatina_ir::{Function, Type, Value, ValueId, module::ModuleCtx, types::CompoundType};
+use sonatina_ir::{
+    Function, Immediate, Type, Value, ValueId,
+    inst::{BinaryInstKind, InstClassKind},
+    module::ModuleCtx,
+    types::CompoundType,
+};
 
 use super::{
     ValueMap, load_limbs, resize_int_value, resolve_i256, resolve_value, signed_scalar,
@@ -286,12 +291,20 @@ pub(super) fn translate_gep(
         };
         match compound {
             CompoundType::Ptr(elem) | CompoundType::Array { elem, .. } => {
-                let index = resolve_index(function, idx_value, true, value_map, builder)?;
-                let elem_size = builder
-                    .ins()
-                    .iconst(clif::types::I64, i64::from(value_storage_size(elem, ctx)?));
-                let offset = builder.ins().imul(index, elem_size);
+                let (index_value, shift, constant) = index_terms(function, idx_value);
+                let mut index = resolve_index(function, index_value, true, value_map, builder)?;
+                if shift != 0 {
+                    index = builder.ins().ishl_imm_u(index, i64::from(shift));
+                }
+                let elem_size = i64::from(value_storage_size(elem, ctx)?);
+                let size = builder.ins().iconst(clif::types::I64, elem_size);
+                let offset = builder.ins().imul(index, size);
                 addr = builder.ins().iadd(addr, offset);
+                if constant != 0 {
+                    addr = builder
+                        .ins()
+                        .iadd_imm_s(addr, constant.wrapping_mul(elem_size));
+                }
                 current_ty = elem;
             }
             CompoundType::Struct(_) => {
@@ -310,6 +323,54 @@ pub(super) fn translate_gep(
     }
 
     Ok(addr)
+}
+
+/// An i64 index as `(x << shift) + constant`. The constant moves into the
+/// address's displacement, where the addressing mode adds it: a slot at
+/// `base + ((depth - 2) << 5)` loads from `-64(base, depth << 5)`, sharing
+/// `depth << 5` with the slot at `base + (depth << 5)`. An index with other
+/// uses stays whole, as they compute it anyway.
+fn index_terms(function: &Function, index: ValueId) -> (ValueId, u8, i64) {
+    let binary = |value| {
+        let inst = function.dfg.value_inst(value)?;
+        let InstClassKind::Binary(kind) = function.dfg.inst(inst).kind() else {
+            return None;
+        };
+        let [lhs, rhs] = function.dfg.inst(inst).collect_values()[..] else {
+            return None;
+        };
+        Some((kind, lhs, rhs))
+    };
+    let imm = |value| match function.dfg.value_imm(value)? {
+        Immediate::I64(imm) => Some(imm),
+        _ => None,
+    };
+    if function.dfg.value_ty(index) != Type::I64 || function.dfg.users_num(index) != 1 {
+        return (index, 0, 0);
+    }
+    let (shift, mut value) = match binary(index) {
+        Some((BinaryInstKind::Shl, bits, value)) if let Some(bits @ 0..64) = imm(bits) => {
+            (bits as u8, value)
+        }
+        _ => (0, index),
+    };
+    let mut constant = 0i64;
+    loop {
+        let (next, term) = match binary(value) {
+            Some((BinaryInstKind::Add, next, term)) if let Some(term) = imm(term) => (next, term),
+            Some((BinaryInstKind::Add, term, next)) if let Some(term) = imm(term) => (next, term),
+            Some((BinaryInstKind::Sub, next, term)) if let Some(term) = imm(term) => {
+                (next, term.wrapping_neg())
+            }
+            _ => break,
+        };
+        value = next;
+        constant = constant.wrapping_add(term);
+    }
+    if constant == 0 {
+        return (index, 0, 0);
+    }
+    (value, shift, constant.wrapping_shl(u32::from(shift)))
 }
 
 pub(super) fn resolve_index(
