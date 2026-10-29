@@ -549,8 +549,11 @@ impl Pipeline {
     ///
     /// O2 runs the speed schedule with an inliner tuned for native code. O1
     /// stops that schedule after its second of four inline rounds, for
-    /// quicker builds. Both end by forming switches from comparison trees and
-    /// fusing comparisons with the subtractions they guard.
+    /// quicker builds. Both end by simplifying with known bits and ranges
+    /// again, so code inlined after the first round has bounded shift counts
+    /// masked too, then folding boolean phis, forming switches from
+    /// comparison trees and fusing comparisons with the subtractions they
+    /// guard.
     /// Os is the size pipeline.
     pub fn native(level: OptLevel) -> Self {
         let mut pipeline = match level {
@@ -560,6 +563,7 @@ impl Pipeline {
             OptLevel::O2 => Self::optimized(native_inliner_config(), true, true),
         };
         pipeline.add_step(Step::FuncPasses(vec![
+            Pass::KnownBitsSimplify,
             Pass::BoolPhiFold,
             Pass::CfgCleanup,
             Pass::SwitchFormation,
@@ -2709,11 +2713,12 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 .map(|step| format!("{step:?}"))
                 .collect()
         };
-        // Both end by folding boolean phis, forming switches and fusing
-        // comparisons with subtractions.
+        // Both end by simplifying with known bits, folding boolean phis,
+        // forming switches and fusing comparisons with subtractions.
         let switches = format!(
             "{:?}",
             Step::FuncPasses(vec![
+                Pass::KnownBitsSimplify,
                 Pass::BoolPhiFold,
                 Pass::CfgCleanup,
                 Pass::SwitchFormation,
