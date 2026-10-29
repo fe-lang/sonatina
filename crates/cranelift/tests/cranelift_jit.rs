@@ -373,6 +373,91 @@ fn enum_instructions_are_legalized_before_translation() {
 }
 
 #[test]
+fn enum_variants_share_payload_storage() {
+    // An i8 tag, then every variant's payload from offset 16, the i256's
+    // alignment: `Pair`'s fields lie inside `Some`'s.
+    let source = r#"
+type @Choice = enum { #None, #Some(i256), #Pair(i8, i64) };
+func public %write_pair(v10.*i8, v1.i64) {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v2.objref<@Choice> = obj.alloc @Choice;
+    enum.write_variant v2 #Pair (3.i8, v1);
+    v3.@Choice = obj.load v2;
+    mstore v0 v3 @Choice;
+    return;
+}
+func public %write_some(v10.*i8, v1.i64) {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v2.objref<@Choice> = obj.alloc @Choice;
+    enum.set_tag v2 #Some;
+    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v4.i256 = zext v1 i256;
+    obj.store v3 v4;
+    v5.@Choice = obj.load v2;
+    mstore v0 v5 @Choice;
+    return;
+}
+func public %read(v10.*i8) -> i64 {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v1.@Choice = mload v0 @Choice;
+    v2.i1 = enum.is_variant v1 #Pair;
+    br v2 block1 block2;
+block1:
+    enum.assert_variant v1 #Pair;
+    v3.i64 = enum.extract v1 #Pair 1.i8;
+    return v3;
+block2:
+    v4.i1 = enum.is_variant v1 #Some;
+    br v4 block3 block4;
+block3:
+    enum.assert_variant v1 #Some;
+    v5.i256 = enum.extract v1 #Some 0.i8;
+    v6.i64 = trunc v5 i64;
+    return v6;
+block4:
+    return -1.i64;
+}
+"#;
+    #[repr(C, align(16))]
+    struct Choice([u8; 48]);
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let function = |name| artifact.function_address(name).unwrap();
+        let write_pair: unsafe extern "C" fn(*mut Choice, i64) =
+            unsafe { std::mem::transmute(function("write_pair")) };
+        let write_some: unsafe extern "C" fn(*mut Choice, i64) =
+            unsafe { std::mem::transmute(function("write_some")) };
+        let read: unsafe extern "C" fn(*const Choice) -> i64 =
+            unsafe { std::mem::transmute(function("read")) };
+        let mut choice = Choice([0xaa; 48]);
+        unsafe { write_pair(&mut choice, 0x1122_3344_5566_7788) };
+        assert_eq!(choice.0[0], 2, "{level:?}");
+        assert_eq!(choice.0[16], 3, "{level:?}");
+        assert_eq!(
+            choice.0[24..32],
+            0x1122_3344_5566_7788i64.to_le_bytes(),
+            "{level:?}"
+        );
+        assert_eq!(unsafe { read(&choice) }, 0x1122_3344_5566_7788, "{level:?}");
+        unsafe { write_some(&mut choice, 99) };
+        assert_eq!(choice.0[0], 1, "{level:?}");
+        let mut some = [0; 32];
+        some[0] = 99;
+        assert_eq!(choice.0[16..48], some, "{level:?}");
+        assert_eq!(unsafe { read(&choice) }, 99, "{level:?}");
+    }
+}
+
+#[test]
 fn nested_enums_verify_before_lowering_and_execute_afterward() {
     let source = r#"
 type @OptionI64 = enum { #None, #Some(i64) };

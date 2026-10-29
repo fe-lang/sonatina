@@ -1,5 +1,6 @@
 mod abi;
 mod division;
+mod enums;
 mod frame;
 mod globals;
 mod i256;
@@ -37,6 +38,7 @@ use sonatina_triple::TargetTriple;
 use self::{
     abi::*,
     division::{Divider, DividerCall, Numerator, addmod, div_rem, div_rem_i128, mulmod},
+    enums::{store_tag, store_variant, tag_clif_type, variant_field_offset},
     frame::FrameSlots,
     globals::*,
     i256::*,
@@ -1844,20 +1846,120 @@ fn translate_function(
                     emit_trap(&mut builder, TrapCode::user(1).unwrap());
                 }
                 NativeInstKind::Phi(_) => continue,
-                NativeInstKind::EnumMake(_)
-                | NativeInstKind::EnumTag(_)
-                | NativeInstKind::EnumIsVariant(_)
-                | NativeInstKind::EnumAssertVariant(_)
-                | NativeInstKind::EnumAssertVariantRef(_)
-                | NativeInstKind::EnumExtract(_)
-                | NativeInstKind::EnumSetTag(_)
-                | NativeInstKind::EnumWriteVariant(_)
-                | NativeInstKind::EnumGetTag(_)
-                | NativeInstKind::EnumProj(_) => {
-                    return Err(format!(
-                        "enum instruction {:?} survived EnumLowerToProduct",
-                        inst_data.kind()
-                    ));
+                NativeInstKind::EnumMake(make) => {
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let addr = frame.address(result, &mut builder)?;
+                        store_variant(
+                            function,
+                            *make.variant(),
+                            make.values(),
+                            addr,
+                            &value_map,
+                            target_config,
+                            &mut builder,
+                        )?;
+                        value_map.insert(result, addr);
+                    }
+                }
+                NativeInstKind::EnumWriteVariant(write) => {
+                    let addr = resolve_value(function, *write.object(), &value_map, &mut builder)?;
+                    store_variant(
+                        function,
+                        *write.variant(),
+                        write.values(),
+                        addr,
+                        &value_map,
+                        target_config,
+                        &mut builder,
+                    )?;
+                }
+                NativeInstKind::EnumSetTag(set) => {
+                    let addr = resolve_value(function, *set.object(), &value_map, &mut builder)?;
+                    store_tag(&module.ctx, *set.variant(), addr, &mut builder)?;
+                }
+                NativeInstKind::EnumTag(tag) => {
+                    let addr = resolve_value(function, *tag.value(), &value_map, &mut builder)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let ty = function.dfg.value_ty(result);
+                        load_value(
+                            result,
+                            ty,
+                            addr,
+                            0,
+                            &mut value_map,
+                            pointer_type,
+                            &mut builder,
+                        )?;
+                    }
+                }
+                NativeInstKind::EnumGetTag(tag) => {
+                    let addr = resolve_value(function, *tag.object(), &value_map, &mut builder)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let ty = function.dfg.value_ty(result);
+                        load_value(
+                            result,
+                            ty,
+                            addr,
+                            0,
+                            &mut value_map,
+                            pointer_type,
+                            &mut builder,
+                        )?;
+                    }
+                }
+                NativeInstKind::EnumIsVariant(test) => {
+                    let addr = resolve_value(function, *test.value(), &value_map, &mut builder)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let variant = *test.variant();
+                        let tag_ty = tag_clif_type(&module.ctx, variant)?;
+                        let tag = builder.ins().load(tag_ty, MemFlagsData::new(), addr, 0);
+                        let is_variant =
+                            builder
+                                .ins()
+                                .icmp_imm_u(IntCC::Equal, tag, i64::from(variant.index()));
+                        value_map.insert(result, is_variant);
+                    }
+                }
+                NativeInstKind::EnumAssertVariant(_) => {}
+                NativeInstKind::EnumAssertVariantRef(assertion) => {
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let addr =
+                            resolve_value(function, *assertion.object(), &value_map, &mut builder)?;
+                        value_map.insert(result, addr);
+                    }
+                }
+                NativeInstKind::EnumExtract(extract) => {
+                    let base = resolve_value(function, *extract.value(), &value_map, &mut builder)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let field =
+                            constant_value_index(function, *extract.field(), "enum.extract")?;
+                        let (offset, ty) =
+                            variant_field_offset(&module.ctx, *extract.variant(), field)?;
+                        if uses_indirect_value_representation(&module.ctx, ty) {
+                            let addr = builder.ins().iadd_imm_s(base, i64::from(offset));
+                            value_map.insert(result, addr);
+                        } else {
+                            load_value(
+                                result,
+                                ty,
+                                base,
+                                offset,
+                                &mut value_map,
+                                pointer_type,
+                                &mut builder,
+                            )?;
+                        }
+                    }
+                }
+                NativeInstKind::EnumProj(proj) => {
+                    let base = resolve_value(function, *proj.object(), &value_map, &mut builder)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let field = constant_value_index(function, *proj.field(), "enum.proj")?;
+                        let (offset, _) =
+                            variant_field_offset(&module.ctx, *proj.variant(), field)?;
+                        let addr = builder.ins().iadd_imm_s(base, i64::from(offset));
+                        value_map.insert(result, addr);
+                    }
                 }
                 NativeInstKind::GetFunctionPtr(_)
                 | NativeInstKind::SymAddr(_)

@@ -2,12 +2,12 @@ use std::sync::LazyLock;
 
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
-use super::{Endian, Isa, TypeLayout, TypeLayoutError};
+use super::{Endian, EnumLayout, Isa, TypeLayout, TypeLayoutError};
 use crate::{
     AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind, Type,
     inst::native::inst_set::NativeInstSet,
     module::ModuleCtx,
-    types::{CompoundType, TypeStore},
+    types::{CompoundType, EnumData, TypeStore},
 };
 
 pub mod space {
@@ -93,7 +93,7 @@ pub fn inst_set() -> &'static NativeInstSet {
 impl NativeTypeLayout {
     fn size(ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
         let Type::Compound(compound) = ty else {
-            return Self::scalar_layout(ty).map(|(size, _)| size);
+            return Self::scalar_layout(Self::tag_repr(ty, store)?).map(|(size, _)| size);
         };
         let size = match store.resolve_compound(compound) {
             CompoundType::Array { elem, len } => Self::size(*elem, store)? * len,
@@ -112,7 +112,8 @@ impl NativeTypeLayout {
                 size.next_multiple_of(struct_align)
             }
             CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
-            CompoundType::Enum(_) | CompoundType::Func { .. } => {
+            CompoundType::Enum(data) => Self::enum_layout(data, store)?.size,
+            CompoundType::Func { .. } => {
                 return Err(TypeLayoutError::UnrepresentableType(ty));
             }
         };
@@ -121,7 +122,7 @@ impl NativeTypeLayout {
 
     fn align(ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
         let Type::Compound(compound) = ty else {
-            return Self::scalar_layout(ty).map(|(_, align)| align);
+            return Self::scalar_layout(Self::tag_repr(ty, store)?).map(|(_, align)| align);
         };
         let align = match store.resolve_compound(compound) {
             CompoundType::Array { elem, .. } => Self::align(*elem, store)?,
@@ -136,11 +137,33 @@ impl NativeTypeLayout {
                 align
             }
             CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
-            CompoundType::Enum(_) | CompoundType::Func { .. } => {
+            CompoundType::Enum(data) => Self::enum_layout(data, store)?.align,
+            CompoundType::Func { .. } => {
                 return Err(TypeLayoutError::UnrepresentableType(ty));
             }
         };
         Ok(align)
+    }
+
+    fn enum_layout(data: &EnumData, store: &TypeStore) -> Result<EnumLayout, TypeLayoutError> {
+        let layout = |ty| Ok((Self::size(ty, store)?, Self::align(ty, store)?));
+        let variants = data
+            .variants
+            .iter()
+            .map(|variant| variant.fields.iter().map(|&field| layout(field)).collect())
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(EnumLayout::new(layout(data.tag_ty())?, &variants))
+    }
+
+    /// An enum tag's integer type; any other scalar is its own.
+    fn tag_repr(ty: Type, store: &TypeStore) -> Result<Type, TypeLayoutError> {
+        let Type::EnumTag(enum_ty) = ty else {
+            return Ok(ty);
+        };
+        store
+            .enum_data(enum_ty)
+            .map(EnumData::tag_ty)
+            .ok_or(TypeLayoutError::UnrepresentableType(ty))
     }
 
     fn scalar_layout(ty: Type) -> Result<(usize, usize), TypeLayoutError> {
@@ -152,15 +175,16 @@ impl NativeTypeLayout {
             Type::I64 => (8, 8),
             Type::I128 => (16, 16),
             Type::I256 => (32, 16),
-            Type::EnumTag(_) => return Err(TypeLayoutError::UnrepresentableType(ty)),
-            Type::Compound(_) => unreachable!("compound layout needs its type store"),
+            Type::EnumTag(_) | Type::Compound(_) => {
+                unreachable!("tag and compound layouts need their type store")
+            }
         })
     }
 }
 
 impl TypeLayout for NativeTypeLayout {
     fn size_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
-        if matches!(ty, Type::Compound(_)) {
+        if matches!(ty, Type::Compound(_) | Type::EnumTag(_)) {
             ctx.with_ty_store(|store| Self::size(ty, store))
         } else {
             Self::scalar_layout(ty).map(|(size, _)| size)
@@ -168,7 +192,7 @@ impl TypeLayout for NativeTypeLayout {
     }
 
     fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
-        if matches!(ty, Type::Compound(_)) {
+        if matches!(ty, Type::Compound(_) | Type::EnumTag(_)) {
             ctx.with_ty_store(|store| Self::align(ty, store))
         } else {
             Self::scalar_layout(ty).map(|(_, align)| align)
@@ -228,7 +252,49 @@ mod tests {
     }
 
     #[test]
-    fn native_enum_layouts_remain_abstract_through_nested_aggregates() {
+    fn enum_variants_share_an_aligned_payload() {
+        let module = Module::new(&native_isa());
+        let variant = |name: &str, fields: &[Type]| VariantData {
+            name: name.to_string(),
+            explicit_discriminant: None,
+            fields: fields.to_vec(),
+        };
+        let [choice, option] = [
+            vec![
+                variant("None", &[]),
+                variant("Some", &[Type::I256]),
+                variant("Pair", &[Type::I8, Type::I64]),
+            ],
+            vec![variant("None", &[]), variant("Some", &[Type::I64])],
+        ]
+        .map(|variants| {
+            module.ctx.with_ty_store_mut(|store| {
+                store.make_enum(
+                    &format!("E{}", variants.len()),
+                    &variants,
+                    EnumReprHint::Default,
+                )
+            })
+        });
+        // An i8 tag, then every payload from the i256's 16-byte alignment.
+        assert_eq!(module.ctx.size_of_unchecked(choice), 48);
+        assert_eq!(module.ctx.align_of_unchecked(choice), 16);
+        let offset = |ty, variant, field| module.ctx.enum_variant_field_offset(ty, variant, field);
+        assert_eq!(offset(choice, 1, 0), Some((16, Type::I256)));
+        assert_eq!(offset(choice, 2, 0), Some((16, Type::I8)));
+        assert_eq!(offset(choice, 2, 1), Some((24, Type::I64)));
+        assert_eq!(offset(choice, 0, 0), None);
+        // A two-variant enum's i1 tag pads to its payload's alignment.
+        assert_eq!(module.ctx.size_of_unchecked(option), 16);
+        assert_eq!(offset(option, 1, 0), Some((8, Type::I64)));
+        let Type::Compound(option) = option else {
+            unreachable!()
+        };
+        assert_eq!(module.ctx.size_of_unchecked(Type::EnumTag(option)), 1);
+    }
+
+    #[test]
+    fn native_enum_layouts_nest_in_aggregates() {
         let module = Module::new(&native_isa());
         let (enumeration, array, structure, references) = module.ctx.with_ty_store_mut(|store| {
             let enumeration = store.make_enum(
@@ -256,13 +322,9 @@ mod tests {
             ];
             (enumeration, array, structure, references)
         });
-        for ty in [enumeration, array, structure] {
-            for layout in [module.ctx.size_of(ty), module.ctx.align_of(ty)] {
-                assert!(
-                    matches!(layout, Err(TypeLayoutError::UnrepresentableType(inner)) if inner == enumeration),
-                    "{ty:?}: {layout:?}"
-                );
-            }
+        for (ty, size) in [(enumeration, 16), (array, 32), (structure, 40)] {
+            assert_eq!(module.ctx.size_of(ty).unwrap(), size, "{ty:?}");
+            assert_eq!(module.ctx.align_of(ty).unwrap(), 8, "{ty:?}");
         }
         for reference in references {
             assert_eq!(module.ctx.size_of(reference).unwrap(), 8);

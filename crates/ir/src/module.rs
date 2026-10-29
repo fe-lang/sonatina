@@ -13,7 +13,7 @@ use crate::{
     AddressSpaceInfo, FuncEffectSummary, Function, InstSetBase, Linkage, Signature, Type,
     global_variable::GlobalVariableStore,
     ir_writer::IrWrite,
-    isa::{Endian, Isa, TypeLayout, TypeLayoutError},
+    isa::{Endian, EnumLayout, Isa, TypeLayout, TypeLayoutError, place_fields},
     object::Object,
     parallel,
     types::{CompoundType, TypeStore},
@@ -417,6 +417,30 @@ impl ModuleCtx {
             | CompoundType::ConstRef(_)
             | CompoundType::Func { .. } => None,
         }
+    }
+
+    /// The offset and type of field `field` of variant `variant` of
+    /// `enum_ty`, whose variants share payload storage (see [`EnumLayout`]).
+    pub fn enum_variant_field_offset(
+        &self,
+        enum_ty: Type,
+        variant: usize,
+        field: usize,
+    ) -> Option<(usize, Type)> {
+        let Type::Compound(cmpd) = enum_ty else {
+            return None;
+        };
+        let data = self.with_ty_store(|store| store.enum_data(cmpd).cloned())?;
+        let layout = |ty| Some((self.size_of(ty).ok()?, self.align_of(ty).ok()?));
+        let variants = data
+            .variants
+            .iter()
+            .map(|variant| variant.fields.iter().map(|&field| layout(field)).collect())
+            .collect::<Option<Vec<Vec<_>>>>()?;
+        let payload_offset = EnumLayout::new(layout(data.tag_ty())?, &variants).payload_offset;
+        let (offsets, _) = place_fields(variants.get(variant)?);
+        let field_ty = *data.variants[variant].fields.get(field)?;
+        Some((payload_offset + offsets.get(field)?, field_ty))
     }
 
     pub fn func_sig<F, R>(&self, func_ref: FuncRef, f: F) -> R

@@ -22,7 +22,7 @@ use sonatina_codegen::{
     backend::{Backend, BackendOptions},
     compile::OptLevel,
     optim::Pipeline,
-    transform::aggregate::{EnumLowerToProduct, check_frame_lifetimes},
+    transform::aggregate::{EnumTagLower, check_frame_lifetimes},
 };
 use sonatina_ir::Module;
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
@@ -252,7 +252,7 @@ impl Backend for CraneliftObjectBackend {
 }
 
 fn legalize_module(module: &Module) -> Result<(), String> {
-    EnumLowerToProduct.run(module);
+    EnumTagLower.run(module);
     for func in module.funcs() {
         let report = verify_function_signature(&module.ctx, func, &VerifierConfig::default());
         if report.has_errors() {
