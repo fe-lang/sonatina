@@ -103,20 +103,28 @@ block0:
             .compile()
             .unwrap();
         let object = object::File::parse(artifact.as_bytes()).unwrap();
-        // The divider is defined in the object, so nothing is imported, and
-        // calls reach it PC-relative.
+        // The divider and its reciprocal table are defined in the object, so
+        // nothing is imported: calls reach the divider and the divider reads
+        // the table PC-relative.
         assert!(!object.symbols().any(|symbol| symbol.is_undefined()));
-        let calls: Vec<_> = object
+        let relocations: Vec<_> = object
             .sections()
             .filter(|section| section.kind() == SectionKind::Text)
             .flat_map(|section| section.relocations())
-            .map(|(_, relocation)| relocation.flags())
+            .map(|(_, relocation)| match relocation.flags() {
+                RelocationFlags::Elf { r_type } => r_type,
+                flags => panic!("unexpected relocation {flags:?}"),
+            })
             .collect();
-        assert!(!calls.is_empty());
-        assert!(calls.iter().all(|&flags| flags
-            == RelocationFlags::Elf {
-                r_type: object::elf::R_RISCV_CALL_PLT
-            }));
+        assert!(relocations.contains(&object::elf::R_RISCV_CALL_PLT));
+        assert!(relocations.iter().all(|r_type| {
+            [
+                object::elf::R_RISCV_CALL_PLT,
+                object::elf::R_RISCV_PCREL_HI20,
+                object::elf::R_RISCV_PCREL_LO12_I,
+            ]
+            .contains(r_type)
+        }));
     }
 }
 

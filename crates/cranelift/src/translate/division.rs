@@ -3,19 +3,21 @@
 //! divisors inline, and modular sites a zero modulus; everything else calls
 //! the module's divider: Knuth's algorithm D on 64-bit limbs. Quotient
 //! digits come from a 128/64-bit division by reciprocal (Möller and
-//! Granlund, "Improved division by invariant integers").
+//! Granlund, "Improved division by invariant integers"), and reciprocals
+//! from the module's table of 9-bit estimates and three Newton steps.
 
 use cranelift_codegen::{
     Context,
     ir::{
-        self as clif, AbiParam, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
+        self as clif, AbiParam, Endianness, InstBuilder, MemFlagsData, StackSlotData,
+        StackSlotKind,
         condcodes::IntCC,
         instructions::BlockArg,
         types::{I64, I128},
     },
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
-use cranelift_module::{FuncId, Module as ClifModule};
+use cranelift_module::{DataDescription, DataId, FuncId, Module as ClifModule};
 
 use super::{
     DivRemKind, LIMBS, Limbs, ShiftKind, abs, add_carry, is_zero, load_limbs, mul_limbs, neg,
@@ -56,15 +58,18 @@ impl Numerator {
 pub(super) struct Divider {
     ids: [Option<FuncId>; 2],
     calls: [Option<DividerCall>; 2],
+    table: Option<DataId>,
 }
 
 /// A divider as called from one function: its reference, the stack buffer
-/// for its operands and results, and the numerator it takes.
+/// for its operands and results, the numerator it takes, and the reciprocal
+/// table, which divisions by one limb read too.
 #[derive(Clone, Copy)]
 pub(super) struct DividerCall {
     func: clif::FuncRef,
     buffer: clif::StackSlot,
     numerator: Numerator,
+    table: clif::GlobalValue,
 }
 
 impl Divider {
@@ -94,6 +99,10 @@ impl Divider {
                 *self.ids[index].insert(id)
             }
         };
+        let table = match self.table {
+            Some(table) => table,
+            None => *self.table.insert(define_reciprocal_table(clif_module)?),
+        };
         let call = DividerCall {
             func: clif_module.declare_func_in_func(id, builder.func),
             buffer: builder.create_sized_stack_slot(StackSlotData::new(
@@ -102,6 +111,7 @@ impl Divider {
                 4,
             )),
             numerator,
+            table: clif_module.declare_data_in_func(table, builder.func),
         };
         self.calls[index] = Some(call);
         Ok(call)
@@ -116,9 +126,10 @@ impl Divider {
                 let id = id?;
                 let mut ctx = clif_module.make_context();
                 ctx.func.signature = signature(clif_module);
+                let table = clif_module.declare_data_in_func(self.table?, &mut ctx.func);
                 let mut builder_ctx = FunctionBuilderContext::new();
                 let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
-                build_divider(numerator.limbs(), &mut builder);
+                build_divider(numerator.limbs(), table, &mut builder);
                 builder.seal_all_blocks();
                 builder.finalize(clif_module.target_config());
                 if std::env::var("DUMP_CLIF").is_ok() {
@@ -131,6 +142,32 @@ impl Divider {
             })
             .collect()
     }
+}
+
+/// The table of 9-bit reciprocal estimates `0x7fd00 / d9` for each value of
+/// a normalized divisor's top nine bits, `d9` (Möller and Granlund,
+/// algorithm 3), as the module's 16-bit words.
+fn define_reciprocal_table(clif_module: &mut impl ClifModule) -> Result<DataId, String> {
+    let table = clif_module
+        .declare_anonymous_data(false, false)
+        .map_err(|error| format!("failed to declare the reciprocal table: {error}"))?;
+    let endianness = clif_module.isa().endianness();
+    let bytes: Vec<u8> = (256..512u32)
+        .flat_map(|d9| {
+            let estimate = (0x7fd00 / d9) as u16;
+            match endianness {
+                Endianness::Little => estimate.to_le_bytes(),
+                Endianness::Big => estimate.to_be_bytes(),
+            }
+        })
+        .collect();
+    let mut description = DataDescription::new();
+    description.define(bytes.into_boxed_slice());
+    description.set_align(2);
+    clif_module
+        .define_data(table, &description)
+        .map_err(|error| format!("failed to define the reciprocal table: {error}"))?;
+    Ok(table)
 }
 
 fn signature(clif_module: &impl ClifModule) -> clif::Signature {
@@ -233,7 +270,7 @@ fn udivrem(
         .brif(divisor_high, call_block, &[], one_limb, &[]);
 
     builder.switch_to_block(one_limb);
-    let (quotient, remainder) = divide_by_limb(numerator, divisor[0], builder);
+    let (quotient, remainder) = divide_by_limb(numerator, divisor[0], call.table, builder);
     builder
         .ins()
         .jump(exit, &exit_with(quotient, [remainder, zero, zero, zero]));
@@ -255,12 +292,13 @@ fn udivrem(
 fn divide_by_limb(
     numerator: Limbs,
     divisor: clif::Value,
+    table: clif::GlobalValue,
     builder: &mut FunctionBuilder,
 ) -> (Limbs, clif::Value) {
     let shift = builder.ins().clz(divisor);
     let inverse = builder.ins().bxor_imm_s(shift, 63);
     let normalized = builder.ins().ishl(divisor, shift);
-    let reciprocal = reciprocal(normalized, builder);
+    let reciprocal = reciprocal(normalized, table, builder);
     // The bits shifted out of the top limb start the remainder, below the
     // normalized divisor's set top bit.
     let top = builder.ins().ushr_imm_s(numerator[LIMBS - 1], 1);
@@ -596,53 +634,44 @@ fn div3by2(
     reciprocal: clif::Value,
     builder: &mut FunctionBuilder,
 ) -> (clif::Value, clif::Value, clif::Value) {
+    // Two-limb values are i128s, which Cranelift adds, subtracts and compares
+    // with carry chains.
     // `(q1, q0) = reciprocal * u2 + (u2, u1)`.
-    let (q0, q1) = mul_wide(reciprocal, u2, builder);
-    let (q0, carry) = builder.ins().uadd_overflow(q0, u1);
-    let carry = builder.ins().uextend(I64, carry);
-    let q1 = builder.ins().iadd(q1, u2);
-    let q1 = builder.ins().iadd(q1, carry);
-    // `(r1, r0) = (u1 - q1 * d1, u0) - q1 * d0 - (d1, d0)`.
+    let reciprocal_wide = builder.ins().uextend(I128, reciprocal);
+    let u2_wide = builder.ins().uextend(I128, u2);
+    let q = builder.ins().imul(reciprocal_wide, u2_wide);
+    let top = builder.ins().iconcat(u1, u2);
+    let q = builder.ins().iadd(q, top);
+    let (q0, q1) = builder.ins().isplit(q);
+    // `r = (u1 - q1 * d1, u0) - q1 * d0 - (d1, d0)`.
     let product = builder.ins().imul(q1, d1);
     let r1 = builder.ins().isub(u1, product);
-    let (t0, t1) = mul_wide(d0, q1, builder);
-    let (r0, borrow) = builder.ins().usub_overflow(u0, t0);
-    let borrow = builder.ins().uextend(I64, borrow);
-    let r1 = builder.ins().isub(r1, t1);
-    let r1 = builder.ins().isub(r1, borrow);
-    let (r0, borrow) = builder.ins().usub_overflow(r0, d0);
-    let borrow = builder.ins().uextend(I64, borrow);
-    let r1 = builder.ins().isub(r1, d1);
-    let r1 = builder.ins().isub(r1, borrow);
+    let d0_wide = builder.ins().uextend(I128, d0);
+    let q1_wide = builder.ins().uextend(I128, q1);
+    let t = builder.ins().imul(d0_wide, q1_wide);
+    let divisor = builder.ins().iconcat(d0, d1);
+    let r = builder.ins().iconcat(u0, r1);
+    let r = builder.ins().isub(r, t);
+    let r = builder.ins().isub(r, divisor);
     let q1 = builder.ins().iadd_imm_s(q1, 1);
     // Too large by one when `r1 >= q0`: add the divisor back.
+    let (_, r1) = builder.ins().isplit(r);
     let over = builder
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, r1, q0);
     let decremented = builder.ins().iadd_imm_s(q1, -1);
     let q1 = builder.ins().select(over, decremented, q1);
-    let (s0, carry) = builder.ins().uadd_overflow(r0, d0);
-    let carry = builder.ins().uextend(I64, carry);
-    let s1 = builder.ins().iadd(r1, d1);
-    let s1 = builder.ins().iadd(s1, carry);
-    let r0 = builder.ins().select(over, s0, r0);
-    let r1 = builder.ins().select(over, s1, r1);
+    let restored = builder.ins().iadd(r, divisor);
+    let r = builder.ins().select(over, restored, r);
     // Rarely still at least the divisor: subtract it once more.
-    let above = builder.ins().icmp(IntCC::UnsignedGreaterThan, r1, d1);
-    let top_equal = builder.ins().icmp(IntCC::Equal, r1, d1);
-    let low_at_least = builder
+    let reaches = builder
         .ins()
-        .icmp(IntCC::UnsignedGreaterThanOrEqual, r0, d0);
-    let low_reaches = builder.ins().band(top_equal, low_at_least);
-    let reaches = builder.ins().bor(above, low_reaches);
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, r, divisor);
     let incremented = builder.ins().iadd_imm_s(q1, 1);
     let q1 = builder.ins().select(reaches, incremented, q1);
-    let (t0, borrow) = builder.ins().usub_overflow(r0, d0);
-    let borrow = builder.ins().uextend(I64, borrow);
-    let t1 = builder.ins().isub(r1, d1);
-    let t1 = builder.ins().isub(t1, borrow);
-    let r0 = builder.ins().select(reaches, t0, r0);
-    let r1 = builder.ins().select(reaches, t1, r1);
+    let reduced = builder.ins().isub(r, divisor);
+    let r = builder.ins().select(reaches, reduced, r);
+    let (r0, r1) = builder.ins().isplit(r);
     (q1, r0, r1)
 }
 
@@ -677,57 +706,64 @@ fn submul(
     (difference, overflow)
 }
 
-/// `floor((2^128 - 1) / divisor) - 2^64` for a normalized divisor: the
-/// quotient of `(!divisor, 2^64 - 1) / divisor`, by two base-2^32 digits
-/// from 64-bit divisions (Hacker's Delight, `divlu`).
-fn reciprocal(divisor: clif::Value, builder: &mut FunctionBuilder) -> clif::Value {
-    let divisor_high = builder.ins().ushr_imm_s(divisor, 32);
-    let divisor_low = builder.ins().band_imm_s(divisor, 0xffff_ffff);
-    // The numerator's low word is all ones, so both of its 32-bit digits
-    // are `0xffff_ffff`.
-    let ones = builder.ins().iconst(I64, 0xffff_ffff);
-    // Knuth's estimate of the digit of `(high * 2^32 + next) / divisor`
-    // exceeds it by at most two; each correction step fixes one.
-    let digit = |high, builder: &mut FunctionBuilder| {
-        let quotient = builder.ins().udiv(high, divisor_high);
-        let product = builder.ins().imul(quotient, divisor_high);
-        let remainder = builder.ins().isub(high, product);
-        let correct = |quotient, remainder, builder: &mut FunctionBuilder| {
-            let too_wide =
-                builder
-                    .ins()
-                    .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, quotient, 1 << 32);
-            let estimate = builder.ins().imul(quotient, divisor_low);
-            let shifted = builder.ins().ishl_imm_s(remainder, 32);
-            let bound = builder.ins().bor(shifted, ones);
-            let too_large = builder
-                .ins()
-                .icmp(IntCC::UnsignedGreaterThan, estimate, bound);
-            let wrong = builder.ins().bor(too_wide, too_large);
-            // A remainder of at least 2^32 proves the digit right.
-            let checked = builder
-                .ins()
-                .icmp_imm_s(IntCC::UnsignedLessThan, remainder, 1 << 32);
-            let decrement = builder.ins().band(wrong, checked);
-            let decremented = builder.ins().iadd_imm_s(quotient, -1);
-            let increased = builder.ins().iadd(remainder, divisor_high);
-            (
-                builder.ins().select(decrement, decremented, quotient),
-                builder.ins().select(decrement, increased, remainder),
-            )
-        };
-        let (quotient, remainder) = correct(quotient, remainder, builder);
-        correct(quotient, remainder, builder).0
-    };
-    let high = builder.ins().bnot(divisor);
-    let first = digit(high, builder);
-    let shifted = builder.ins().ishl_imm_s(high, 32);
-    let partial = builder.ins().bor(shifted, ones);
-    let product = builder.ins().imul(first, divisor);
-    let partial = builder.ins().isub(partial, product);
-    let second = digit(partial, builder);
-    let first = builder.ins().ishl_imm_s(first, 32);
-    builder.ins().bor(first, second)
+/// `floor((2^128 - 1) / divisor) - 2^64` for a normalized divisor, from
+/// the table's estimate for its top nine bits and three Newton steps
+/// (Möller and Granlund, algorithm 3).
+fn reciprocal(
+    divisor: clif::Value,
+    table: clif::GlobalValue,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    // A normalized divisor's top nine bits are 256 to 511; the low eight
+    // index the table.
+    let base = builder.ins().symbol_value(I64, table);
+    let index = builder.ins().ushr_imm_s(divisor, 55);
+    let index = builder.ins().band_imm_s(index, 0xff);
+    let offset = builder.ins().ishl_imm_s(index, 1);
+    let address = builder.ins().iadd(base, offset);
+    let flags = MemFlagsData::trusted().with_readonly();
+    let v0 = builder.ins().uload16(I64, flags, address, 0);
+    // `v1 = (v0 << 11) - ((v0 * v0) * d40 >> 40) - 1`, with `d40` the
+    // divisor's top 40 bits plus one: 22 correct bits.
+    let d40 = builder.ins().ushr_imm_s(divisor, 24);
+    let d40 = builder.ins().iadd_imm_s(d40, 1);
+    let square = builder.ins().imul(v0, v0);
+    let correction = builder.ins().imul(square, d40);
+    let correction = builder.ins().ushr_imm_s(correction, 40);
+    let v1 = builder.ins().ishl_imm_s(v0, 11);
+    let v1 = builder.ins().isub(v1, correction);
+    let v1 = builder.ins().iadd_imm_s(v1, -1);
+    // `v2 = (v1 << 13) + (v1 * (2^60 - v1 * d40) >> 47)`: 35 bits.
+    let product = builder.ins().imul(v1, d40);
+    let two_60 = builder.ins().iconst(I64, 1 << 60);
+    let error = builder.ins().isub(two_60, product);
+    let step = builder.ins().imul(v1, error);
+    let step = builder.ins().ushr_imm_s(step, 47);
+    let v2 = builder.ins().ishl_imm_s(v1, 13);
+    let v2 = builder.ins().iadd(v2, step);
+    // `v3 = (v2 * e >> 65) + (v2 << 31)`, with `e = ((v2 >> 1) & -d0) -
+    // v2 * ceil(divisor / 2)` and `d0` the divisor's low bit: 64 bits.
+    let d0 = builder.ins().band_imm_s(divisor, 1);
+    let half = builder.ins().ushr_imm_s(divisor, 1);
+    let d63 = builder.ins().iadd(half, d0);
+    let mask = builder.ins().ineg(d0);
+    let halved = builder.ins().ushr_imm_s(v2, 1);
+    let masked = builder.ins().band(halved, mask);
+    let product = builder.ins().imul(v2, d63);
+    let e = builder.ins().isub(masked, product);
+    let high = builder.ins().umulhi(v2, e);
+    let high = builder.ins().ushr_imm_s(high, 1);
+    let v3 = builder.ins().ishl_imm_s(v2, 31);
+    let v3 = builder.ins().iadd(v3, high);
+    // `v4 = v3 - ((v3 * divisor + divisor) >> 64) - divisor` corrects the
+    // last unit.
+    let v3_wide = builder.ins().uextend(I128, v3);
+    let divisor_wide = builder.ins().uextend(I128, divisor);
+    let product = builder.ins().imul(v3_wide, divisor_wide);
+    let product = builder.ins().iadd(product, divisor_wide);
+    let (_, high) = builder.ins().isplit(product);
+    let v4 = builder.ins().isub(v3, high);
+    builder.ins().isub(v4, divisor)
 }
 
 /// The address of limb `index` of the limb array at `base`.
@@ -755,7 +791,7 @@ struct Normalized {
 }
 
 /// Emits the divider's body (see `Divider`).
-fn build_divider(numerator_limbs: usize, builder: &mut FunctionBuilder) {
+fn build_divider(numerator_limbs: usize, table: clif::GlobalValue, builder: &mut FunctionBuilder) {
     let flags = MemFlagsData::trusted();
     let entry = builder.create_block();
     builder.append_block_params_for_function_params(entry);
@@ -846,7 +882,7 @@ fn build_divider(numerator_limbs: usize, builder: &mut FunctionBuilder) {
         numerator: normalized,
         numerator_limbs: m,
         divisor: normalized_divisor,
-        reciprocal: reciprocal(top, builder),
+        reciprocal: reciprocal(top, table, builder),
         shift,
         inverse,
     };
@@ -946,9 +982,10 @@ fn emit_digit_loop(n: usize, operands: &Normalized, builder: &mut FunctionBuilde
         );
         let (mut difference, overflow) =
             submul(&window[..n - 2], &divisor[..n - 2], digit, builder);
-        let (r0, borrow) = builder.ins().usub_overflow(r0, overflow);
-        let borrow = builder.ins().uextend(I64, borrow);
-        let (r1, negative) = builder.ins().usub_overflow(r1, borrow);
+        let remainder = builder.ins().iconcat(r0, r1);
+        let overflow = builder.ins().uextend(I128, overflow);
+        let (remainder, negative) = builder.ins().usub_overflow(remainder, overflow);
+        let (r0, r1) = builder.ins().isplit(remainder);
         difference.extend([r0, r1]);
         let add_back = builder.create_block();
         builder.ins().brif(
