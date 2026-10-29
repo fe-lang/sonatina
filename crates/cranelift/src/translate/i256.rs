@@ -260,23 +260,32 @@ pub(super) fn select(
     })
 }
 
-fn any_nonzero(limbs: &[clif::Value], builder: &mut FunctionBuilder) -> clif::Value {
+/// Compares the bitwise or of `limbs` with zero by `cc`: one `icmp`, which a
+/// branch on it uses directly.
+fn compare_zero(cc: IntCC, limbs: &[clif::Value], builder: &mut FunctionBuilder) -> clif::Value {
     let combined = limbs
         .iter()
         .copied()
         .reduce(|lhs, rhs| builder.ins().bor(lhs, rhs))
         .expect("at least one limb");
-    builder.ins().icmp_imm_s(IntCC::NotEqual, combined, 0)
+    builder.ins().icmp_imm_s(cc, combined, 0)
+}
+
+fn any_nonzero(limbs: &[clif::Value], builder: &mut FunctionBuilder) -> clif::Value {
+    compare_zero(IntCC::NotEqual, limbs, builder)
 }
 
 pub(super) fn is_zero(value: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
-    let nonzero = any_nonzero(&value, builder);
-    bool_not(nonzero, builder)
+    compare_zero(IntCC::Equal, &value, builder)
+}
+
+fn difference(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> Limbs {
+    std::array::from_fn(|limb| builder.ins().bxor(lhs[limb], rhs[limb]))
 }
 
 pub(super) fn eq(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> clif::Value {
-    let diff: Limbs = std::array::from_fn(|limb| builder.ins().bxor(lhs[limb], rhs[limb]));
-    is_zero(diff, builder)
+    let difference = difference(lhs, rhs, builder);
+    is_zero(difference, builder)
 }
 
 /// Compares the high halves with `high_cc` and, when they are equal, the
@@ -395,8 +404,8 @@ fn icmp(cc: IntCC, lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> cli
     let (high_cc, lhs, rhs, negate) = match cc {
         IntCC::Equal => return eq(lhs, rhs, builder),
         IntCC::NotEqual => {
-            let equal = eq(lhs, rhs, builder);
-            return bool_not(equal, builder);
+            let difference = difference(lhs, rhs, builder);
+            return any_nonzero(&difference, builder);
         }
         IntCC::UnsignedLessThan => (IntCC::UnsignedLessThan, lhs, rhs, false),
         IntCC::UnsignedGreaterThan => (IntCC::UnsignedLessThan, rhs, lhs, false),
