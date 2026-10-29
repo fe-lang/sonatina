@@ -853,6 +853,27 @@ pub(super) fn translate_i256_op(
                 builder.ins().bswap(value[LIMBS - 1 - limb])
             }))
         }
+        // The leading zeros of the most significant nonzero limb, plus 64 for
+        // each limb above it; zero gives the low limb's 64 plus 192. One `clz`
+        // keeps targets without a count instruction, like SP1's, to one loop.
+        NativeInstKind::EvmClz(op) if wide(op.word()) => {
+            let [low, rest @ ..] = resolve_i256(function, *op.word(), value_map, builder)?;
+            let start = (low, builder.ins().iconst(I64, 192));
+            let (top, above) =
+                rest.into_iter()
+                    .zip([128, 64, 0])
+                    .fold(start, |(top, above), (limb, bits)| {
+                        let bits = builder.ins().iconst(I64, bits);
+                        (
+                            builder.ins().select(limb, limb, top),
+                            builder.ins().select(limb, bits, above),
+                        )
+                    });
+            let zeros = builder.ins().clz(top);
+            let count = builder.ins().iadd(above, zeros);
+            let zero = builder.ins().iconst(I64, 0);
+            Output::Limbs([count, zero, zero, zero])
+        }
         NativeInstKind::Lt(op) if wide(op.lhs()) || wide(op.rhs()) => compare(
             IntCC::UnsignedLessThan,
             op.lhs(),
