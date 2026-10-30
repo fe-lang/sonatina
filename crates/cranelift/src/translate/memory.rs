@@ -14,27 +14,50 @@ use super::{
 /// Larger ones call `memcpy` or `memset`, so their code size is constant.
 pub(super) const INLINE_MEMORY_BYTES: u32 = 128;
 
-/// Copies `size` bytes between distinct, non-overlapping storage.
-pub(super) fn copy_bytes(
+/// Copies the `ty` value at `src` to distinct, non-overlapping storage at
+/// `dst`.
+pub(super) fn copy_value(
+    ty: Type,
     src: clif::Value,
     dst: clif::Value,
-    size: u32,
+    ctx: &ModuleCtx,
     config: TargetFrontendConfig,
     builder: &mut FunctionBuilder,
-) {
+) -> Result<(), String> {
+    let size = value_storage_size(ty, ctx)?;
     if size > INLINE_MEMORY_BYTES {
         let size = builder.ins().iconst(config.pointer_type(), i64::from(size));
         builder.call_memcpy(config, dst, src, size);
-        return;
+        return Ok(());
     }
-    for (offset, ty) in storage_chunks(size) {
-        let value = builder.ins().load(ty, MemFlagsData::new(), src, offset);
-        builder.ins().store(MemFlagsData::new(), value, dst, offset);
+    for piece in value_pieces(ty, size, ctx)? {
+        let value = match piece {
+            Piece::Field(offset, ty) => builder.ins().load(ty, MemFlagsData::new(), src, offset),
+            Piece::Padding(_, ty) => builder.ins().iconst(ty, 0),
+        };
+        builder
+            .ins()
+            .store(MemFlagsData::new(), value, dst, piece.offset());
     }
+    Ok(())
 }
 
-/// Copies at most `INLINE_MEMORY_BYTES` between storage that may overlap,
-/// loading every word before storing any.
+/// Copies the `ty` value at `src`, of at most `INLINE_MEMORY_BYTES`, to `dst`,
+/// which may overlap it.
+pub(super) fn move_value(
+    ty: Type,
+    src: clif::Value,
+    dst: clif::Value,
+    ctx: &ModuleCtx,
+    builder: &mut FunctionBuilder,
+) -> Result<(), String> {
+    let size = value_storage_size(ty, ctx)?;
+    debug_assert!(size <= INLINE_MEMORY_BYTES);
+    move_pieces(value_pieces(ty, size, ctx)?, src, dst, builder);
+    Ok(())
+}
+
+/// Copies at most `INLINE_MEMORY_BYTES` between storage that may overlap.
 pub(super) fn move_bytes(
     src: clif::Value,
     dst: clif::Value,
@@ -42,17 +65,126 @@ pub(super) fn move_bytes(
     builder: &mut FunctionBuilder,
 ) {
     debug_assert!(size <= INLINE_MEMORY_BYTES);
-    let words: Vec<_> = storage_chunks(size)
-        .map(|(offset, ty)| {
-            (
-                offset,
-                builder.ins().load(ty, MemFlagsData::new(), src, offset),
-            )
+    let pieces = aligned_chunks(0, size).map(|(offset, ty)| Piece::Field(offset, ty));
+    move_pieces(pieces, src, dst, builder);
+}
+
+/// Copies `pieces` from `src` to `dst`, loading every field piece before
+/// storing any, so the ranges may overlap.
+fn move_pieces(
+    pieces: impl IntoIterator<Item = Piece>,
+    src: clif::Value,
+    dst: clif::Value,
+    builder: &mut FunctionBuilder,
+) {
+    let values: Vec<_> = pieces
+        .into_iter()
+        .map(|piece| {
+            let value = match piece {
+                Piece::Field(offset, ty) => {
+                    builder.ins().load(ty, MemFlagsData::new(), src, offset)
+                }
+                Piece::Padding(_, ty) => builder.ins().iconst(ty, 0),
+            };
+            (piece.offset(), value)
         })
         .collect();
-    for (offset, word) in words {
-        builder.ins().store(MemFlagsData::new(), word, dst, offset);
+    for (offset, value) in values {
+        builder.ins().store(MemFlagsData::new(), value, dst, offset);
     }
+}
+
+/// A piece of a value's storage that a copy writes with one store: bytes of
+/// a field, which it loads, or padding, which it zeroes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Piece {
+    Field(i32, clif::Type),
+    Padding(i32, clif::Type),
+}
+
+impl Piece {
+    fn offset(self) -> i32 {
+        match self {
+            Self::Field(offset, _) | Self::Padding(offset, _) => offset,
+        }
+    }
+}
+
+/// The pieces of a copy of a `size`-byte `ty` value. The CPU forwards a store
+/// to a load only if the store covers the load; otherwise the load waits for
+/// the store to reach the cache. Fields are written by their own stores, often
+/// narrower than a word, so the pieces split wherever a scalar field starts or
+/// ends, then as `aligned_chunks`, as zero fills split too. Padding is not
+/// part of the value, and often nothing has written it, so a copy writes
+/// zeros there instead of loading it.
+fn value_pieces(ty: Type, size: u32, ctx: &ModuleCtx) -> Result<Vec<Piece>, String> {
+    let mut fields = Vec::new();
+    field_ranges(ty, 0, ctx, &mut fields)?;
+    let mut bounds: Vec<u32> = fields
+        .iter()
+        .flat_map(|&(start, end)| [start, end])
+        .chain([0, size])
+        .collect();
+    bounds.sort_unstable();
+    bounds.dedup();
+    Ok(bounds
+        .windows(2)
+        .flat_map(|range| {
+            let (start, end) = (range[0], range[1]);
+            let field = fields
+                .iter()
+                .any(|&(first, last)| first <= start && end <= last);
+            aligned_chunks(start, end).map(move |(offset, ty)| {
+                if field {
+                    Piece::Field(offset, ty)
+                } else {
+                    Piece::Padding(offset, ty)
+                }
+            })
+        })
+        .collect())
+}
+
+/// Pushes the byte ranges, from `base`, of the scalar fields of a `ty` value.
+/// An array of scalars narrower than a word counts as one field: such arrays
+/// are mostly written whole, and splitting them would multiply the pieces.
+/// Enum variants share payload bytes, so every variant's fields count.
+fn field_ranges(
+    ty: Type,
+    base: u32,
+    ctx: &ModuleCtx,
+    fields: &mut Vec<(u32, u32)>,
+) -> Result<(), String> {
+    match ty.resolve_compound(ctx) {
+        Some(CompoundType::Struct(data)) if !data.packed => {
+            for idx in 0..data.fields.len() {
+                let (offset, field) = aggregate_elem_offset(ctx, ty, idx)?;
+                field_ranges(field, base + offset as u32, ctx, fields)?;
+            }
+        }
+        Some(CompoundType::Array { elem, len })
+            if uses_indirect_value_representation(ctx, elem)
+                || value_storage_size(elem, ctx)? >= 8 =>
+        {
+            let stride = value_storage_size(elem, ctx)?;
+            for index in 0..len as u32 {
+                field_ranges(elem, base + index * stride, ctx, fields)?;
+            }
+        }
+        Some(CompoundType::Enum(data)) => {
+            fields.push((base, base + value_storage_size(data.tag_ty(), ctx)?));
+            for (variant, variant_data) in data.variants.iter().enumerate() {
+                for field in 0..variant_data.fields.len() {
+                    let (offset, field_ty) = ctx
+                        .enum_variant_field_offset(ty, variant, field)
+                        .ok_or_else(|| format!("cannot lay out field {field} of {ty:?}"))?;
+                    field_ranges(field_ty, base + offset as u32, ctx, fields)?;
+                }
+            }
+        }
+        _ => fields.push((base, base + value_storage_size(ty, ctx)?)),
+    }
+    Ok(())
 }
 
 pub(super) fn zero_bytes(
@@ -67,7 +199,12 @@ pub(super) fn zero_bytes(
         builder.call_memset(config, dst, zero, size);
         return;
     }
-    for (offset, ty) in storage_chunks(size) {
+    zero_range(dst, 0, size, builder);
+}
+
+/// Zeroes `dst + start..dst + end` in `aligned_chunks`.
+fn zero_range(dst: clif::Value, start: u32, end: u32, builder: &mut FunctionBuilder) {
+    for (offset, ty) in aligned_chunks(start, end) {
         let zero = builder.ins().iconst(ty, 0);
         builder.ins().store(MemFlagsData::new(), zero, dst, offset);
     }
@@ -88,9 +225,11 @@ pub(super) fn zero_unwritten(
     written.sort_unstable();
     let mut zeroed = 0;
     for (offset, len) in written.into_iter().chain([(size, 0)]) {
-        if offset > zeroed {
+        if offset > zeroed && offset - zeroed > INLINE_MEMORY_BYTES {
             let gap = builder.ins().iadd_imm_s(dst, i64::from(zeroed));
             zero_bytes(gap, offset - zeroed, config, builder);
+        } else if offset > zeroed {
+            zero_range(dst, zeroed, offset, builder);
         }
         zeroed = zeroed.max(offset + len);
     }
@@ -138,22 +277,27 @@ pub(super) fn store_value(
     Ok(())
 }
 
-/// Writes the `size`-byte contents of `value` to `dst`. Native undef values
-/// are zero, so an undef value zeroes `dst` without a zeroed temporary.
+/// Writes `value`, stored as a `ty`, to `dst`. Native undef values are zero,
+/// so an undef value zeroes `dst` without a zeroed temporary.
 pub(super) fn store_indirect(
     function: &Function,
     value: ValueId,
     dst: clif::Value,
-    size: u32,
+    ty: Type,
     value_map: &ValueMap,
     config: TargetFrontendConfig,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
     if is_undef(function, value) {
-        zero_bytes(dst, size, config, builder);
+        zero_bytes(
+            dst,
+            value_storage_size(ty, function.ctx())?,
+            config,
+            builder,
+        );
     } else {
         let src = resolve_value(function, value, value_map, builder)?;
-        copy_bytes(src, dst, size, config, builder);
+        copy_value(ty, src, dst, function.ctx(), config, builder)?;
     }
     Ok(())
 }
@@ -201,7 +345,7 @@ pub(super) fn translate_bitcast(
         // for the destination layout, which may require stronger alignment.
         let dest = create_stack_slot_for_type(to_ty, ctx, builder)?;
         if from_indirect {
-            copy_bytes(value, dest, size, config, builder);
+            copy_value(from_ty, value, dest, ctx, config, builder)?;
         } else {
             builder.ins().store(MemFlagsData::new(), value, dest, 0);
         }
@@ -220,16 +364,20 @@ pub(super) fn translate_bitcast(
     }
 }
 
-fn storage_chunks(size: u32) -> impl Iterator<Item = (i32, clif::Type)> {
-    let mut offset = 0;
+/// Splits `start..end` into loads or stores of at most a word, each at an
+/// offset its size divides. Two such splits of overlapping ranges put each
+/// piece of one within a piece of the other, or around it.
+fn aligned_chunks(start: u32, end: u32) -> impl Iterator<Item = (i32, clif::Type)> {
+    let mut offset = start;
     std::iter::from_fn(move || {
-        let (bytes, ty) = match size - offset {
-            0 => return None,
-            1 => (1, clif::types::I8),
-            2..=3 => (2, clif::types::I16),
-            4..=7 => (4, clif::types::I32),
-            _ => (8, clif::types::I64),
-        };
+        let (bytes, ty) = [
+            (8, clif::types::I64),
+            (4, clif::types::I32),
+            (2, clif::types::I16),
+            (1, clif::types::I8),
+        ]
+        .into_iter()
+        .find(|&(bytes, _)| offset.is_multiple_of(bytes) && offset + bytes <= end)?;
         let chunk = (offset as i32, ty);
         offset += bytes;
         Some(chunk)
@@ -417,5 +565,89 @@ pub(super) fn compute_element_size(obj_ty: Type, ctx: &ModuleCtx) -> Result<usiz
             compute_element_size(inner, ctx)
         }
         _ => Err(format!("cannot index non-array value of type {obj_ty:?}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cranelift_codegen::ir::types::{I8, I16, I32, I64};
+    use sonatina_ir::types::CompoundType;
+
+    use super::{
+        Piece::{self, Field, Padding},
+        value_pieces, value_storage_size,
+    };
+
+    /// The pieces of a copy of `@T`, declared by `types`.
+    fn pieces(types: &str) -> Vec<Piece> {
+        let source = format!(
+            "target = \"x86_64-unknown-native\"\n{types}\nfunc public %f(v0.*@T) {{\nblock0:\n    return;\n}}\n"
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let func = module.funcs()[0];
+        let ptr = module.ctx.func_sig(func, |sig| sig.args()[0]);
+        let Some(CompoundType::Ptr(ty)) = ptr.resolve_compound(&module.ctx) else {
+            panic!("%f takes a pointer");
+        };
+        let size = value_storage_size(ty, &module.ctx).unwrap();
+        value_pieces(ty, size, &module.ctx).unwrap()
+    }
+
+    #[test]
+    fn pieces_split_at_narrow_fields_and_zero_padding() {
+        // The tag, its padding, then the payload word.
+        assert_eq!(
+            pieces("type @T = enum { #None, #Some(*i8) };"),
+            [
+                Field(0, I8),
+                Padding(1, I8),
+                Padding(2, I16),
+                Padding(4, I32),
+                Field(8, I64)
+            ]
+        );
+        // Payloads overlap, so `#Byte`'s field splits `#Word`'s.
+        assert_eq!(
+            pieces("type @T = enum { #Byte(i8), #Word(i64) };"),
+            [
+                Field(0, I8),
+                Padding(1, I8),
+                Padding(2, I16),
+                Padding(4, I32),
+                Field(8, I8),
+                Field(9, I8),
+                Field(10, I16),
+                Field(12, I32)
+            ]
+        );
+        assert_eq!(
+            pieces("type @T = { i1, i32, i16 };"),
+            [
+                Field(0, I8),
+                Padding(1, I8),
+                Padding(2, I16),
+                Field(4, I32),
+                Field(8, I16),
+                Padding(10, I16)
+            ]
+        );
+    }
+
+    #[test]
+    fn pieces_keep_words_and_byte_arrays_whole() {
+        assert_eq!(
+            pieces("type @T = { i64, [i8; 12], i256 };"),
+            [
+                Field(0, I64),
+                Field(8, I64),
+                Field(16, I32),
+                Padding(20, I32),
+                Padding(24, I64),
+                Field(32, I64),
+                Field(40, I64),
+                Field(48, I64),
+                Field(56, I64)
+            ]
+        );
     }
 }

@@ -12,9 +12,9 @@ use sonatina_ir::{
 };
 
 use super::{
-    ValueMap, aggregate_elem_offset, constant_value_index, copy_bytes, frame::FrameSlots,
+    ValueMap, aggregate_elem_offset, constant_value_index, copy_value, frame::FrameSlots,
     resolve_i256, resolve_value, stack_slot_data, store_indirect,
-    uses_indirect_value_representation, value_storage_size,
+    uses_indirect_value_representation,
 };
 
 /// Lowers CFG edges. Scalar phis receive Cranelift block arguments, and an
@@ -205,7 +205,14 @@ impl Edges<'_> {
                     let dst = builder
                         .ins()
                         .stack_addr(self.config.pointer_type(), slot, 0);
-                    copy_bytes(src, dst, self.size(phi)?, self.config, builder);
+                    copy_value(
+                        self.function.dfg.value_ty(phi),
+                        src,
+                        dst,
+                        self.function.ctx(),
+                        self.config,
+                        builder,
+                    )?;
                     for &reader in &pending {
                         if let Some((read, offset)) = copies[reader].reads
                             && read == index
@@ -219,19 +226,19 @@ impl Edges<'_> {
             };
             let copy = &copies[index];
             let dst = self.frame.address(copy.phi, builder)?;
-            let size = self.size(copy.phi)?;
+            let ty = self.function.dfg.value_ty(copy.phi);
             match copy.saved {
                 Some((slot, offset)) => {
                     let src = builder
                         .ins()
                         .stack_addr(self.config.pointer_type(), slot, offset);
-                    copy_bytes(src, dst, size, self.config, builder);
+                    copy_value(ty, src, dst, self.function.ctx(), self.config, builder)?;
                 }
                 None => store_indirect(
                     self.function,
                     copy.input,
                     dst,
-                    size,
+                    ty,
                     value_map,
                     self.config,
                     builder,
@@ -257,9 +264,5 @@ impl Edges<'_> {
             value = base;
         }
         Ok((value, offset))
-    }
-
-    fn size(&self, phi: ValueId) -> Result<u32, String> {
-        value_storage_size(self.function.dfg.value_ty(phi), self.function.ctx())
     }
 }

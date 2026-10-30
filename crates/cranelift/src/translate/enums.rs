@@ -72,7 +72,7 @@ pub(super) fn store_variant(
         let size = value_storage_size(ty, ctx)?;
         if uses_indirect_value_representation(ctx, ty) {
             let field_dst = builder.ins().iadd_imm_s(dst, i64::from(offset));
-            store_indirect(function, value, field_dst, size, value_map, config, builder)?;
+            store_indirect(function, value, field_dst, ty, value_map, config, builder)?;
         } else {
             store_value(function, value, dst, offset, value_map, builder)?;
         }

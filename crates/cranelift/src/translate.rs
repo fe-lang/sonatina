@@ -1146,7 +1146,7 @@ fn translate_function(
                                 function,
                                 *val_id,
                                 sret,
-                                value_storage_size(storage_ty, &module.ctx)?,
+                                storage_ty,
                                 &value_map,
                                 target_config,
                                 &mut builder,
@@ -1423,13 +1423,14 @@ fn translate_function(
                             value_map.insert(result, addr);
                         } else if uses_indirect_value_representation(&module.ctx, result_ty) {
                             let result_addr = frame.address(result, &mut builder)?;
-                            copy_bytes(
+                            copy_value(
+                                result_ty,
                                 addr,
                                 result_addr,
-                                value_storage_size(result_ty, &module.ctx)?,
+                                &module.ctx,
                                 target_config,
                                 &mut builder,
-                            );
+                            )?;
                             value_map.insert(result, result_addr);
                         } else {
                             load_value(
@@ -1521,7 +1522,7 @@ fn translate_function(
                                 function,
                                 source_value,
                                 address,
-                                size,
+                                result_ty,
                                 &value_map,
                                 target_config,
                                 &mut builder,
@@ -1545,7 +1546,7 @@ fn translate_function(
                             function,
                             *insert.value(),
                             field_addr,
-                            value_storage_size(value_ty, &module.ctx)?,
+                            value_ty,
                             &value_map,
                             target_config,
                             &mut builder,
@@ -1594,18 +1595,13 @@ fn translate_function(
                     if frame.forwards(*mstore.value()) {
                         let src =
                             resolve_value(function, *mstore.value(), &value_map, &mut builder)?;
-                        move_bytes(
-                            src,
-                            addr,
-                            value_storage_size(store_ty, &module.ctx)?,
-                            &mut builder,
-                        );
+                        move_value(store_ty, src, addr, &module.ctx, &mut builder)?;
                     } else if uses_indirect_value_representation(&module.ctx, store_ty) {
                         store_indirect(
                             function,
                             *mstore.value(),
                             addr,
-                            value_storage_size(store_ty, &module.ctx)?,
+                            store_ty,
                             &value_map,
                             target_config,
                             &mut builder,
@@ -1679,13 +1675,14 @@ fn translate_function(
                             value_map.insert(result, addr);
                         } else if uses_indirect_value_representation(&module.ctx, result_ty) {
                             let result_addr = frame.address(result, &mut builder)?;
-                            copy_bytes(
+                            copy_value(
+                                result_ty,
                                 addr,
                                 result_addr,
-                                value_storage_size(result_ty, &module.ctx)?,
+                                &module.ctx,
                                 target_config,
                                 &mut builder,
-                            );
+                            )?;
                             value_map.insert(result, result_addr);
                         } else {
                             load_value(
@@ -1707,18 +1704,13 @@ fn translate_function(
                     if frame.forwards(*obj_store.value()) {
                         let src =
                             resolve_value(function, *obj_store.value(), &value_map, &mut builder)?;
-                        move_bytes(
-                            src,
-                            dest,
-                            value_storage_size(val_ty, &module.ctx)?,
-                            &mut builder,
-                        );
+                        move_value(val_ty, src, dest, &module.ctx, &mut builder)?;
                     } else if uses_indirect_value_representation(&module.ctx, val_ty) {
                         store_indirect(
                             function,
                             *obj_store.value(),
                             dest,
-                            value_storage_size(val_ty, &module.ctx)?,
+                            val_ty,
                             &value_map,
                             target_config,
                             &mut builder,

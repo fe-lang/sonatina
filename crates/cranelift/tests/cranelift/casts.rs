@@ -61,6 +61,11 @@ block0:
                     if from == "i1" || to == "i1" {
                         expected[0] &= 1;
                     }
+                    // Padding is not part of a value: copying a `@Padded`
+                    // writes zeros there.
+                    if from == "@Padded" || to == "@Padded" {
+                        expected[1..16].fill(0);
+                    }
                     let mut output = [0xa5; 64];
                     unsafe { apply(input.as_ptr(), output.as_mut_ptr()) };
                     assert_eq!(
