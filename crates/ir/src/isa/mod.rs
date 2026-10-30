@@ -33,19 +33,22 @@ pub trait TypeLayout: Send + Sync {
     fn endian(&self) -> Endian;
 }
 
+/// A part's size and alignment in bytes.
+pub(crate) type PartLayout = (usize, usize);
+
 /// Where an enum's parts go when its variants share payload storage: the tag
 /// at offset zero, then each variant's fields placed like a struct's, from one
 /// payload offset aligned for every field of every variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EnumLayout {
+pub(crate) struct EnumLayout {
     pub payload_offset: usize,
     pub size: usize,
     pub align: usize,
 }
 
 impl EnumLayout {
-    /// The layout for a tag and variant fields given as `(size, align)`.
-    pub fn new(tag: (usize, usize), variants: &[Vec<(usize, usize)>]) -> Self {
+    /// The layout for a tag and variant fields.
+    pub(crate) fn new(tag: PartLayout, variants: &[Vec<PartLayout>]) -> Self {
         let payload_align = variants
             .iter()
             .flatten()
@@ -66,9 +69,9 @@ impl EnumLayout {
     }
 }
 
-/// The offsets of `fields`, given as `(size, align)`, placed like a struct's
-/// fields, and the end of the last.
-pub fn place_fields(fields: &[(usize, usize)]) -> (Vec<usize>, usize) {
+/// The offsets of `fields` placed like a struct's fields, and the end of the
+/// last.
+pub(crate) fn place_fields(fields: &[PartLayout]) -> (Vec<usize>, usize) {
     let mut end = 0usize;
     let offsets = fields
         .iter()

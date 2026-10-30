@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
-use super::{Endian, EnumLayout, Isa, TypeLayout, TypeLayoutError, place_fields};
+use super::{Endian, EnumLayout, Isa, PartLayout, TypeLayout, TypeLayoutError, place_fields};
 use crate::{
     AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind, Type,
     inst::native::inst_set::NativeInstSet,
@@ -145,13 +145,22 @@ impl NativeTypeLayout {
     }
 
     fn enum_layout(data: &EnumData, store: &TypeStore) -> Result<EnumLayout, TypeLayoutError> {
+        let (tag, variants) = Self::enum_part_layouts(data, store)?;
+        Ok(EnumLayout::new(tag, &variants))
+    }
+
+    /// The layouts of an enum's tag and of each variant's fields.
+    fn enum_part_layouts(
+        data: &EnumData,
+        store: &TypeStore,
+    ) -> Result<(PartLayout, Vec<Vec<PartLayout>>), TypeLayoutError> {
         let layout = |ty| Ok((Self::size(ty, store)?, Self::align(ty, store)?));
         let variants = data
             .variants
             .iter()
             .map(|variant| variant.fields.iter().map(|&field| layout(field)).collect())
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(EnumLayout::new(layout(data.tag_ty())?, &variants))
+            .collect::<Result<_, _>>()?;
+        Ok((layout(data.tag_ty())?, variants))
     }
 
     /// An enum tag's integer type; any other scalar is its own.
@@ -197,13 +206,8 @@ impl TypeLayout for NativeTypeLayout {
         field: usize,
         store: &TypeStore,
     ) -> Option<usize> {
-        let layout = |ty| Some((Self::size(ty, store).ok()?, Self::align(ty, store).ok()?));
-        let variants = data
-            .variants
-            .iter()
-            .map(|variant| variant.fields.iter().map(|&field| layout(field)).collect())
-            .collect::<Option<Vec<Vec<_>>>>()?;
-        let payload_offset = EnumLayout::new(layout(data.tag_ty())?, &variants).payload_offset;
+        let (tag, variants) = Self::enum_part_layouts(data, store).ok()?;
+        let payload_offset = EnumLayout::new(tag, &variants).payload_offset;
         let (offsets, _) = place_fields(variants.get(variant)?);
         Some(payload_offset + offsets.get(field)?)
     }

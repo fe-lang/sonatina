@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use bitflags::bitflags;
 use cranelift_entity::entity_impl;
@@ -18,6 +18,9 @@ use crate::{
     parallel,
     types::{CompoundType, TypeStore},
 };
+
+/// The store scalar layouts receive: they resolve no compound types.
+static NO_TYPES: LazyLock<TypeStore> = LazyLock::new(TypeStore::default);
 
 bitflags! {
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -362,7 +365,7 @@ impl ModuleCtx {
         if matches!(ty, Type::Compound(_) | Type::EnumTag(_)) {
             self.with_ty_store(|store| self.type_layout.size_of(ty, store))
         } else {
-            self.type_layout.size_of(ty, &TypeStore::default())
+            self.type_layout.size_of(ty, &NO_TYPES)
         }
     }
 
@@ -370,7 +373,7 @@ impl ModuleCtx {
         if matches!(ty, Type::Compound(_) | Type::EnumTag(_)) {
             self.with_ty_store(|store| self.type_layout.align_of(ty, store))
         } else {
-            self.type_layout.align_of(ty, &TypeStore::default())
+            self.type_layout.align_of(ty, &NO_TYPES)
         }
     }
 

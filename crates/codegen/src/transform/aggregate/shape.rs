@@ -859,14 +859,9 @@ impl LayoutCtx<'_> {
 
                 // Leaves of different variants share the target's payload
                 // storage, so their bytes may overlap.
-                let variants: Vec<_> = data
-                    .variants
-                    .iter()
-                    .map(|variant| variant.fields.clone())
-                    .collect();
                 let mut slot = 1u32;
-                for (variant, fields) in variants.into_iter().enumerate() {
-                    for (field, field_ty) in fields.into_iter().enumerate() {
+                for (variant, data_variant) in data.variants.iter().enumerate() {
+                    for (field, &field_ty) in data_variant.fields.iter().enumerate() {
                         let offset = self
                             .module
                             .type_layout
