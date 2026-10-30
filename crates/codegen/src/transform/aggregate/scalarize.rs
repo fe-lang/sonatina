@@ -2276,11 +2276,17 @@ impl AggregateScalarize {
             let Some(replacement) = trivial_phi_replacement(func, phi_inst) else {
                 continue;
             };
+            // The phi is its own user when a back edge carries it unchanged.
+            // It is removed below, so it has no result left to revisit.
             let phi_users: Vec<_> = func
                 .dfg
                 .users(leaf_phi)
                 .copied()
-                .filter(|user| func.layout.is_inst_inserted(*user) && func.dfg.is_phi(*user))
+                .filter(|user| {
+                    *user != phi_inst
+                        && func.layout.is_inst_inserted(*user)
+                        && func.dfg.is_phi(*user)
+                })
                 .collect();
             func.dfg.change_to_alias(leaf_phi, replacement);
             for current in leaf_phis.iter_mut() {
@@ -5449,6 +5455,80 @@ func private %f(v0.i1, v1.i1, v2.i256, v3.i256) -> i256 {
                 }
             }
             assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarize_simplifies_loop_carried_struct_with_an_unchanged_field() {
+        // Field 1 of the carried struct is never updated, so its leaf phi names
+        // itself on the back edge and is trivial. The leaf phi is one of its own
+        // users, and it must not be looked at again after it is removed.
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        v1.@pair = insert_value undef.@pair 0.i8 v0;
+        v2.@pair = insert_value v1 1.i8 v0;
+        jump block1;
+
+    block1:
+        v3.i256 = phi (0.i256 block0) (v7 block2);
+        v4.@pair = phi (v2 block0) (v6 block2);
+        v5.i1 = lt v3 v0;
+        br v5 block2 block3;
+
+    block2:
+        v8.i256 = extract_value v4 0.i8;
+        v9.i256 = add v8 v3;
+        v6.@pair = insert_value v4 0.i8 v9;
+        v7.i256 = add v3 1.i256;
+        jump block1;
+
+    block3:
+        v10.i256 = extract_value v4 0.i8;
+        v11.i256 = extract_value v4 1.i8;
+        v12.i256 = add v10 v11;
+        return v12;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    func.dfg.inst(inst).for_each_value(&mut |value| {
+                        if let Some(def_inst) = func.dfg.value_inst(value) {
+                            assert!(
+                                func.layout.is_inst_inserted(def_inst),
+                                "inst {} uses value v{} from removed inst {}",
+                                inst.as_u32(),
+                                value.as_u32(),
+                                def_inst.as_u32()
+                            );
+                        }
+                    });
+                }
+            }
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+            let phis = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .filter(|inst| func.dfg.is_phi(*inst))
+                .count();
+            assert_eq!(
+                phis, 2,
+                "the counter and the updated field stay phis; the unchanged field does not"
+            );
         });
     }
 
