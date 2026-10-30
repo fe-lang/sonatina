@@ -1300,12 +1300,16 @@ fn enum_proj_of_value(func: &Function, value: ValueId) -> Option<data::EnumProj>
     func.dfg.downcast::<&data::EnumProj>(inst).cloned()
 }
 
+/// A phi of `args` at the top of `block`, or `undef` if every argument is.
 fn append_phi_at_block_top(
     func: &mut Function,
     block: BlockId,
     ty: Type,
     args: control_flow::PhiArgs,
 ) -> ValueId {
+    if args.iter().all(|&(arg, _)| is_explicit_undef(func, arg)) {
+        return func.dfg.make_undef_value(ty);
+    }
     let phi = control_flow::Phi::new_unchecked(func.inst_set(), args);
     let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
     let inst = cursor.prepend_inst_data(func, phi);
@@ -1736,6 +1740,45 @@ block0:
         assert!(
             dumped.contains("return v0;"),
             "payload load should fold to the written scalar:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn combine_merges_undef_insert_bases_without_a_phi() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %f(v0.i1, v1.i256, v2.i256) -> @pair {
+block0:
+    br v0 block1 block2;
+block1:
+    v3.@pair = insert_value undef.@pair 0.i8 v1;
+    jump block3;
+block2:
+    v4.@pair = insert_value undef.@pair 0.i8 v2;
+    jump block3;
+block3:
+    v5.@pair = phi (v3 block1) (v4 block2);
+    return v5;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            assert!(AggregateCombine::default().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(
+            !dumped.contains("@pair = phi"),
+            "undef bases should merge to undef, not a phi:\n{dumped}"
+        );
+        assert!(
+            dumped.contains("i256 = phi (v1 block1) (v2 block2)"),
+            "the inserted fields should merge:\n{dumped}"
         );
     }
 
