@@ -13,7 +13,7 @@ use crate::{
     AddressSpaceInfo, FuncEffectSummary, Function, InstSetBase, Linkage, Signature, Type,
     global_variable::GlobalVariableStore,
     ir_writer::IrWrite,
-    isa::{Endian, EnumLayout, Isa, TypeLayout, TypeLayoutError, place_fields},
+    isa::{Endian, Isa, TypeLayout, TypeLayoutError},
     object::Object,
     parallel,
     types::{CompoundType, TypeStore},
@@ -356,12 +356,22 @@ impl ModuleCtx {
         }
     }
 
+    /// Scalars need no type store, so their layout takes no lock: callers may
+    /// already hold it.
     pub fn size_of(&self, ty: Type) -> Result<usize, TypeLayoutError> {
-        self.type_layout.size_of(ty, self)
+        if matches!(ty, Type::Compound(_) | Type::EnumTag(_)) {
+            self.with_ty_store(|store| self.type_layout.size_of(ty, store))
+        } else {
+            self.type_layout.size_of(ty, &TypeStore::default())
+        }
     }
 
     pub fn align_of(&self, ty: Type) -> Result<usize, TypeLayoutError> {
-        self.type_layout.align_of(ty, self)
+        if matches!(ty, Type::Compound(_) | Type::EnumTag(_)) {
+            self.with_ty_store(|store| self.type_layout.align_of(ty, store))
+        } else {
+            self.type_layout.align_of(ty, &TypeStore::default())
+        }
     }
 
     pub fn size_of_unchecked(&self, ty: Type) -> usize {
@@ -420,7 +430,7 @@ impl ModuleCtx {
     }
 
     /// The offset and type of field `field` of variant `variant` of
-    /// `enum_ty`, whose variants share payload storage (see [`EnumLayout`]).
+    /// `enum_ty`, as the target lays out enums.
     pub fn enum_variant_field_offset(
         &self,
         enum_ty: Type,
@@ -430,17 +440,14 @@ impl ModuleCtx {
         let Type::Compound(cmpd) = enum_ty else {
             return None;
         };
-        let data = self.with_ty_store(|store| store.enum_data(cmpd).cloned())?;
-        let layout = |ty| Some((self.size_of(ty).ok()?, self.align_of(ty).ok()?));
-        let variants = data
-            .variants
-            .iter()
-            .map(|variant| variant.fields.iter().map(|&field| layout(field)).collect())
-            .collect::<Option<Vec<Vec<_>>>>()?;
-        let payload_offset = EnumLayout::new(layout(data.tag_ty())?, &variants).payload_offset;
-        let (offsets, _) = place_fields(variants.get(variant)?);
-        let field_ty = *data.variants[variant].fields.get(field)?;
-        Some((payload_offset + offsets.get(field)?, field_ty))
+        self.with_ty_store(|store| {
+            let data = store.enum_data(cmpd)?;
+            let field_ty = *data.variants.get(variant)?.fields.get(field)?;
+            let offset = self
+                .type_layout
+                .enum_variant_field_offset(data, variant, field, store)?;
+            Some((offset, field_ty))
+        })
     }
 
     pub fn func_sig<F, R>(&self, func_ref: FuncRef, f: F) -> R

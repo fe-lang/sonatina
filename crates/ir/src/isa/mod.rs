@@ -1,6 +1,9 @@
 use sonatina_triple::TargetTriple;
 
-use crate::{AddressSpaceInfo, InstSetBase, Type, module::ModuleCtx};
+use crate::{
+    AddressSpaceInfo, InstSetBase, Type,
+    types::{EnumData, TypeStore},
+};
 
 pub mod evm;
 pub mod native;
@@ -14,9 +17,18 @@ pub trait Isa {
     fn address_spaces(&self) -> &'static dyn AddressSpaceInfo;
 }
 
+/// Lays out types; compound types resolve through `store`.
 pub trait TypeLayout: Send + Sync {
-    fn size_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError>;
-    fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError>;
+    fn size_of(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError>;
+    fn align_of(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError>;
+    /// The offset of field `field` of variant `variant` in an enum `data`.
+    fn enum_variant_field_offset(
+        &self,
+        data: &EnumData,
+        variant: usize,
+        field: usize,
+        store: &TypeStore,
+    ) -> Option<usize>;
     fn pointer_repl(&self) -> Type;
     fn endian(&self) -> Endian;
 }

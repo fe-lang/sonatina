@@ -2,11 +2,10 @@ use std::sync::LazyLock;
 
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
-use super::{Endian, EnumLayout, Isa, TypeLayout, TypeLayoutError};
+use super::{Endian, EnumLayout, Isa, TypeLayout, TypeLayoutError, place_fields};
 use crate::{
     AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind, Type,
     inst::native::inst_set::NativeInstSet,
-    module::ModuleCtx,
     types::{CompoundType, EnumData, TypeStore},
 };
 
@@ -183,20 +182,30 @@ impl NativeTypeLayout {
 }
 
 impl TypeLayout for NativeTypeLayout {
-    fn size_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
-        if matches!(ty, Type::Compound(_) | Type::EnumTag(_)) {
-            ctx.with_ty_store(|store| Self::size(ty, store))
-        } else {
-            Self::scalar_layout(ty).map(|(size, _)| size)
-        }
+    fn size_of(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
+        Self::size(ty, store)
     }
 
-    fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
-        if matches!(ty, Type::Compound(_) | Type::EnumTag(_)) {
-            ctx.with_ty_store(|store| Self::align(ty, store))
-        } else {
-            Self::scalar_layout(ty).map(|(_, align)| align)
-        }
+    fn align_of(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
+        Self::align(ty, store)
+    }
+
+    fn enum_variant_field_offset(
+        &self,
+        data: &EnumData,
+        variant: usize,
+        field: usize,
+        store: &TypeStore,
+    ) -> Option<usize> {
+        let layout = |ty| Some((Self::size(ty, store).ok()?, Self::align(ty, store).ok()?));
+        let variants = data
+            .variants
+            .iter()
+            .map(|variant| variant.fields.iter().map(|&field| layout(field)).collect())
+            .collect::<Option<Vec<Vec<_>>>>()?;
+        let payload_offset = EnumLayout::new(layout(data.tag_ty())?, &variants).payload_offset;
+        let (offsets, _) = place_fields(variants.get(variant)?);
+        Some(payload_offset + offsets.get(field)?)
     }
 
     fn pointer_repl(&self) -> Type {

@@ -6,8 +6,7 @@ use super::{Endian, Isa, TypeLayout, TypeLayoutError};
 use crate::{
     AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind, Type,
     inst::evm::{inst_set::EvmInstSet, machine_inst_set::EvmMachineInstSet},
-    module::ModuleCtx,
-    types::CompoundType,
+    types::{CompoundType, EnumData, TypeStore},
 };
 
 pub mod space {
@@ -148,61 +147,80 @@ impl Isa for EvmMachine {
 
 struct EvmTypeLayout {}
 impl TypeLayout for EvmTypeLayout {
-    fn size_of(&self, ty: crate::Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
+    fn size_of(&self, ty: crate::Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
         let size = match ty {
             Type::Unit => 0,
             // EVM memory is word-addressed by the MLOAD/MSTORE family. For now we model all
             // scalar/pointer values as occupying one full 32-byte slot.
-            Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 | Type::I256 => 32,
-            Type::EnumTag(_) => return Err(TypeLayoutError::UnrepresentableType(ty)),
+            Type::I1
+            | Type::I8
+            | Type::I16
+            | Type::I32
+            | Type::I64
+            | Type::I128
+            | Type::I256
+            | Type::EnumTag(_) => 32,
 
-            Type::Compound(cmpd) => {
-                let cmpd_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd).clone());
-                match cmpd_data {
-                    CompoundType::Array { elem, len } => self.size_of(elem, ctx)? * len,
+            Type::Compound(cmpd) => match store.resolve_compound(cmpd) {
+                CompoundType::Array { elem, len } => self.size_of(*elem, store)? * len,
 
-                    CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => {
-                        32
+                CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 32,
+
+                CompoundType::Struct(s) => {
+                    if s.packed {
+                        panic!("packed data is not supported yet!");
+                    }
+                    let mut size = 0;
+                    for &field in &s.fields {
+                        size += self.size_of(field, store)?;
                     }
 
-                    CompoundType::Struct(s) => {
-                        if s.packed {
-                            panic!("packed data is not supported yet!");
-                        }
-                        let mut size = 0;
-                        for &field in &s.fields {
-                            size += self.size_of(field, ctx)?;
-                        }
-
-                        size
-                    }
-
-                    CompoundType::Enum(data) => {
-                        let mut size = 32;
-                        for variant in &data.variants {
-                            for &field in &variant.fields {
-                                size += self.size_of(field, ctx)?;
-                            }
-                        }
-                        size
-                    }
-
-                    CompoundType::Func { .. } => {
-                        return Err(TypeLayoutError::UnrepresentableType(ty));
-                    }
+                    size
                 }
-            }
+
+                CompoundType::Enum(data) => {
+                    let mut size = 32;
+                    for variant in &data.variants {
+                        for &field in &variant.fields {
+                            size += self.size_of(field, store)?;
+                        }
+                    }
+                    size
+                }
+
+                CompoundType::Func { .. } => {
+                    return Err(TypeLayoutError::UnrepresentableType(ty));
+                }
+            },
         };
 
         Ok(size)
+    }
+
+    /// The tag's word, then every variant's fields in turn.
+    fn enum_variant_field_offset(
+        &self,
+        data: &EnumData,
+        variant: usize,
+        field: usize,
+        store: &TypeStore,
+    ) -> Option<usize> {
+        data.variants.get(variant)?.fields.get(field)?;
+        data.variants[..variant]
+            .iter()
+            .flat_map(|variant| &variant.fields)
+            .chain(&data.variants[variant].fields[..field])
+            .try_fold(32, |offset, &ty| {
+                Some(offset + self.size_of(ty, store).ok()?)
+            })
     }
 
     fn pointer_repl(&self) -> Type {
         Type::I256
     }
 
-    fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
-        let size = self.size_of(ty, ctx)?;
+    fn align_of(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
+        let size = self.size_of(ty, store)?;
         if size == 0 { Ok(1) } else { Ok(32) }
     }
 

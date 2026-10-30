@@ -857,16 +857,26 @@ impl LayoutCtx<'_> {
                 });
                 path.pop();
 
+                // Leaves of different variants share the target's payload
+                // storage, so their bytes may overlap.
+                let variants: Vec<_> = data
+                    .variants
+                    .iter()
+                    .map(|variant| variant.fields.clone())
+                    .collect();
                 let mut slot = 1u32;
-                let mut offset = base_offset.checked_add(tag_size)?;
-                for field_ty in enum_field_tys(data) {
-                    let (field_size, field_align) = self.runtime_size_align_bytes(field_ty)?;
-                    offset = align_to(offset, field_align)?;
-                    path.push(slot);
-                    self.flatten_aggregate(field_ty, offset, path, out)?;
-                    path.pop();
-                    offset = offset.checked_add(field_size)?;
-                    slot = slot.checked_add(1)?;
+                for (variant, fields) in variants.into_iter().enumerate() {
+                    for (field, field_ty) in fields.into_iter().enumerate() {
+                        let offset = self
+                            .module
+                            .type_layout
+                            .enum_variant_field_offset(data, variant, field, self.types)?;
+                        let offset = base_offset.checked_add(u32::try_from(offset).ok()?)?;
+                        path.push(slot);
+                        self.flatten_aggregate(field_ty, offset, path, out)?;
+                        path.pop();
+                        slot = slot.checked_add(1)?;
+                    }
                 }
                 Some(())
             }
@@ -972,10 +982,6 @@ impl LayoutCtx<'_> {
     }
 
     fn compute_runtime_size_align_bytes(&mut self, ty: Type) -> Option<(u32, u32)> {
-        if ty.is_enum_tag() {
-            return self.primitive_size_align(self.module.type_layout.pointer_repl());
-        }
-
         match compound_ty(self.types, ty) {
             Some(CompoundType::Struct(s)) => {
                 if s.packed {
@@ -1000,18 +1006,8 @@ impl LayoutCtx<'_> {
                     elem_align,
                 ))
             }
-            Some(CompoundType::Enum(data)) => {
-                let (tag_size, tag_align) = self.runtime_size_align_bytes(enum_tag_ty(ty)?)?;
-                let mut size = tag_size;
-                let mut align = tag_align;
-                for field_ty in enum_field_tys(data) {
-                    let (field_size, field_align) = self.runtime_size_align_bytes(field_ty)?;
-                    size = align_to(size, field_align)?;
-                    size = size.checked_add(field_size)?;
-                    align = align.max(field_align);
-                }
-                Some((size, align))
-            }
+            // Variants share payload storage as the target lays them out.
+            Some(CompoundType::Enum(_)) => self.primitive_size_align(ty),
             Some(CompoundType::Func { .. }) => None,
             Some(CompoundType::Ptr(_))
             | Some(CompoundType::ObjRef(_))
@@ -1022,9 +1018,11 @@ impl LayoutCtx<'_> {
         }
     }
 
+    /// The target's layout of `ty`, through the type store this context holds.
     fn primitive_size_align(&self, ty: Type) -> Option<(u32, u32)> {
-        let size = u32::try_from(self.module.size_of(ty).ok()?).ok()?;
-        let align = u32::try_from(self.module.align_of(ty).ok()?).ok()?;
+        let layout = self.module.type_layout;
+        let size = u32::try_from(layout.size_of(ty, self.types).ok()?).ok()?;
+        let align = u32::try_from(layout.align_of(ty, self.types).ok()?).ok()?;
         Some((size, align))
     }
     fn runtime_leaf_range_for_slice(
@@ -1632,7 +1630,7 @@ mod tests {
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     use crate::transform::aggregate::{
-        compute_object_effect_summaries, object_tracking::AggregateFacts,
+        compute_object_effect_summaries, object_tracking::AggregateFacts, objref_element_ty,
         provenance::ProvenanceSnapshot,
     };
 
@@ -1921,6 +1919,63 @@ block0:
             shape.leaves[2].offset_bytes,
             align_to(option_size, 32).expect("offset")
         );
+    }
+
+    #[test]
+    fn enum_leaves_follow_the_target_layout() {
+        for target in ["evm-ethereum-osaka", "aarch64-unknown-native"] {
+            let module = parse_test_module(&format!(
+                r#"
+target = "{target}"
+type @E = enum {{ #A(i64), #B(i64) }};
+type @O = enum {{ #None, #Some(i64) }};
+type @Pair = {{ i8, i64 }};
+func private %f(v0.objref<@E>, v1.objref<@O>, v2.objref<[i64; 3]>, v3.objref<@Pair>) {{
+block0:
+    return;
+}}
+"#
+            ));
+            let func_ref = module.funcs()[0];
+            let args = module.ctx.func_sig(func_ref, |sig| sig.args().to_vec());
+            let [e, option, words, pair] = args
+                .iter()
+                .map(|&arg| objref_element_ty(&module.ctx, arg).unwrap())
+                .collect::<Vec<_>>()[..]
+            else {
+                unreachable!()
+            };
+            let leaves = |ty| {
+                aggregate_shape(&module.ctx, ty)
+                    .unwrap()
+                    .leaves
+                    .iter()
+                    .map(|leaf| (leaf.offset_bytes, leaf.size_bytes))
+                    .collect::<Vec<_>>()
+            };
+            let mut cache = AggregateLayoutCache::default();
+            let mut compatible = |from, to| {
+                cache
+                    .compatible_bitcast_runtime_leaves(&module.ctx, from, to)
+                    .is_some()
+            };
+            if target.starts_with("evm") {
+                // The tag's word, then every variant's fields in turn.
+                assert_eq!(leaves(e), [(0, 32), (32, 32), (64, 32)]);
+                assert_eq!(runtime_size_bytes(&module.ctx, e), Some(96));
+            } else {
+                // One i8 tag, then both payloads at the i64's offset.
+                assert_eq!(leaves(e), [(0, 1), (8, 8), (8, 8)]);
+                assert_eq!(runtime_size_bytes(&module.ctx, e), Some(16));
+                assert_eq!(leaves(option), [(0, 1), (8, 8)]);
+                assert!(compatible(option, pair));
+                assert!(!compatible(words, e));
+            }
+            assert_eq!(
+                runtime_size_bytes(&module.ctx, e),
+                module.ctx.size_of(e).ok().map(|size| size as u32)
+            );
+        }
     }
 
     #[test]
