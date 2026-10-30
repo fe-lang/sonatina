@@ -420,6 +420,38 @@ block3:
 block4:
     return -1.i64;
 }
+func public %object_tag(v10.*i8) -> i64 {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v1.@Choice = mload v0 @Choice;
+    v2.objref<@Choice> = obj.alloc @Choice;
+    obj.store v2 v1;
+    v3.enumtag(@Choice) = enum.get_tag v2;
+    br_table v3 block4 (0.enumtag(@Choice) block1) (1.enumtag(@Choice) block2) (2.enumtag(@Choice) block3);
+block1:
+    return 10.i64;
+block2:
+    return 11.i64;
+block3:
+    return 12.i64;
+block4:
+    return -1.i64;
+}
+func public %value_tag(v10.*i8) -> i64 {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v1.@Choice = mload v0 @Choice;
+    v2.enumtag(@Choice) = enum.tag v1;
+    br_table v2 block4 (0.enumtag(@Choice) block1) (1.enumtag(@Choice) block2) (2.enumtag(@Choice) block3);
+block1:
+    return 20.i64;
+block2:
+    return 21.i64;
+block3:
+    return 22.i64;
+block4:
+    return -1.i64;
+}
 "#;
     #[repr(C, align(16))]
     struct Choice([u8; 48]);
@@ -438,6 +470,10 @@ block4:
             unsafe { std::mem::transmute(function("write_some")) };
         let read: unsafe extern "C" fn(*const Choice) -> i64 =
             unsafe { std::mem::transmute(function("read")) };
+        let object_tag: unsafe extern "C" fn(*const Choice) -> i64 =
+            unsafe { std::mem::transmute(function("object_tag")) };
+        let value_tag: unsafe extern "C" fn(*const Choice) -> i64 =
+            unsafe { std::mem::transmute(function("value_tag")) };
         let mut choice = Choice([0xaa; 48]);
         unsafe { write_pair(&mut choice, 0x1122_3344_5566_7788) };
         assert_eq!(choice.0[0], 2, "{level:?}");
@@ -448,12 +484,16 @@ block4:
             "{level:?}"
         );
         assert_eq!(unsafe { read(&choice) }, 0x1122_3344_5566_7788, "{level:?}");
+        assert_eq!(unsafe { object_tag(&choice) }, 12, "{level:?}");
+        assert_eq!(unsafe { value_tag(&choice) }, 22, "{level:?}");
         unsafe { write_some(&mut choice, 99) };
         assert_eq!(choice.0[0], 1, "{level:?}");
         let mut some = [0; 32];
         some[0] = 99;
         assert_eq!(choice.0[16..48], some, "{level:?}");
         assert_eq!(unsafe { read(&choice) }, 99, "{level:?}");
+        assert_eq!(unsafe { object_tag(&choice) }, 11, "{level:?}");
+        assert_eq!(unsafe { value_tag(&choice) }, 21, "{level:?}");
     }
 }
 
