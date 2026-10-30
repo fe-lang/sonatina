@@ -650,7 +650,7 @@ fn generic_pipeline_emits_a_host_object() {
         match host_architecture() {
             Architecture::X86_64 => object::Architecture::X86_64,
             Architecture::Aarch64 => object::Architecture::Aarch64,
-            Architecture::Evm | Architecture::Riscv64im => unreachable!(),
+            Architecture::Evm | Architecture::Riscv64im | Architecture::Wasm32 => unreachable!(),
         }
     );
     assert!(object.symbols().any(|symbol| {
@@ -867,7 +867,7 @@ fn object_backend_rejects_a_non_host_native_target() {
     let architecture = match host_architecture() {
         Architecture::X86_64 => Architecture::Aarch64,
         Architecture::Aarch64 => Architecture::X86_64,
-        Architecture::Evm | Architecture::Riscv64im => unreachable!(),
+        Architecture::Evm | Architecture::Riscv64im | Architecture::Wasm32 => unreachable!(),
     };
     let isa = native_isa(architecture);
     let errors = Compile::new(return_constant_module(&isa), CraneliftObjectBackend::new())

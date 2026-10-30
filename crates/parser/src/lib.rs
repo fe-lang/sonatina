@@ -729,12 +729,31 @@ fn module_ctx_from_triple(triple: TargetTriple) -> ModuleCtx {
             let isa = ir::isa::native::Native::new(triple);
             ModuleCtx::new(&isa)
         }
+        Architecture::Wasm32 => {
+            let isa = ir::isa::wasm32::Wasm32::new(triple);
+            ModuleCtx::new(&isa)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wasm32_target_selects_32_bit_pointers() {
+        let parsed = parse_module(
+            r#"
+target = "wasm32-unknown-native"
+func public %f(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+"#,
+        )
+        .expect("a wasm32 module should parse");
+        assert_eq!(parsed.module.ctx.type_layout.pointer_repl(), ir::Type::I32);
+    }
 
     #[test]
     fn missing_blocks_within_reserved_slots_are_undefined() {
