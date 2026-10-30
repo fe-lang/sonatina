@@ -2,11 +2,11 @@ use std::sync::LazyLock;
 
 use sonatina_triple::{Architecture, TargetTriple};
 
-use super::{Endian, Isa, TypeLayout, TypeLayoutError};
+use super::{Endian, Isa, TypeLayout, TypeLayoutError, enum_layout};
 use crate::{
     AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind, Type,
     inst::evm::{inst_set::EvmInstSet, machine_inst_set::EvmMachineInstSet},
-    types::{CompoundType, EnumData, TypeStore},
+    types::{CompoundType, TypeStore},
 };
 
 pub mod space {
@@ -178,15 +178,7 @@ impl TypeLayout for EvmTypeLayout {
                     size
                 }
 
-                CompoundType::Enum(data) => {
-                    let mut size = 32;
-                    for variant in &data.variants {
-                        for &field in &variant.fields {
-                            size += self.size_of(field, store)?;
-                        }
-                    }
-                    size
-                }
+                CompoundType::Enum(data) => enum_layout(self, data, store)?.size,
 
                 CompoundType::Func { .. } => {
                     return Err(TypeLayoutError::UnrepresentableType(ty));
@@ -195,24 +187,6 @@ impl TypeLayout for EvmTypeLayout {
         };
 
         Ok(size)
-    }
-
-    /// The tag's word, then every variant's fields in turn.
-    fn enum_variant_field_offset(
-        &self,
-        data: &EnumData,
-        variant: usize,
-        field: usize,
-        store: &TypeStore,
-    ) -> Option<usize> {
-        data.variants.get(variant)?.fields.get(field)?;
-        data.variants[..variant]
-            .iter()
-            .flat_map(|variant| &variant.fields)
-            .chain(&data.variants[variant].fields[..field])
-            .try_fold(32, |offset, &ty| {
-                Some(offset + self.size_of(ty, store).ok()?)
-            })
     }
 
     fn pointer_repl(&self) -> Type {
@@ -234,7 +208,12 @@ mod tests {
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
     use super::{Evm, EvmMachine, space};
-    use crate::{AddressSpaceKind, inst::inst_set::InstSetBase, isa::Isa};
+    use crate::{
+        AddressSpaceKind, Module, Type,
+        inst::inst_set::InstSetBase,
+        isa::Isa,
+        types::{EnumReprHint, VariantData},
+    };
 
     #[test]
     fn evm_address_spaces_match_expected_layout() {
@@ -270,5 +249,39 @@ mod tests {
         assert!(isa.inst_set().has_evm_mstore().is_some());
         assert!(isa.inst_set().has_evm_malloc().is_none());
         assert!(isa.inst_set().has_alloca().is_none());
+    }
+
+    #[test]
+    fn enum_variants_share_payload_words() {
+        let module = Module::new(&Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::Osaka),
+        )));
+        let variant = |name: &str, fields: &[Type]| VariantData {
+            name: name.to_string(),
+            explicit_discriminant: None,
+            fields: fields.to_vec(),
+        };
+        let choice = module.ctx.with_ty_store_mut(|store| {
+            let pair = store.make_array(Type::I256, 2);
+            store.make_enum(
+                "Choice",
+                &[
+                    variant("None", &[]),
+                    variant("Some", &[Type::I8, Type::I256]),
+                    variant("Many", &[Type::I1, pair, Type::Unit, Type::I64]),
+                ],
+                EnumReprHint::Default,
+            )
+        });
+        // The tag's word, then the largest payload: Many's four words.
+        assert_eq!(module.ctx.size_of_unchecked(choice), 160);
+        let offset = |variant, field| module.ctx.enum_variant_field_offset(choice, variant, field);
+        assert_eq!(offset(1, 0), Some((32, Type::I8)));
+        assert_eq!(offset(1, 1), Some((64, Type::I256)));
+        assert_eq!(offset(2, 0), Some((32, Type::I1)));
+        assert_eq!(offset(2, 3), Some((128, Type::I64)));
+        assert_eq!(offset(0, 0), None);
     }
 }

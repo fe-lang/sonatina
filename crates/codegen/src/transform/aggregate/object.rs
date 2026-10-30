@@ -10,6 +10,10 @@ use sonatina_ir::{
 use crate::type_rewrite::{TypeRewrite, rewrite_compound_type_default, rewrite_function_type_uses};
 
 use super::{
+    enum_lowering::{
+        EnumWordRewrite, LoweredEnums, lower_enum_inst, lower_enum_type, lower_global_tags,
+        lower_tag_immediates, tag_int_ty,
+    },
     object_locality::{self, LocalObjectArgMap, LocalObjectArgs, SpecialObjectUse},
     private_abi::{self, PrivateAbiPlan},
 };
@@ -36,6 +40,8 @@ impl PrivateAbiPlan for FuncPlan {
     }
 }
 
+/// Lowers objects to memory, and enums to structs of their tag and the
+/// payload parts their variants share (see `enum_lowering`).
 #[derive(Default)]
 pub struct ObjectLowerToMemory;
 
@@ -65,7 +71,7 @@ impl ObjectLowerToMemory {
         private_abi::retain_higher_order_safe_plans(module, &mut plans);
         let mut changed = type_lowerer.changed || !plans.is_empty();
         let old_sigs = private_abi::rewrite_declared_signatures(module, &plans);
-        changed |= rewrite_global_types(module, &mut type_lowerer);
+        changed |= lower_global_tags(module, &mut type_lowerer);
         changed |= type_lowerer.changed;
 
         for func_ref in module.funcs() {
@@ -126,7 +132,8 @@ impl ObjectLowerToMemory {
         local_object_args: &LocalObjectArgs,
         type_lowerer: &mut ObjRefTypeLowerer,
     ) -> bool {
-        let mut changed = self.rewrite_types(func, type_lowerer);
+        let mut changed = lower_tag_immediates(func);
+        changed |= self.rewrite_types(func, type_lowerer);
         let alloc_kinds = self.collect_alloc_kinds(func, local_object_args);
         if alloc_kinds.is_empty() && !has_object_lowering_work(func) {
             if changed {
@@ -142,7 +149,8 @@ impl ObjectLowerToMemory {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
-                changed |= self.rewrite_inst(func, inst, &alloc_kinds);
+                changed |= lower_enum_inst(type_lowerer, func, inst)
+                    || self.rewrite_inst(func, inst, &alloc_kinds);
             }
         }
 
@@ -368,6 +376,7 @@ fn has_object_lowering_work(func: &Function) -> bool {
                     .downcast::<&data::ObjMaterializeStack>(inst)
                     .is_some()
                 || func.dfg.downcast::<&data::MemAllocDynamic>(inst).is_some()
+                || is_enum_inst(func, inst)
             {
                 return true;
             }
@@ -377,15 +386,42 @@ fn has_object_lowering_work(func: &Function) -> bool {
     false
 }
 
+fn is_enum_inst(func: &Function, inst: InstId) -> bool {
+    let dfg = &func.dfg;
+    dfg.downcast::<&data::EnumMake>(inst).is_some()
+        || dfg.downcast::<&data::EnumTag>(inst).is_some()
+        || dfg.downcast::<&data::EnumIsVariant>(inst).is_some()
+        || dfg.downcast::<&data::EnumAssertVariant>(inst).is_some()
+        || dfg.downcast::<&data::EnumAssertVariantRef>(inst).is_some()
+        || dfg.downcast::<&data::EnumExtract>(inst).is_some()
+        || dfg.downcast::<&data::EnumSetTag>(inst).is_some()
+        || dfg.downcast::<&data::EnumWriteVariant>(inst).is_some()
+        || dfg.downcast::<&data::EnumGetTag>(inst).is_some()
+        || dfg.downcast::<&data::EnumProj>(inst).is_some()
+}
+
+/// Lowers object references to pointers, and enums and their tags to structs
+/// and integers.
 #[derive(Default)]
 struct ObjRefTypeLowerer {
     changed: bool,
     compound_map: FxHashMap<CompoundTypeRef, Type>,
+    enums: LoweredEnums,
+}
+
+impl EnumWordRewrite for ObjRefTypeLowerer {
+    fn lowered_enums(&mut self) -> &mut LoweredEnums {
+        &mut self.enums
+    }
 }
 
 impl TypeRewrite for ObjRefTypeLowerer {
     fn compound_map(&mut self) -> &mut FxHashMap<CompoundTypeRef, Type> {
         &mut self.compound_map
+    }
+
+    fn rewrite_leaf_type(&mut self, ctx: &ModuleCtx, ty: Type) -> Type {
+        tag_int_ty(ctx, ty)
     }
 
     fn rewrite_compound_type(
@@ -399,6 +435,7 @@ impl TypeRewrite for ObjRefTypeLowerer {
                 let elem = self.rewrite_type(ctx, elem);
                 ctx.with_ty_store_mut(|store| store.make_ptr(elem))
             }
+            CompoundType::Enum(data) => lower_enum_type(self, ctx, compound, &data),
             _ => rewrite_compound_type_default(self, ctx, compound, current),
         }
     }
@@ -410,28 +447,6 @@ impl TypeRewrite for ObjRefTypeLowerer {
     fn note_named_compound_update(&mut self, _compound: CompoundTypeRef) {
         self.changed = true;
     }
-}
-
-fn rewrite_global_types(module: &Module, type_lowerer: &mut ObjRefTypeLowerer) -> bool {
-    let globals: Vec<_> = module
-        .ctx
-        .with_gv_store(|store| store.all_gv_refs().collect());
-    let mut changed = false;
-
-    module.ctx.with_gv_store_mut(|store| {
-        for gv in globals {
-            let Some(gv_data) = store.get(gv).cloned() else {
-                continue;
-            };
-            let new_ty = type_lowerer.rewrite_type(&module.ctx, gv_data.ty);
-            if new_ty != gv_data.ty {
-                store.update_ty(gv, new_ty);
-                changed = true;
-            }
-        }
-    });
-
-    changed
 }
 
 fn pointer_elem_ty(func: &Function, value: ValueId) -> Option<Type> {

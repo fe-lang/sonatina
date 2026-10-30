@@ -25,7 +25,7 @@ mod tail_calls;
 #[path = "cranelift/control_flow.rs"]
 mod wide_control_flow;
 
-use sonatina_codegen::{Compile, OptLevel, transform::aggregate::EnumLowerToProduct};
+use sonatina_codegen::{Compile, OptLevel};
 use sonatina_cranelift::{CraneliftError, CraneliftJitArtifact, CraneliftJitBackend};
 use sonatina_ir::{
     I256, Immediate, Linkage, Signature, Type, U256,
@@ -536,10 +536,6 @@ block3:
     let config = VerifierConfig::for_level(VerificationLevel::Full);
     for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
         let module = parse_verified_native_module(source);
-        let lowered = parse_native_module(source);
-        assert!(EnumLowerToProduct.run(&lowered));
-        let report = verify_module(&lowered, &config);
-        assert!(!report.has_errors(), "{report}");
         let mut compile = Compile::new(module, CraneliftJitBackend::new()).with_opt_level(level);
         let report = verify_module(compile.optimize(), &config);
         assert!(!report.has_errors(), "{level:?}: {report}");

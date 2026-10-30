@@ -6,16 +6,16 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 374 bytes
-  total: 374 bytes
+  section runtime: 328 bytes
+  total: 328 bytes
 
 functions:
-  mem: global_dyn_base=0x1c0 arena_base=0x0 scratch_peak_words=14 stable_chain_peak_words=0
-  main_root: ir_blocks=23 ir_insts=74 vcode_ops=204 fixups=14 imm_bytes=57
-    mem: scratch_words=14 stable_words=0 stable_mode=None entry_abs_words=14 abs_words_end=14
+  mem: global_dyn_base=0x140 arena_base=0x0 scratch_peak_words=9 stable_chain_peak_words=1
+  main_root: ir_blocks=23 ir_insts=70 vcode_ops=204 fixups=15 imm_bytes=49
+    mem: scratch_words=9 stable_words=1 stable_mode=StableAbs(base=0x120) entry_abs_words=9 abs_words_end=10
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=22279 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1279
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=22239 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1239
 
 
 --------------- DEBUG ---------------
@@ -23,12 +23,12 @@ evm:
 // func private %main_root()
 main_root:
   block0:
-    PUSH1 0x7 (7)  // evm_mstore 416.i256 7.i256;
-    PUSH2 0x1a0 (416)
+    PUSH1 0x7 (7)  // evm_mstore 256.i256 7.i256;
+    PUSH2 0x100 (256)
     MSTORE
   block2:
     JUMPDEST
-    PUSH2 0x1a0 (416)  // v7.i256 = evm_mload 416.i256;
+    PUSH2 0x100 (256)  // v7.i256 = evm_mload 256.i256;
     MLOAD
     PUSH1 0xff (255)  // v9.i256 = and v7 255.i256;
     AND
@@ -42,8 +42,8 @@ main_root:
     PUSH1 0x1 (1)  // v12.i256 = sub v9 1.i256;
     SWAP1
     SUB
-    DUP1  // evm_mstore 416.i256 v12;
-    PUSH2 0x1a0 (416)
+    DUP1  // evm_mstore 256.i256 v12;
+    PUSH2 0x100 (256)
     MSTORE
     PUSH1 0x3 (3)  // v15.i256 = shl 3.i256 v12;
     SHL
@@ -56,7 +56,7 @@ main_root:
     PUSH1 block5  // br v17 block5 block4;
     JUMPI
   block4:
-    PUSH4 0x4e487b71 (1313373041)  // evm_mstore v3 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
+    PUSH4 0x4e487b71 (1313373041)  // evm_mstore v4 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
     PUSH1 0xe0 (224)
     SHL
     PUSH0
@@ -64,7 +64,7 @@ main_root:
     PUSH1 0x11 (17)  // evm_mstore 4.i256 17.i256;
     PUSH1 0x4 (4)
     MSTORE
-    PUSH1 0x24 (36)  // evm_revert v3 36.i256;
+    PUSH1 0x24 (36)  // evm_revert v4 36.i256;
     PUSH0
     REVERT
   block5:
@@ -80,8 +80,8 @@ main_root:
     PUSH1 block2
     JUMPI
   block20:
-    PUSH0  // evm_mstore v4 v3;
-    PUSH1 0x80 (128)
+    PUSH0  // evm_mstore v4 v4;
+    PUSH0
     MSTORE
     PUSH1 block19  // jump block19;
     JUMP
@@ -89,44 +89,41 @@ main_root:
     JUMPDEST
     POP  // evm_mstore v4 1.i256;
     PUSH1 0x1 (1)
+    PUSH0
+    MSTORE
+    PUSH6 0x1e08000201e6 (33019708703206)  // evm_mstore 64.i256 33019708703206.i256;
+    PUSH1 0x40 (64)
+    MSTORE
+    PUSH1 0x1 (1)  // evm_mstore 96.i256 1.i256;
+    PUSH1 0x60 (96)
+    MSTORE
+    PUSH0  // evm_mstore 128.i256 v4;
     PUSH1 0x80 (128)
     MSTORE
-    PUSH31 0xe00000000000000000000000000000000000000000000000000000006000c (24735858906897380614166165010400859221584774556258665413702486818097070092)  // evm_mstore 192.i256 24735858906897380614166165010400859221584774556258665413702486818097070092.i256;
+    PUSH0  // evm_mstore 160.i256 v4;
+    PUSH1 0xa0 (160)
+    MSTORE
+    PUSH1 0x8 (8)  // evm_mstore 192.i256 8.i256;
     PUSH1 0xc0 (192)
-    MSTORE
-    PUSH6 0x1e08000201e6 (33019708703206)  // evm_mstore 224.i256 33019708703206.i256;
-    PUSH1 0xe0 (224)
-    MSTORE
-    PUSH1 0x1 (1)  // evm_mstore 256.i256 1.i256;
-    PUSH2 0x100 (256)
-    MSTORE
-    PUSH0  // evm_mstore 288.i256 v3;
-    PUSH2 0x120 (288)
-    MSTORE
-    PUSH0  // evm_mstore 320.i256 v3;
-    PUSH2 0x140 (320)
-    MSTORE
-    PUSH1 0x8 (8)  // evm_mstore 352.i256 8.i256;
-    PUSH2 0x160 (352)
     MSTORE
   block19:
     JUMPDEST
-    PUSH1 0x80 (128)  // v42.i256 = evm_mload v4;
+    PUSH0  // v42.i256 = evm_mload v4;
     MLOAD
-    PUSH1 0xe0 (224)  // v44.i256 = evm_mload 224.i256;
+    PUSH1 0x40 (64)  // v44.i256 = evm_mload 64.i256;
     MLOAD
-    PUSH2 0x100 (256)  // v46.i256 = evm_mload 256.i256;
+    PUSH1 0x60 (96)  // v46.i256 = evm_mload 96.i256;
     MLOAD
-    PUSH2 0x120 (288)  // v48.i256 = evm_mload 288.i256;
+    PUSH1 0x80 (128)  // v48.i256 = evm_mload 128.i256;
     MLOAD
-    PUSH2 0x140 (320)  // v51.i256 = evm_mload 320.i256;
+    PUSH1 0xa0 (160)  // v50.i256 = evm_mload 160.i256;
     MLOAD
-    PUSH2 0x160 (352)  // v54.i256 = evm_mload 352.i256;
+    PUSH1 0xc0 (192)  // v53.i256 = evm_mload 192.i256;
     MLOAD
-    PUSH0  // br_table v42 (v3 block27) (1.i256 block7);
+    PUSH0  // br_table v42 (v4 block27) (1.i256 block7);
     DUP7
     EQ
-    PUSH1 block22
+    PUSH1 block27
     JUMPI
     PUSH1 0x1 (1)
     DUP7
@@ -135,14 +132,14 @@ main_root:
     JUMPI
   block7:
     JUMPDEST
-    DUP1  // br v54 block8 block24;
+    DUP1  // br v53 block8 block24;
     ISZERO
     PUSH1 block24
     JUMPI
   block8:
-    PUSH1 0xff (255)  // v56.i256 = xor v54 255.i256;
+    PUSH1 0xff (255)  // v55.i256 = xor v53 255.i256;
     XOR
-    PUSH1 0x3 (3)  // v57.i256 = and 3.i256 v56;
+    PUSH1 0x3 (3)  // v56.i256 = and 3.i256 v55;
     AND
     SWAP5  // jump block10;
     POP
@@ -163,24 +160,24 @@ main_root:
     PUSH1 0x3 (3)
   block10:
     JUMPDEST
-    PUSH1 0xfd (253)  // v59.i256 = and v0 253.i256;
+    PUSH1 0xfd (253)  // v58.i256 = and v0 253.i256;
     AND
-    SWAP4  // v61.i256 = and v44 -31.i256;
+    SWAP4  // v60.i256 = and v44 -31.i256;
     PUSH1 0x1e (30)
     NOT
     AND
-    SWAP4  // v62.i256 = shl 1.i256 v59;
+    SWAP4  // v61.i256 = shl 1.i256 v58;
     PUSH1 0x1 (1)
     SHL
-    SWAP1  // v63.i256 = or v61 v62;
+    SWAP1  // v62.i256 = or v60 v61;
     SWAP4
     OR
-    SWAP3  // br v51 block11 block12;
+    SWAP3  // br v50 block11 block12;
     ISZERO
     PUSH1 block12
     JUMPI
   block11:
-    SWAP2  // v65.i256 = and v63 -481.i256;
+    SWAP2  // v64.i256 = and v62 -481.i256;
     PUSH2 0x1e0 (480)
     NOT
     AND
@@ -188,11 +185,11 @@ main_root:
     JUMP
   block12:
     JUMPDEST
-    SWAP2  // v66.i256 = and v63 -481.i256;
+    SWAP2  // v65.i256 = and v62 -481.i256;
     PUSH2 0x1e0 (480)
     NOT
     AND
-    PUSH2 0x1e0 (480)  // v68.i256 = or v66 480.i256;
+    PUSH2 0x1e0 (480)  // v67.i256 = or v65 480.i256;
     OR
   block13:
     JUMPDEST
@@ -200,15 +197,16 @@ main_root:
     PUSH1 block25
     JUMPI
   block18:
-    PUSH1 block26  // br v46 block26 block16;
+    ISZERO  // br v46 block16 block26;
+    PUSH1 block26
     JUMPI
   block16:
-    PUSH2 0x200 (512)  // jump block17;
+    PUSH0  // jump block17;
     PUSH1 block17
     JUMP
   block26:
     JUMPDEST
-    PUSH0  // jump block17;
+    PUSH2 0x200 (512)  // jump block17;
     PUSH1 block17
     JUMP
   block25:
@@ -217,33 +215,36 @@ main_root:
     PUSH0
   block17:
     JUMPDEST
-    SWAP1  // v70.i256 = and v1 -130561.i256;
+    SWAP1  // v69.i256 = and v1 -130561.i256;
     PUSH3 0x1fe00 (130560)
     NOT
     AND
-    OR  // v71.i256 = or v70 v2;
-    PUSH5 0x1fffe0000 (8589803520)  // v73.i256 = and v71 -8589803521.i256;
+    OR  // v70.i256 = or v69 v2;
+    PUSH5 0x1fffe0000 (8589803520)  // v72.i256 = and v70 -8589803521.i256;
     NOT
     AND
-    PUSH3 0x40000 (262144)  // v75.i256 = or v73 262144.i256;
+    PUSH3 0x40000 (262144)  // v74.i256 = or v72 262144.i256;
     OR
-    PUSH1 0x1 (1)  // v77.i256 = and v75 -2.i256;
-    NOT
-    AND
-    PUSH1 0x1 (1)  // v78.i256 = or v77 1.i256;
-    OR
-    PUSH1 0x60 (96)  // evm_mstore 96.i256 v78;
-    MSTORE
+    PUSH1 block22  // jump block22;
+    JUMP
+  block27:
+    JUMPDEST
+    POP  // jump block22;
+    POP
+    POP
+    POP
+    POP
+    POP
+    PUSH2 0x120 (288)
+    MLOAD
   block22:
     JUMPDEST
-    PUSH1 0x60 (96)  // v81.i256 = evm_mload 96.i256;
-    MLOAD
-    PUSH1 0x1 (1)  // v82.i256 = shr 1.i256 v81;
+    PUSH1 0x1 (1)  // v75.i256 = shr 1.i256 v3;
     SHR
-    PUSH1 0xf (15)  // v83.i256 = and v82 15.i256;
+    PUSH1 0xf (15)  // v76.i256 = and v75 15.i256;
     AND
-    PUSH0  // evm_mstore v3 v83;
+    PUSH0  // evm_mstore v4 v76;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v3 32.i256;
+    PUSH1 0x20 (32)  // evm_return v4 32.i256;
     PUSH0
     RETURN

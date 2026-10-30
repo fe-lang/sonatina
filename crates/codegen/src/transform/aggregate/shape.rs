@@ -1955,21 +1955,21 @@ block0:
                     .is_some()
             };
             if target.starts_with("evm") {
-                // The tag's word, then every variant's fields in turn.
-                assert_eq!(leaves(e), [(0, 32), (32, 32), (64, 32)]);
-                assert_eq!(runtime_size_bytes(&module.ctx, e), Some(96));
+                // `B`'s i64 shares the word of `A`'s.
+                assert_eq!(leaves(e), [(0, 32), (32, 32), (32, 32)]);
+                assert_eq!(runtime_size_bytes(&module.ctx, e), Some(64));
             } else {
                 // One i8 tag, then both payloads at the i64's offset.
                 assert_eq!(leaves(e), [(0, 1), (8, 8), (8, 8)]);
                 assert_eq!(runtime_size_bytes(&module.ctx, e), Some(16));
                 assert_eq!(leaves(option), [(0, 1), (8, 8)]);
                 assert!(compatible(option, pair));
-                assert!(!compatible(words, e));
             }
             assert_eq!(
                 runtime_size_bytes(&module.ctx, e),
                 module.ctx.size_of(e).ok().map(|size| size as u32)
             );
+            assert!(!compatible(words, e));
         }
     }
 

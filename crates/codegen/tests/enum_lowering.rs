@@ -5,7 +5,7 @@ use sonatina_codegen::{
     isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
     object::{CompileOptions, compile_all_objects},
     optim::Pipeline,
-    transform::aggregate::{EnumLowerToProduct, EnumTagLower},
+    transform::aggregate::{EnumTagLower, ObjectLowerToMemory},
 };
 use sonatina_ir::{
     I256, Immediate, Linkage, Module, Signature, Type,
@@ -38,7 +38,7 @@ fn test_enum_lowering(fixture: Fixture<&str>) {
         "enum IR should verify before lowering:\n{report}"
     );
 
-    EnumLowerToProduct.run(&parsed.module);
+    ObjectLowerToMemory.run(&parsed.module);
 
     let report = verify_module(
         &parsed.module,
@@ -95,7 +95,7 @@ block0:
 "#,
             )
             .expect("module should parse");
-            EnumLowerToProduct.run(&parsed.module);
+            ObjectLowerToMemory.run(&parsed.module);
             ModuleWriter::new(&parsed.module).dump_string()
         })
         .collect();
@@ -162,7 +162,7 @@ fn enum_tag_global_initializers_follow_lowered_types() {
         "global should initially verify:\n{before}"
     );
 
-    assert!(EnumLowerToProduct.run(&module));
+    assert!(ObjectLowerToMemory.run(&module));
 
     let after = verify_module(
         &module,
@@ -256,7 +256,7 @@ fn enum_tag_initializers_use_original_shared_struct_fields() {
     let before = verify_module(&module, &config);
     assert!(!before.has_errors(), "{before}");
 
-    assert!(EnumLowerToProduct.run(&module));
+    assert!(ObjectLowerToMemory.run(&module));
     let after = verify_module(&module, &config);
     assert!(!after.has_errors(), "{after}");
     let tag = GvInitializer::make_struct(vec![GvInitializer::make_imm(true)]);
@@ -269,7 +269,7 @@ fn enum_tag_initializers_use_original_shared_struct_fields() {
             assert_eq!(store.gv_data(global).initializer.as_ref(), Some(&expected));
         }
     });
-    assert!(!EnumLowerToProduct.run(&module));
+    assert!(!ObjectLowerToMemory.run(&module));
 }
 
 #[test]
@@ -766,17 +766,18 @@ fn layout_queries_preserve_types_and_match_enum_legalization() {
             let lowered: Vec<_> = args.iter().map(|&ty| module.ctx.size_of(ty).ok()).collect();
             assert_eq!(lowered, sizes);
         } else {
-            assert!(EnumLowerToProduct.run(&module));
+            assert!(ObjectLowerToMemory.run(&module));
             let args = module.ctx.func_sig(signature, |sig| sig.args().to_vec());
             let sizes = args.iter().map(|&ty| module.ctx.size_of(ty).unwrap());
-            assert!(sizes.eq([128, 256, 320, 160]));
+            // `{ tag, i64, i8 }`: `A`'s i8 shares the word of `B`'s i64.
+            assert!(sizes.eq([96, 192, 256, 128]));
             let offset = |ty, index| module.ctx.aggregate_elem_offset(ty, index).unwrap().0;
+            assert_eq!(module.ctx.aggregate_len(args[0]), Some(3));
             assert_eq!(offset(args[0], 1), 32);
             assert_eq!(offset(args[0], 2), 64);
-            assert_eq!(offset(args[0], 3), 96);
-            assert_eq!(offset(args[1], 1), 128);
+            assert_eq!(offset(args[1], 1), 96);
             assert_eq!(offset(args[2], 1), 32);
-            assert_eq!(offset(args[2], 2), 288);
+            assert_eq!(offset(args[2], 2), 224);
             assert_eq!(offset(args[3], 1), 32);
         }
     }

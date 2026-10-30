@@ -28,13 +28,43 @@ pub trait TypeLayout: Send + Sync {
         variant: usize,
         field: usize,
         store: &TypeStore,
-    ) -> Option<usize>;
+    ) -> Option<usize> {
+        let (tag, variants) = enum_part_layouts(self, data, store).ok()?;
+        let payload_offset = EnumLayout::new(tag, &variants).payload_offset;
+        let (offsets, _) = place_fields(variants.get(variant)?);
+        Some(payload_offset + offsets.get(field)?)
+    }
     fn pointer_repl(&self) -> Type;
     fn endian(&self) -> Endian;
 }
 
 /// A part's size and alignment in bytes.
-pub(crate) type PartLayout = (usize, usize);
+type PartLayout = (usize, usize);
+
+/// The layout of an enum `data` under `layout`.
+pub(crate) fn enum_layout(
+    layout: &(impl TypeLayout + ?Sized),
+    data: &EnumData,
+    store: &TypeStore,
+) -> Result<EnumLayout, TypeLayoutError> {
+    let (tag, variants) = enum_part_layouts(layout, data, store)?;
+    Ok(EnumLayout::new(tag, &variants))
+}
+
+/// The layouts of an enum's tag and of each variant's fields.
+fn enum_part_layouts(
+    layout: &(impl TypeLayout + ?Sized),
+    data: &EnumData,
+    store: &TypeStore,
+) -> Result<(PartLayout, Vec<Vec<PartLayout>>), TypeLayoutError> {
+    let part = |ty| Ok((layout.size_of(ty, store)?, layout.align_of(ty, store)?));
+    let variants = data
+        .variants
+        .iter()
+        .map(|variant| variant.fields.iter().map(|&field| part(field)).collect())
+        .collect::<Result<_, _>>()?;
+    Ok((part(data.tag_ty())?, variants))
+}
 
 /// Where an enum's parts go when its variants share payload storage: the tag
 /// at offset zero, then each variant's fields placed like a struct's, from one
@@ -48,7 +78,7 @@ pub(crate) struct EnumLayout {
 
 impl EnumLayout {
     /// The layout for a tag and variant fields.
-    pub(crate) fn new(tag: PartLayout, variants: &[Vec<PartLayout>]) -> Self {
+    fn new(tag: PartLayout, variants: &[Vec<PartLayout>]) -> Self {
         let payload_align = variants
             .iter()
             .flatten()
@@ -71,7 +101,7 @@ impl EnumLayout {
 
 /// The offsets of `fields` placed like a struct's fields, and the end of the
 /// last.
-pub(crate) fn place_fields(fields: &[PartLayout]) -> (Vec<usize>, usize) {
+fn place_fields(fields: &[PartLayout]) -> (Vec<usize>, usize) {
     let mut end = 0usize;
     let offsets = fields
         .iter()

@@ -35,7 +35,7 @@ pub use arg_promotion::{ObjectArgPromotion, ObjectArgPromotionStats};
 pub use byval_object_abi::{
     ObjectAggregateAbi, ObjectAggregateAbiConfig, ObjectByValueArgAbi, ObjectByValueArgAbiConfig,
 };
-pub use enum_lowering::{EnumLowerToProduct, EnumTagLower};
+pub use enum_lowering::EnumTagLower;
 pub use frame_lifetimes::check_frame_lifetimes;
 pub use legalize::{
     AggregateLowerToMemoryLegalize, assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,

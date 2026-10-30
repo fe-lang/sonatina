@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
-use super::{Endian, EnumLayout, Isa, PartLayout, TypeLayout, TypeLayoutError, place_fields};
+use super::{Endian, Isa, TypeLayout, TypeLayoutError, enum_layout};
 use crate::{
     AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind, Type,
     inst::native::inst_set::NativeInstSet,
@@ -111,7 +111,7 @@ impl NativeTypeLayout {
                 size.next_multiple_of(struct_align)
             }
             CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
-            CompoundType::Enum(data) => Self::enum_layout(data, store)?.size,
+            CompoundType::Enum(data) => enum_layout(&NativeTypeLayout, data, store)?.size,
             CompoundType::Func { .. } => {
                 return Err(TypeLayoutError::UnrepresentableType(ty));
             }
@@ -136,31 +136,12 @@ impl NativeTypeLayout {
                 align
             }
             CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
-            CompoundType::Enum(data) => Self::enum_layout(data, store)?.align,
+            CompoundType::Enum(data) => enum_layout(&NativeTypeLayout, data, store)?.align,
             CompoundType::Func { .. } => {
                 return Err(TypeLayoutError::UnrepresentableType(ty));
             }
         };
         Ok(align)
-    }
-
-    fn enum_layout(data: &EnumData, store: &TypeStore) -> Result<EnumLayout, TypeLayoutError> {
-        let (tag, variants) = Self::enum_part_layouts(data, store)?;
-        Ok(EnumLayout::new(tag, &variants))
-    }
-
-    /// The layouts of an enum's tag and of each variant's fields.
-    fn enum_part_layouts(
-        data: &EnumData,
-        store: &TypeStore,
-    ) -> Result<(PartLayout, Vec<Vec<PartLayout>>), TypeLayoutError> {
-        let layout = |ty| Ok((Self::size(ty, store)?, Self::align(ty, store)?));
-        let variants = data
-            .variants
-            .iter()
-            .map(|variant| variant.fields.iter().map(|&field| layout(field)).collect())
-            .collect::<Result<_, _>>()?;
-        Ok((layout(data.tag_ty())?, variants))
     }
 
     /// An enum tag's integer type; any other scalar is its own.
@@ -197,19 +178,6 @@ impl TypeLayout for NativeTypeLayout {
 
     fn align_of(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
         Self::align(ty, store)
-    }
-
-    fn enum_variant_field_offset(
-        &self,
-        data: &EnumData,
-        variant: usize,
-        field: usize,
-        store: &TypeStore,
-    ) -> Option<usize> {
-        let (tag, variants) = Self::enum_part_layouts(data, store).ok()?;
-        let payload_offset = EnumLayout::new(tag, &variants).payload_offset;
-        let (offsets, _) = place_fields(variants.get(variant)?);
-        Some(payload_offset + offsets.get(field)?)
     }
 
     fn pointer_repl(&self) -> Type {
