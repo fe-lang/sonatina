@@ -64,7 +64,7 @@ are canonical: an `i8` holding -1 is returned as 255.
 ## Module structure
 
 - One linear memory is always emitted and exported as `memory`, with no
-  maximum. A module that needs no frame, global data or arena has one page and
+  maximum. A module that needs no frame, global data or heap has one page and
   the backend places nothing in it: addresses used by `mload` and `mstore` are
   chosen by the program or the host. Any other module has the layout below.
 - A function with `public` linkage is exported under its symbol. `private`
@@ -81,20 +81,22 @@ are canonical: an `i8` holding -1 is returned as 255.
 ## Linear memory
 
 A module that uses `alloca`, `obj.alloc`, struct or array values, constants,
-global variables or `mem.alloc_dynamic` has this layout, from the lowest
-address:
+global variables, `mem.alloc_dynamic` or the external `malloc` or `free` has this
+layout, from the lowest address:
 
 1. A reserved block of 16 bytes, so that address 0 is never an object.
 2. The global variables, each at its alignment, in declaration order. Their
    initial contents are data segments of the module (all-zero data is not
    emitted). `const.ref` and the address of a global variable are these
    addresses. Only `private` global variables are supported.
-3. The stack, `WasmBackend::with_stack_size` bytes (1 MiB by default) rounded
+3. When the module has a heap: the table of the heads of the free lists, 128
+   bytes, one word for each size class.
+4. The stack, `WasmBackend::with_stack_size` bytes (1 MiB by default) rounded
    up so that it ends on a page boundary. It holds the frames of calls.
-4. The arena, from the end of the stack to the end of the memory. The initial
+5. The heap, from the end of the stack to the end of the memory. The initial
    memory has one page of it. It grows by `memory.grow`.
 
-The host must not write to regions 3 and 4 while the module is running, and
+The host must not write to regions 3, 4 and 5 while the module is running, and
 should treat regions 1 and 2 as owned by the module.
 
 ### Frames
@@ -122,44 +124,78 @@ error or a callback traps, the module does not run again before the host call
 ends, and the frame of the caller stays reserved. Each such error costs the
 frame of one function.
 
-### The arena
+### The heap
 
-`mem.alloc_dynamic` allocates from the arena. No object does: every `obj.alloc` is a slot of
-the frame. An allocation takes the size rounded up to 16 bytes (a size of
-zero takes 16 bytes, so that it has an address of its own), returns the old
-arena top and moves it. Blocks are never freed and never overlap, and the memory
-of a block is zero when it is returned, because the arena only moves up.
+`mem.alloc_dynamic` and the external C routines `malloc` and `free` use the
+heap. No object does: every `obj.alloc` is a slot of the frame. The heap is an
+allocator with size classes and free lists.
 
-- If the new top is above the end of the memory, the memory grows by the missing
-  pages. The module declares no maximum, so the arena can use as much memory as
-  the host allows, up to the 4 GiB of a 32-bit address space.
-- The allocation traps, and leaves the arena as it was, if the new top does not
-  fit in 32 bits or if the engine refuses to grow the memory. A size operand
-  wider than 32 bits traps if its value does not fit.
-- Nothing is freed. A trap leaves the blocks that were allocated before it
-  allocated and unchanged, and the instance can be called again.
+- Every block starts with a 16-byte header, so that payloads are 16-byte
+  aligned. The class is at offset 0 and the state at offset 4 (1 when the block
+  is in use, 2 when it is free). A block of class `k` has a payload of `2**k`
+  bytes, for `k` from 4 to 31. A request takes the smallest class that holds it,
+  at least 16 bytes, so a block takes `2**k + 16` bytes: up to twice the request
+  plus the header. A request of zero bytes gets a block of its own.
+- A freed block goes on the list of its class. The first word of its payload is
+  the link to the next free block, and the table in region 3 holds the first
+  block of each class. An allocation takes the first block of its class's list
+  when there is one, so the block freed last is the first reused. Otherwise a
+  block is cut from the top of the heap, and the memory grows by the missing
+  pages when it must. Blocks are never split or merged.
+- The largest request is `2**31` bytes.
+- `malloc(size: i32) -> pointer` returns 0 if the request is larger than that,
+  if the end of the new block would not fit in 32 bits, or if the engine refuses
+  to grow the memory; nothing has changed then. `mem.alloc_dynamic` traps in
+  those cases, also changing nothing, so the instance can be called again.
+- `free(pointer)` does nothing for 0. Any other address must be the payload of a
+  block in use: aligned, inside the heap, with the state "in use", a class from 4
+  to 31, and a block that ends at or below the top. Otherwise the call traps and
+  changes nothing, which catches a double free and a free of an address that is
+  not a block.
+- Contents. A block cut from the top is zero, because memory above the top is
+  always zero. A block taken from a list holds what its last user left, except
+  its first word, which held the link.
+- An external function named `malloc` or `free` is the allocator of the module
+  and not an import. `malloc` must take one `i32` and return a pointer, and
+  `free` must take a pointer and return nothing; a declaration with another
+  signature is an error that says so. A call to `memmove` or `memcpy` is
+  `memory.copy`, as described under aggregates.
 
 ### The host allocator
 
-`WasmBackend::with_host_allocator` lets the host place data in the arena before
+`WasmBackend::with_host_allocator` lets the host place data in the heap before
 it calls an export, for example the bytes of a text argument. The module then
-has a stack and an arena even if its code uses neither, and exports three
+has a stack and a heap even if its code uses neither, and exports three
 functions, whose names no function of the module may use (the module is
 rejected with an error that names the function):
 
 | Export | Meaning |
 | --- | --- |
-| `alloc(size: i32) -> i32` | The arena allocator described above. The block is 16-byte aligned, zeroed and at least 16 bytes. The call traps, and changes nothing, when the memory cannot grow. |
-| `arena_mark() -> i32` | The arena top: the address the next block gets. |
-| `arena_release(mark: i32)` | Frees every block allocated after `mark` was read: clears the bytes from `mark` to the arena top, so that new blocks read zero as before, and moves the top back to `mark`. Traps, and changes nothing, unless `mark` is a multiple of 16, not below the start of the arena and not above the top. |
+| `alloc(size: i32) -> i32` | Cuts a block from the top of the heap. The block is zero, and its payload is 16-byte aligned and 16 bytes after its header. It never takes a block from a free list. The call traps, and changes nothing, if the request cannot be met. |
+| `arena_mark() -> i32` | The top of the heap. The next block cut from the top has its header at this address and its payload 16 bytes later. It has no side effect. |
+| `arena_release(mark: i32)` | Frees every block at or above `mark`: the free blocks that end above the mark are unlinked from their lists, the bytes from `mark` to the top are cleared, and the top moves back to `mark`. Traps, and changes nothing, unless `mark` is a multiple of 16, not below the start of the heap and not above the top. |
 
 The protocol for one call is `mark = arena_mark()`, one `alloc` per argument,
 the call, reading whatever the call returned by address, and
-`arena_release(mark)`. Blocks that the call allocated itself are freed by the
-release as well, so an export must not keep arena data for a later call. The
-memory that the arena grew stays; a release does not shrink it. Releasing to a
-mark that an earlier release has already passed traps, which catches a host
-that releases twice.
+`arena_release(mark)`. The release also forgets the blocks that the call cut
+from the top of the heap, so an export must not keep heap data for a later call.
+A block that the call took from a free list, and did not free, stays allocated,
+as it would on a native target. The memory that the heap grew stays; a release
+does not shrink it. Releasing to a mark that an earlier release has already
+passed traps, which catches a host that releases twice. The release walks every
+free list once and checks each block it visits (aligned, inside the heap, in the
+state "free"), and it traps if a list is damaged, for example by a write to a
+freed block.
+
+A call that frees what it allocates, outside any mark, does not make the heap
+grow: freed blocks are reused. A call with a text argument is bounded between
+calls by the release.
+
+Marks may be nested, if the releases are made innermost first: an import that
+calls back into an export that takes text takes its own mark above the outer one.
+An address that `arena_mark` never returned but that is aligned and between the
+start of the heap and the top is accepted by a release; it frees the blocks that
+end above it, and a block that crosses it is forgotten as well.
 
 ## Aggregates, objects and constants
 

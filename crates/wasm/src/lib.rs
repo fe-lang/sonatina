@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 mod arith;
+mod heap;
 mod memory;
 mod translate;
 mod wide;

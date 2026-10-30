@@ -19,6 +19,8 @@ mod diagnostics;
 mod enums;
 #[path = "wasm/harness.rs"]
 mod harness;
+#[path = "wasm/heap.rs"]
+mod heap;
 #[path = "wasm/memory_and_calls.rs"]
 mod memory_and_calls;
 #[path = "wasm/memory_runtime.rs"]

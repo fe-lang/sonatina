@@ -1,6 +1,6 @@
 //! The linear-memory layout and the runtime helpers of a module.
 //!
-//! A module that does not use frames, global data or the arena keeps the
+//! A module that does not use frames, global data or the heap keeps the
 //! layout of the integer slice: one exported page that the backend does not
 //! touch. Any other module gets this layout, from the lowest address:
 //!
@@ -8,19 +8,21 @@
 //!    pointer is never the address of one.
 //! 2. The global variables, each at its natural alignment, filled from the
 //!    module's initializers.
-//! 3. The stack, at least [`WasmBackend::with_stack_size`](super::WasmBackend)
+//! 3. When the module has a heap, the table of free-list heads
+//!    ([`heap::TABLE_BYTES`] bytes, one word for each size class).
+//! 4. The stack, at least [`WasmBackend::with_stack_size`](super::WasmBackend)
 //!    bytes (1 MiB by default), up to the next page boundary. It holds the
 //!    frames of `alloca`, `obj.alloc` and aggregate temporaries.
-//! 4. The arena, from that page boundary to the end of the memory. It holds
-//!    `mem.alloc_dynamic` blocks and objects that outlive their frame, and it
-//!    grows by `memory.grow` as needed.
+//! 5. The heap, from that page boundary to the end of the memory. It holds the
+//!    blocks of `mem.alloc_dynamic` and of the external `malloc`, and it grows
+//!    by `memory.grow` as needed. See the [`heap`] module.
 //!
-//! The initial memory covers regions 1 to 3, and one page of the arena if the
-//! module uses it. The host does not place anything in regions 3 and 4.
+//! The initial memory covers regions 1 to 4, and one page of the heap if the
+//! module uses it. The host does not place anything in regions 3 to 5.
 
 use waffle::{
-    BlockTarget, FunctionBody, Global, GlobalData, Memory, MemorySegment, Module as WModule,
-    Operator, Signature, SignatureData, Terminator, Type as WType,
+    FunctionBody, Global, GlobalData, MemorySegment, Module as WModule, Operator, Signature,
+    Terminator, Type as WType,
 };
 
 use rustc_hash::FxHashMap;
@@ -29,7 +31,7 @@ use sonatina_ir::{
     module::ModuleCtx, types::CompoundType,
 };
 
-use super::{WasmError, arith::Emit};
+use super::{WasmError, heap};
 
 /// The size of a WebAssembly page.
 pub(super) const PAGE: u64 = 65536;
@@ -48,8 +50,11 @@ pub(super) struct MemoryPlan {
     /// Functions take a hidden stack-top parameter, exports are wrapped, and
     /// the stack and global data exist.
     pub(super) runtime: bool,
-    /// The module allocates from the arena.
+    /// The module allocates from the heap.
     pub(super) arena: bool,
+    /// The address of the table of free-list heads, one word per size class,
+    /// when the module has a heap.
+    pub(super) lists: u32,
     pub(super) globals: FxHashMap<GlobalVariableRef, u32>,
     pub(super) segments: Vec<MemorySegment>,
     pub(super) stack_base: u32,
@@ -63,6 +68,7 @@ impl MemoryPlan {
         Self {
             runtime: false,
             arena: false,
+            lists: 0,
             globals: FxHashMap::default(),
             segments: Vec::new(),
             stack_base: 0,
@@ -147,6 +153,14 @@ pub(super) fn plan_memory(
         Ok::<(), WasmError>(())
     })?;
 
+    // The table of free-list heads follows the globals.
+    let lists = if needs_arena {
+        let at = align_up(cursor, ALIGN).ok_or_else(too_large)?;
+        cursor = at.checked_add(heap::TABLE_BYTES).ok_or_else(too_large)?;
+        at
+    } else {
+        0
+    };
     let stack_base = align_up(cursor, ALIGN).ok_or_else(too_large)?;
     // The stack ends on a page boundary, so the slack of the last page belongs
     // to the stack and the arena starts on a fresh page.
@@ -158,6 +172,7 @@ pub(super) fn plan_memory(
     Ok(MemoryPlan {
         runtime: needs_runtime || has_globals,
         arena: needs_arena,
+        lists,
         globals,
         segments,
         stack_base,
@@ -262,153 +277,8 @@ pub(super) fn declare_runtime_globals(
     }
 }
 
-/// The signature of the arena allocator: size in bytes, address out.
-pub(super) fn arena_signature(wmod: &mut WModule<'static>) -> Signature {
-    wmod.signatures.push(SignatureData {
-        params: vec![WType::I32],
-        returns: vec![WType::I32],
-    })
-}
-
-/// The body of the arena allocator.
-///
-/// `alloc(size)` rounds `size` up to 16 bytes (a request for zero bytes gets
-/// 16 so that it still has a distinct address), moves the arena top and returns
-/// the old top. If the new top is above the memory, the memory grows by the
-/// missing pages. The call traps if the new top does not fit in 32 bits or if
-/// the engine refuses to grow the memory, and then leaves the arena unchanged.
-/// Memory that has never been used reads as zero, and the arena never reuses a
-/// block, so every allocation starts zeroed.
-pub(super) fn build_arena_allocator(
-    wmod: &WModule<'static>,
-    sig: Signature,
-    memory: Memory,
-    arena_top: Global,
-) -> FunctionBody {
-    let mut body = FunctionBody::new(wmod, sig);
-    let entry = body.entry;
-    let size = body.blocks[entry].params[0].1;
-
-    let trap = body.add_block();
-    body.set_terminator(trap, Terminator::Unreachable);
-    let grow = body.add_block();
-    let done = body.add_block();
-
-    let mut e = Emit {
-        body: &mut body,
-        block: entry,
-    };
-    let top = e.op(
-        Operator::GlobalGet {
-            global_index: arena_top,
-        },
-        &[],
-        WType::I32,
-    );
-    // The block size, at least one unit of the alignment.
-    let one = e.c32(1);
-    let zero = e.c32(0);
-    let is_empty = e.op(Operator::I32Eq, &[size, zero], WType::I32);
-    let size = e.op(Operator::Select, &[one, size, is_empty], WType::I32);
-    let size64 = e.op(Operator::I64ExtendI32U, &[size], WType::I64);
-    let round = e.c64(u64::from(ALIGN - 1));
-    let padded = e.op(Operator::I64Add, &[size64, round], WType::I64);
-    let mask = e.c64(!u64::from(ALIGN - 1));
-    let block_size = e.op(Operator::I64And, &[padded, mask], WType::I64);
-    let top64 = e.op(Operator::I64ExtendI32U, &[top], WType::I64);
-    let new_top = e.op(Operator::I64Add, &[top64, block_size], WType::I64);
-    let shift32 = e.c64(32);
-    let high = e.op(Operator::I64ShrU, &[new_top, shift32], WType::I64);
-    let zero64 = e.c64(0);
-    let overflow = e.op(Operator::I64Ne, &[high, zero64], WType::I32);
-    let pages = e.op(Operator::MemorySize { mem: memory }, &[], WType::I32);
-    let pages64 = e.op(Operator::I64ExtendI32U, &[pages], WType::I64);
-    let shift16 = e.c64(16);
-    let have = e.op(Operator::I64Shl, &[pages64, shift16], WType::I64);
-    let short = e.op(Operator::I64GtU, &[new_top, have], WType::I32);
-    let check = body.add_block();
-    body.set_terminator(
-        entry,
-        Terminator::CondBr {
-            cond: overflow,
-            if_true: BlockTarget {
-                block: trap,
-                args: vec![],
-            },
-            if_false: BlockTarget {
-                block: check,
-                args: vec![],
-            },
-        },
-    );
-    body.set_terminator(
-        check,
-        Terminator::CondBr {
-            cond: short,
-            if_true: BlockTarget {
-                block: grow,
-                args: vec![],
-            },
-            if_false: BlockTarget {
-                block: done,
-                args: vec![],
-            },
-        },
-    );
-
-    // Grow by the missing pages.
-    let mut g = Emit {
-        body: &mut body,
-        block: grow,
-    };
-    let page_mask = g.c64(PAGE - 1);
-    let rounded = g.op(Operator::I64Add, &[new_top, page_mask], WType::I64);
-    let sixteen = g.c64(16);
-    let need_pages = g.op(Operator::I64ShrU, &[rounded, sixteen], WType::I64);
-    let missing = g.op(Operator::I64Sub, &[need_pages, pages64], WType::I64);
-    let missing32 = g.op(Operator::I32WrapI64, &[missing], WType::I32);
-    let grown = g.op(
-        Operator::MemoryGrow { mem: memory },
-        &[missing32],
-        WType::I32,
-    );
-    let minus_one = g.c32(u32::MAX);
-    let refused = g.op(Operator::I32Eq, &[grown, minus_one], WType::I32);
-    body.set_terminator(
-        grow,
-        Terminator::CondBr {
-            cond: refused,
-            if_true: BlockTarget {
-                block: trap,
-                args: vec![],
-            },
-            if_false: BlockTarget {
-                block: done,
-                args: vec![],
-            },
-        },
-    );
-
-    let mut d = Emit {
-        body: &mut body,
-        block: done,
-    };
-    let new_top32 = d.op(Operator::I32WrapI64, &[new_top], WType::I32);
-    d.body.add_op(
-        done,
-        Operator::GlobalSet {
-            global_index: arena_top,
-        },
-        &[new_top32],
-        &[],
-    );
-    body.set_terminator(done, Terminator::Return { values: vec![top] });
-    body.convert_to_max_ssa(None);
-    body
-}
-
-/// The body of `arena_mark`: the arena top, which is the address the next
-/// allocation gets.
+/// The body of `arena_mark`: the top of the heap. The next block cut from the
+/// top has its header here, and its payload 16 bytes later.
 pub(super) fn build_arena_mark(
     wmod: &WModule<'static>,
     sig: Signature,
@@ -425,89 +295,5 @@ pub(super) fn build_arena_mark(
         &[WType::I32],
     );
     body.set_terminator(entry, Terminator::Return { values: vec![top] });
-    body
-}
-
-/// The body of `arena_release(mark)`: frees every block allocated since `mark`
-/// was read from `arena_mark`.
-///
-/// The bytes from `mark` to the arena top are cleared, so the blocks that the
-/// arena hands out next are zero again, and the top moves back to `mark`. The
-/// call traps, and changes nothing, unless `mark` is 16-byte aligned, not below
-/// the start of the arena (`arena_start`) and not above the top. A mark that
-/// was valid once can be above the top later (after a release to a lower mark);
-/// it is refused as well.
-pub(super) fn build_arena_release(
-    wmod: &WModule<'static>,
-    sig: Signature,
-    memory: Memory,
-    arena_top: Global,
-    arena_start: u32,
-) -> FunctionBody {
-    let mut body = FunctionBody::new(wmod, sig);
-    let entry = body.entry;
-    let mark = body.blocks[entry].params[0].1;
-
-    let trap = body.add_block();
-    body.set_terminator(trap, Terminator::Unreachable);
-    let clear = body.add_block();
-
-    let mut e = Emit {
-        body: &mut body,
-        block: entry,
-    };
-    let top = e.op(
-        Operator::GlobalGet {
-            global_index: arena_top,
-        },
-        &[],
-        WType::I32,
-    );
-    let start = e.c32(arena_start);
-    let below = e.op(Operator::I32LtU, &[mark, start], WType::I32);
-    let above = e.op(Operator::I32GtU, &[mark, top], WType::I32);
-    let align_mask = e.c32(ALIGN - 1);
-    let low_bits = e.op(Operator::I32And, &[mark, align_mask], WType::I32);
-    let no_bits = e.c32(0);
-    let bad_low = e.op(Operator::I32Ne, &[low_bits, no_bits], WType::I32);
-    let bad = e.op(Operator::I32Or, &[below, above], WType::I32);
-    let bad = e.op(Operator::I32Or, &[bad, bad_low], WType::I32);
-    body.set_terminator(
-        entry,
-        Terminator::CondBr {
-            cond: bad,
-            if_true: BlockTarget {
-                block: trap,
-                args: vec![],
-            },
-            if_false: BlockTarget {
-                block: clear,
-                args: vec![],
-            },
-        },
-    );
-
-    let mut c = Emit {
-        body: &mut body,
-        block: clear,
-    };
-    let len = c.op(Operator::I32Sub, &[top, mark], WType::I32);
-    let zero = c.c32(0);
-    body.add_op(
-        clear,
-        Operator::MemoryFill { mem: memory },
-        &[mark, zero, len],
-        &[],
-    );
-    body.add_op(
-        clear,
-        Operator::GlobalSet {
-            global_index: arena_top,
-        },
-        &[mark],
-        &[],
-    );
-    body.set_terminator(clear, Terminator::Return { values: vec![] });
-    body.convert_to_max_ssa(None);
     body
 }

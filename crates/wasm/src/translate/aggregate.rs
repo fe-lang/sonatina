@@ -1,4 +1,4 @@
-//! Aggregates, objects, constants, frames and the arena.
+//! Aggregates, objects, constants, frames and the heap.
 //!
 //! The semantics follow the host-native backend. A struct or array value is the
 //! address of an immutable snapshot in memory. `insert_value` and `obj.load`
@@ -6,7 +6,7 @@
 //! source, and a function passes aggregates by address and returns one through
 //! a buffer that its caller provides. `obj.alloc` is a slot of the frame:
 //! the front end promises that no reference to it is used after the function
-//! returns. The arena serves only `mem.alloc.dynamic`.
+//! returns. The heap serves `mem.alloc.dynamic` and the external `malloc` and `free`.
 //!
 //! Frame slots are static: an instruction in a loop uses the same slot on every
 //! iteration, as `alloca` does on the native target.
@@ -649,6 +649,10 @@ impl FunctionTranslator<'_> {
     ) -> Result<(), WasmError> {
         let size = self.index32(wb, op, size, false)?;
         let address = self.arena_alloc(*wb, size)?;
+        // The allocator returns null when it cannot meet the request, and the
+        // instruction traps then.
+        let failed = self.emit(*wb).op(Operator::I32Eqz, &[address], WType::I32);
+        self.trap_if(wb, failed);
         let ty = self.result_ty(inst_id)?;
         self.define(inst_id, 0, address, ty)
     }

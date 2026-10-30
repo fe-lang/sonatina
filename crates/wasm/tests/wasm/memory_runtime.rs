@@ -12,11 +12,11 @@ use super::{
 };
 use crate::Lcg;
 
-const PAGE: usize = 65536;
+pub(crate) const PAGE: usize = 65536;
 /// The lowest address the backend uses.
-const DATA_BASE: usize = 16;
+pub(crate) const DATA_BASE: usize = 16;
 
-fn build_with(source: &str, level: OptLevel, backend: WasmBackend) -> Vec<u8> {
+pub(crate) fn build_with(source: &str, level: OptLevel, backend: WasmBackend) -> Vec<u8> {
     let bytes = Compile::new(parse(source), backend)
         .with_opt_level(level)
         .compile()
@@ -29,13 +29,13 @@ fn build_with(source: &str, level: OptLevel, backend: WasmBackend) -> Vec<u8> {
 }
 
 /// A running module whose memory the host can limit.
-struct Limited {
+pub(crate) struct Limited {
     store: Store<StoreLimits>,
     instance: Instance,
 }
 
 impl Limited {
-    fn new(bytes: &[u8], memory_limit: usize) -> Self {
+    pub(crate) fn new(bytes: &[u8], memory_limit: usize) -> Self {
         Self::with_imports(bytes, memory_limit, |_| {})
     }
 
@@ -57,7 +57,7 @@ impl Limited {
         Self { store, instance }
     }
 
-    fn call(&mut self, name: &str, args: &[Val]) -> Result<Vec<Val>, wasmtime::Error> {
+    pub(crate) fn call(&mut self, name: &str, args: &[Val]) -> Result<Vec<Val>, wasmtime::Error> {
         let func = self
             .instance
             .get_func(&mut self.store, name)
@@ -67,21 +67,21 @@ impl Limited {
         Ok(results)
     }
 
-    fn alloc(&mut self, size: u32) -> Result<u32, wasmtime::Error> {
+    pub(crate) fn alloc(&mut self, size: u32) -> Result<u32, wasmtime::Error> {
         Ok(self.call("alloc", &[Val::I32(size as i32)])?[0].unwrap_i32() as u32)
     }
 
-    fn memory_bytes(&mut self) -> usize {
+    pub(crate) fn memory_bytes(&mut self) -> usize {
         let memory = self.instance.get_memory(&mut self.store, "memory").unwrap();
         memory.data_size(&self.store)
     }
 
-    fn read(&mut self, address: u32, len: usize) -> Vec<u8> {
+    pub(crate) fn read(&mut self, address: u32, len: usize) -> Vec<u8> {
         let memory = self.instance.get_memory(&mut self.store, "memory").unwrap();
         memory.data(&self.store)[address as usize..address as usize + len].to_vec()
     }
 
-    fn write(&mut self, address: u32, bytes: &[u8]) {
+    pub(crate) fn write(&mut self, address: u32, bytes: &[u8]) {
         let memory = self.instance.get_memory(&mut self.store, "memory").unwrap();
         memory.data_mut(&mut self.store)[address as usize..address as usize + bytes.len()]
             .copy_from_slice(bytes);
@@ -135,10 +135,17 @@ fn arena_blocks_are_aligned_zeroed_and_never_overlap() {
                 "block {round} lies below the arena"
             );
             if round == 0 {
-                assert_eq!(address as usize, arena, "the arena starts after the stack");
+                // The first block starts the heap, and its payload follows its
+                // 16-byte header.
+                assert_eq!(
+                    address as usize,
+                    arena + 16,
+                    "the heap starts after the stack"
+                );
             }
             let length = size.max(1) as usize;
-            // New memory reads as zero.
+            // A block cut from the top of the heap reads as zero (nothing has
+            // been freed here, so every block is cut from the top).
             let content = machine.read(address, length);
             assert!(
                 content.iter().all(|&b| b == 0),
@@ -244,13 +251,10 @@ fn exhaustion_traps_and_corrupts_nothing() {
     assert!(machine.alloc(0xffff_fff0).is_err());
     assert!(machine.alloc(u32::MAX).is_err());
     // ...so a small block that fits in the memory that exists still succeeds,
-    // right after the last good block.
+    // right after the last good block: its header follows the 1 MiB payload.
     let small = machine.alloc(64).unwrap();
     let (last, length, _) = *kept.last().unwrap();
-    assert_eq!(
-        small as usize,
-        (last as usize + length).next_multiple_of(16)
-    );
+    assert_eq!(small as usize, last as usize + length + 16);
     machine.write(small, &[7; 64]);
     assert!(machine.read(small, 64).iter().all(|&b| b == 7));
     for &(address, length, fill) in &kept {
@@ -920,7 +924,7 @@ func public %grab(v0.i32) -> *i8 {
 }
 ";
 
-fn with_host_allocator(source: &str, level: OptLevel) -> Vec<u8> {
+pub(crate) fn with_host_allocator(source: &str, level: OptLevel) -> Vec<u8> {
     build_with(
         source,
         level,
@@ -930,7 +934,11 @@ fn with_host_allocator(source: &str, level: OptLevel) -> Vec<u8> {
     )
 }
 
-fn call_i32(machine: &mut Limited, name: &str, args: &[Val]) -> Result<u32, wasmtime::Error> {
+pub(crate) fn call_i32(
+    machine: &mut Limited,
+    name: &str,
+    args: &[Val],
+) -> Result<u32, wasmtime::Error> {
     Ok(machine.call(name, args)?[0].unwrap_i32() as u32)
 }
 
@@ -944,7 +952,8 @@ fn the_host_allocator_places_data_that_the_module_reads() {
         assert_eq!(call_i32(&mut machine, "arena_mark", &[]).unwrap(), arena);
         let text = b"hello, host";
         let address = machine.alloc(text.len() as u32).unwrap();
-        assert_eq!(address, arena, "{level:?}");
+        // The first block's payload follows its 16-byte header.
+        assert_eq!(address, arena + 16, "{level:?}");
         machine.write(address, text);
         let want: u32 = text.iter().map(|&b| u32::from(b)).sum();
         let got = call_i32(
@@ -955,10 +964,13 @@ fn the_host_allocator_places_data_that_the_module_reads() {
         assert_eq!(got.unwrap(), want, "{level:?}");
         // A module allocation and a host allocation share the arena and do not
         // overlap.
+        // The 11-byte text took a block of 16 payload bytes and a header; the
+        // 40-byte request takes 64 payload bytes and a header, and the next block
+        // follows it.
         let own = call_i32(&mut machine, "grab", &[Val::I32(40)]).unwrap();
-        assert_eq!(own, address + 16, "{level:?}");
+        assert_eq!(own, address + 16 + 16, "{level:?}");
         let next = machine.alloc(1).unwrap();
-        assert_eq!(next, own + 48, "{level:?}");
+        assert_eq!(next, own + 64 + 16, "{level:?}");
         // The text is intact.
         assert_eq!(machine.read(address, text.len()), text);
         // A length of zero is a valid text and still has an address of its own.
@@ -977,7 +989,8 @@ fn releasing_to_a_mark_frees_the_blocks_after_it_and_clears_them() {
         let kept = machine.alloc(100).unwrap();
         machine.write(kept, &[7; 100]);
         let mark = call_i32(&mut machine, "arena_mark", &[]).unwrap();
-        assert_eq!(mark, kept + 112);
+        // The 100-byte request took a block of 128 payload bytes.
+        assert_eq!(mark, kept + 128);
         // Allocate across a page boundary so that the memory grows.
         let first = machine.alloc(70_000).unwrap();
         let second = call_i32(&mut machine, "grab", &[Val::I32(10)]).unwrap();

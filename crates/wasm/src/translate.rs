@@ -43,9 +43,10 @@ use sonatina_ir::{
 use super::{
     HOST_ALLOCATOR_EXPORTS, WasmError,
     arith::{Arith, Cmp, DivRem, Emit, Int, Shift},
+    heap::{self, Mode},
     memory::{
-        self, ALIGN, MemoryPlan, RuntimeGlobals, align_up, build_arena_allocator, build_arena_mark,
-        build_arena_release, declare_runtime_globals,
+        self, ALIGN, MemoryPlan, RuntimeGlobals, align_up, build_arena_mark,
+        declare_runtime_globals,
     },
     wide::{self, LIMBS, Limbs},
 };
@@ -156,6 +157,12 @@ enum CallTarget {
     /// The C routine `memmove` or `memcpy`, which is `memory.copy` in the
     /// module and not an import.
     MemoryCopy,
+    /// The C routine `malloc` with a 32-bit size, which is the allocator of the
+    /// module and not an import.
+    HeapMalloc,
+    /// The C routine `free`, which is the allocator of the module and not an
+    /// import.
+    HeapFree,
 }
 
 /// A function the module can call: its WAFFLE index and its Sonatina signature.
@@ -177,6 +184,9 @@ struct Callee {
 struct Scan {
     runtime: bool,
     arena: bool,
+    /// The module declares the external C routine `free`, so it needs a `free`
+    /// function.
+    free: bool,
     /// Which 256-bit helper functions are used: multiplication, division, left
     /// and right shifts.
     helpers: (bool, bool, bool, bool, bool, bool),
@@ -224,9 +234,19 @@ fn wide_op_of(kind: &NativeInstKind<'_>) -> Option<(WideOp, ValueId, ValueId)> {
 fn scan_module(module: &Module) -> Scan {
     let mut runtime = module.ctx.with_gv_store(|store| !store.is_empty());
     let mut arena = false;
+    let mut free = false;
     let mut helpers = (false, false, false, false, false, false);
     let inst_set = native_inst_set();
     for func_ref in module.funcs() {
+        // The C routines `malloc` and `free` are the allocator of the module.
+        if module.ctx.func_linkage(func_ref) == Linkage::External {
+            let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
+            if matches!(name.as_str(), "malloc" | "free") {
+                runtime = true;
+                arena = true;
+                free |= name == "free";
+            }
+        }
         let is_aggregate = |ty: Type| {
             matches!(
                 repr(&module.ctx, ty),
@@ -296,6 +316,7 @@ fn scan_module(module: &Module) -> Scan {
     Scan {
         runtime,
         arena,
+        free,
         helpers,
     }
 }
@@ -350,6 +371,23 @@ pub(super) fn translate_module(
             .unwrap_or(false);
 
         match (linkage, has_body) {
+            (Linkage::External, false) if matches!(name.as_str(), "malloc" | "free") => {
+                let target = heap_call_target(module, func_ref, &name)?;
+                let (params, rets) = module.ctx.func_sig(func_ref, |sig| {
+                    (sig.args().to_vec(), sig.ret_tys().to_vec())
+                });
+                callees.insert(
+                    func_ref,
+                    Callee {
+                        target,
+                        params,
+                        rets,
+                        is_import: false,
+                        stack_param: false,
+                        sret: None,
+                    },
+                );
+            }
             (Linkage::External, false) if is_memory_copy_declaration(module, func_ref, &name) => {
                 let (params, rets) = module.ctx.func_sig(func_ref, |sig| {
                     (sig.args().to_vec(), sig.ret_tys().to_vec())
@@ -478,12 +516,25 @@ pub(super) fn translate_module(
         pending.push((func_ref, func, wsig, inner_name, public && !plan.runtime));
     }
 
+    // The allocator of the module: `malloc` serves `mem.alloc_dynamic` and the
+    // external C routine of that name, and `free` the external C routine.
     let arena_func = if plan.arena {
-        let sig = memory::arena_signature(&mut wmod);
+        let sig = heap::alloc_signature(&mut wmod);
         let placeholder = FunctionBody::new(&wmod, sig);
         Some((
             wmod.funcs
-                .push(FuncDecl::Body(sig, "arena_alloc".to_string(), placeholder)),
+                .push(FuncDecl::Body(sig, "heap_malloc".to_string(), placeholder)),
+            sig,
+        ))
+    } else {
+        None
+    };
+    let free_func = if scan.free {
+        let sig = heap::consume_signature(&mut wmod);
+        let placeholder = FunctionBody::new(&wmod, sig);
+        Some((
+            wmod.funcs
+                .push(FuncDecl::Body(sig, "heap_free".to_string(), placeholder)),
             sig,
         ))
     } else {
@@ -581,6 +632,7 @@ pub(super) fn translate_module(
                     &plan,
                     globals,
                     arena_func.map(|(func, _)| func),
+                    free_func.map(|(func, _)| func),
                     helpers,
                 )
                 .translate(canonicalize_params)
@@ -614,14 +666,30 @@ pub(super) fn translate_module(
         wmod.funcs[func] = FuncDecl::Body(sig, name, body);
     }
 
-    if let (Some((func, sig)), Some(globals)) = (arena_func, globals) {
+    if let Some((func, sig)) = arena_func {
+        // A heap exists only with a runtime, which has the globals.
+        let globals = globals.expect("a heap exists only with a runtime");
         let arena_top = globals
             .arena_top
-            .expect("the arena global exists with an arena");
-        let body = build_arena_allocator(&wmod, sig, memory, arena_top);
-        wmod.funcs[func] = FuncDecl::Body(sig, "arena_alloc".to_string(), body);
+            .expect("the heap global exists with a heap");
+        let lists = plan.lists;
+        let body = heap::build_malloc(&wmod, sig, memory, arena_top, lists, Mode::Module);
+        wmod.funcs[func] = FuncDecl::Body(sig, "heap_malloc".to_string(), body);
+        if let Some((free, free_sig)) = free_func {
+            let body =
+                heap::build_free(&wmod, free_sig, memory, arena_top, lists, plan.stack_limit);
+            wmod.funcs[free] = FuncDecl::Body(free_sig, "heap_free".to_string(), body);
+        }
         if host_allocator {
             let [alloc, mark, release] = HOST_ALLOCATOR_EXPORTS;
+            // The host allocator cuts zeroed blocks from the top and traps on
+            // failure; the allocator of the module reuses freed blocks.
+            let host_sig = heap::alloc_signature(&mut wmod);
+            let host_body =
+                heap::build_malloc(&wmod, host_sig, memory, arena_top, lists, Mode::Host);
+            let host_func = wmod
+                .funcs
+                .push(FuncDecl::Body(host_sig, alloc.to_string(), host_body));
             let mark_sig = wmod.signatures.push(SignatureData {
                 params: vec![],
                 returns: vec![WType::I32],
@@ -638,9 +706,20 @@ pub(super) fn translate_module(
             let release_func = wmod.funcs.push(FuncDecl::Body(
                 release_sig,
                 release.to_string(),
-                build_arena_release(&wmod, release_sig, memory, arena_top, plan.stack_limit),
+                heap::build_release(
+                    &wmod,
+                    release_sig,
+                    memory,
+                    arena_top,
+                    lists,
+                    plan.stack_limit,
+                ),
             ));
-            for (name, func) in [(alloc, func), (mark, mark_func), (release, release_func)] {
+            for (name, func) in [
+                (alloc, host_func),
+                (mark, mark_func),
+                (release, release_func),
+            ] {
                 wmod.exports.push(waffle::Export {
                     name: name.to_string(),
                     kind: ExportKind::Func(func),
@@ -678,6 +757,47 @@ fn is_memory_copy_declaration(module: &Module, func_ref: FuncRef, name: &str) ->
         matches!(sig.args(), [dst, src, len]
             if is_pointer(*dst) && is_pointer(*src) && matches!(len, Type::I32 | Type::I64))
             && matches!(sig.ret_tys(), [ret] if is_pointer(*ret))
+    })
+}
+
+/// The call target of an external `malloc` or `free`: the allocator of the module.
+///
+/// `malloc` must take a 32-bit size and return a pointer, and `free` must take a
+/// pointer and return nothing. Any other signature is an error that names the
+/// signature expected, because importing it from the host would give the module
+/// two allocators.
+fn heap_call_target(
+    module: &Module,
+    func_ref: FuncRef,
+    name: &str,
+) -> Result<CallTarget, WasmError> {
+    let ctx = &module.ctx;
+    let is_pointer = |ty: Type| ty.is_pointer(ctx);
+    let matches = module.ctx.func_sig(func_ref, |sig| match name {
+        "malloc" => {
+            matches!(sig.args(), [size] if *size == Type::I32)
+                && matches!(sig.ret_tys(), [ret] if is_pointer(*ret))
+        }
+        _ => {
+            matches!(sig.args(), [address] if is_pointer(*address))
+                && matches!(sig.ret_tys(), [] | [Type::Unit])
+        }
+    });
+    if !matches {
+        let expected = if name == "malloc" {
+            "one `i32` size parameter and a pointer result"
+        } else {
+            "one pointer parameter and no result"
+        };
+        return Err(WasmError::Unsupported(format!(
+            "`{name}` is the allocator of the WebAssembly module and must have {expected}; \
+             this declaration has another signature"
+        )));
+    }
+    Ok(if name == "malloc" {
+        CallTarget::HeapMalloc
+    } else {
+        CallTarget::HeapFree
     })
 }
 
@@ -892,6 +1012,7 @@ struct FunctionTranslator<'a> {
     plan: &'a MemoryPlan,
     globals: Option<RuntimeGlobals>,
     arena: Option<Func>,
+    free: Option<Func>,
     wide_helpers: WideHelpers,
     return_tys: Vec<Type>,
     /// Sonatina values defined so far, in canonical WAFFLE form. Not 256-bit
@@ -934,6 +1055,7 @@ impl<'a> FunctionTranslator<'a> {
         plan: &'a MemoryPlan,
         globals: Option<RuntimeGlobals>,
         arena: Option<Func>,
+        free: Option<Func>,
         wide_helpers: WideHelpers,
     ) -> Self {
         Self {
@@ -946,6 +1068,7 @@ impl<'a> FunctionTranslator<'a> {
             plan,
             globals,
             arena,
+            free,
             wide_helpers,
             return_tys: callees[&func_ref].rets.clone(),
             values: FxHashMap::default(),
@@ -2254,6 +2377,30 @@ impl<'a> FunctionTranslator<'a> {
                 return match function.dfg.inst_results(inst_id) {
                     [] => Ok(()),
                     _ => self.define(inst_id, 0, dst_value, callee.rets[0]),
+                };
+            }
+            CallTarget::HeapMalloc | CallTarget::HeapFree => {
+                let [argument] = call_args else {
+                    return Err(invalid(format!(
+                        "function `{}`: `{op}` of the allocator needs one argument",
+                        self.name
+                    )));
+                };
+                let value = self.operand(*wb_ref, *argument)?;
+                let missing = || {
+                    invalid(format!(
+                        "function `{}`: `{op}` calls the allocator but the module has none",
+                        self.name
+                    ))
+                };
+                let (func, carriers): (Func, &[WType]) = match callee.target {
+                    CallTarget::HeapMalloc => (self.arena.ok_or_else(missing)?, &[WType::I32]),
+                    _ => (self.free.ok_or_else(missing)?, &[]),
+                };
+                let results = emit_call(&mut self.body, *wb_ref, func, &[value], carriers);
+                return match function.dfg.inst_results(inst_id) {
+                    [] => Ok(()),
+                    _ => self.define(inst_id, 0, results[0], callee.rets[0]),
                 };
             }
         };
