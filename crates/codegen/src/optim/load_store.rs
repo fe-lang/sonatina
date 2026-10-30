@@ -1335,8 +1335,11 @@ block0:
     }
 
     /// Object `v0` that may share raw pointer `v9`'s memory: an argument a
-    /// caller may alias.
-    const SHARED: [(&str, &str); 1] = [("v0.objref<i256>, v9.*i256", "")];
+    /// caller may alias, and a view of `v9`.
+    const SHARED: [(&str, &str); 2] = [
+        ("v0.objref<i256>, v9.*i256", ""),
+        ("v9.*i256", "v0.objref<i256> = obj.from_ptr v9;"),
+    ];
 
     #[test]
     fn object_stores_that_may_share_memory_write_it() {

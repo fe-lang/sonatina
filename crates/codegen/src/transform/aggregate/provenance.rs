@@ -757,6 +757,12 @@ fn possible_root_transfer_for_inst(
         return Some(PossibleRootTransfer::source(result, *materialize.object()));
     }
 
+    // An object viewed through a pointer reaches what the pointer reaches. A
+    // pointer has no exact projection, so neither does the view.
+    if let Some(from_ptr) = func.dfg.downcast::<&data::ObjFromPtr>(inst) {
+        return Some(PossibleRootTransfer::source(result, *from_ptr.ptr()));
+    }
+
     if let Some(obj_proj) = func.dfg.downcast::<&data::ObjProj>(inst) {
         return obj_proj
             .values()
@@ -2681,6 +2687,45 @@ block3:
                 }
             });
         }
+    }
+
+    #[test]
+    fn pointer_views_reach_what_their_pointers_reach() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.objref<[i64; 2]>, v1.*i64) -> objref<i64> {
+block0:
+    v2.*[i64; 2] = obj.materialize.stack v0;
+    v3.*i64 = gep v2 0.i64 1.i64;
+    v4.objref<i64> = obj.from_ptr v3;
+    v5.objref<i64> = obj.from_ptr v1;
+    return v4;
+}
+"#,
+        );
+        module.func_store.view(lookup_func(&module, "f"), |func| {
+            let mut cache = shape::AggregateLayoutCache::default();
+            let roots = collect_root_slices_with_arg_roots(func, &mut cache);
+            let provenance = collect_root_provenance(func, func.ctx(), &roots, &mut cache, None);
+            let views: Vec<_> = func
+                .layout
+                .iter_all_insts()
+                .filter(|&inst| func.dfg.downcast::<&data::ObjFromPtr>(inst).is_some())
+                .map(|inst| func.dfg.inst_result(inst).unwrap())
+                .collect();
+            let [object_view, raw_view] = views[..] else {
+                panic!("two views");
+            };
+            // A view reaches what its pointer reaches, at no exact projection:
+            // the materialized object, or the pointer argument's referent.
+            assert_known_only(
+                provenance.may().may_roots(object_view),
+                &[func.arg_values[0]],
+            );
+            assert_eq!(provenance.complete().exact_projection(object_view), None);
+            assert_known_only(provenance.may().may_roots(raw_view), &[func.arg_values[1]]);
+        });
     }
 
     #[test]

@@ -1998,6 +1998,13 @@ fn translate_function(
                         value_map.insert(result, value);
                     }
                 }
+                // An object reference is the address of its storage.
+                NativeInstKind::ObjFromPtr(from_ptr) => {
+                    let value = resolve_value(function, *from_ptr.ptr(), &value_map, &mut builder)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        value_map.insert(result, value);
+                    }
+                }
                 NativeInstKind::MemAllocDynamic(allocate) => {
                     let size = if function.dfg.value_ty(*allocate.size()) == Type::I256 {
                         let [low, high, upper, top] =

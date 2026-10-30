@@ -373,6 +373,7 @@ impl ObjectReachability {
                 || downcast::<&data::EnumProj>(is, data).is_some()
                 || downcast::<&data::EnumAssertVariantRef>(is, data).is_some()
                 || downcast::<&data::ObjMaterializeStack>(is, data).is_some()
+                || downcast::<&data::ObjFromPtr>(is, data).is_some()
                 || downcast::<&data::Gep>(is, data).is_some()
                 || downcast::<&cast::Bitcast>(is, data).is_some()
                 || downcast::<&control_flow::Phi>(is, data).is_some()

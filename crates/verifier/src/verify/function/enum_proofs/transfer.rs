@@ -315,6 +315,16 @@ pub(super) fn instruction(
             ValueState::new(verifier.func.dfg.value_ty(result.unwrap()), true),
             None,
         );
+    } else if downcast::<&data::ObjFromPtr>(is, inst).is_some() {
+        // Like a reference loaded from memory, a view of the memory at a
+        // pointer reaches an object outside this function or an exposed one.
+        let result = result.unwrap();
+        let sources = ImportSources::new(ctx, state, std::iter::empty());
+        let root = Root::Imported(result);
+        let value = Source::RawLoad(&sources).value(ctx, root, verifier.func.dfg.value_ty(result));
+        state.bind(verifier, result, value, None);
+        state.exposed.insert(root);
+        state.close_exposure(ctx);
     } else {
         let call = downcast::<&control_flow::Call>(is, inst);
         let raw_load = downcast::<&data::Mload>(is, inst).is_some_and(|load| {

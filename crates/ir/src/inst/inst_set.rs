@@ -92,6 +92,7 @@ define_inst_set_base! {
         data::EnumGetTag,
         data::EnumProj,
         data::ObjMaterializeStack,
+        data::ObjFromPtr,
         data::MemAllocDynamic,
         data::InsertValue,
         data::ExtractValue,

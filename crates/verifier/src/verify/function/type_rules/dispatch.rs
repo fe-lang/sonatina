@@ -1705,6 +1705,36 @@ impl VerifyInst for data::ObjMaterializeStack {
     }
 }
 
+impl VerifyInst for data::ObjFromPtr {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(ptr_ty) = verifier.value_ty(*self.ptr()) else {
+            return;
+        };
+        let Some(elem_ty) = verifier.pointee_ty(ptr_ty) else {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "obj.from_ptr operand must be a raw pointer",
+                location,
+            ));
+            return;
+        };
+        let result_ty = verifier.inst_result_ty(inst_id).unwrap_or(Type::Unit);
+        if verifier.objref_ty(result_ty) != Some(elem_ty) {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstResultTypeMismatch,
+                    "obj.from_ptr result must be an object reference to the pointee type",
+                    location,
+                )
+                .with_note(format!(
+                    "expected object reference to {elem_ty:?}, found {result_ty:?}"
+                )),
+            );
+        }
+    }
+}
+
 impl VerifyInst for data::MemAllocDynamic {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         let location = verifier.inst_location(inst_id);

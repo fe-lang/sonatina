@@ -373,6 +373,83 @@ fn enum_instructions_are_legalized_before_translation() {
 }
 
 #[test]
+fn views_of_host_memory_are_objects_in_place() {
+    // One `%bump` serves a local object and a view of host memory; a raw load
+    // after a store through a view reads the stored value.
+    let source = r#"
+type @Rec = { i8, i64, i256 };
+func private %bump(v0.objref<@Rec>, v1.i64) {
+block0:
+    v2.objref<i64> = obj.proj v0 1.i8;
+    v3.i64 = obj.load v2;
+    v4.i64 = add v3 v1;
+    obj.store v2 v4;
+    v5.objref<i256> = obj.proj v0 2.i8;
+    v6.i256 = zext v4 i256;
+    obj.store v5 v6;
+    return;
+}
+func public %bump_host(v10.*i8, v1.i64) {
+block0:
+    v0.*@Rec = bitcast v10 *@Rec;
+    v2.objref<@Rec> = obj.from_ptr v0;
+    call %bump v2 v1;
+    return;
+}
+func public %bump_local(v1.i64) -> i64 {
+block0:
+    v0.objref<@Rec> = obj.alloc @Rec;
+    v2.@Rec = insert_value undef.@Rec 0.i8 0.i8;
+    v3.@Rec = insert_value v2 1.i8 0.i64;
+    v4.@Rec = insert_value v3 2.i8 0.i256;
+    obj.store v0 v4;
+    call %bump v0 v1;
+    v5.objref<i64> = obj.proj v0 1.i8;
+    v6.i64 = obj.load v5;
+    return v6;
+}
+func public %store_through_view(v10.*i8) -> i64 {
+block0:
+    v0.*@Rec = bitcast v10 *@Rec;
+    v1.*i64 = gep v0 0.i64 1.i64;
+    mstore v1 1.i64 i64;
+    v2.objref<@Rec> = obj.from_ptr v0;
+    v3.objref<i64> = obj.proj v2 1.i8;
+    obj.store v3 5.i64;
+    v4.i64 = mload v1 i64;
+    return v4;
+}
+"#;
+    #[repr(C, align(16))]
+    struct Rec([u8; 48]);
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let function = |name| artifact.function_address(name).unwrap();
+        let bump_host: unsafe extern "C" fn(*mut Rec, i64) =
+            unsafe { std::mem::transmute(function("bump_host")) };
+        let bump_local: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(function("bump_local")) };
+        let store_through_view: unsafe extern "C" fn(*mut Rec) -> i64 =
+            unsafe { std::mem::transmute(function("store_through_view")) };
+        let mut rec = Rec([0; 48]);
+        unsafe { bump_host(&mut rec, 7) };
+        unsafe { bump_host(&mut rec, 7) };
+        assert_eq!(rec.0[8..16], 14i64.to_le_bytes(), "{level:?}");
+        let mut wide = [0; 32];
+        wide[0] = 14;
+        assert_eq!(rec.0[16..48], wide, "{level:?}");
+        assert_eq!(unsafe { bump_local(3) }, 3, "{level:?}");
+        assert_eq!(unsafe { store_through_view(&mut rec) }, 5, "{level:?}");
+    }
+}
+
+#[test]
 fn enum_variants_share_payload_storage() {
     // An i8 tag, then every variant's payload from offset 16, the i256's
     // alignment: `Pair`'s fields lie inside `Some`'s.

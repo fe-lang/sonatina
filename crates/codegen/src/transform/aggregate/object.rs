@@ -332,7 +332,12 @@ impl ObjectLowerToMemory {
             .downcast::<&data::ObjMaterializeStack>(inst)
             .cloned()
         {
-            return alias_and_remove_object_materialize(func, inst, *mat_stack.object());
+            return alias_and_remove_object_address(func, inst, *mat_stack.object());
+        }
+
+        // Both lower to the address of the object's storage.
+        if let Some(from_ptr) = func.dfg.downcast::<&data::ObjFromPtr>(inst).cloned() {
+            return alias_and_remove_object_address(func, inst, *from_ptr.ptr());
         }
 
         if let Some(mem_alloc) = func.dfg.downcast::<&data::MemAllocDynamic>(inst).cloned() {
@@ -350,7 +355,7 @@ impl ObjectLowerToMemory {
     }
 }
 
-fn alias_and_remove_object_materialize(
+fn alias_and_remove_object_address(
     func: &mut Function,
     inst: sonatina_ir::InstId,
     replacement: ValueId,
@@ -375,6 +380,7 @@ fn has_object_lowering_work(func: &Function) -> bool {
                     .dfg
                     .downcast::<&data::ObjMaterializeStack>(inst)
                     .is_some()
+                || func.dfg.downcast::<&data::ObjFromPtr>(inst).is_some()
                 || func.dfg.downcast::<&data::MemAllocDynamic>(inst).is_some()
                 || is_enum_inst(func, inst)
             {

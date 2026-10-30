@@ -324,6 +324,16 @@ pub struct ObjMaterializeStack {
     object: ValueId,
 }
 
+/// Views the memory at `ptr` as an object of the pointer's pointee type, laid
+/// out by the target's type layout. The reference reaches what `ptr` reaches:
+/// memory other code may access, or an object `ptr` was materialized from.
+/// It is valid while that memory is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "obj.from_ptr")]
+pub struct ObjFromPtr {
+    ptr: ValueId,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]
 #[inst(text = "mem.alloc_dynamic")]

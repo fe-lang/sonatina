@@ -85,6 +85,7 @@ pub struct NativeInstSet(
     data::EnumGetTag,
     data::EnumProj,
     data::ObjMaterializeStack,
+    data::ObjFromPtr,
     data::MemAllocDynamic,
     data::InsertValue,
     data::ExtractValue,
