@@ -47,9 +47,14 @@ pub(crate) trait TypeRewrite {
             return mapped;
         }
 
-        self.compound_map()
-            .insert(compound, Type::Compound(compound));
         let current = ctx.with_ty_store(|store| store.resolve_compound(compound).clone());
+        // Only named types close cycles. A placeholder for a structural type
+        // would map a reference back into a type still being rewritten to
+        // itself, unrewritten.
+        if matches!(current, CompoundType::Struct(_) | CompoundType::Enum(_)) {
+            self.compound_map()
+                .insert(compound, Type::Compound(compound));
+        }
         let mapped = self.rewrite_compound_type(ctx, compound, current);
         self.compound_map().insert(compound, mapped);
         if mapped != Type::Compound(compound) {
