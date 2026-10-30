@@ -1,8 +1,8 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    AccessKind, AccessLoc, AddressSpaceId, ControlFlowGraph, Function, InstDowncast, InstId, Type,
-    ValueId,
+    AccessKind, AccessLoc, AddressSpaceId, ControlFlowGraph, Function, InstDowncast, InstEffects,
+    InstId, MemoryAccess, Type, ValueId,
     bitset::BitSet,
     inst::{
         control_flow,
@@ -15,7 +15,10 @@ use sonatina_ir::{
 };
 
 use super::dead_malloc::eliminate_dead_mallocs;
-use crate::analysis::definedness::UndefTaint;
+use crate::{
+    analysis::definedness::UndefTaint,
+    transform::aggregate::{MemoryReach, ObjectEffectSummaryMap, RawObjectAccesses},
+};
 
 mod absolute;
 use absolute::{AbsoluteLocations, absolute_interval};
@@ -37,11 +40,20 @@ struct LiveState {
     exit_ranges: FxHashSet<LinearRangeKey>,
     range_live: FxHashSet<LinearRangeKey>,
     whole_space_live: BitSet<AddressSpaceId>,
+    /// Spaces where an exposed object's storage may be read: any memory but
+    /// the function's own allocations.
+    escaped_live: BitSet<AddressSpaceId>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct AllocaVisibility {
     local_only: FxHashSet<InstId>,
+}
+
+/// What the backward solver knows about a function for one run.
+struct BackwardFacts<'a> {
+    alloca_visibility: AllocaVisibility,
+    objects: &'a RawObjectAccesses,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -311,15 +323,26 @@ impl LoadStoreSolver {
     }
 
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) -> bool {
+        self.run_with_effects(func, cfg, None)
+    }
+
+    pub(crate) fn run_with_effects(
+        &mut self,
+        func: &mut Function,
+        cfg: &mut ControlFlowGraph,
+        object_effects: Option<&ObjectEffectSummaryMap>,
+    ) -> bool {
         let mut changed_any = false;
         let mut analysis = MemoryAccessAnalysis::new();
+        // Removing loads and stores leaves object accesses as they are.
+        let objects = RawObjectAccesses::new(func, object_effects);
 
         loop {
             cfg.compute(func);
 
-            let mut changed = self.run_forward(func, cfg, &mut analysis);
+            let mut changed = self.run_forward(func, cfg, &mut analysis, &objects);
             cfg.compute(func);
-            changed |= self.run_backward(func, cfg, &mut analysis);
+            changed |= self.run_backward(func, cfg, &mut analysis, &objects);
             changed |= eliminate_dead_mallocs(func);
 
             if !changed {
@@ -335,6 +358,7 @@ impl LoadStoreSolver {
         func: &mut Function,
         cfg: &ControlFlowGraph,
         analysis: &mut MemoryAccessAnalysis,
+        objects: &RawObjectAccesses,
     ) -> bool {
         let reachable = cfg.reachable_blocks();
         let order: Vec<_> = cfg
@@ -396,7 +420,7 @@ impl LoadStoreSolver {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    transfer_forward(func, inst, analysis, &mut state, &taint, false);
+                    transfer_forward(func, inst, analysis, objects, &mut state, &taint, false);
                 }
 
                 if !out_valid[block] || state != out_states[block] {
@@ -422,7 +446,7 @@ impl LoadStoreSolver {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
-                if transfer_forward(func, inst, analysis, &mut state, &taint, true) {
+                if transfer_forward(func, inst, analysis, objects, &mut state, &taint, true) {
                     changed = true;
                 }
             }
@@ -436,13 +460,17 @@ impl LoadStoreSolver {
         func: &mut Function,
         cfg: &ControlFlowGraph,
         analysis: &mut MemoryAccessAnalysis,
+        objects: &RawObjectAccesses,
     ) -> bool {
         let reachable = cfg.reachable_blocks();
         let committing_exit_reachable = blocks_reaching_committing_exit(func, cfg, &reachable);
         let order: Vec<_> = cfg.post_order().collect();
         func.rebuild_users();
         analysis.clear();
-        let alloca_visibility = collect_alloca_visibility(func, analysis);
+        let facts = BackwardFacts {
+            alloca_visibility: collect_alloca_visibility(func, analysis),
+            objects,
+        };
 
         let mut in_states = SecondaryMap::<sonatina_ir::BlockId, LiveState>::new();
         let mut out_states = SecondaryMap::<sonatina_ir::BlockId, LiveState>::new();
@@ -478,7 +506,7 @@ impl LoadStoreSolver {
                         analysis,
                         &mut live,
                         committing_exit_reachable[block],
-                        &alloca_visibility,
+                        &facts,
                         false,
                     );
                 }
@@ -508,7 +536,7 @@ impl LoadStoreSolver {
                     analysis,
                     &mut live,
                     committing_exit_reachable[block],
-                    &alloca_visibility,
+                    &facts,
                     true,
                 ) {
                     changed = true;
@@ -540,6 +568,7 @@ fn meet_live(states: impl Iterator<Item = (LiveState, bool)>) -> LiveState {
 
     for (state, committing_exit_reachable) in states {
         out.whole_space_live.union_with(&state.whole_space_live);
+        out.escaped_live.union_with(&state.escaped_live);
         out.exact_live.extend(state.exact_live.into_iter());
         out.range_live.extend(state.range_live);
         if committing_exit_reachable {
@@ -680,15 +709,38 @@ fn access_uses_local_alloca_addr(
     }
 }
 
+/// `inst`'s memory accesses, counting an object access that may touch any
+/// memory as an access at an unknown location. Accesses of exposed objects
+/// alone are handled where the solver can spare the function's allocations.
+fn memory_effects(func: &Function, inst: InstId, objects: &RawObjectAccesses) -> InstEffects {
+    let mut effects = func.dfg.effects(inst);
+    let space = func.ctx().address_spaces().default_space();
+    for (kind, reaches) in [
+        (AccessKind::Read, &objects.reads),
+        (AccessKind::Write, &objects.writes),
+    ] {
+        if reaches.get(&inst) == Some(&MemoryReach::Any) {
+            effects.accesses.push(MemoryAccess {
+                space,
+                kind,
+                must_happen: false,
+                loc: AccessLoc::Unknown,
+            });
+        }
+    }
+    effects
+}
+
 fn transfer_forward(
     func: &mut Function,
     inst: InstId,
     analysis: &mut MemoryAccessAnalysis,
+    objects: &RawObjectAccesses,
     state: &mut AvailState,
     taint: &UndefTaint,
     rewrite: bool,
 ) -> bool {
-    let effects = func.dfg.effects(inst);
+    let effects = memory_effects(func, inst, objects);
 
     if let Some(key) = forwardable_read_key(func, inst, analysis, &effects) {
         if let Some(&known) = state.exact.get(&key)
@@ -720,6 +772,12 @@ fn transfer_forward(
         .filter(|access| access.kind == AccessKind::Write && !access.must_happen)
     {
         kill_aliasing_access(func, state, analysis, access);
+    }
+    if objects.writes.get(&inst) == Some(&MemoryReach::Escaped) {
+        let space = func.ctx().address_spaces().default_space();
+        state
+            .exact
+            .retain(|key, _| key.space() != space || is_own_allocation(key));
     }
 
     for access in effects
@@ -758,12 +816,12 @@ fn transfer_backward(
     analysis: &mut MemoryAccessAnalysis,
     live: &mut LiveState,
     committing_exit_reachable: bool,
-    alloca_visibility: &AllocaVisibility,
+    facts: &BackwardFacts,
     rewrite: bool,
 ) -> bool {
     // The fixed point does not mutate IR, and backward rewriting only removes
     // stores. Neither can delete the values or allocation roots in live keys.
-    let effects = func.dfg.effects(inst);
+    let effects = memory_effects(func, inst, facts.objects);
 
     // Before an `evm_malloc` runs, its keys name an earlier object, such as
     // the previous loop iteration's, which writes after it do not overwrite.
@@ -796,7 +854,7 @@ fn transfer_backward(
                         live,
                         key.space(),
                         base,
-                        alloca_visibility,
+                        &facts.alloca_visibility,
                     );
                     let has_exact_live = has_may_alias_live(&live.exact_live, &key, analysis);
                     let has_range_live = has_may_alias_live_range(&live.range_live, &key, analysis);
@@ -835,7 +893,7 @@ fn transfer_backward(
                             live,
                             range.space,
                             Some(&range.base),
-                            alloca_visibility,
+                            &facts.alloca_visibility,
                         )
                         && !live
                             .exact_live
@@ -866,8 +924,19 @@ fn transfer_backward(
             }
         }
     }
+    if facts.objects.reads.get(&inst) == Some(&MemoryReach::Escaped) {
+        live.escaped_live
+            .insert(func.ctx().address_spaces().default_space());
+    }
 
     false
+}
+
+/// Whether `key` lies in an allocation the function makes itself, which no
+/// exposed object's storage is.
+fn is_own_allocation(key: &TrackedLocKey) -> bool {
+    matches!(key, TrackedLocKey::Linear(key)
+        if matches!(key.base, BaseObject::Alloca(_) | BaseObject::Malloc(_)))
 }
 
 fn kill_aliasing_access(
@@ -973,8 +1042,8 @@ fn has_may_alias_live_range(
         .any(|range| analysis.range_may_alias_key(range, key))
 }
 
-/// Whether an unknown read can observe a write to `base` in `space`. A
-/// linear write has a base; a keyed one has none.
+/// Whether an unknown read, or a read of an exposed object, can observe a
+/// write to `base` in `space`. A linear write has a base; a keyed one has none.
 fn whole_space_liveness_may_observe(
     func: &Function,
     live: &LiveState,
@@ -982,10 +1051,12 @@ fn whole_space_liveness_may_observe(
     base: Option<&BaseObject>,
     alloca_visibility: &AllocaVisibility,
 ) -> bool {
-    live.whole_space_live.contains(space)
-        && !(space == func.ctx().address_spaces().default_space()
-            && matches!(base, Some(BaseObject::Alloca(alloca))
-                if alloca_visibility.local_only.contains(alloca)))
+    let local_alloca = space == func.ctx().address_spaces().default_space()
+        && matches!(base, Some(BaseObject::Alloca(alloca))
+            if alloca_visibility.local_only.contains(alloca));
+    let own_allocation = matches!(base, Some(BaseObject::Alloca(_) | BaseObject::Malloc(_)));
+    live.whole_space_live.contains(space) && !local_alloca
+        || live.escaped_live.contains(space) && !own_allocation
 }
 
 fn kill_must_alias_live(
@@ -1249,6 +1320,62 @@ block0:
         crate::test_support::dump_func(&module, func_ref)
     }
 
+    /// Runs the solver on `%f` of `body` and dumps it.
+    fn solve(body: &str) -> String {
+        let module = crate::test_support::parse_test_module(&format!(
+            "target = \"evm-ethereum-osaka\"\n{body}"
+        ));
+        let func_ref = crate::test_support::lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            LoadStoreSolver::new().run(func, &mut cfg);
+        });
+        crate::test_support::dump_func(&module, func_ref)
+    }
+
+    /// Object `v0` that may share raw pointer `v9`'s memory: an argument a
+    /// caller may alias.
+    const SHARED: [(&str, &str); 1] = [("v0.objref<i256>, v9.*i256", "")];
+
+    #[test]
+    fn object_stores_that_may_share_memory_write_it() {
+        for (params, view) in SHARED {
+            let dumped = solve(&format!(
+                "func public %f({params}) -> i256 {{\nblock0:\n    mstore v9 1.i256 i256;\n    {view}\n    obj.store v0 5.i256;\n    v2.i256 = mload v9 i256;\n    return v2;\n}}"
+            ));
+            assert!(dumped.contains("= mload"), "{dumped}");
+        }
+        // A `noalias` argument shares no memory with the function's pointers.
+        let dumped = solve(
+            "func public %f(noalias v0.objref<i256>, v9.*i256) -> i256 {\nblock0:\n    mstore v9 1.i256 i256;\n    obj.store v0 5.i256;\n    v2.i256 = mload v9 i256;\n    return v2;\n}",
+        );
+        assert!(!dumped.contains("mload"), "{dumped}");
+    }
+
+    #[test]
+    fn exposed_objects_do_not_share_the_functions_allocations() {
+        // `v0` may alias the caller's memory, but not memory `%f` allocates.
+        let forwarded = solve(
+            "func public %f(v0.objref<i256>) -> i256 {\nblock0:\n    v1.*i8 = evm_malloc 32.i256;\n    v2.i256 = ptr_to_int v1 i256;\n    mstore v2 1.i256 i256;\n    obj.store v0 5.i256;\n    v3.i256 = mload v2 i256;\n    return v3;\n}",
+        );
+        assert!(!forwarded.contains("= mload"), "{forwarded}");
+        let dead = solve(
+            "func public %f(v0.objref<i256>) -> i256 {\nblock0:\n    v1.*i8 = evm_malloc 32.i256;\n    v2.i256 = ptr_to_int v1 i256;\n    mstore v2 1.i256 i256;\n    v3.i256 = obj.load v0;\n    mstore v2 v3 i256;\n    evm_return v2 32.i256;\n}",
+        );
+        assert_eq!(dead.matches("mstore").count(), 1, "{dead}");
+    }
+
+    #[test]
+    fn object_loads_that_may_share_memory_read_it() {
+        for (params, view) in SHARED {
+            let dumped = solve(&format!(
+                "func public %f({params}) -> i256 {{\nblock0:\n    mstore v9 1.i256 i256;\n    {view}\n    v2.i256 = obj.load v0;\n    mstore v9 3.i256 i256;\n    return v2;\n}}"
+            ));
+            assert_eq!(dumped.matches("mstore").count(), 2, "{dumped}");
+        }
+    }
+
     #[test]
     fn reads_keep_stored_aggregates_with_undefined_fields() {
         // A read is never undef, so a nested field that is stays behind the read.
@@ -1301,6 +1428,7 @@ block0:
             &mut builder.func,
             live_inst,
             &mut analysis,
+            &RawObjectAccesses::default(),
             &mut state,
             &taint,
             true,

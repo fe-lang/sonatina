@@ -75,6 +75,72 @@ pub(crate) struct ObjectInstEffects {
     pub initialization: SmallVec<[ObjectInitializationWrite; 4]>,
 }
 
+/// How far an object access may reach into memory that raw accesses reach.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum MemoryReach {
+    /// An exposed object's storage: memory other code may reach, never an
+    /// allocation the function makes itself.
+    Escaped,
+    /// Any memory, through an external or unknown reference.
+    Any,
+}
+
+/// The instructions whose object reads or writes may touch memory that raw
+/// accesses also reach, and how far.
+#[derive(Default)]
+pub(crate) struct RawObjectAccesses {
+    pub reads: FxHashMap<InstId, MemoryReach>,
+    pub writes: FxHashMap<InstId, MemoryReach>,
+}
+
+impl RawObjectAccesses {
+    pub(crate) fn new(func: &Function, summaries: Option<&ObjectEffectSummaryMap>) -> Self {
+        let mut this = Self::default();
+        // A raw instruction's own accesses are already memory accesses; only
+        // object instructions and calls access objects that raw analysis
+        // cannot see.
+        let insts: Vec<_> = func
+            .layout
+            .iter_all_insts()
+            .filter(|&inst| {
+                func.dfg.call_info(inst).is_some()
+                    || func
+                        .dfg
+                        .inst(inst)
+                        .collect_values()
+                        .into_iter()
+                        .any(|value| func.dfg.value_ty(value).is_obj_ref(func.ctx()))
+            })
+            .collect();
+        if insts.is_empty() {
+            return this;
+        }
+        let facts = ObjectAccessFacts::new(func, summaries);
+        let reach = |accesses: &AccessSet| {
+            accesses
+                .iter()
+                .filter_map(|access| match *access {
+                    ObjectAccess::Exact(projection) | ObjectAccess::Within(projection) => facts
+                        .exposed(projection.root_value)
+                        .then_some(MemoryReach::Escaped),
+                    ObjectAccess::Root(root) => facts.exposed(root).then_some(MemoryReach::Escaped),
+                    ObjectAccess::External | ObjectAccess::Unknown => Some(MemoryReach::Any),
+                })
+                .max()
+        };
+        for inst in insts {
+            let effects = facts.effects(func, inst, summaries);
+            if let Some(reach) = reach(&effects.reads) {
+                this.reads.insert(inst, reach);
+            }
+            if let Some(reach) = reach(&effects.writes) {
+                this.writes.insert(inst, reach);
+            }
+        }
+        this
+    }
+}
+
 pub(crate) struct ObjectAccessFacts {
     facts: AggregateFacts,
     reachability: ObjectReachability,

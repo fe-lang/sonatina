@@ -922,7 +922,7 @@ fn run_pass(
             let mut solver = LoadStoreSolver::new();
             {
                 let _span = trace_span!("sonatina.optim.pipeline.load_store.solve").entered();
-                solver.run(func, &mut ctx.cfg)
+                solver.run_with_effects(func, &mut ctx.cfg, object_effects)
             }
         }
         Pass::ScalarCanonicalize => {

@@ -42,6 +42,7 @@ pub use legalize::{
 };
 pub use object::ObjectLowerToMemory;
 pub use object_abi::ObjectReturnOutParam;
+pub(crate) use object_access::{MemoryReach, RawObjectAccesses};
 pub(crate) use object_effects::{
     ObjectEffectSummaryMap, ObjectReturnEffect, SliceSet, compute_object_effect_summaries,
 };
