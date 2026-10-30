@@ -24,6 +24,7 @@ cranelift-module = { git = "https://github.com/fe-lang/wasmtime", rev = "94b3dcc
 cranelift-native = { git = "https://github.com/fe-lang/wasmtime", rev = "94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1" }
 cranelift-object = { git = "https://github.com/fe-lang/wasmtime", rev = "94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1" }
 rustc-hash = "2.0.0"
+smallvec = "1.15.1"
 sonatina-codegen = { path = "../codegen", version = "0.1.0" }
 sonatina-ir = { path = "../ir", version = "0.1.0" }
 sonatina-triple = { path = "../triple", version = "0.1.0" }
@@ -31,7 +32,6 @@ sonatina-verifier = { path = "../verifier", version = "0.1.0" }
 
 [dev-dependencies]
 object = { version = "0.39.1", default-features = false, features = ["read", "std"] }
-smallvec = "1.15.1"
 sonatina-parser = { path = "../parser" }
 tempfile = "3.23"
 

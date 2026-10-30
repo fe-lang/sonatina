@@ -5,6 +5,7 @@ mod frame;
 mod globals;
 mod i256;
 mod memory;
+mod parts;
 mod phi;
 mod scalar;
 mod tail;
@@ -43,6 +44,7 @@ use self::{
     globals::*,
     i256::*,
     memory::*,
+    parts::*,
     phi::Edges,
     scalar::*,
     tail::TailCalls,
@@ -363,15 +365,29 @@ fn translate_function(
         None
     };
 
-    let arg_offset = if has_sret { 1 } else { 0 };
-    for (idx, &arg_value) in function.arg_values.iter().enumerate() {
-        let param = builder.block_params(clif_entry)[idx + arg_offset];
+    let linkage = module.ctx.func_linkage(func_ref);
+    // The loop below adds instructions, so it walks a copy of the parameters.
+    let params: Vec<_> = builder.block_params(clif_entry)[usize::from(has_sret)..].to_vec();
+    let mut params = params.into_iter();
+    let mut next_param = || params.next().ok_or("too few Cranelift parameters");
+    for &arg_value in &function.arg_values {
         let ty = function.dfg.value_ty(arg_value);
         if ty == Type::I256 {
-            let limbs = i256_storage.incoming(arg_value, param, &mut builder);
+            let limbs = i256_storage.incoming(arg_value, next_param()?, &mut builder);
             value_map.insert_limbs(arg_value, limbs);
+        } else if let Some(parts) = register_parts(&module.ctx, ty) {
+            // A private function takes the parts, others a reference.
+            let values = if linkage.is_private() {
+                parts
+                    .iter()
+                    .map(|part| Ok(normalize_scalar(next_param()?, part.ty, &mut builder)))
+                    .collect::<Result<_, String>>()?
+            } else {
+                load_parts(&module.ctx, &parts, next_param()?, 0, &mut builder)?
+            };
+            value_map.insert_parts(arg_value, values);
         } else {
-            let param = normalize_scalar(param, ty, &mut builder);
+            let param = normalize_scalar(next_param()?, ty, &mut builder);
             value_map.insert(arg_value, param);
         }
     }
@@ -411,6 +427,15 @@ fn translate_function(
                     builder.append_block_param(clif_block, clif::types::I64)
                 });
                 value_map.insert_limbs(result, limbs);
+            } else if let Some(parts) = register_parts(&module.ctx, ty) {
+                let params = parts
+                    .iter()
+                    .map(|part| {
+                        let clif_ty = sonatina_type_to_clif_or_err(part.ty, pointer_type)?;
+                        Ok(builder.append_block_param(clif_block, clif_ty))
+                    })
+                    .collect::<Result<_, String>>()?;
+                value_map.insert_parts(result, params);
             } else if !uses_indirect_value_representation(&module.ctx, ty) {
                 let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_type)?;
                 let param = builder.append_block_param(clif_block, clif_ty);
@@ -851,6 +876,62 @@ fn translate_function(
                         value_map.insert(result, arg);
                     }
                 }
+                NativeInstKind::Bitcast(bitcast)
+                    if [function.dfg.value_ty(*bitcast.from()), *bitcast.ty()]
+                        .into_iter()
+                        .any(|ty| register_parts(&module.ctx, ty).is_some()) =>
+                {
+                    // A cast to or from an aggregate held in registers goes
+                    // through storage.
+                    let from_ty = function.dfg.value_ty(*bitcast.from());
+                    let to_ty = *bitcast.ty();
+                    if value_storage_size(from_ty, &module.ctx)?
+                        != value_storage_size(to_ty, &module.ctx)?
+                    {
+                        return Err(format!(
+                            "bitcast requires equal-sized types: {from_ty:?} to {to_ty:?}"
+                        ));
+                    }
+                    let source = if uses_indirect_value_representation(&module.ctx, from_ty) {
+                        resolve_operand(
+                            function,
+                            *bitcast.from(),
+                            &value_map,
+                            target_config,
+                            &mut builder,
+                        )?
+                    } else {
+                        let slot = create_stack_slot_for_type(from_ty, &module.ctx, &mut builder)?;
+                        store_value(function, *bitcast.from(), slot, 0, &value_map, &mut builder)?;
+                        slot
+                    };
+                    let result = function
+                        .dfg
+                        .inst_result(inst_id)
+                        .ok_or("bitcast has no result")?;
+                    if uses_indirect_value_representation(&module.ctx, to_ty) {
+                        let dest = create_stack_slot_for_type(to_ty, &module.ctx, &mut builder)?;
+                        copy_value(
+                            from_ty,
+                            source,
+                            dest,
+                            &module.ctx,
+                            target_config,
+                            &mut builder,
+                        )?;
+                        value_map.insert(result, dest);
+                    } else {
+                        load_value(
+                            result,
+                            to_ty,
+                            source,
+                            0,
+                            &mut value_map,
+                            &module.ctx,
+                            &mut builder,
+                        )?;
+                    }
+                }
                 NativeInstKind::Bitcast(bitcast) => {
                     let from_ty = function.dfg.value_ty(*bitcast.from());
                     let to_ty = *bitcast.ty();
@@ -983,15 +1064,26 @@ fn translate_function(
                             .dfg
                             .downcast::<&control_flow::Call>(switch.call)
                             .ok_or("a tail switch's call is not a call")?;
+                        // Every callee is private, so it takes aggregates held in
+                        // registers as their parts.
                         let mut call_args: Vec<_> = sret_ptr.into_iter().collect();
                         for &arg in call.args() {
-                            call_args.push(resolve_operand(
-                                function,
-                                arg,
-                                &value_map,
-                                target_config,
-                                &mut builder,
-                            )?);
+                            match register_parts(&module.ctx, function.dfg.value_ty(arg)) {
+                                Some(parts) => call_args.extend(resolve_parts(
+                                    function,
+                                    arg,
+                                    &parts,
+                                    &value_map,
+                                    &mut builder,
+                                )?),
+                                None => call_args.push(resolve_operand(
+                                    function,
+                                    arg,
+                                    &value_map,
+                                    target_config,
+                                    &mut builder,
+                                )?),
+                            }
                         }
                         let sig = clif_signature(module, switch.default, tail_calls, clif_module)?;
                         let sig = builder.import_signature(sig);
@@ -1137,9 +1229,9 @@ fn translate_function(
                             return Err("indirect return requires exactly one value".to_string());
                         };
                         let val_ty = function.dfg.value_ty(*val_id);
-                        let storage_ty = indirect_return_storage_type(&module.ctx, val_ty)
+                        let storage_ty = indirect_return_storage_type(&module.ctx, linkage, val_ty)
                             .ok_or("indirect return value has no storage type")?;
-                        if val_ty == Type::I256 {
+                        if val_ty == Type::I256 || register_parts(&module.ctx, val_ty).is_some() {
                             store_value(function, *val_id, sret, 0, &value_map, &mut builder)?;
                         } else if !frame.in_return_buffer(*val_id) {
                             store_indirect(
@@ -1154,13 +1246,24 @@ fn translate_function(
                         }
                         builder.ins().return_(&[]);
                     } else {
-                        let args: Result<Vec<_>, _> = ret
-                            .args()
-                            .as_slice()
-                            .iter()
-                            .map(|v| resolve_value(function, *v, &value_map, &mut builder))
-                            .collect();
-                        let args = args?;
+                        let mut args = Vec::new();
+                        for &value in ret.args().as_slice() {
+                            match passed_parts(&module.ctx, linkage, function.dfg.value_ty(value)) {
+                                Some(parts) => args.extend(resolve_parts(
+                                    function,
+                                    value,
+                                    &parts,
+                                    &value_map,
+                                    &mut builder,
+                                )?),
+                                None => args.push(resolve_value(
+                                    function,
+                                    value,
+                                    &value_map,
+                                    &mut builder,
+                                )?),
+                            }
+                        }
                         builder.ins().return_(&args);
                     }
                 }
@@ -1172,9 +1275,11 @@ fn translate_function(
                     let clif_func_ref =
                         clif_module.declare_func_in_func(*clif_func_id, builder.func);
                     let ir_results = function.dfg.inst_results(inst_id);
+                    let callee_linkage = module.ctx.func_linkage(callee);
                     let indirect_storage_ty = match ir_results {
                         [result] => indirect_return_storage_type(
                             &module.ctx,
+                            callee_linkage,
                             function.dfg.value_ty(*result),
                         ),
                         _ => None,
@@ -1192,6 +1297,8 @@ fn translate_function(
                         // in a slot of its own.
                         let addr = if result_ty == Type::I256 {
                             i256_storage.result(&mut builder)
+                        } else if register_parts(&module.ctx, result_ty).is_some() {
+                            create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?
                         } else if storage_ty == result_ty {
                             frame.address(ir_results[0], &mut builder)?
                         } else {
@@ -1207,7 +1314,8 @@ fn translate_function(
 
                     let mut i256_args = 0;
                     for &arg in call.args() {
-                        let value = if function.dfg.value_ty(arg) == Type::I256 {
+                        let arg_ty = function.dfg.value_ty(arg);
+                        let value = if arg_ty == Type::I256 {
                             i256_args += 1;
                             i256_storage.outgoing(
                                 function,
@@ -1216,6 +1324,16 @@ fn translate_function(
                                 &value_map,
                                 &mut builder,
                             )?
+                        } else if let Some(parts) = register_parts(&module.ctx, arg_ty) {
+                            // A private callee takes the parts, others a
+                            // reference to a copy in storage.
+                            let values =
+                                resolve_parts(function, arg, &parts, &value_map, &mut builder)?;
+                            if callee_linkage.is_private() {
+                                call_args.extend(values);
+                                continue;
+                            }
+                            materialize_parts(&module.ctx, arg_ty, &parts, &values, &mut builder)?
                         } else {
                             resolve_operand(function, arg, &value_map, target_config, &mut builder)?
                         };
@@ -1230,17 +1348,39 @@ fn translate_function(
                     let clif_call = builder.ins().call(clif_func_ref, &call_args);
                     if let Some(sret_addr) = sret_slot {
                         let result = ir_results[0];
-                        if function.dfg.value_ty(result) == Type::I256 {
+                        let result_ty = function.dfg.value_ty(result);
+                        if result_ty == Type::I256 {
                             let limbs =
                                 load_limbs(sret_addr, 0, MemFlagsData::trusted(), &mut builder);
                             value_map.insert_limbs(result, limbs);
+                        } else if register_parts(&module.ctx, result_ty).is_some() {
+                            load_value(
+                                result,
+                                result_ty,
+                                sret_addr,
+                                0,
+                                &mut value_map,
+                                &module.ctx,
+                                &mut builder,
+                            )?;
                         } else {
                             value_map.insert(result, sret_addr);
                         }
                     } else {
-                        let results = builder.inst_results(clif_call);
-                        for (ir_result, clif_result) in ir_results.iter().zip(results) {
-                            value_map.insert(*ir_result, *clif_result);
+                        let mut results = builder.inst_results(clif_call).to_vec().into_iter();
+                        for &ir_result in ir_results {
+                            let ty = function.dfg.value_ty(ir_result);
+                            match passed_parts(&module.ctx, callee_linkage, ty) {
+                                Some(parts) => {
+                                    let values = results.by_ref().take(parts.len()).collect();
+                                    value_map.insert_parts(ir_result, values);
+                                }
+                                None => {
+                                    let result =
+                                        results.next().ok_or("too few Cranelift call results")?;
+                                    value_map.insert(ir_result, result);
+                                }
+                            }
                         }
                     }
                 }
@@ -1439,10 +1579,35 @@ fn translate_function(
                                 addr,
                                 0,
                                 &mut value_map,
-                                pointer_type,
+                                &module.ctx,
                                 &mut builder,
                             )?;
                         }
+                    }
+                }
+                NativeInstKind::ExtractValue(extract)
+                    if let Some(parts) =
+                        register_parts(&module.ctx, function.dfg.value_ty(*extract.dest())) =>
+                {
+                    let values =
+                        resolve_parts(function, *extract.dest(), &parts, &value_map, &mut builder)?;
+                    let idx = constant_value_index(function, *extract.idx(), "extract_value")?;
+                    let dest_ty = function.dfg.value_ty(*extract.dest());
+                    let (offset, elem_ty) = aggregate_elem_offset(&module.ctx, dest_ty, idx)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let range = parts_within(
+                            &parts,
+                            offset as u32,
+                            value_storage_size(elem_ty, &module.ctx)?,
+                        );
+                        insert_field_part_values(
+                            &module.ctx,
+                            result,
+                            elem_ty,
+                            &values[range],
+                            &mut value_map,
+                            &mut builder,
+                        )?;
                     }
                 }
                 NativeInstKind::ExtractValue(extract) => {
@@ -1473,11 +1638,34 @@ fn translate_function(
                                 base,
                                 offset,
                                 &mut value_map,
-                                pointer_type,
+                                &module.ctx,
                                 &mut builder,
                             )?;
                         }
                     }
+                }
+                NativeInstKind::InsertValue(insert)
+                    if let Some(parts) =
+                        register_parts(&module.ctx, function.dfg.value_ty(*insert.dest())) =>
+                {
+                    let Some(result) = function.dfg.inst_result(inst_id) else {
+                        continue;
+                    };
+                    let result_ty = function.dfg.value_ty(result);
+                    let mut values =
+                        resolve_parts(function, *insert.dest(), &parts, &value_map, &mut builder)?;
+                    let idx = constant_value_index(function, *insert.idx(), "insert_value")?;
+                    let (offset, elem_ty) = aggregate_elem_offset(&module.ctx, result_ty, idx)?;
+                    let field =
+                        field_part_values(function, *insert.value(), &value_map, &mut builder)?;
+                    replace_parts(
+                        &parts,
+                        &mut values,
+                        offset as u32,
+                        value_storage_size(elem_ty, &module.ctx)?,
+                        &field,
+                    )?;
+                    value_map.insert_parts(result, values);
                 }
                 NativeInstKind::InsertValue(insert) => {
                     let Some(result) = function.dfg.inst_result(inst_id) else {
@@ -1691,7 +1879,7 @@ fn translate_function(
                                 addr,
                                 0,
                                 &mut value_map,
-                                pointer_type,
+                                &module.ctx,
                                 &mut builder,
                             )?;
                         }
@@ -1828,7 +2016,7 @@ fn translate_function(
                                 addr,
                                 0,
                                 &mut value_map,
-                                pointer_type,
+                                &module.ctx,
                                 &mut builder,
                             )?;
                         }
@@ -1838,6 +2026,32 @@ fn translate_function(
                     emit_trap(&mut builder, TrapCode::user(1).unwrap());
                 }
                 NativeInstKind::Phi(_) => continue,
+                NativeInstKind::EnumMake(make)
+                    if let Some(result) = function.dfg.inst_result(inst_id)
+                        && let Some(parts) =
+                            register_parts(&module.ctx, function.dfg.value_ty(result)) =>
+                {
+                    // The tag first; fields of other variants are zero.
+                    let variant = *make.variant();
+                    let mut values = zero_parts(&module.ctx, &parts, &mut builder)?;
+                    values[0] = builder.ins().iconst(
+                        tag_clif_type(&module.ctx, variant)?,
+                        i64::from(variant.index()),
+                    );
+                    for (field, &value) in make.values().iter().enumerate() {
+                        let (offset, ty) = variant_field_offset(&module.ctx, variant, field)?;
+                        let field_values =
+                            field_part_values(function, value, &value_map, &mut builder)?;
+                        replace_parts(
+                            &parts,
+                            &mut values,
+                            offset as u32,
+                            value_storage_size(ty, &module.ctx)?,
+                            &field_values,
+                        )?;
+                    }
+                    value_map.insert_parts(result, values);
+                }
                 NativeInstKind::EnumMake(make) => {
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let addr = frame.address(result, &mut builder)?;
@@ -1873,6 +2087,16 @@ fn translate_function(
                     let addr = resolve_value(function, *set.object(), &value_map, &mut builder)?;
                     store_tag(&module.ctx, *set.variant(), addr, &mut builder)?;
                 }
+                NativeInstKind::EnumTag(tag)
+                    if let Some(parts) =
+                        register_parts(&module.ctx, function.dfg.value_ty(*tag.value())) =>
+                {
+                    let values =
+                        resolve_parts(function, *tag.value(), &parts, &value_map, &mut builder)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        value_map.insert(result, values[0]);
+                    }
+                }
                 NativeInstKind::EnumTag(tag) => {
                     let addr = resolve_operand(
                         function,
@@ -1889,7 +2113,7 @@ fn translate_function(
                             addr,
                             0,
                             &mut value_map,
-                            pointer_type,
+                            &module.ctx,
                             &mut builder,
                         )?;
                     }
@@ -1904,9 +2128,24 @@ fn translate_function(
                             addr,
                             0,
                             &mut value_map,
-                            pointer_type,
+                            &module.ctx,
                             &mut builder,
                         )?;
+                    }
+                }
+                NativeInstKind::EnumIsVariant(test)
+                    if let Some(parts) =
+                        register_parts(&module.ctx, function.dfg.value_ty(*test.value())) =>
+                {
+                    let values =
+                        resolve_parts(function, *test.value(), &parts, &value_map, &mut builder)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let is_variant = builder.ins().icmp_imm_u(
+                            IntCC::Equal,
+                            values[0],
+                            i64::from(test.variant().index()),
+                        );
+                        value_map.insert(result, is_variant);
                     }
                 }
                 NativeInstKind::EnumIsVariant(test) => {
@@ -1936,6 +2175,37 @@ fn translate_function(
                         value_map.insert(result, addr);
                     }
                 }
+                NativeInstKind::EnumExtract(extract)
+                    if let Some(parts) =
+                        register_parts(&module.ctx, function.dfg.value_ty(*extract.value())) =>
+                {
+                    let values = resolve_parts(
+                        function,
+                        *extract.value(),
+                        &parts,
+                        &value_map,
+                        &mut builder,
+                    )?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let field =
+                            constant_value_index(function, *extract.field(), "enum.extract")?;
+                        let (offset, ty) =
+                            variant_field_offset(&module.ctx, *extract.variant(), field)?;
+                        let range = parts_within(
+                            &parts,
+                            offset as u32,
+                            value_storage_size(ty, &module.ctx)?,
+                        );
+                        insert_field_part_values(
+                            &module.ctx,
+                            result,
+                            ty,
+                            &values[range],
+                            &mut value_map,
+                            &mut builder,
+                        )?;
+                    }
+                }
                 NativeInstKind::EnumExtract(extract) => {
                     let base = resolve_operand(
                         function,
@@ -1959,7 +2229,7 @@ fn translate_function(
                                 base,
                                 offset,
                                 &mut value_map,
-                                pointer_type,
+                                &module.ctx,
                                 &mut builder,
                             )?;
                         }

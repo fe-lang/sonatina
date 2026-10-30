@@ -1,28 +1,44 @@
 use cranelift_codegen::ir::{self as clif, ArgumentPurpose};
 use cranelift_module::Module as ClifModule;
-use sonatina_ir::{Signature, Type, module::ModuleCtx, types::CompoundType};
+use sonatina_ir::{Linkage, Signature, Type, module::ModuleCtx, types::CompoundType};
 use sonatina_triple::TargetTriple;
 
+use super::{Parts, is_aggregate, register_parts};
+
 /// Whether translated values of `ty` are addresses of their storage.
-/// i256 values are four limbs instead, though passed by reference.
+/// i256 values are four limbs instead, though passed by reference, and
+/// small aggregates their parts (`register_parts`).
 pub(super) fn uses_indirect_value_representation(ctx: &ModuleCtx, ty: Type) -> bool {
-    matches!(
-        ty.resolve_compound(ctx),
-        Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_))
-    )
+    is_aggregate(ctx, ty) && register_parts(ctx, ty).is_none()
 }
 
-/// Whether values of `ty` are passed and returned through memory.
-fn passes_by_reference(ctx: &ModuleCtx, ty: Type) -> bool {
-    ty == Type::I256 || uses_indirect_value_representation(ctx, ty)
+/// The parts in which a function of `linkage` passes and returns `ty`
+/// values: private functions pass aggregates held in registers as their
+/// parts, while public and external ones keep the platform's references.
+pub(super) fn passed_parts(ctx: &ModuleCtx, linkage: Linkage, ty: Type) -> Option<Parts> {
+    linkage
+        .is_private()
+        .then(|| register_parts(ctx, ty))
+        .flatten()
+}
+
+/// Whether a function of `linkage` passes and returns `ty` values through
+/// memory.
+fn passes_by_reference(ctx: &ModuleCtx, linkage: Linkage, ty: Type) -> bool {
+    ty == Type::I256 || is_aggregate(ctx, ty) && passed_parts(ctx, linkage, ty).is_none()
 }
 
 pub(super) fn returns_indirect(ctx: &ModuleCtx, sig: &Signature) -> bool {
-    sig.ret_tys().len() == 1 && indirect_return_storage_type(ctx, sig.ret_tys()[0]).is_some()
+    sig.ret_tys().len() == 1
+        && indirect_return_storage_type(ctx, sig.linkage(), sig.ret_tys()[0]).is_some()
 }
 
-pub(super) fn indirect_return_storage_type(ctx: &ModuleCtx, ty: Type) -> Option<Type> {
-    if passes_by_reference(ctx, ty) {
+pub(super) fn indirect_return_storage_type(
+    ctx: &ModuleCtx,
+    linkage: Linkage,
+    ty: Type,
+) -> Option<Type> {
+    if passes_by_reference(ctx, linkage, ty) {
         Some(ty)
     } else if let Some(CompoundType::ConstRef(inner)) = ty.resolve_compound(ctx) {
         Some(inner)
@@ -47,7 +63,7 @@ pub(super) fn validate_cranelift_signature(ctx: &ModuleCtx, sig: &Signature) -> 
         && sig
             .ret_tys()
             .iter()
-            .any(|ty| indirect_return_storage_type(ctx, *ty).is_some())
+            .any(|ty| indirect_return_storage_type(ctx, sig.linkage(), *ty).is_some())
     {
         return Err(format!(
             "Cranelift backend does not support multi-return signatures containing indirect return types: {}",
@@ -74,17 +90,26 @@ pub(super) fn sonatina_sig_to_clif(
         ));
     }
 
-    for &arg_ty in sig.args() {
-        if let Some(clif_ty) = sonatina_type_to_clif(arg_ty, pointer_type) {
-            clif_sig.params.push(scalar_abi_param(ctx, clif_ty));
+    let abi_params = |ty: Type| -> Vec<clif::AbiParam> {
+        match passed_parts(ctx, sig.linkage(), ty) {
+            Some(parts) => parts
+                .iter()
+                .filter_map(|part| sonatina_type_to_clif(part.ty, pointer_type))
+                .map(|clif_ty| scalar_abi_param(ctx, clif_ty))
+                .collect(),
+            None => sonatina_type_to_clif(ty, pointer_type)
+                .map(|clif_ty| scalar_abi_param(ctx, clif_ty))
+                .into_iter()
+                .collect(),
         }
+    };
+    for &arg_ty in sig.args() {
+        clif_sig.params.extend(abi_params(arg_ty));
     }
 
     if !returns_indirect(ctx, sig) {
         for &ret_ty in sig.ret_tys() {
-            if let Some(clif_ty) = sonatina_type_to_clif(ret_ty, pointer_type) {
-                clif_sig.returns.push(scalar_abi_param(ctx, clif_ty));
-            }
+            clif_sig.returns.extend(abi_params(ret_ty));
         }
     }
     clif_sig

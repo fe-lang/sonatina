@@ -81,6 +81,10 @@ impl CraneliftObjectBackend {
             // The native ABI passes i128 scalars directly. Cranelift's x86_64
             // calling conventions require LLVM ABI extensions for these values.
             ("enable_llvm_abi_extensions", "true"),
+            // Private functions return small aggregates as their parts.
+            // Results past the convention's return registers go to a return
+            // area the caller provides.
+            ("enable_multi_ret_implicit_sret", "true"),
             // Like Sonatina's own IR checks, Cranelift's verifier runs only
             // in builds with debug assertions: it can take most of the
             // backend's time.

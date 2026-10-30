@@ -6,8 +6,9 @@ use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Function, Type, Value, ValueId, module::ModuleCtx, types::CompoundType};
 
 use super::{
-    ValueMap, load_limbs, resize_int_value, resolve_i256, resolve_value, signed_scalar,
-    sonatina_type_to_clif_or_err, store_limbs, uses_indirect_value_representation,
+    ValueMap, is_aggregate, load_limbs, load_parts, pointer_clif_type, register_parts,
+    resize_int_value, resolve_i256, resolve_parts, resolve_value, signed_scalar,
+    sonatina_type_to_clif_or_err, store_limbs, store_parts, uses_indirect_value_representation,
 };
 
 /// Copies and fills of at most this many bytes use inline loads and stores.
@@ -97,7 +98,7 @@ fn move_pieces(
 /// A piece of a value's storage that a copy writes with one store: bytes of
 /// a field, which it loads, or padding, which it zeroes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Piece {
+pub(super) enum Piece {
     Field(i32, clif::Type),
     Padding(i32, clif::Type),
 }
@@ -106,6 +107,14 @@ impl Piece {
     fn offset(self) -> i32 {
         match self {
             Self::Field(offset, _) | Self::Padding(offset, _) => offset,
+        }
+    }
+
+    /// The offset and type of a padding piece.
+    pub(super) fn padding(self) -> Option<(i32, clif::Type)> {
+        match self {
+            Self::Padding(offset, ty) => Some((offset, ty)),
+            Self::Field(..) => None,
         }
     }
 }
@@ -117,7 +126,7 @@ impl Piece {
 /// ends, then as `aligned_chunks`, as zero fills split too. Padding is not
 /// part of the value, and often nothing has written it, so a copy writes
 /// zeros there instead of loading it.
-fn value_pieces(ty: Type, size: u32, ctx: &ModuleCtx) -> Result<Vec<Piece>, String> {
+pub(super) fn value_pieces(ty: Type, size: u32, ctx: &ModuleCtx) -> Result<Vec<Piece>, String> {
     let mut fields = Vec::new();
     field_ranges(ty, 0, ctx, &mut fields)?;
     let mut bounds: Vec<u32> = fields
@@ -163,8 +172,7 @@ fn field_ranges(
             }
         }
         Some(CompoundType::Array { elem, len })
-            if uses_indirect_value_representation(ctx, elem)
-                || value_storage_size(elem, ctx)? >= 8 =>
+            if is_aggregate(ctx, elem) || value_storage_size(elem, ctx)? >= 8 =>
         {
             let stride = value_storage_size(elem, ctx)?;
             for index in 0..len as u32 {
@@ -242,14 +250,17 @@ pub(super) fn load_value(
     src: clif::Value,
     offset: i32,
     value_map: &mut ValueMap,
-    pointer_type: clif::Type,
+    ctx: &ModuleCtx,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
     if ty == Type::I256 {
         let limbs = load_limbs(src, offset, MemFlagsData::new(), builder);
         value_map.insert_limbs(result, limbs);
+    } else if let Some(parts) = register_parts(ctx, ty) {
+        let values = load_parts(ctx, &parts, src, offset, builder)?;
+        value_map.insert_parts(result, values);
     } else {
-        let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_type)?;
+        let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_clif_type(ctx)?)?;
         let loaded = builder
             .ins()
             .load(clif_ty, MemFlagsData::new(), src, offset);
@@ -258,7 +269,8 @@ pub(super) fn load_value(
     Ok(())
 }
 
-/// Stores the scalar or i256 value `value` at `dst + offset`.
+/// Stores the scalar, i256 or register-held aggregate `value` at
+/// `dst + offset`.
 pub(super) fn store_value(
     function: &Function,
     value: ValueId,
@@ -267,9 +279,13 @@ pub(super) fn store_value(
     value_map: &ValueMap,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
-    if function.dfg.value_ty(value) == Type::I256 {
+    let ty = function.dfg.value_ty(value);
+    if ty == Type::I256 {
         let limbs = resolve_i256(function, value, value_map, builder)?;
         store_limbs(limbs, dst, offset, MemFlagsData::new(), builder);
+    } else if let Some(parts) = register_parts(function.ctx(), ty) {
+        let values = resolve_parts(function, value, &parts, value_map, builder)?;
+        store_parts(function.ctx(), ty, &parts, &values, dst, offset, builder)?;
     } else {
         let value = resolve_value(function, value, value_map, builder)?;
         builder.ins().store(MemFlagsData::new(), value, dst, offset);
