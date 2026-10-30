@@ -155,6 +155,11 @@ allocator with size classes and free lists.
 - Contents. A block cut from the top is zero, because memory above the top is
   always zero. A block taken from a list holds what its last user left, except
   its first word, which held the link.
+- `WasmBackend::with_heap_poison` fills the payload of every block that `free`
+  releases, except its first word, with the byte `0xA5`. A program that reads a
+  block after freeing it then sees that pattern, so a comparison with a build for
+  another target turns the use after free into a wrong answer. It costs one
+  `memory.fill` for each `free` and is meant for tests.
 - An external function named `malloc` or `free` is the allocator of the module
   and not an import. `malloc` must take one `i32` and return a pointer, and
   `free` must take a pointer and return nothing; a declaration with another

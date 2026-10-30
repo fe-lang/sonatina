@@ -694,3 +694,26 @@ fn a_heap_with_a_small_memory_limit_fails_cleanly_in_the_middle_of_a_sequence() 
         assert!(!kept.is_empty());
     }
 }
+
+#[test]
+fn heap_poison_fills_a_freed_block_except_its_link() {
+    for level in LEVELS {
+        let bytes = build_with(
+            HEAP,
+            level,
+            WasmBackend::new()
+                .with_stack_size(STACK as u32)
+                .with_host_allocator()
+                .with_heap_poison(),
+        );
+        let mut machine = Limited::new(&bytes, usize::MAX);
+        let a = m(&mut machine, 32);
+        machine.write(a, &[0x11; 32]);
+        free(&mut machine, a).unwrap();
+        // A program that reads the block after freeing it sees the pattern.
+        assert_eq!(machine.read(a + 4, 28), vec![0xA5; 28], "{level:?}");
+        // The link in the first word is intact: the block is still reused.
+        assert_eq!(m(&mut machine, 32), a, "{level:?}");
+        assert_eq!(machine.read(a + 4, 28), vec![0xA5; 28], "{level:?}");
+    }
+}

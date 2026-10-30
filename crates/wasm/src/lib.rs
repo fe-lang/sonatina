@@ -80,6 +80,7 @@ pub struct WasmBackend {
     import_module: String,
     stack_bytes: u32,
     host_allocator: bool,
+    heap_poison: bool,
 }
 
 impl Default for WasmBackend {
@@ -94,6 +95,7 @@ impl WasmBackend {
             import_module: DEFAULT_IMPORT_MODULE.to_string(),
             stack_bytes: memory::DEFAULT_STACK_BYTES,
             host_allocator: false,
+            heap_poison: false,
         }
     }
 
@@ -119,6 +121,16 @@ impl WasmBackend {
     /// The module then has a stack and an arena even if its code uses neither,
     /// and no function of the module may have one of these names. See the
     /// section "The arena" of the module documentation for the protocol.
+    /// Fill the payload of every block that `free` releases, except its first
+    /// word (the link of the free list), with the byte `0xA5`. A program that
+    /// reads a block after freeing it then sees that pattern, and a comparison
+    /// with a build for another target turns the use after free into a wrong
+    /// answer. It costs one `memory.fill` for each `free`, and is meant for tests.
+    pub fn with_heap_poison(mut self) -> Self {
+        self.heap_poison = true;
+        self
+    }
+
     pub fn with_host_allocator(mut self) -> Self {
         self.host_allocator = true;
         self
@@ -165,6 +177,7 @@ impl Backend for WasmBackend {
             &self.import_module,
             self.stack_bytes,
             self.host_allocator,
+            self.heap_poison,
         )
         .map_err(|error| vec![error])?;
         let bytes = translated

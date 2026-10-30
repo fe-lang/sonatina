@@ -369,6 +369,7 @@ pub(super) fn build_free(
     top: Global,
     lists: u32,
     heap_start: u32,
+    poison: bool,
 ) -> FunctionBody {
     let mut body = FunctionBody::new(wmod, sig);
     let entry = body.entry;
@@ -477,6 +478,21 @@ pub(super) fn build_free(
         WType::I32,
     );
     let freed = p.c32(FREE);
+    if poison {
+        // Everything but the first word, which becomes the link below.
+        let four = p.c32(4);
+        let from = p.op(Operator::I32Add, &[address, four], WType::I32);
+        let one = p.c32(1);
+        let size = p.op(Operator::I32Shl, &[one, class], WType::I32);
+        let length = p.op(Operator::I32Sub, &[size, four], WType::I32);
+        let pattern = p.c32(0xA5);
+        p.body.add_op(
+            release,
+            Operator::MemoryFill { mem: memory },
+            &[from, pattern, length],
+            &[],
+        );
+    }
     p.body.add_op(
         release,
         Operator::I32Store {

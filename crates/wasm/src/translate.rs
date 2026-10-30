@@ -326,6 +326,7 @@ pub(super) fn translate_module(
     import_module: &str,
     stack_bytes: u32,
     host_allocator: bool,
+    heap_poison: bool,
 ) -> Result<Translated, WasmError> {
     let mut scan = scan_module(module);
     if host_allocator {
@@ -676,8 +677,15 @@ pub(super) fn translate_module(
         let body = heap::build_malloc(&wmod, sig, memory, arena_top, lists, Mode::Module);
         wmod.funcs[func] = FuncDecl::Body(sig, "heap_malloc".to_string(), body);
         if let Some((free, free_sig)) = free_func {
-            let body =
-                heap::build_free(&wmod, free_sig, memory, arena_top, lists, plan.stack_limit);
+            let body = heap::build_free(
+                &wmod,
+                free_sig,
+                memory,
+                arena_top,
+                lists,
+                plan.stack_limit,
+                heap_poison,
+            );
             wmod.funcs[free] = FuncDecl::Body(free_sig, "heap_free".to_string(), body);
         }
         if host_allocator {
