@@ -498,6 +498,53 @@ block4:
 }
 
 #[test]
+fn enum_values_zero_bytes_outside_their_variant() {
+    // `Some`'s value dies before `Pair`'s and `None`'s are made, so the frame
+    // slot they share still holds its ones.
+    let source = r#"
+type @Choice = enum { #None, #Some(i256), #Pair(i8, i64) };
+func public %make(v10.*i8, v11.*i8, v12.*i8, v1.i64) {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v2.@Choice = enum.make @Choice #Some (-1.i256);
+    mstore v0 v2 @Choice;
+    v3.*@Choice = bitcast v11 *@Choice;
+    v4.@Choice = enum.make @Choice #Pair (3.i8, v1);
+    mstore v3 v4 @Choice;
+    v5.*@Choice = bitcast v12 *@Choice;
+    v6.@Choice = enum.make @Choice #None;
+    mstore v5 v6 @Choice;
+    return;
+}
+"#;
+    #[repr(C, align(16))]
+    struct Choice([u8; 48]);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let make: unsafe extern "C" fn(*mut Choice, *mut Choice, *mut Choice, i64) =
+            unsafe { std::mem::transmute(artifact.function_address("make").unwrap()) };
+        let [mut some, mut pair, mut none] = [0, 1, 2].map(|_| Choice([0xaa; 48]));
+        unsafe { make(&mut some, &mut pair, &mut none, 0x1122_3344_5566_7788) };
+        let mut expected = [0; 48];
+        expected[0] = 1;
+        expected[16..48].fill(0xff);
+        assert_eq!(some.0, expected, "{level:?}");
+        expected = [0; 48];
+        expected[0] = 2;
+        expected[16] = 3;
+        expected[24..32].copy_from_slice(&0x1122_3344_5566_7788i64.to_le_bytes());
+        assert_eq!(pair.0, expected, "{level:?}");
+        assert_eq!(none.0, [0; 48], "{level:?}");
+    }
+}
+
+#[test]
 fn nested_enums_verify_before_lowering_and_execute_afterward() {
     let source = r#"
 type @OptionI64 = enum { #None, #Some(i64) };

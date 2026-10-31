@@ -1849,7 +1849,7 @@ fn translate_function(
                 NativeInstKind::EnumMake(make) => {
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let addr = frame.address(result, &mut builder)?;
-                        store_variant(
+                        let written = store_variant(
                             function,
                             *make.variant(),
                             make.values(),
@@ -1858,6 +1858,10 @@ fn translate_function(
                             target_config,
                             &mut builder,
                         )?;
+                        // Padding and other variants' payload bytes are zero,
+                        // like the bytes an insert chain on undef leaves.
+                        let size = value_storage_size(function.dfg.value_ty(result), &module.ctx)?;
+                        zero_unwritten(addr, size, written, target_config, &mut builder);
                         value_map.insert(result, addr);
                     }
                 }

@@ -54,7 +54,8 @@ pub(super) fn store_tag(
     Ok(())
 }
 
-/// Writes `variant`'s tag and the fields `values` to the enum at `dst`.
+/// Writes `variant`'s tag and the fields `values` to the enum at `dst`, and
+/// returns the byte ranges written: the tag's, then each field's.
 pub(super) fn store_variant(
     function: &Function,
     variant: EnumVariantRef,
@@ -63,24 +64,20 @@ pub(super) fn store_variant(
     value_map: &ValueMap,
     config: TargetFrontendConfig,
     builder: &mut FunctionBuilder,
-) -> Result<(), String> {
+) -> Result<Vec<(u32, u32)>, String> {
     let ctx = function.ctx();
+    let mut written = vec![(0, tag_clif_type(ctx, variant)?.bytes())];
     for (field, &value) in values.iter().enumerate() {
         let (offset, ty) = variant_field_offset(ctx, variant, field)?;
+        let size = value_storage_size(ty, ctx)?;
         if uses_indirect_value_representation(ctx, ty) {
             let field_dst = builder.ins().iadd_imm_s(dst, i64::from(offset));
-            store_indirect(
-                function,
-                value,
-                field_dst,
-                value_storage_size(ty, ctx)?,
-                value_map,
-                config,
-                builder,
-            )?;
+            store_indirect(function, value, field_dst, size, value_map, config, builder)?;
         } else {
             store_value(function, value, dst, offset, value_map, builder)?;
         }
+        written.push((offset as u32, size));
     }
-    store_tag(ctx, variant, dst, builder)
+    store_tag(ctx, variant, dst, builder)?;
+    Ok(written)
 }

@@ -191,7 +191,8 @@ The native instruction set includes integer arithmetic, comparisons, casts,
 control flow, direct calls, memory and aggregate/object operations. It also
 accepts `evm_add_mod` and `evm_mul_mod`: `(a + b) % m` and `(a * b) % m` at
 full precision, zero for a zero modulus, with narrower operands
-zero-extended. Enum operations are translated against the enum layout above.
+zero-extended. Enum operations are translated against the enum layout above;
+`enum.make` zeroes the bytes outside its variant's tag and fields.
 `get_function_ptr`, `sym_addr` and `sym_size` are unsupported. Dynamic
 allocation and object materialization use the allocation and lifetime rules
 above.
