@@ -361,20 +361,20 @@ impl ModuleCtx {
 
     /// Scalars need no type store, so their layout takes no lock: callers may
     /// already hold it.
-    pub fn size_of(&self, ty: Type) -> Result<usize, TypeLayoutError> {
+    pub fn size_align_of(&self, ty: Type) -> Result<(usize, usize), TypeLayoutError> {
         if matches!(ty, Type::Compound(_) | Type::EnumTag(_)) {
-            self.with_ty_store(|store| self.type_layout.size_of(ty, store))
+            self.with_ty_store(|store| self.type_layout.size_align_of(ty, store))
         } else {
-            self.type_layout.size_of(ty, &NO_TYPES)
+            self.type_layout.size_align_of(ty, &NO_TYPES)
         }
     }
 
+    pub fn size_of(&self, ty: Type) -> Result<usize, TypeLayoutError> {
+        self.size_align_of(ty).map(|(size, _)| size)
+    }
+
     pub fn align_of(&self, ty: Type) -> Result<usize, TypeLayoutError> {
-        if matches!(ty, Type::Compound(_) | Type::EnumTag(_)) {
-            self.with_ty_store(|store| self.type_layout.align_of(ty, store))
-        } else {
-            self.type_layout.align_of(ty, &NO_TYPES)
-        }
+        self.size_align_of(ty).map(|(_, align)| align)
     }
 
     pub fn size_of_unchecked(&self, ty: Type) -> usize {

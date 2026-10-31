@@ -147,7 +147,11 @@ impl Isa for EvmMachine {
 
 struct EvmTypeLayout {}
 impl TypeLayout for EvmTypeLayout {
-    fn size_of(&self, ty: crate::Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
+    fn size_align_of(
+        &self,
+        ty: Type,
+        store: &TypeStore,
+    ) -> Result<(usize, usize), TypeLayoutError> {
         let size = match ty {
             Type::Unit => 0,
             // EVM memory is word-addressed by the MLOAD/MSTORE family. For now we model all
@@ -162,7 +166,7 @@ impl TypeLayout for EvmTypeLayout {
             | Type::EnumTag(_) => 32,
 
             Type::Compound(cmpd) => match store.resolve_compound(cmpd) {
-                CompoundType::Array { elem, len } => self.size_of(*elem, store)? * len,
+                CompoundType::Array { elem, len } => self.size_align_of(*elem, store)?.0 * len,
 
                 CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 32,
 
@@ -172,7 +176,7 @@ impl TypeLayout for EvmTypeLayout {
                     }
                     let mut size = 0;
                     for &field in &s.fields {
-                        size += self.size_of(field, store)?;
+                        size += self.size_align_of(field, store)?.0;
                     }
 
                     size
@@ -186,16 +190,11 @@ impl TypeLayout for EvmTypeLayout {
             },
         };
 
-        Ok(size)
+        Ok((size, if size == 0 { 1 } else { 32 }))
     }
 
     fn pointer_repl(&self) -> Type {
         Type::I256
-    }
-
-    fn align_of(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
-        let size = self.size_of(ty, store)?;
-        if size == 0 { Ok(1) } else { Ok(32) }
     }
 
     fn endian(&self) -> Endian {

@@ -90,60 +90,6 @@ pub fn inst_set() -> &'static NativeInstSet {
 }
 
 impl NativeTypeLayout {
-    fn size(ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
-        let Type::Compound(compound) = ty else {
-            return Self::scalar_layout(Self::tag_repr(ty, store)?).map(|(size, _)| size);
-        };
-        let size = match store.resolve_compound(compound) {
-            CompoundType::Array { elem, len } => Self::size(*elem, store)? * len,
-            CompoundType::Struct(data) => {
-                if data.packed {
-                    return Err(TypeLayoutError::UnsupportedType(ty));
-                }
-                let mut size = 0usize;
-                let mut struct_align = 1usize;
-                for &field in &data.fields {
-                    let align = Self::align(field, store)?;
-                    size = size.next_multiple_of(align);
-                    size += Self::size(field, store)?;
-                    struct_align = struct_align.max(align);
-                }
-                size.next_multiple_of(struct_align)
-            }
-            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
-            CompoundType::Enum(data) => enum_layout(&NativeTypeLayout, data, store)?.size,
-            CompoundType::Func { .. } => {
-                return Err(TypeLayoutError::UnrepresentableType(ty));
-            }
-        };
-        Ok(size)
-    }
-
-    fn align(ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
-        let Type::Compound(compound) = ty else {
-            return Self::scalar_layout(Self::tag_repr(ty, store)?).map(|(_, align)| align);
-        };
-        let align = match store.resolve_compound(compound) {
-            CompoundType::Array { elem, .. } => Self::align(*elem, store)?,
-            CompoundType::Struct(data) => {
-                if data.packed {
-                    return Err(TypeLayoutError::UnsupportedType(ty));
-                }
-                let mut align = 1usize;
-                for &field in &data.fields {
-                    align = align.max(Self::align(field, store)?);
-                }
-                align
-            }
-            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
-            CompoundType::Enum(data) => enum_layout(&NativeTypeLayout, data, store)?.align,
-            CompoundType::Func { .. } => {
-                return Err(TypeLayoutError::UnrepresentableType(ty));
-            }
-        };
-        Ok(align)
-    }
-
     /// An enum tag's integer type; any other scalar is its own.
     fn tag_repr(ty: Type, store: &TypeStore) -> Result<Type, TypeLayoutError> {
         let Type::EnumTag(enum_ty) = ty else {
@@ -172,12 +118,41 @@ impl NativeTypeLayout {
 }
 
 impl TypeLayout for NativeTypeLayout {
-    fn size_of(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
-        Self::size(ty, store)
-    }
-
-    fn align_of(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
-        Self::align(ty, store)
+    fn size_align_of(
+        &self,
+        ty: Type,
+        store: &TypeStore,
+    ) -> Result<(usize, usize), TypeLayoutError> {
+        let Type::Compound(compound) = ty else {
+            return Self::scalar_layout(Self::tag_repr(ty, store)?);
+        };
+        Ok(match store.resolve_compound(compound) {
+            CompoundType::Array { elem, len } => {
+                let (size, align) = self.size_align_of(*elem, store)?;
+                (size * len, align)
+            }
+            CompoundType::Struct(data) => {
+                if data.packed {
+                    return Err(TypeLayoutError::UnsupportedType(ty));
+                }
+                let mut size = 0usize;
+                let mut struct_align = 1usize;
+                for &field in &data.fields {
+                    let (field_size, align) = self.size_align_of(field, store)?;
+                    size = size.next_multiple_of(align) + field_size;
+                    struct_align = struct_align.max(align);
+                }
+                (size.next_multiple_of(struct_align), struct_align)
+            }
+            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => (8, 8),
+            CompoundType::Enum(data) => {
+                let layout = enum_layout(self, data, store)?;
+                (layout.size, layout.align)
+            }
+            CompoundType::Func { .. } => {
+                return Err(TypeLayoutError::UnrepresentableType(ty));
+            }
+        })
     }
 
     fn pointer_repl(&self) -> Type {

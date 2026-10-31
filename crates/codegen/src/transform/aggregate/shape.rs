@@ -1015,10 +1015,8 @@ impl LayoutCtx<'_> {
 
     /// The target's layout of `ty`, through the type store this context holds.
     fn primitive_size_align(&self, ty: Type) -> Option<(u32, u32)> {
-        let layout = self.module.type_layout;
-        let size = u32::try_from(layout.size_of(ty, self.types).ok()?).ok()?;
-        let align = u32::try_from(layout.align_of(ty, self.types).ok()?).ok()?;
-        Some((size, align))
+        let (size, align) = self.module.type_layout.size_align_of(ty, self.types).ok()?;
+        Some((u32::try_from(size).ok()?, u32::try_from(align).ok()?))
     }
     fn runtime_leaf_range_for_slice(
         &mut self,

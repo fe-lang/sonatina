@@ -19,8 +19,9 @@ pub trait Isa {
 
 /// Lays out types; compound types resolve through `store`.
 pub trait TypeLayout: Send + Sync {
-    fn size_of(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError>;
-    fn align_of(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError>;
+    /// The size and alignment of `ty` in bytes, from one walk of its parts.
+    fn size_align_of(&self, ty: Type, store: &TypeStore)
+    -> Result<(usize, usize), TypeLayoutError>;
     /// The offset of field `field` of variant `variant` in an enum `data`.
     fn enum_variant_field_offset(
         &self,
@@ -57,7 +58,7 @@ fn enum_part_layouts(
     data: &EnumData,
     store: &TypeStore,
 ) -> Result<(PartLayout, Vec<Vec<PartLayout>>), TypeLayoutError> {
-    let part = |ty| Ok((layout.size_of(ty, store)?, layout.align_of(ty, store)?));
+    let part = |ty| layout.size_align_of(ty, store);
     let variants = data
         .variants
         .iter()
@@ -132,4 +133,49 @@ pub enum TypeLayoutError {
 pub enum Endian {
     Be,
     Le,
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+    use super::{evm::Evm, native::Native};
+    use crate::{
+        Module, Type,
+        types::{EnumReprHint, VariantData},
+    };
+
+    #[test]
+    fn nested_enums_lay_out_each_level_once() {
+        let evm = Module::new(&Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::Osaka),
+        )));
+        let native = Module::new(&Native::new(TargetTriple::new(
+            Architecture::Aarch64,
+            Vendor::Unknown,
+            OperatingSystem::Native,
+        )));
+        // `E{n}` is `enum { #None, #Some(E{n - 1}) }`. Laying out a level's
+        // size and alignment separately would lay out the one below twice.
+        for (module, outer, step) in [(evm, 64, 32), (native, 16, 8)] {
+            let nested = module.ctx.with_ty_store_mut(|store| {
+                (0..64).fold(Type::I64, |inner, level| {
+                    let variant = |name: &str, fields: &[Type]| VariantData {
+                        name: name.to_string(),
+                        explicit_discriminant: None,
+                        fields: fields.to_vec(),
+                    };
+                    store.make_enum(
+                        &format!("E{level}"),
+                        &[variant("None", &[]), variant("Some", &[inner])],
+                        EnumReprHint::Default,
+                    )
+                })
+            });
+            // Each level adds a tag `step` bytes wide with its padding.
+            assert_eq!(module.ctx.size_of_unchecked(nested), outer + 63 * step);
+        }
+    }
 }
