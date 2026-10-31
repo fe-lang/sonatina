@@ -1882,7 +1882,13 @@ fn translate_function(
                     store_tag(&module.ctx, *set.variant(), addr, &mut builder)?;
                 }
                 NativeInstKind::EnumTag(tag) => {
-                    let addr = resolve_value(function, *tag.value(), &value_map, &mut builder)?;
+                    let addr = resolve_operand(
+                        function,
+                        *tag.value(),
+                        &value_map,
+                        target_config,
+                        &mut builder,
+                    )?;
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let ty = function.dfg.value_ty(result);
                         load_value(
@@ -1912,7 +1918,13 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::EnumIsVariant(test) => {
-                    let addr = resolve_value(function, *test.value(), &value_map, &mut builder)?;
+                    let addr = resolve_operand(
+                        function,
+                        *test.value(),
+                        &value_map,
+                        target_config,
+                        &mut builder,
+                    )?;
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let variant = *test.variant();
                         let tag_ty = tag_clif_type(&module.ctx, variant)?;
@@ -1933,7 +1945,13 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::EnumExtract(extract) => {
-                    let base = resolve_value(function, *extract.value(), &value_map, &mut builder)?;
+                    let base = resolve_operand(
+                        function,
+                        *extract.value(),
+                        &value_map,
+                        target_config,
+                        &mut builder,
+                    )?;
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let field =
                             constant_value_index(function, *extract.field(), "enum.extract")?;

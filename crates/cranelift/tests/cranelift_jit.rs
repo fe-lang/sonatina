@@ -545,6 +545,40 @@ block0:
 }
 
 #[test]
+fn undef_enum_values_read_as_zero() {
+    // Native undef values are zero, so an undef enum is its first variant.
+    for payload in ["i64", "i256"] {
+        let source = format!(
+            r#"
+type @Choice = enum {{ #Some({payload}), #None }};
+func public %read() -> i64 {{
+block0:
+    v0.enumtag(@Choice) = enum.tag undef.@Choice;
+    br_table v0 block3 (0.enumtag(@Choice) block1) (1.enumtag(@Choice) block3);
+block1:
+    v1.i1 = enum.is_variant undef.@Choice #Some;
+    br v1 block2 block3;
+block2:
+    return 1.i64;
+block3:
+    return -1.i64;
+}}
+"#
+        );
+        let artifact = Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(OptLevel::O0)
+        .compile()
+        .unwrap();
+        let read: unsafe extern "C" fn() -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("read").unwrap()) };
+        assert_eq!(unsafe { read() }, 1, "{payload}");
+    }
+}
+
+#[test]
 fn nested_enums_verify_before_lowering_and_execute_afterward() {
     let source = r#"
 type @OptionI64 = enum { #None, #Some(i64) };
