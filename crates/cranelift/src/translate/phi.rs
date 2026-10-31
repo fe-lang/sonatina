@@ -17,10 +17,10 @@ use super::{
     uses_indirect_value_representation,
 };
 
-/// Lowers CFG edges. Scalar phis receive Cranelift block arguments, and an
-/// i256 phi four, one per limb. Each aggregate phi owns a slot that its
-/// incoming edges copy into, so a phi costs one copy per edge rather than
-/// one block parameter per word.
+/// Lowers CFG edges. Scalar phis receive Cranelift block arguments, an i256
+/// phi four, one per limb, and an aggregate held in registers one per part.
+/// Each other aggregate phi owns a slot that its incoming edges copy into, so
+/// a phi costs one copy per edge rather than one block parameter per word.
 pub(super) struct Edges<'a> {
     pub function: &'a Function,
     pub block_map: &'a HashMap<BlockId, clif::Block>,

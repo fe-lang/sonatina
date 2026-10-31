@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use cranelift_codegen::ir::{self as clif, InstBuilder, MemFlagsData};
 use cranelift_frontend::FunctionBuilder;
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{Function, Type, Value, ValueId, module::ModuleCtx, types::CompoundType};
 
 use super::{
@@ -237,7 +237,7 @@ pub(super) fn field_part_values(
     } else if is_aggregate(ctx, ty) {
         Ok(PartValues::new())
     } else {
-        Ok(smallvec::smallvec![resolve_value(
+        Ok(smallvec![resolve_value(
             function, value, value_map, builder
         )?])
     }

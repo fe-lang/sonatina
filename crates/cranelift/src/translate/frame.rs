@@ -19,7 +19,8 @@ use super::{
 };
 
 /// Stack slots for indirectly represented SSA values: aggregates. (i256
-/// values are four limbs in Cranelift values.)
+/// values are four limbs in Cranelift values, and small aggregates their
+/// parts: see `register_parts`.)
 ///
 /// A value-producing instruction with an aggregate result writes a
 /// snapshot that nothing mutates afterwards. Phis, loads, call results,
