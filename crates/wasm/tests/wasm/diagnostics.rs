@@ -251,13 +251,26 @@ func public %f(v0.i32) -> i32 {
             "insert_value",
         ),
         (
-            "an address of the wrong type",
-            "func public %f(v0.i64) -> i32 {
+            "a call to the module's `free` that binds a result",
+            "func external %free(v0.*i8) {
+}
+func public %f(v0.*i8) {
     block0:
-        v1.i32 = mload v0 i32;
-        return v1;
+        v1.i32 = call %free v0;
+        return;
 }",
-            "address",
+            "results",
+        ),
+        (
+            "a memory copy with an argument of the wrong type",
+            "func external %memcpy(v0.*i8, v1.*i8, v2.i32) -> *i8 {
+}
+func public %f(v0.i64, v1.*i8) {
+    block0:
+        v2.*i8 = call %memcpy v0 v1 4.i32;
+        return;
+}",
+            "argument 0",
         ),
         (
             "a 128-bit value read from memory",

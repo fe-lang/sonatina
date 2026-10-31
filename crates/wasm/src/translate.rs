@@ -2360,6 +2360,33 @@ impl<'a> FunctionTranslator<'a> {
                 self.name
             ))
         })?;
+        if call_args.len() != callee.params.len() {
+            return Err(invalid(format!(
+                "function `{}`: `{op}` passes {} arguments but the callee takes {}",
+                self.name,
+                call_args.len(),
+                callee.params.len()
+            )));
+        }
+        if let Some(index) = call_args
+            .iter()
+            .zip(&callee.params)
+            .position(|(&arg, &param)| function.dfg.value_ty(arg) != param)
+        {
+            return Err(invalid(format!(
+                "function `{}`: `{op}` argument {index} does not have the parameter type",
+                self.name
+            )));
+        }
+        let results = function.dfg.inst_results(inst_id);
+        if results.len() != callee.rets.len() {
+            return Err(invalid(format!(
+                "function `{}`: `{op}` has {} results but the callee returns {}",
+                self.name,
+                results.len(),
+                callee.rets.len()
+            )));
+        }
         let func = match callee.target {
             CallTarget::Func(func) => func,
             CallTarget::MemoryCopy => {
@@ -2413,14 +2440,6 @@ impl<'a> FunctionTranslator<'a> {
             }
         };
         let wb = *wb_ref;
-        if call_args.len() != callee.params.len() {
-            return Err(invalid(format!(
-                "function `{}`: `{op}` passes {} arguments but the callee takes {}",
-                self.name,
-                call_args.len(),
-                callee.params.len()
-            )));
-        }
         let mut args = Vec::with_capacity(call_args.len() + 2);
         // The value of `stack_top` that the call to an import must put back.
         let mut stack_top_before = None;
@@ -2460,27 +2479,12 @@ impl<'a> FunctionTranslator<'a> {
             }
             None => None,
         };
-        for (index, &arg) in call_args.iter().enumerate() {
-            if function.dfg.value_ty(arg) != callee.params[index] {
-                return Err(invalid(format!(
-                    "function `{}`: `{op}` argument {index} does not have the parameter type",
-                    self.name
-                )));
-            }
+        for &arg in call_args {
             if self.is_wide(arg) {
                 args.extend(self.wide_operand(wb, arg)?);
             } else {
                 args.push(self.operand(wb, arg)?);
             }
-        }
-        let results = function.dfg.inst_results(inst_id);
-        if results.len() != callee.rets.len() {
-            return Err(invalid(format!(
-                "function `{}`: `{op}` has {} results but the callee returns {}",
-                self.name,
-                results.len(),
-                callee.rets.len()
-            )));
         }
 
         let mut carriers = Vec::new();
