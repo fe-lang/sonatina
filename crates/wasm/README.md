@@ -114,7 +114,7 @@ the native target. Slot contents are not initialized.
 
 There is no mutable stack pointer, so a trap leaves nothing to repair. An
 exported function is a wrapper that starts the stack at the `stack_top` global of
-the module (initially the start of region 3) and calls the function with it.
+the module (initially the start of region 4) and calls the function with it.
 A call to an import first stores the end of its caller's frame in that global, so
 that an export that the host calls back runs above the caller's frames, and puts
 the global back when the import returns. The wrapper of an export also restores
@@ -187,10 +187,10 @@ from the top of the heap, so an export must not keep heap data for a later call.
 A block that the call took from a free list, and did not free, stays allocated,
 as it would on a native target. The memory that the heap grew stays; a release
 does not shrink it. Releasing to a mark that an earlier release has already
-passed traps, which catches a host that releases twice. The release walks every
-free list once and checks each block it visits (aligned, inside the heap, in the
-state "free"), and it traps if a list is damaged, for example by a write to a
-freed block.
+passed traps, which catches a host that releases twice. The release first
+walks every free list and checks each block it visits (aligned, inside the heap,
+in the state "free"), and it traps, changing nothing, if a list is damaged, for
+example by a write to a freed block. Only a second walk unlinks.
 
 A call that frees what it allocates, outside any mark, does not make the heap
 grow: freed blocks are reused. A call with a text argument is bounded between

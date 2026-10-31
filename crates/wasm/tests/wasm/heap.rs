@@ -387,6 +387,22 @@ fn a_bad_mark_traps_and_changes_nothing() {
 }
 
 #[test]
+fn a_release_that_finds_a_damaged_list_traps_and_changes_nothing() {
+    let mut machine = machine(OptLevel::O0, usize::MAX);
+    let before = mark(&mut machine);
+    let blocks = [16, 16, 32].map(|size| m(&mut machine, size));
+    for block in blocks {
+        free(&mut machine, block).unwrap();
+    }
+    // A use after free damages the link of the last list the walk visits.
+    machine.write(blocks[2], &8u32.to_le_bytes());
+    let lists = machine.read(DATA_BASE as u32, 128);
+    assert!(release(&mut machine, before).is_err());
+    assert_eq!(machine.read(DATA_BASE as u32, 128), lists);
+    assert_eq!(mark(&mut machine), blocks[2] + 32, "the top did not move");
+}
+
+#[test]
 fn the_host_allocator_never_reuses_a_listed_block_and_returns_zeroes() {
     for level in LEVELS {
         let mut machine = machine(level, usize::MAX);

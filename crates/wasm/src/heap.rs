@@ -526,11 +526,11 @@ pub(super) fn build_free(
 ///
 /// `mark` must be 16-byte aligned, not below the start of the heap and not above
 /// the top; otherwise the call traps and changes nothing. Then every free list is
-/// walked once, and each free block that does not end at or below `mark` is
-/// unlinked, keeping the order of the others. The walk checks every node it
-/// visits (aligned, inside the heap, state `FREE`) and allows at most as many
-/// nodes as the heap can hold, and traps otherwise, which stops a loop made by
-/// damage to a freed block. Only then are the bytes from `mark` to the top
+/// walked to check every node (aligned, inside the heap, state `FREE`), with at
+/// most as many nodes as the heap can hold, and the call traps otherwise, still
+/// changing nothing; this stops a loop made by damage to a freed block. A second
+/// walk unlinks each free block that does not end at or below `mark`, keeping
+/// the order of the others. Only then are the bytes from `mark` to the top
 /// cleared and the top moved back to `mark`, so the blocks the host allocator
 /// hands out next are zero again.
 ///
@@ -550,15 +550,6 @@ pub(super) fn build_release(
 
     let trap = body.add_block();
     body.set_terminator(trap, Terminator::Unreachable);
-    let walk = body.add_block();
-    let header = body.add_block();
-    let next_class = body.add_block();
-    let load_head = body.add_block();
-    let visit = body.add_block();
-    let check_state = body.add_block();
-    let test_end = body.add_block();
-    let unlink = body.add_block();
-    let keep = body.add_block();
     let clear = body.add_block();
 
     // The mark must be a valid one.
@@ -576,197 +567,223 @@ pub(super) fn build_release(
     let bad_low = e.op(Operator::I32Ne, &[low_bits, no_bits], WType::I32);
     let bad = e.op(Operator::I32Or, &[below, above], WType::I32);
     let bad = e.op(Operator::I32Or, &[bad, bad_low], WType::I32);
+
+    // Two walks over every list, each from the first list and with a budget of
+    // the most nodes the heap can hold (each block takes at least 32 bytes). The
+    // first only checks the nodes, so that a damaged list traps before anything
+    // is written; the second unlinks. They are built last first, so that each
+    // knows the block that follows it.
+    let mut exit = clear;
+    for unlinks in [true, false] {
+        let walk = body.add_block();
+        let header = body.add_block();
+        let next_class = body.add_block();
+        let load_head = body.add_block();
+        let visit = body.add_block();
+        let check_state = body.add_block();
+        let test_end = body.add_block();
+        let keep = body.add_block();
+
+        let mut w = Emit {
+            body: &mut body,
+            block: walk,
+        };
+        let first_class = w.c32(MIN_CLASS);
+        let first_head = list_head(&mut w, lists, first_class);
+        let first_node = w.op(
+            Operator::I32Load {
+                memory: word(memory),
+            },
+            &[first_head],
+            WType::I32,
+        );
+        let span = w.op(Operator::I32Sub, &[top_value, start], WType::I32);
+        let five = w.c32(5);
+        let nodes = w.op(Operator::I32ShrU, &[span, five], WType::I32);
+        let one = w.c32(1);
+        let budget = w.op(Operator::I32Add, &[nodes, one], WType::I32);
+        body.set_terminator(
+            walk,
+            Terminator::Br {
+                target: target(header, vec![first_class, first_head, first_node, budget]),
+            },
+        );
+
+        // The loop over the nodes of all lists.
+        let class = body.add_blockparam(header, WType::I32);
+        let link = body.add_blockparam(header, WType::I32);
+        let node = body.add_blockparam(header, WType::I32);
+        let left = body.add_blockparam(header, WType::I32);
+        let end_of_list = Emit {
+            body: &mut body,
+            block: header,
+        }
+        .op(Operator::I32Eqz, &[node], WType::I32);
+        body.set_terminator(
+            header,
+            Terminator::CondBr {
+                cond: end_of_list,
+                if_true: target(next_class, vec![]),
+                if_false: target(visit, vec![]),
+            },
+        );
+
+        // The next list, or the end of the walk.
+        let mut n = Emit {
+            body: &mut body,
+            block: next_class,
+        };
+        let one = n.c32(1);
+        let next = n.op(Operator::I32Add, &[class, one], WType::I32);
+        let last = n.c32(CLASSES);
+        let done = n.op(Operator::I32Eq, &[next, last], WType::I32);
+        body.set_terminator(
+            next_class,
+            Terminator::CondBr {
+                cond: done,
+                if_true: target(exit, vec![]),
+                if_false: target(load_head, vec![]),
+            },
+        );
+        let mut h = Emit {
+            body: &mut body,
+            block: load_head,
+        };
+        let next_head = list_head(&mut h, lists, next);
+        let next_node = h.op(
+            Operator::I32Load {
+                memory: word(memory),
+            },
+            &[next_head],
+            WType::I32,
+        );
+        body.set_terminator(
+            load_head,
+            Terminator::Br {
+                target: target(header, vec![next, next_head, next_node, left]),
+            },
+        );
+
+        // A node must be aligned, inside the heap, and the walk must not have run
+        // out of budget.
+        let mut v = Emit {
+            body: &mut body,
+            block: visit,
+        };
+        let align_mask = v.c32(ALIGN - 1);
+        let low_bits = v.op(Operator::I32And, &[node, align_mask], WType::I32);
+        let no_bits = v.c32(0);
+        let misaligned = v.op(Operator::I32Ne, &[low_bits, no_bits], WType::I32);
+        let first_payload = v.c32(heap_start + HEADER);
+        let before = v.op(Operator::I32LtU, &[node, first_payload], WType::I32);
+        let beyond = v.op(Operator::I32GeU, &[node, top_value], WType::I32);
+        let exhausted = v.op(Operator::I32Eqz, &[left], WType::I32);
+        let bad = v.op(Operator::I32Or, &[misaligned, before], WType::I32);
+        let bad = v.op(Operator::I32Or, &[bad, beyond], WType::I32);
+        let bad = v.op(Operator::I32Or, &[bad, exhausted], WType::I32);
+        body.set_terminator(
+            visit,
+            Terminator::CondBr {
+                cond: bad,
+                if_true: target(trap, vec![]),
+                if_false: target(check_state, vec![]),
+            },
+        );
+
+        // The node must be a free block.
+        let mut s = Emit {
+            body: &mut body,
+            block: check_state,
+        };
+        let twelve = s.c32(HEADER - 4);
+        let state_address = s.op(Operator::I32Sub, &[node, twelve], WType::I32);
+        let state = s.op(
+            Operator::I32Load {
+                memory: word(memory),
+            },
+            &[state_address],
+            WType::I32,
+        );
+        let free = s.c32(FREE);
+        let not_free = s.op(Operator::I32Ne, &[state, free], WType::I32);
+        body.set_terminator(
+            check_state,
+            Terminator::CondBr {
+                cond: not_free,
+                if_true: target(trap, vec![]),
+                if_false: target(test_end, vec![]),
+            },
+        );
+
+        // Does the block end above the mark?
+        let mut t = Emit {
+            body: &mut body,
+            block: test_end,
+        };
+        let after = t.op(
+            Operator::I32Load {
+                memory: word(memory),
+            },
+            &[node],
+            WType::I32,
+        );
+        let one = t.c32(1);
+        let left_after = t.op(Operator::I32Sub, &[left, one], WType::I32);
+        if unlinks {
+            let one64 = t.c64(1);
+            let class64 = t.op(Operator::I64ExtendI32U, &[class], WType::I64);
+            let payload = t.op(Operator::I64Shl, &[one64, class64], WType::I64);
+            let node64 = t.op(Operator::I64ExtendI32U, &[node], WType::I64);
+            let block_end = t.op(Operator::I64Add, &[node64, payload], WType::I64);
+            let mark64 = t.op(Operator::I64ExtendI32U, &[mark], WType::I64);
+            let above_mark = t.op(Operator::I64GtU, &[block_end, mark64], WType::I32);
+            let unlink = body.add_block();
+            body.set_terminator(
+                test_end,
+                Terminator::CondBr {
+                    cond: above_mark,
+                    if_true: target(unlink, vec![]),
+                    if_false: target(keep, vec![]),
+                },
+            );
+            // Unlink the node: the link before it now names the node after it.
+            body.add_op(
+                unlink,
+                Operator::I32Store {
+                    memory: word(memory),
+                },
+                &[link, after],
+                &[],
+            );
+            body.set_terminator(
+                unlink,
+                Terminator::Br {
+                    target: target(header, vec![class, link, after, left_after]),
+                },
+            );
+        } else {
+            body.set_terminator(
+                test_end,
+                Terminator::Br {
+                    target: target(keep, vec![]),
+                },
+            );
+        }
+        // Keep the node: it holds the link to the node after it.
+        body.set_terminator(
+            keep,
+            Terminator::Br {
+                target: target(header, vec![class, node, after, left_after]),
+            },
+        );
+        exit = walk;
+    }
     body.set_terminator(
         entry,
         Terminator::CondBr {
             cond: bad,
             if_true: target(trap, vec![]),
-            if_false: target(walk, vec![]),
-        },
-    );
-
-    // The first list and the most nodes the heap can hold (each block takes at
-    // least 32 bytes).
-    let mut w = Emit {
-        body: &mut body,
-        block: walk,
-    };
-    let first_class = w.c32(MIN_CLASS);
-    let first_head = list_head(&mut w, lists, first_class);
-    let first_node = w.op(
-        Operator::I32Load {
-            memory: word(memory),
-        },
-        &[first_head],
-        WType::I32,
-    );
-    let span = w.op(Operator::I32Sub, &[top_value, start], WType::I32);
-    let five = w.c32(5);
-    let nodes = w.op(Operator::I32ShrU, &[span, five], WType::I32);
-    let one = w.c32(1);
-    let budget = w.op(Operator::I32Add, &[nodes, one], WType::I32);
-    body.set_terminator(
-        walk,
-        Terminator::Br {
-            target: target(header, vec![first_class, first_head, first_node, budget]),
-        },
-    );
-
-    // The loop over the nodes of all lists.
-    let class = body.add_blockparam(header, WType::I32);
-    let link = body.add_blockparam(header, WType::I32);
-    let node = body.add_blockparam(header, WType::I32);
-    let left = body.add_blockparam(header, WType::I32);
-    let end_of_list = Emit {
-        body: &mut body,
-        block: header,
-    }
-    .op(Operator::I32Eqz, &[node], WType::I32);
-    body.set_terminator(
-        header,
-        Terminator::CondBr {
-            cond: end_of_list,
-            if_true: target(next_class, vec![]),
-            if_false: target(visit, vec![]),
-        },
-    );
-
-    // The next list, or the end of the walk.
-    let mut n = Emit {
-        body: &mut body,
-        block: next_class,
-    };
-    let one = n.c32(1);
-    let next = n.op(Operator::I32Add, &[class, one], WType::I32);
-    let last = n.c32(CLASSES);
-    let done = n.op(Operator::I32Eq, &[next, last], WType::I32);
-    body.set_terminator(
-        next_class,
-        Terminator::CondBr {
-            cond: done,
-            if_true: target(clear, vec![]),
-            if_false: target(load_head, vec![]),
-        },
-    );
-    let mut h = Emit {
-        body: &mut body,
-        block: load_head,
-    };
-    let next_head = list_head(&mut h, lists, next);
-    let next_node = h.op(
-        Operator::I32Load {
-            memory: word(memory),
-        },
-        &[next_head],
-        WType::I32,
-    );
-    body.set_terminator(
-        load_head,
-        Terminator::Br {
-            target: target(header, vec![next, next_head, next_node, left]),
-        },
-    );
-
-    // A node must be aligned, inside the heap, and the walk must not have run
-    // out of budget.
-    let mut v = Emit {
-        body: &mut body,
-        block: visit,
-    };
-    let align_mask = v.c32(ALIGN - 1);
-    let low_bits = v.op(Operator::I32And, &[node, align_mask], WType::I32);
-    let no_bits = v.c32(0);
-    let misaligned = v.op(Operator::I32Ne, &[low_bits, no_bits], WType::I32);
-    let first_payload = v.c32(heap_start + HEADER);
-    let before = v.op(Operator::I32LtU, &[node, first_payload], WType::I32);
-    let beyond = v.op(Operator::I32GeU, &[node, top_value], WType::I32);
-    let exhausted = v.op(Operator::I32Eqz, &[left], WType::I32);
-    let bad = v.op(Operator::I32Or, &[misaligned, before], WType::I32);
-    let bad = v.op(Operator::I32Or, &[bad, beyond], WType::I32);
-    let bad = v.op(Operator::I32Or, &[bad, exhausted], WType::I32);
-    body.set_terminator(
-        visit,
-        Terminator::CondBr {
-            cond: bad,
-            if_true: target(trap, vec![]),
-            if_false: target(check_state, vec![]),
-        },
-    );
-
-    // The node must be a free block.
-    let mut s = Emit {
-        body: &mut body,
-        block: check_state,
-    };
-    let twelve = s.c32(HEADER - 4);
-    let state_address = s.op(Operator::I32Sub, &[node, twelve], WType::I32);
-    let state = s.op(
-        Operator::I32Load {
-            memory: word(memory),
-        },
-        &[state_address],
-        WType::I32,
-    );
-    let free = s.c32(FREE);
-    let not_free = s.op(Operator::I32Ne, &[state, free], WType::I32);
-    body.set_terminator(
-        check_state,
-        Terminator::CondBr {
-            cond: not_free,
-            if_true: target(trap, vec![]),
-            if_false: target(test_end, vec![]),
-        },
-    );
-
-    // Does the block end above the mark?
-    let mut t = Emit {
-        body: &mut body,
-        block: test_end,
-    };
-    let after = t.op(
-        Operator::I32Load {
-            memory: word(memory),
-        },
-        &[node],
-        WType::I32,
-    );
-    let one64 = t.c64(1);
-    let class64 = t.op(Operator::I64ExtendI32U, &[class], WType::I64);
-    let payload = t.op(Operator::I64Shl, &[one64, class64], WType::I64);
-    let node64 = t.op(Operator::I64ExtendI32U, &[node], WType::I64);
-    let block_end = t.op(Operator::I64Add, &[node64, payload], WType::I64);
-    let mark64 = t.op(Operator::I64ExtendI32U, &[mark], WType::I64);
-    let above_mark = t.op(Operator::I64GtU, &[block_end, mark64], WType::I32);
-    let one = t.c32(1);
-    let left_after = t.op(Operator::I32Sub, &[left, one], WType::I32);
-    body.set_terminator(
-        test_end,
-        Terminator::CondBr {
-            cond: above_mark,
-            if_true: target(unlink, vec![]),
-            if_false: target(keep, vec![]),
-        },
-    );
-    // Unlink the node: the link before it now names the node after it.
-    body.add_op(
-        unlink,
-        Operator::I32Store {
-            memory: word(memory),
-        },
-        &[link, after],
-        &[],
-    );
-    body.set_terminator(
-        unlink,
-        Terminator::Br {
-            target: target(header, vec![class, link, after, left_after]),
-        },
-    );
-    // Keep the node: it holds the link to the node after it.
-    body.set_terminator(
-        keep,
-        Terminator::Br {
-            target: target(header, vec![class, node, after, left_after]),
+            if_false: target(exit, vec![]),
         },
     );
 
