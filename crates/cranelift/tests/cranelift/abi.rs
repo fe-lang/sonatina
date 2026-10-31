@@ -141,7 +141,11 @@ block0:
         .unwrap();
         let run: unsafe extern "C" fn(i64, *const u8, *mut u8) =
             unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
-        let make_quad: unsafe extern "C" fn(*mut u8, i64, *const u8) =
+        // A 32-byte result is returned through memory, at the address each
+        // target's C convention passes: `rdi` on x86_64, `x8` on aarch64.
+        #[repr(C, align(8))]
+        struct QuadBytes([u8; 32]);
+        let make_quad: unsafe extern "C" fn(i64, *const u8) -> QuadBytes =
             unsafe { std::mem::transmute(artifact.function_address("make_quad").unwrap()) };
         let sum_quad: unsafe extern "C" fn(*const u8) -> i64 =
             unsafe { std::mem::transmute(artifact.function_address("sum_quad").unwrap()) };
@@ -178,8 +182,7 @@ block0:
         }
         // `@Quad`: the i8 at 0, the i64 at 8, the i16 at 16, the pointer at 24.
         for value in [0i64, 42] {
-            let mut bytes = [0xa5u8; 32];
-            unsafe { make_quad(bytes.as_mut_ptr(), value, pointer) };
+            let bytes = unsafe { make_quad(value, pointer) }.0;
             let mut expected = [0u8; 32];
             if value != 0 {
                 expected[0] = 1;
