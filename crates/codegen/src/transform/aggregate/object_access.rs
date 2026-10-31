@@ -81,7 +81,8 @@ pub(crate) enum MemoryReach {
     /// An exposed object's storage: memory other code may reach, never an
     /// allocation the function makes itself.
     Escaped,
-    /// Any memory, through an external or unknown reference.
+    /// Any memory, through an external or unknown reference, or an `alloca`
+    /// of the function viewed as an object.
     Any,
 }
 
@@ -116,14 +117,28 @@ impl RawObjectAccesses {
             return this;
         }
         let facts = ObjectAccessFacts::new(func, summaries);
+        // Raw accesses reach an `alloca` through its address whether or not
+        // anything exposes it, and raw analysis has no location for some part
+        // of an allocation, so a view of one may access any memory.
+        let root_reach = |root: RootValue| {
+            if func
+                .dfg
+                .value_inst(root.value())
+                .is_some_and(|inst| func.dfg.downcast::<&data::Alloca>(inst).is_some())
+            {
+                Some(MemoryReach::Any)
+            } else {
+                facts.exposed(root).then_some(MemoryReach::Escaped)
+            }
+        };
         let reach = |accesses: &AccessSet| {
             accesses
                 .iter()
                 .filter_map(|access| match *access {
-                    ObjectAccess::Exact(projection) | ObjectAccess::Within(projection) => facts
-                        .exposed(projection.root_value)
-                        .then_some(MemoryReach::Escaped),
-                    ObjectAccess::Root(root) => facts.exposed(root).then_some(MemoryReach::Escaped),
+                    ObjectAccess::Exact(projection) | ObjectAccess::Within(projection) => {
+                        root_reach(projection.root_value)
+                    }
+                    ObjectAccess::Root(root) => root_reach(root),
                     ObjectAccess::External | ObjectAccess::Unknown => Some(MemoryReach::Any),
                 })
                 .max()

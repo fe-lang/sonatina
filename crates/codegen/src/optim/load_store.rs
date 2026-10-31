@@ -1335,17 +1335,21 @@ block0:
     }
 
     /// Object `v0` that may share raw pointer `v9`'s memory: an argument a
-    /// caller may alias, and a view of `v9`.
-    const SHARED: [(&str, &str); 2] = [
+    /// caller may alias, a view of `v9`, and a view of `v9`'s `alloca`.
+    const SHARED: [(&str, &str); 3] = [
         ("v0.objref<i256>, v9.*i256", ""),
         ("v9.*i256", "v0.objref<i256> = obj.from_ptr v9;"),
+        (
+            "",
+            "v9.*i256 = alloca i256;\n    v0.objref<i256> = obj.from_ptr v9;",
+        ),
     ];
 
     #[test]
     fn object_stores_that_may_share_memory_write_it() {
         for (params, view) in SHARED {
             let dumped = solve(&format!(
-                "func public %f({params}) -> i256 {{\nblock0:\n    mstore v9 1.i256 i256;\n    {view}\n    obj.store v0 5.i256;\n    v2.i256 = mload v9 i256;\n    return v2;\n}}"
+                "func public %f({params}) -> i256 {{\nblock0:\n    {view}\n    mstore v9 1.i256 i256;\n    obj.store v0 5.i256;\n    v2.i256 = mload v9 i256;\n    return v2;\n}}"
             ));
             assert!(dumped.contains("= mload"), "{dumped}");
         }
@@ -1354,6 +1358,15 @@ block0:
             "func public %f(noalias v0.objref<i256>, v9.*i256) -> i256 {\nblock0:\n    mstore v9 1.i256 i256;\n    obj.store v0 5.i256;\n    v2.i256 = mload v9 i256;\n    return v2;\n}",
         );
         assert!(!dumped.contains("mload"), "{dumped}");
+    }
+
+    #[test]
+    fn object_stores_through_unexposed_alloca_views_write_it() {
+        // Nothing exposes the `alloca`, but its view writes it between loads.
+        let dumped = solve(
+            "func public %f() -> i256 {\nblock0:\n    v9.*i256 = alloca i256;\n    v0.objref<i256> = obj.from_ptr v9;\n    obj.store v0 6.i256;\n    v1.i256 = mload v9 i256;\n    obj.store v0 7.i256;\n    v2.i256 = mload v9 i256;\n    v3.i256 = add v1 v2;\n    return v3;\n}",
+        );
+        assert_eq!(dumped.matches("= mload").count(), 2, "{dumped}");
     }
 
     #[test]
@@ -1373,9 +1386,9 @@ block0:
     fn object_loads_that_may_share_memory_read_it() {
         for (params, view) in SHARED {
             let dumped = solve(&format!(
-                "func public %f({params}) -> i256 {{\nblock0:\n    mstore v9 1.i256 i256;\n    {view}\n    v2.i256 = obj.load v0;\n    mstore v9 3.i256 i256;\n    return v2;\n}}"
+                "func public %f({params}) -> i256 {{\nblock0:\n    {view}\n    mstore v9 1.i256 i256;\n    v2.i256 = obj.load v0;\n    mstore v9 3.i256 i256;\n    return v2;\n}}"
             ));
-            assert_eq!(dumped.matches("mstore").count(), 2, "{dumped}");
+            assert!(dumped.contains(" 1.i256 i256;"), "{dumped}");
         }
     }
 

@@ -375,7 +375,8 @@ fn enum_instructions_are_legalized_before_translation() {
 #[test]
 fn views_of_host_memory_are_objects_in_place() {
     // One `%bump` serves a local object and a view of host memory; a raw load
-    // after a store through a view reads the stored value.
+    // after a store through a view reads the stored value, also when the view
+    // is of an `alloca`.
     let source = r#"
 type @Rec = { i8, i64, i256 };
 func private %bump(v0.objref<@Rec>, v1.i64) {
@@ -419,6 +420,24 @@ block0:
     v4.i64 = mload v1 i64;
     return v4;
 }
+func public %view_alloca(v1.i64) -> i64 {
+block0:
+    v0.*@Rec = alloca @Rec;
+    v2.objref<@Rec> = obj.from_ptr v0;
+    v3.objref<i64> = obj.proj v2 1.i8;
+    v4.*i64 = gep v0 0.i64 1.i64;
+    obj.store v3 v1;
+    v5.i64 = mload v4 i64;
+    mstore v4 7.i64 i64;
+    v6.i64 = obj.load v3;
+    obj.store v3 9.i64;
+    v7.i64 = mload v4 i64;
+    v8.i64 = mul v5 100.i64;
+    v9.i64 = mul v6 10.i64;
+    v10.i64 = add v8 v9;
+    v11.i64 = add v10 v7;
+    return v11;
+}
 "#;
     #[repr(C, align(16))]
     struct Rec([u8; 48]);
@@ -437,6 +456,8 @@ block0:
             unsafe { std::mem::transmute(function("bump_local")) };
         let store_through_view: unsafe extern "C" fn(*mut Rec) -> i64 =
             unsafe { std::mem::transmute(function("store_through_view")) };
+        let view_alloca: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(function("view_alloca")) };
         let mut rec = Rec([0; 48]);
         unsafe { bump_host(&mut rec, 7) };
         unsafe { bump_host(&mut rec, 7) };
@@ -446,6 +467,8 @@ block0:
         assert_eq!(rec.0[16..48], wide, "{level:?}");
         assert_eq!(unsafe { bump_local(3) }, 3, "{level:?}");
         assert_eq!(unsafe { store_through_view(&mut rec) }, 5, "{level:?}");
+        // Raw and object accesses of the `alloca` each read the other's store.
+        assert_eq!(unsafe { view_alloca(5) }, 579, "{level:?}");
     }
 }
 
