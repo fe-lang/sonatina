@@ -109,6 +109,93 @@ block0:
 }
 
 #[test]
+fn tail_calls_return_small_aggregates_as_parts() {
+    // `@Quad` is held in registers. Each tail call hands nine result parts
+    // on, which take all of the `tail` convention's return registers and the
+    // caller's return area.
+    let source = r#"
+type @Quad = {i8, i64, i16, i64};
+func private %even(v0.i64, v1.i64) -> (@Quad, i64, @Quad) {
+block0:
+    v2.i1 = eq v0 0.i64;
+    br v2 block1 block2;
+block1:
+    v3.@Quad = insert_value undef.@Quad 0.i64 1.i8;
+    v4.@Quad = insert_value v3 1.i64 v1;
+    v5.@Quad = insert_value v4 2.i64 -3.i16;
+    v6.@Quad = insert_value v5 3.i64 77.i64;
+    v7.@Quad = insert_value v6 0.i64 9.i8;
+    return (v6, v1, v7);
+block2:
+    v8.i64 = sub v0 1.i64;
+    v9.i64 = add v1 2.i64;
+    (v10.@Quad, v11.i64, v12.@Quad) = call %odd v8 v9;
+    return (v10, v11, v12);
+}
+
+func private %odd(v0.i64, v1.i64) -> (@Quad, i64, @Quad) {
+block0:
+    v2.i1 = eq v0 0.i64;
+    br v2 block1 block2;
+block1:
+    v3.@Quad = insert_value undef.@Quad 0.i64 2.i8;
+    v4.@Quad = insert_value v3 1.i64 v1;
+    return (v4, v1, v4);
+block2:
+    v5.i64 = sub v0 1.i64;
+    v6.i64 = add v1 1.i64;
+    (v7.@Quad, v8.i64, v9.@Quad) = call %even v5 v6;
+    return (v7, v8, v9);
+}
+
+func public %run(v0.i64, v1.*i8) {
+block0:
+    (v2.@Quad, v3.i64, v4.@Quad) = call %even v0 0.i64;
+    v5.*@Quad = bitcast v1 *@Quad;
+    mstore v5 v2 @Quad;
+    v6.*i8 = gep v1 32.i64;
+    v7.*i64 = bitcast v6 *i64;
+    mstore v7 v3 i64;
+    v8.*i8 = gep v1 40.i64;
+    v9.*@Quad = bitcast v8 *@Quad;
+    mstore v9 v4 @Quad;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let run: unsafe extern "C" fn(i64, *mut u8) =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        for depth in [DEPTH, DEPTH + 1] {
+            let mut result = [0xa5u8; 72];
+            unsafe { run(depth, result.as_mut_ptr()) };
+            // An even depth ends in `%even`, an odd one in `%odd`, whose
+            // fields it leaves undef are zero.
+            let sum = (depth / 2 * 3 + depth % 2 * 2).to_le_bytes();
+            let mut quad = [0u8; 32];
+            quad[8..16].copy_from_slice(&sum);
+            let mut second = quad;
+            if depth % 2 == 0 {
+                quad[16..18].copy_from_slice(&(-3i16).to_le_bytes());
+                quad[24..32].copy_from_slice(&77i64.to_le_bytes());
+                second = quad;
+                (quad[0], second[0]) = (1, 9);
+            } else {
+                (quad[0], second[0]) = (2, 2);
+            }
+            let expected = [&quad[..], &sum, &second].concat();
+            assert_eq!(result[..], expected, "{level:?} {depth}");
+        }
+    }
+}
+
+#[test]
 fn dispatch_arms_tail_call_through_their_join() {
     // A `match` whose arms make calls joins their results in a block that
     // returns them, as an interpreter's dispatch does.

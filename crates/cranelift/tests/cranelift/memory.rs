@@ -745,9 +745,10 @@ block0:
 fn field_wise_copies_keep_fields_and_zero_padding() {
     // Copies split at narrow fields and overlapping enum payloads, and write
     // zeros to padding. Each copy kind passes the values on: `mload`, phis,
-    // object stores and loads, returns and `mstore`.
+    // object stores and loads, returns and `mstore`. Both types have too many
+    // fields to be held in registers.
     let source = r#"
-type @Mixed = { i1, i32, i16, i64 };
+type @Mixed = { i1, i32, i16, i64, i8 };
 type @Choice = enum { #Byte(i8), #Word(i64), #Flag(i1, i32) };
 func private %pass(v0.@Choice) -> @Choice {
 block0:
@@ -787,9 +788,10 @@ block2:
         .unwrap();
         let copy: unsafe extern "C" fn(*const u8, *mut u8, *const u8, *mut u8, i64) =
             unsafe { std::mem::transmute(artifact.function_address("copy").unwrap()) };
-        // `@Mixed`: i1 at 0, i32 at 4, i16 at 8, i64 at 16. `@Choice`: an i8
-        // tag, then payloads from 8: `#Flag`'s i1 at 8 and i32 at 12.
-        let mut mixed: [u8; 24] = std::array::from_fn(|i| (i * 37 + 11) as u8);
+        // `@Mixed`: i1 at 0, i32 at 4, i16 at 8, i64 at 16, i8 at 24.
+        // `@Choice`: an i8 tag, then payloads from 8: `#Flag`'s i1 at 8 and
+        // i32 at 12.
+        let mut mixed: [u8; 32] = std::array::from_fn(|i| (i * 37 + 11) as u8);
         mixed[0] = 1;
         let mut choice: [u8; 16] = std::array::from_fn(|i| (i * 53 + 5) as u8);
         choice[0] = 2;
@@ -797,10 +799,11 @@ block2:
         let mut expected_mixed = mixed;
         expected_mixed[1..4].fill(0);
         expected_mixed[10..16].fill(0);
+        expected_mixed[25..32].fill(0);
         let mut expected_choice = choice;
         expected_choice[1..8].fill(0);
         for rounds in [1, 3] {
-            let (mut mixed_out, mut choice_out) = ([0xa5u8; 24], [0xa5u8; 16]);
+            let (mut mixed_out, mut choice_out) = ([0xa5u8; 32], [0xa5u8; 16]);
             unsafe {
                 copy(
                     mixed.as_ptr(),
