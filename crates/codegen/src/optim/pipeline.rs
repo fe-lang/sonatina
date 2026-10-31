@@ -264,6 +264,7 @@ impl Pass {
             Pass::AggregateCombine
                 | Pass::ObjectLoadStore
                 | Pass::AggregateScalarize
+                | Pass::LoadStore
                 | Pass::Licm
                 | Pass::Gvn
         )
@@ -1202,6 +1203,42 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.add_step(Step::FuncPasses(passes.to_vec()));
         pipeline.run(module);
+    }
+
+    #[test]
+    fn load_store_forwards_across_calls_without_memory_accesses() {
+        // `load_store` reads the callee's object accesses from the object
+        // effect summaries; without them every call may access any memory.
+        let mut module = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %inc(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    return v1;
+}
+func public %f(v0.*i256, v1.i256) -> i256 {
+block0:
+    mstore v0 1.i256 i256;
+    v2.i256 = call %inc v1;
+    v3.i256 = mload v0 i256;
+    v4.i256 = add v2 v3;
+    return v4;
+}
+"#,
+        )
+        .unwrap()
+        .module;
+        run_test_func_passes(&mut module, &[Pass::LoadStore]);
+        let f = module
+            .funcs()
+            .into_iter()
+            .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == "f"))
+            .unwrap();
+        module.func_store.view(f, |func| {
+            let text = FuncWriter::new(f, func).dump_string();
+            assert!(!text.contains("mload"), "{text}");
+        });
     }
 
     #[test]
