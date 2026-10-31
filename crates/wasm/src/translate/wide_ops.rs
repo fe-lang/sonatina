@@ -273,8 +273,10 @@ impl FunctionTranslator<'_> {
 }
 
 impl FunctionTranslator<'_> {
-    /// `evm_add_mod` or `evm_mul_mod` on 256-bit operands: a call to the helper
-    /// function. The sum or product is exact, and zero if the modulus is zero.
+    /// `evm_add_mod` or `evm_mul_mod`: a call to the 256-bit helper function,
+    /// with narrower operands zero-extended, as on the native target. The sum
+    /// or product is exact, and zero if the modulus is zero. The result is
+    /// below the modulus, so it fits the operands' width.
     pub(super) fn wide_modular(
         &mut self,
         wb: waffle::Block,
@@ -283,15 +285,19 @@ impl FunctionTranslator<'_> {
         operands: [ValueId; 3],
     ) -> Result<(), WasmError> {
         let name = self.function.dfg.inst(inst_id).as_text();
+        let ty = self.function.dfg.value_ty(operands[0]);
         if operands
             .iter()
-            .any(|&value| self.function.dfg.value_ty(value) != Type::I256)
+            .any(|&value| self.function.dfg.value_ty(value) != ty)
         {
-            return Err(super::unsupported(format!(
-                "function `{}`: `{name}` is lowered for 256-bit operands only",
+            return Err(super::invalid(format!(
+                "function `{}`: `{name}` operands have different types",
                 self.name
             )));
         }
+        let int = (ty != Type::I256)
+            .then(|| self.int_ty(name, ty))
+            .transpose()?;
         let func = if product {
             self.helper(self.wide_helpers.mulmod, "modular multiplication")?
         } else {
@@ -299,9 +305,22 @@ impl FunctionTranslator<'_> {
         };
         let mut args = Vec::with_capacity(3 * LIMBS);
         for value in operands {
-            args.extend(self.wide_operand(wb, value)?);
+            match int {
+                Some(int) => {
+                    let value = self.operand(wb, value)?;
+                    args.extend(self.emit(wb).wide_extend(int, false, value));
+                }
+                None => args.extend(self.wide_operand(wb, value)?),
+            }
         }
         let out = self.call_helper(wb, func, &args, &[WType::I64; LIMBS]);
-        self.define_wide(inst_id, 0, [out[0], out[1], out[2], out[3]])
+        let limbs = [out[0], out[1], out[2], out[3]];
+        match int {
+            Some(int) => {
+                let value = self.emit(wb).wide_trunc(int, limbs);
+                self.define(inst_id, 0, value, ty)
+            }
+            None => self.define_wide(inst_id, 0, limbs),
+        }
     }
 }

@@ -307,8 +307,9 @@ impl FunctionTranslator<'_> {
         }
     }
 
-    /// A pointer-like operand: an address. Fe holds a raw pointer in a 256-bit
-    /// integer; an address that does not fit in 32 bits traps.
+    /// A pointer-like operand: an address. An integer of any width is one too
+    /// (Fe holds a raw pointer in a 256-bit integer); an integer address that
+    /// does not fit in 32 bits traps.
     fn address_operand(
         &mut self,
         wb: &mut waffle::Block,
@@ -316,17 +317,10 @@ impl FunctionTranslator<'_> {
         id: ValueId,
     ) -> Result<V, WasmError> {
         let ty = self.function.dfg.value_ty(id);
-        if ty == Type::I256 {
-            return self.index32(wb, op, id, false);
+        if repr(&self.module.ctx, ty) == Some(Repr::Pointer) {
+            return self.operand(*wb, id);
         }
-        if ty != Type::I32 && repr(&self.module.ctx, ty) != Some(Repr::Pointer) {
-            return Err(unsupported(format!(
-                "function `{}`: `{op}` address of type {}; wasm32 addresses are pointers, i32 or i256",
-                self.name,
-                type_name(&self.module.ctx, ty)
-            )));
-        }
-        self.operand(*wb, id)
+        self.index32(wb, op, id, false)
     }
 
     /// An index, length or size operand as an `i32`, trapping if the value does
@@ -380,7 +374,9 @@ impl FunctionTranslator<'_> {
         Ok(self.emit(*wb).resize(int, Int::I32, signed, value))
     }
 
-    /// `index * scale` as an offset: a constant if the index is one.
+    /// `index * scale` as an offset: a constant if the index is one that
+    /// `index32` accepts. Any other constant goes through `index32` too, so it
+    /// traps when it is executed, as the same index computed at run time does.
     fn scaled_index(
         &mut self,
         wb: &mut waffle::Block,
@@ -389,19 +385,20 @@ impl FunctionTranslator<'_> {
         signed: bool,
         scale: u32,
     ) -> Result<Offset, WasmError> {
+        let range = if signed {
+            i128::from(i32::MIN)..=i128::from(i32::MAX)
+        } else {
+            0..=i128::from(u32::MAX)
+        };
         if let Some(value) = self
             .function
             .dfg
             .value_imm(id)
             .and_then(|imm| immediate_value(imm, signed))
+            .filter(|value| range.contains(value))
         {
-            let offset = value
-                .checked_mul(i128::from(scale))
-                .ok_or_else(|| self.offset_overflow(op))?;
-            // Offsets wrap like addresses; one that does not even fit in 64
-            // bits cannot be an address of this module.
-            let offset = i64::try_from(offset).map_err(|_| self.offset_overflow(op))?;
-            return Ok(Offset::Const(offset as u32));
+            // The product wraps like the `i32.mul` of a run-time index.
+            return Ok(Offset::Const((value * i128::from(scale)) as u32));
         }
         let index = self.index32(wb, op, id, signed)?;
         if scale == 1 {
@@ -1069,7 +1066,7 @@ impl FunctionTranslator<'_> {
     }
 
     /// `bitcast` between types of the same size. Scalars, pointers and
-    /// references of the same width share one representation. Anything else
+    /// references of the same size share one representation. Anything else
     /// goes through memory, as on the native target.
     pub(super) fn bitcast(
         &mut self,
@@ -1080,25 +1077,13 @@ impl FunctionTranslator<'_> {
         to_ty: Type,
     ) -> Result<(), WasmError> {
         let from_ty = self.function.dfg.value_ty(from);
+        if from_ty == Type::I256 && to_ty == Type::I256 {
+            let limbs = self.wide_operand(*wb, from)?;
+            return self.define_wide(inst_id, 0, limbs);
+        }
         let ctx = &self.module.ctx;
         let from_repr = repr(ctx, from_ty);
         let to_repr = repr(ctx, to_ty);
-        let bits = |representation: Option<Repr>| match representation {
-            Some(Repr::Int(int)) => Some(int.bits()),
-            Some(Repr::Pointer) => Some(32),
-            _ => None,
-        };
-        if let (Some(from_bits), Some(to_bits)) = (bits(from_repr), bits(to_repr)) {
-            if from_bits != to_bits {
-                return Err(invalid(format!(
-                    "function `{}`: `bitcast` between types of different widths",
-                    self.name
-                )));
-            }
-            // Same-width scalars and pointers share one representation.
-            let value = self.operand(*wb, from)?;
-            return self.define(inst_id, 0, value, to_ty);
-        }
         let (Some(from_repr), Some(to_repr)) = (from_repr, to_repr) else {
             let bad = if from_repr.is_none() { from_ty } else { to_ty };
             return Err(self.unsupported_type("`bitcast`", bad));
@@ -1110,6 +1095,16 @@ impl FunctionTranslator<'_> {
                 "function `{}`: `bitcast` between types of different sizes",
                 self.name
             )));
+        }
+        let scalar = |representation| matches!(representation, Repr::Int(_) | Repr::Pointer);
+        if scalar(from_repr) && scalar(to_repr) {
+            // Scalars and pointers of the same size share one carrier. An `i1`
+            // keeps only the low bit of an `i8`.
+            let mut value = self.operand(*wb, from)?;
+            if to_ty == Type::I1 && from_ty != Type::I1 {
+                value = self.emit(*wb).canonicalize(Int::I1, value);
+            }
+            return self.define(inst_id, 0, value, to_ty);
         }
         // Make the source addressable, then read it back as the new type.
         let source = match from_repr {
@@ -1164,7 +1159,8 @@ impl Access {
 /// The value of a small immediate, read as signed or unsigned.
 fn immediate_value(imm: Immediate, signed: bool) -> Option<i128> {
     Some(match (imm, signed) {
-        (Immediate::I1(value), _) => i128::from(value),
+        (Immediate::I1(value), true) => -i128::from(value),
+        (Immediate::I1(value), false) => i128::from(value),
         (Immediate::I8(value), true) => i128::from(value),
         (Immediate::I8(value), false) => i128::from(value as u8),
         (Immediate::I16(value), true) => i128::from(value),

@@ -25,6 +25,8 @@ mod heap;
 mod memory_and_calls;
 #[path = "wasm/memory_runtime.rs"]
 mod memory_runtime;
+#[path = "wasm/operands.rs"]
+mod operands;
 #[path = "wasm/shared_oracles.rs"]
 mod shared_oracles;
 #[path = "wasm/wide.rs"]

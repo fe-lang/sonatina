@@ -104,9 +104,10 @@ should treat regions 1 and 2 as owned by the module.
 Every function of such a module takes the address of the first free byte of the
 stack as a hidden first parameter. It places its frame there: one slot, with
 the alignment of its type, for each `alloca`, each `obj.alloc` (an object lives until
-its function returns, as the front end promises), each struct or array that an instruction builds (results of
-`insert_value`, `obj.load`, `mload` of an aggregate, a call that returns an
-aggregate, an aggregate `undef`), and each aggregate phi. It passes the end of
+its function returns, as the front end promises), each struct, array or enum
+that an instruction builds (results of `insert_value`, `enum.make`, `obj.load`,
+`mload` of an aggregate, a call that returns an aggregate, an aggregate `undef`),
+and each aggregate phi. It passes the end of
 its frame to the functions it calls. Frames are 16-byte aligned. A call whose
 frame does not fit below the end of the stack traps. Slots are static: an
 instruction in a loop uses the same slot on each iteration, as `alloca` does on
@@ -123,6 +124,11 @@ it was, except a trap during the call to an import: when the host throws an
 error or a callback traps, the module does not run again before the host call
 ends, and the frame of the caller stays reserved. Each such error costs the
 frame of one function.
+
+There are no tail calls: WAFFLE 0.3.3 has no `return_call`. The native backend
+makes the calls of a recursive cycle tail calls, so a deep tail recursion that
+runs in constant stack there takes a frame per call here and traps when the
+stack is full.
 
 ### The heap
 
@@ -236,9 +242,11 @@ aggregate combination and object returns the backend runs first.
   `memory.copy` (the ranges may overlap, the call returns its destination) and
   is not an import. A length that does not fit in 32 bits traps, and so does
   an address beyond the memory, even for a length of zero.
-- Fe holds raw pointers in 256-bit integers, so `mload`, `mstore`, `memzero`
-  and `gep` also take an `i256` address, which traps if it does not fit in 32
-  bits.
+- `mload`, `mstore`, `memzero`, `memcopy`, `gep` and `int_to_ptr` take an
+  integer address of any width as well as a pointer (Fe holds raw pointers in
+  256-bit integers). An address that does not fit in 32 bits traps.
+- A `gep` index behaves the same whether it is a constant or computed at run
+  time: one that does not fit in 32 bits traps when it is executed.
 - Aggregate `undef` is zero-filled storage.
 
 ## 256-bit integers
@@ -248,9 +256,13 @@ The backend supports `add`, `sub`, `mul`, `neg`, `udiv`, `sdiv`, `umod`, `smod`,
 `shl`, `shr`, `sar`, `and`, `or`, `xor`, `not`, all comparisons, `is_zero`,
 `zext`, `sext` and `trunc` between `i256` and the narrower types, the checked
 forms `uaddo`, `usubo`, `umulo`, `saddo`, `ssubo`, `smulo` and `snego`, loads and
-stores of `i256`, `bswap`, `ptr_to_int` to `i256` and `int_to_ptr` from `i256`. Not
-translated: the saturating forms. `int_to_ptr` traps if the value
-does not fit in 32 bits.
+stores of `i256`, `bswap`, `ptr_to_int` to `i256`, `int_to_ptr` from `i256` and
+`br_table` on `i256`. Not translated: the saturating forms. `int_to_ptr` traps
+if the value does not fit in 32 bits.
+
+`evm_add_mod` and `evm_mul_mod` compute at 256 bits for every width: narrower
+operands are zero-extended, as on the native target, so the sum or product
+does not wrap.
 
 Multiplication, division and variable shifts are functions of the module,
 emitted only when used. Division traps on a zero divisor. It is one 64-bit

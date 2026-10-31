@@ -150,6 +150,13 @@ fn type_name(ctx: &ModuleCtx, ty: Type) -> String {
     }
 }
 
+/// The value a `br_table` compares with its cases.
+#[derive(Clone, Copy)]
+enum Scrutinee {
+    Int(Int, V),
+    Wide(Limbs),
+}
+
 /// What a call goes to.
 #[derive(Clone, Copy)]
 enum CallTarget {
@@ -289,16 +296,13 @@ fn scan_module(module: &Module) -> Scan {
                         helpers.2 |= shl;
                         helpers.3 |= shr;
                     }
+                    // Modular arithmetic of every width runs at 256 bits.
                     match &kind {
-                        NativeInstKind::EvmAddMod(i)
-                            if function.dfg.value_ty(*i.lhs()) == Type::I256 =>
-                        {
+                        NativeInstKind::EvmAddMod(_) => {
                             helpers.1 = true;
                             helpers.4 = true;
                         }
-                        NativeInstKind::EvmMulMod(i)
-                            if function.dfg.value_ty(*i.lhs()) == Type::I256 =>
-                        {
+                        NativeInstKind::EvmMulMod(_) => {
                             helpers.1 = true;
                             helpers.5 = true;
                         }
@@ -2090,6 +2094,10 @@ impl<'a> FunctionTranslator<'a> {
                     let arg = self.wide_operand(*wb, *i.lhs())?;
                     let value = self.emit(*wb).wide_is_zero(arg);
                     self.define(inst_id, 0, value, Type::I1)?;
+                } else if self.is_pointer(function.dfg.value_ty(*i.lhs())) {
+                    let arg = self.operand(*wb, *i.lhs())?;
+                    let value = self.emit(*wb).is_zero(Int::I32, arg);
+                    self.define(inst_id, 0, value, Type::I1)?;
                 } else {
                     let (int, _, arg) = self.unary_operand(*wb, op, *i.lhs())?;
                     let value = self.emit(*wb).is_zero(int, arg);
@@ -2108,19 +2116,10 @@ impl<'a> FunctionTranslator<'a> {
                 if !self.is_pointer(to_ty) {
                     return Err(self.unsupported_type("`int_to_ptr` result", to_ty));
                 }
-                if self.is_wide(*i.from()) {
-                    // An address wider than 32 bits is not an address of this
-                    // module.
-                    let limbs = self.wide_operand(*wb, *i.from())?;
-                    let exceeds = self.emit(*wb).wide_exceeds_u32(limbs);
-                    self.trap_if(wb, exceeds);
-                    let value = self.emit(*wb).wide_trunc(Int::I32, limbs);
-                    self.define(inst_id, 0, value, to_ty)?;
-                } else {
-                    let (int, _, arg) = self.unary_operand(*wb, op, *i.from())?;
-                    let value = self.emit(*wb).resize(int, Int::I32, false, arg);
-                    self.define(inst_id, 0, value, to_ty)?;
-                }
+                // An address that does not fit in 32 bits is not an address of
+                // this module.
+                let value = self.index32(wb, op, *i.from(), false)?;
+                self.define(inst_id, 0, value, to_ty)?;
             }
             NativeInstKind::PtrToInt(i) => {
                 let from_ty = function.dfg.value_ty(*i.from());
@@ -2216,8 +2215,12 @@ impl<'a> FunctionTranslator<'a> {
             }
             NativeInstKind::BrTable(table) => {
                 let scrutinee_ty = function.dfg.value_ty(*table.scrutinee());
-                let int = self.int_ty(op, scrutinee_ty)?;
-                let scrutinee = self.operand(*wb, *table.scrutinee())?;
+                let scrutinee = if scrutinee_ty == Type::I256 {
+                    Scrutinee::Wide(self.wide_operand(*wb, *table.scrutinee())?)
+                } else {
+                    let int = self.int_ty(op, scrutinee_ty)?;
+                    Scrutinee::Int(int, self.operand(*wb, *table.scrutinee())?)
+                };
                 let default = *table.default();
 
                 // Each case is tested in turn; the edge arguments are
@@ -2230,10 +2233,18 @@ impl<'a> FunctionTranslator<'a> {
                             self.name
                         )));
                     }
-                    let case = self.operand(current, case)?;
-                    let matched = self
-                        .emit(current)
-                        .compare(int, Cmp::Eq, false, scrutinee, case);
+                    let matched = match scrutinee {
+                        Scrutinee::Int(int, scrutinee) => {
+                            let case = self.operand(current, case)?;
+                            self.emit(current)
+                                .compare(int, Cmp::Eq, false, scrutinee, case)
+                        }
+                        Scrutinee::Wide(scrutinee) => {
+                            let case = self.wide_operand(current, case)?;
+                            self.emit(current)
+                                .wide_compare(Cmp::Eq, false, scrutinee, case)
+                        }
+                    };
                     let if_true = self.edge(block, dest, current)?;
                     let if_false = if index + 1 < table.table().len() {
                         let next = self.body.add_block();
