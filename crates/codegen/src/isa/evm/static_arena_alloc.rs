@@ -159,9 +159,8 @@ impl<'a> StackObjectInput<'a> {
 /// The words an alloca of `ty` occupies. A silently truncated size would
 /// leave the object without storage, so an oversized type panics.
 pub(crate) fn alloca_size_words(isa: &Evm, module: &ModuleCtx, ty: Type) -> u32 {
-    let size_bytes = isa
-        .type_layout()
-        .size_of(ty, module)
+    let (size_bytes, _) = module
+        .with_ty_store(|store| isa.type_layout().size_align_of(ty, store))
         .expect("alloca has invalid type");
     u32::try_from(size_bytes)
         .expect("alloca size overflow")

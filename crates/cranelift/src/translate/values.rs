@@ -5,17 +5,19 @@ use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Function, Immediate, Type, U256, Value, ValueId, inst::InstId};
 
 use super::{
-    Limbs, constant_limbs, scalar_constant, sonatina_scalar_type_to_clif_or_err,
-    sonatina_type_to_clif_or_err, uses_indirect_value_representation,
+    Limbs, PartValues, constant_limbs, is_aggregate, scalar_constant,
+    sonatina_scalar_type_to_clif_or_err, sonatina_type_to_clif_or_err,
 };
 
 /// The Cranelift values of translated Sonatina values. An i256 value is
-/// four i64 limbs; every other value is one Cranelift value, and an
-/// aggregate's is the address of its storage.
+/// four i64 limbs, and an aggregate held in registers its parts; every other
+/// value is one Cranelift value, and an aggregate's is the address of its
+/// storage.
 #[derive(Default)]
 pub(super) struct ValueMap {
     scalars: HashMap<ValueId, clif::Value>,
     limbs: HashMap<ValueId, Limbs>,
+    parts: HashMap<ValueId, PartValues>,
 }
 
 impl ValueMap {
@@ -25,6 +27,14 @@ impl ValueMap {
 
     pub fn insert_limbs(&mut self, value: ValueId, limbs: Limbs) {
         self.limbs.insert(value, limbs);
+    }
+
+    pub fn insert_parts(&mut self, value: ValueId, parts: PartValues) {
+        self.parts.insert(value, parts);
+    }
+
+    pub fn parts(&self, value: &ValueId) -> Option<&PartValues> {
+        self.parts.get(value)
     }
 
     pub fn get(&self, value: &ValueId) -> Option<&clif::Value> {
@@ -77,9 +87,10 @@ pub(super) fn resolve_value(
         },
         Value::Undef { ty } => {
             let ctx = function.ctx();
-            if uses_indirect_value_representation(ctx, *ty) {
+            if is_aggregate(ctx, *ty) {
                 // Aggregate consumers zero their destination (`store_indirect`)
-                // or a slot of their own (`resolve_operand`).
+                // or a slot of their own (`resolve_operand`), or take zero
+                // parts (`resolve_parts`).
                 return Err(format!(
                     "undef aggregate v{} needs a storage-aware consumer",
                     value_id.0

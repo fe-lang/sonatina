@@ -232,6 +232,90 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
     }
 }
 
+/// Compiles `body`, a module without an entry, with an entry that returns the
+/// `i64` result of each case in turn, and checks the results at every
+/// optimization level.
+fn assert_i64_cases(body: &str, cases: &[(&str, i64)]) {
+    let mut source =
+        format!("target = \"evm-ethereum-osaka\"\n{body}\nfunc public %entry() {{\nblock0:\n");
+    let mut stores = String::new();
+    for (index, &(name, _)) in cases.iter().enumerate() {
+        let result = index * 2;
+        let extended = result + 1;
+        let offset = index * 32;
+        source.push_str(&format!(
+            "v{result}.i64 = call %{name};\nv{extended}.i256 = zext v{result} i256;\n"
+        ));
+        stores.push_str(&format!("mstore {offset}.i256 v{extended} i256;\n"));
+    }
+    // Store after the last call: the backend reserves low memory for spills
+    // and the free and dynamic stack pointers.
+    source.push_str(&stores);
+    let size = cases.len() * 32;
+    source.push_str(&format!(
+        "evm_return 0.i256 {size}.i256;\n}}\nobject @Contract {{ section runtime {{ entry %entry; }} }}\n"
+    ));
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(&source).module;
+        let report = verify_module(&module, &config);
+        assert!(report.is_ok(), "{report}");
+        let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        let report = verify_module(compiler.optimize(), &config);
+        assert!(report.is_ok(), "{level:?}: {report}");
+        let artifacts = compiler
+            .compile()
+            .unwrap_or_else(|err| panic!("{level:?}: {err:?}"));
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let result = EvmHarness::from_runtime(&runtime.1.bytes).call(&[]);
+        let ExecutionResult::Success {
+            output: Output::Call(actual),
+            ..
+        } = result
+        else {
+            panic!("{level:?}: {result:?}");
+        };
+        assert_eq!(actual.len(), size);
+        for (bytes, &(name, expected)) in actual.as_chunks::<32>().0.iter().zip(cases) {
+            assert_eq!(
+                *bytes,
+                IrU256::from(expected as u64).to_big_endian(),
+                "{level:?}: {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn enum_payload_words_execute_at_all_optimization_levels() {
+    assert_i64_cases(
+        include_str!("fixtures/enum_payload_words.sntn"),
+        &[
+            ("point_object", 100_042),
+            ("narrow_overwrite", 100_300),
+            ("flag_retag", 1001),
+            ("mixed_phi_sum", 700_042_541_001),
+            ("mixed_through_memory", 5442),
+            ("nested_object", 7_709_635_023),
+            ("array_payload", 41_128),
+            ("ref_or_num_words", 42_054_243),
+            ("big_by_value", 424_233),
+            ("many_enum_args", 426_504),
+            ("list_sum", 123),
+            ("zero_sized_field", 78),
+            ("holder_fields", 200_908),
+            ("swapped_fields", 5604),
+            ("retargeted_shared", 28),
+            ("nested_nodes", 42_048_115),
+            ("straddling_fields", 404_207_033),
+        ],
+    );
+}
+
 #[test]
 fn spilled_phi_cycle_wider_than_the_evm_stack_at_every_search_profile() {
     // Every iteration rotates 1,100 loop-carried lanes left by one, so the backedge is a single

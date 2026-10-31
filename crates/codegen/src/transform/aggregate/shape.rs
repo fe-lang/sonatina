@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, ops::Range};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
@@ -96,6 +96,63 @@ impl Ord for AggregateSlice {
 impl PartialOrd for AggregateSlice {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+/// Where a type's enums put their variants' payloads, in leaf coordinates.
+/// One enum's variants share payload storage, so a leaf range in one
+/// variant's payload may overlap any range in another's.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PayloadPartition {
+    /// Consecutive children, struct fields or one variant's fields: each
+    /// child's first leaf, leaf count and partition if it holds an enum.
+    Fields(Vec<(usize, usize, Option<PayloadPartition>)>),
+    Array {
+        stride: usize,
+        elem: Box<PayloadPartition>,
+    },
+    /// Each variant's fields, after the tag leaf.
+    Enum(Vec<(usize, usize, PayloadPartition)>),
+}
+
+impl PayloadPartition {
+    /// Whether leaf ranges `a` and `b`, which share no leaf, lie in the
+    /// payloads of different variants of one enum.
+    pub(crate) fn separates_variants(&self, a: Range<usize>, b: Range<usize>) -> bool {
+        let within = |first: usize, count: usize, range: &Range<usize>| {
+            first <= range.start && range.end <= first + count
+        };
+        let shift = |range: &Range<usize>, by: usize| range.start - by..range.end - by;
+        match self {
+            Self::Fields(children) => children.iter().any(|(first, count, child)| {
+                child.as_ref().is_some_and(|child| {
+                    within(*first, *count, &a)
+                        && within(*first, *count, &b)
+                        && child.separates_variants(shift(&a, *first), shift(&b, *first))
+                })
+            }),
+            Self::Array { stride, elem } => {
+                let first = a.start / stride * stride;
+                within(first, *stride, &a)
+                    && within(first, *stride, &b)
+                    && elem.separates_variants(shift(&a, first), shift(&b, first))
+            }
+            Self::Enum(variants) => {
+                let variant = |range: &Range<usize>| {
+                    variants
+                        .iter()
+                        .position(|&(first, count, _)| within(first, count, range))
+                };
+                match (variant(&a), variant(&b)) {
+                    (Some(x), Some(y)) if x != y => true,
+                    (Some(x), Some(_)) => {
+                        let (first, _, fields) = &variants[x];
+                        fields.separates_variants(shift(&a, *first), shift(&b, *first))
+                    }
+                    _ => false,
+                }
+            }
+        }
     }
 }
 
@@ -800,16 +857,21 @@ impl LayoutCtx<'_> {
                 });
                 path.pop();
 
+                // Leaves of different variants share the target's payload
+                // storage, so their bytes may overlap.
                 let mut slot = 1u32;
-                let mut offset = base_offset.checked_add(tag_size)?;
-                for field_ty in enum_field_tys(data) {
-                    let (field_size, field_align) = self.runtime_size_align_bytes(field_ty)?;
-                    offset = align_to(offset, field_align)?;
-                    path.push(slot);
-                    self.flatten_aggregate(field_ty, offset, path, out)?;
-                    path.pop();
-                    offset = offset.checked_add(field_size)?;
-                    slot = slot.checked_add(1)?;
+                for (variant, data_variant) in data.variants.iter().enumerate() {
+                    for (field, &field_ty) in data_variant.fields.iter().enumerate() {
+                        let offset = self
+                            .module
+                            .type_layout
+                            .enum_variant_field_offset(data, variant, field, self.types)?;
+                        let offset = base_offset.checked_add(u32::try_from(offset).ok()?)?;
+                        path.push(slot);
+                        self.flatten_aggregate(field_ty, offset, path, out)?;
+                        path.pop();
+                        slot = slot.checked_add(1)?;
+                    }
                 }
                 Some(())
             }
@@ -828,6 +890,58 @@ impl LayoutCtx<'_> {
             }
             Some(CompoundType::Func { .. }) => None,
         }
+    }
+
+    fn payload_partition(&mut self, ty: Type) -> Option<PayloadPartition> {
+        match compound_ty(self.types, ty)? {
+            CompoundType::Struct(s) if !s.packed => {
+                let fields = s.fields.clone();
+                self.fields_partition(&fields)
+            }
+            CompoundType::Array { elem, len } if *len != 0 => {
+                let elem = *elem;
+                Some(PayloadPartition::Array {
+                    stride: self.flattened_leaf_count(elem)?,
+                    elem: Box::new(self.payload_partition(elem)?),
+                })
+            }
+            CompoundType::Enum(data) => {
+                let variants: Vec<SmallVec<[Type; 4]>> = data
+                    .variants
+                    .iter()
+                    .map(|variant| variant.fields.iter().copied().collect())
+                    .collect();
+                let mut first = 1;
+                let mut parts = Vec::with_capacity(variants.len());
+                for fields in variants {
+                    let count = fields.iter().try_fold(0usize, |count, &field| {
+                        count.checked_add(self.flattened_leaf_count(field)?)
+                    })?;
+                    let fields = self
+                        .fields_partition(&fields)
+                        .unwrap_or(PayloadPartition::Fields(Vec::new()));
+                    parts.push((first, count, fields));
+                    first += count;
+                }
+                Some(PayloadPartition::Enum(parts))
+            }
+            _ => None,
+        }
+    }
+
+    /// The partition of consecutive `fields`, if any of them holds an enum.
+    fn fields_partition(&mut self, fields: &[Type]) -> Option<PayloadPartition> {
+        let mut first = 0;
+        let mut children = Vec::with_capacity(fields.len());
+        for &field in fields {
+            let count = self.flattened_leaf_count(field)?;
+            children.push((first, count, self.payload_partition(field)));
+            first += count;
+        }
+        children
+            .iter()
+            .any(|(_, _, child)| child.is_some())
+            .then_some(PayloadPartition::Fields(children))
     }
 
     fn compute_flattened_leaf_count(&mut self, ty: Type) -> Option<usize> {
@@ -863,10 +977,6 @@ impl LayoutCtx<'_> {
     }
 
     fn compute_runtime_size_align_bytes(&mut self, ty: Type) -> Option<(u32, u32)> {
-        if ty.is_enum_tag() {
-            return self.primitive_size_align(self.module.type_layout.pointer_repl());
-        }
-
         match compound_ty(self.types, ty) {
             Some(CompoundType::Struct(s)) => {
                 if s.packed {
@@ -891,18 +1001,8 @@ impl LayoutCtx<'_> {
                     elem_align,
                 ))
             }
-            Some(CompoundType::Enum(data)) => {
-                let (tag_size, tag_align) = self.runtime_size_align_bytes(enum_tag_ty(ty)?)?;
-                let mut size = tag_size;
-                let mut align = tag_align;
-                for field_ty in enum_field_tys(data) {
-                    let (field_size, field_align) = self.runtime_size_align_bytes(field_ty)?;
-                    size = align_to(size, field_align)?;
-                    size = size.checked_add(field_size)?;
-                    align = align.max(field_align);
-                }
-                Some((size, align))
-            }
+            // Variants share payload storage as the target lays them out.
+            Some(CompoundType::Enum(_)) => self.primitive_size_align(ty),
             Some(CompoundType::Func { .. }) => None,
             Some(CompoundType::Ptr(_))
             | Some(CompoundType::ObjRef(_))
@@ -913,10 +1013,10 @@ impl LayoutCtx<'_> {
         }
     }
 
+    /// The target's layout of `ty`, through the type store this context holds.
     fn primitive_size_align(&self, ty: Type) -> Option<(u32, u32)> {
-        let size = u32::try_from(self.module.size_of(ty).ok()?).ok()?;
-        let align = u32::try_from(self.module.align_of(ty).ok()?).ok()?;
-        Some((size, align))
+        let (size, align) = self.module.type_layout.size_align_of(ty, self.types).ok()?;
+        Some((u32::try_from(size).ok()?, u32::try_from(align).ok()?))
     }
     fn runtime_leaf_range_for_slice(
         &mut self,
@@ -1487,6 +1587,11 @@ pub fn enum_tag_ty(ty: Type) -> Option<Type> {
     Some(Type::EnumTag(enum_ty))
 }
 
+/// The payload partition of `ty`, if it holds an enum.
+pub(crate) fn payload_partition(module: &ModuleCtx, ty: Type) -> Option<PayloadPartition> {
+    with_uncached_layout(module, |layout| layout.payload_partition(ty))
+}
+
 pub fn enum_slot_info(module: &ModuleCtx, enum_ty: Type, idx: u32) -> Option<EnumSlotInfo> {
     with_uncached_layout(module, |layout| layout.enum_slot_info(enum_ty, idx))
 }
@@ -1518,7 +1623,7 @@ mod tests {
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     use crate::transform::aggregate::{
-        compute_object_effect_summaries, object_tracking::AggregateFacts,
+        compute_object_effect_summaries, object_tracking::AggregateFacts, objref_element_ty,
         provenance::ProvenanceSnapshot,
     };
 
@@ -1807,6 +1912,63 @@ block0:
             shape.leaves[2].offset_bytes,
             align_to(option_size, 32).expect("offset")
         );
+    }
+
+    #[test]
+    fn enum_leaves_follow_the_target_layout() {
+        for target in ["evm-ethereum-osaka", "aarch64-unknown-native"] {
+            let module = parse_test_module(&format!(
+                r#"
+target = "{target}"
+type @E = enum {{ #A(i64), #B(i64) }};
+type @O = enum {{ #None, #Some(i64) }};
+type @Pair = {{ i8, i64 }};
+func private %f(v0.objref<@E>, v1.objref<@O>, v2.objref<[i64; 3]>, v3.objref<@Pair>) {{
+block0:
+    return;
+}}
+"#
+            ));
+            let func_ref = module.funcs()[0];
+            let args = module.ctx.func_sig(func_ref, |sig| sig.args().to_vec());
+            let [e, option, words, pair] = args
+                .iter()
+                .map(|&arg| objref_element_ty(&module.ctx, arg).unwrap())
+                .collect::<Vec<_>>()[..]
+            else {
+                unreachable!()
+            };
+            let leaves = |ty| {
+                aggregate_shape(&module.ctx, ty)
+                    .unwrap()
+                    .leaves
+                    .iter()
+                    .map(|leaf| (leaf.offset_bytes, leaf.size_bytes))
+                    .collect::<Vec<_>>()
+            };
+            let mut cache = AggregateLayoutCache::default();
+            let mut compatible = |from, to| {
+                cache
+                    .compatible_bitcast_runtime_leaves(&module.ctx, from, to)
+                    .is_some()
+            };
+            if target.starts_with("evm") {
+                // `B`'s i64 shares the word of `A`'s.
+                assert_eq!(leaves(e), [(0, 32), (32, 32), (32, 32)]);
+                assert_eq!(runtime_size_bytes(&module.ctx, e), Some(64));
+            } else {
+                // One i8 tag, then both payloads at the i64's offset.
+                assert_eq!(leaves(e), [(0, 1), (8, 8), (8, 8)]);
+                assert_eq!(runtime_size_bytes(&module.ctx, e), Some(16));
+                assert_eq!(leaves(option), [(0, 1), (8, 8)]);
+                assert!(compatible(option, pair));
+            }
+            assert_eq!(
+                runtime_size_bytes(&module.ctx, e),
+                module.ctx.size_of(e).ok().map(|size| size as u32)
+            );
+            assert!(!compatible(words, e));
+        }
     }
 
     #[test]

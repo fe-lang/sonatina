@@ -1,0 +1,14 @@
+target = "evm-ethereum-osaka"
+
+# The argument reaches `@node` through an object reference before `@node`
+# itself, so its field must not keep the reference while `@node` is rewritten.
+type @node = { i256, objref<@node> };
+
+func public %next_value(v0.objref<@node>) -> i256 {
+block0:
+    v1.objref<objref<@node>> = obj.proj v0 1.i8;
+    v2.objref<@node> = obj.load v1;
+    v3.objref<i256> = obj.proj v2 0.i8;
+    v4.i256 = obj.load v3;
+    return v4;
+}

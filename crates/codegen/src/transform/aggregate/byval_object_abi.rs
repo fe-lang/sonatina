@@ -11,13 +11,14 @@ use sonatina_ir::{
     module::{FuncRef, ModuleCtx},
     types::CompoundType,
 };
+use sonatina_triple::Architecture;
 
 use crate::liveness::{InstLiveness, Liveness};
 
 use super::{
     LocalObjectArgInfo, ModuleObjectFacts, ObjectEffectSummaryMap, ObjectLowerToMemory,
     ObjectMemoryAnalysis,
-    abi::{abi_arg_operand_count, abi_leaf_count},
+    abi::abi_arg_operand_count,
     compute_object_effect_summaries,
     object_abi::{
         OutputBufferContract, fresh_root_blocks_are_pairwise_unreachable, whole_object_slice,
@@ -526,10 +527,10 @@ impl ObjectAggregateAbi {
     }
 
     fn initial_ret_plan(&self, ctx: &ModuleCtx, ty: Type) -> RetPlan {
-        let direct_words = direct_word_count(ctx, ty).unwrap_or(1);
+        let direct_words = direct_words(ctx, ty).unwrap_or(1);
         let kind = if direct_words <= 1
             || shape::runtime_size_bytes(ctx, ty).is_some_and(|size| size == 0)
-            || !shape::is_supported_aggregate_ty(ctx, ty)
+            || !is_object_abi_ty(ctx, ty)
             || direct_words <= self.cfg.inline_leaf_limit
         {
             RetAbiKind::Direct
@@ -545,10 +546,10 @@ impl ObjectAggregateAbi {
     }
 
     fn initial_arg_plan(&self, ctx: &ModuleCtx, ty: Type) -> ArgPlan {
-        let direct_words = abi_arg_operand_count(ctx, ty).unwrap_or(1);
+        let direct_words = direct_words(ctx, ty).unwrap_or(1);
         let kind = if direct_words <= 1
             || shape::runtime_size_bytes(ctx, ty).is_some_and(|size| size == 0)
-            || !shape::is_supported_aggregate_ty(ctx, ty)
+            || !is_object_abi_ty(ctx, ty)
             || direct_words <= self.cfg.inline_leaf_limit
         {
             ArgAbiKind::Direct
@@ -572,7 +573,7 @@ impl ObjectAggregateAbi {
     fn can_rewrite_as_object(&self, ctx: &ModuleCtx, arg: &ArgPlan) -> bool {
         arg.direct_words > 1
             && shape::runtime_size_bytes(ctx, arg.original_ty).is_some_and(|size| size != 0)
-            && shape::is_supported_aggregate_ty(ctx, arg.original_ty)
+            && is_object_abi_ty(ctx, arg.original_ty)
     }
 
     fn can_rewrite_ret_as_object(&self, ret: &RetPlan) -> bool {
@@ -922,8 +923,12 @@ impl ObjectAggregateAbi {
                 RetAbiKind::OutObject => {
                     let out_arg = function.arg_values[hidden_out_idx];
                     hidden_out_idx += 1;
-                    let total_leaves =
-                        direct_word_count(function.ctx(), ret_plan.original_ty).unwrap_or(1);
+                    let total_leaves = whole_object_slice(
+                        &mut shape::AggregateLayoutCache::default(),
+                        function.ctx(),
+                        ret_plan.original_ty,
+                    )
+                    .leaf_count;
                     if !object_memory.value_matches_current_object_slice_before_inst(
                         inst,
                         value,
@@ -1661,7 +1666,13 @@ impl ObjectAggregateAbi {
         }
         let dest_slice = facts.tracked[dest_obj].and_then(TrackedObject::exact)?;
         if dest_slice.ty != request.original_ty
-            || dest_slice.leaf_count != direct_word_count(function.ctx(), request.original_ty)?
+            || dest_slice.leaf_count
+                != whole_object_slice(
+                    &mut shape::AggregateLayoutCache::default(),
+                    function.ctx(),
+                    request.original_ty,
+                )
+                .leaf_count
         {
             return None;
         }
@@ -2184,14 +2195,22 @@ struct CopyRootCandidate {
     root: ValueId,
 }
 
-fn direct_word_count(ctx: &ModuleCtx, ty: Type) -> Option<usize> {
-    if shape::runtime_size_bytes(ctx, ty)? == 0 {
-        return Some(0);
+/// Whether a value of type `ty` can pass as an object: an aggregate, or an EVM
+/// enum, which object lowering turns into a struct.
+fn is_object_abi_ty(ctx: &ModuleCtx, ty: Type) -> bool {
+    shape::is_supported_aggregate_ty(ctx, ty)
+        || (ctx.triple.architecture == Architecture::Evm
+            && matches!(ty.resolve_compound(ctx), Some(CompoundType::Enum(_))))
+}
+
+/// The operands a direct value of type `ty` takes. On EVM, where every leaf
+/// is a word and object lowering gives each enum a word for its tag and for
+/// each payload word, an aggregate takes its size in words.
+fn direct_words(ctx: &ModuleCtx, ty: Type) -> Option<usize> {
+    if ctx.triple.architecture == Architecture::Evm && is_object_abi_ty(ctx, ty) {
+        return Some(shape::runtime_size_bytes(ctx, ty)? as usize / 32);
     }
-    if !shape::is_supported_aggregate_ty(ctx, ty) {
-        return Some(1);
-    }
-    abi_leaf_count(ctx, ty)
+    abi_arg_operand_count(ctx, ty)
 }
 
 fn inst_uses_value(function: &Function, inst: InstId, value: ValueId) -> bool {

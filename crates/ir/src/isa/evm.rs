@@ -2,12 +2,11 @@ use std::sync::LazyLock;
 
 use sonatina_triple::{Architecture, TargetTriple};
 
-use super::{Endian, Isa, TypeLayout, TypeLayoutError};
+use super::{Endian, Isa, TypeLayout, TypeLayoutError, enum_layout};
 use crate::{
     AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind, Type,
     inst::evm::{inst_set::EvmInstSet, machine_inst_set::EvmMachineInstSet},
-    module::ModuleCtx,
-    types::CompoundType,
+    types::{CompoundType, TypeStore},
 };
 
 pub mod space {
@@ -148,62 +147,54 @@ impl Isa for EvmMachine {
 
 struct EvmTypeLayout {}
 impl TypeLayout for EvmTypeLayout {
-    fn size_of(&self, ty: crate::Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
+    fn size_align_of(
+        &self,
+        ty: Type,
+        store: &TypeStore,
+    ) -> Result<(usize, usize), TypeLayoutError> {
         let size = match ty {
             Type::Unit => 0,
             // EVM memory is word-addressed by the MLOAD/MSTORE family. For now we model all
             // scalar/pointer values as occupying one full 32-byte slot.
-            Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 | Type::I256 => 32,
-            Type::EnumTag(_) => return Err(TypeLayoutError::UnrepresentableType(ty)),
+            Type::I1
+            | Type::I8
+            | Type::I16
+            | Type::I32
+            | Type::I64
+            | Type::I128
+            | Type::I256
+            | Type::EnumTag(_) => 32,
 
-            Type::Compound(cmpd) => {
-                let cmpd_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd).clone());
-                match cmpd_data {
-                    CompoundType::Array { elem, len } => self.size_of(elem, ctx)? * len,
+            Type::Compound(cmpd) => match store.resolve_compound(cmpd) {
+                CompoundType::Array { elem, len } => self.size_align_of(*elem, store)?.0 * len,
 
-                    CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => {
-                        32
+                CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 32,
+
+                CompoundType::Struct(s) => {
+                    if s.packed {
+                        panic!("packed data is not supported yet!");
+                    }
+                    let mut size = 0;
+                    for &field in &s.fields {
+                        size += self.size_align_of(field, store)?.0;
                     }
 
-                    CompoundType::Struct(s) => {
-                        if s.packed {
-                            panic!("packed data is not supported yet!");
-                        }
-                        let mut size = 0;
-                        for &field in &s.fields {
-                            size += self.size_of(field, ctx)?;
-                        }
-
-                        size
-                    }
-
-                    CompoundType::Enum(data) => {
-                        let mut size = 32;
-                        for variant in &data.variants {
-                            for &field in &variant.fields {
-                                size += self.size_of(field, ctx)?;
-                            }
-                        }
-                        size
-                    }
-
-                    CompoundType::Func { .. } => {
-                        return Err(TypeLayoutError::UnrepresentableType(ty));
-                    }
+                    size
                 }
-            }
+
+                CompoundType::Enum(data) => enum_layout(self, data, store)?.size,
+
+                CompoundType::Func { .. } => {
+                    return Err(TypeLayoutError::UnrepresentableType(ty));
+                }
+            },
         };
 
-        Ok(size)
+        Ok((size, if size == 0 { 1 } else { 32 }))
     }
 
     fn pointer_repl(&self) -> Type {
         Type::I256
-    }
-
-    fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
-        let size = self.size_of(ty, ctx)?;
-        if size == 0 { Ok(1) } else { Ok(32) }
     }
 
     fn endian(&self) -> Endian {
@@ -216,7 +207,12 @@ mod tests {
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
     use super::{Evm, EvmMachine, space};
-    use crate::{AddressSpaceKind, inst::inst_set::InstSetBase, isa::Isa};
+    use crate::{
+        AddressSpaceKind, Module, Type,
+        inst::inst_set::InstSetBase,
+        isa::Isa,
+        types::{EnumReprHint, VariantData},
+    };
 
     #[test]
     fn evm_address_spaces_match_expected_layout() {
@@ -252,5 +248,39 @@ mod tests {
         assert!(isa.inst_set().has_evm_mstore().is_some());
         assert!(isa.inst_set().has_evm_malloc().is_none());
         assert!(isa.inst_set().has_alloca().is_none());
+    }
+
+    #[test]
+    fn enum_variants_share_payload_words() {
+        let module = Module::new(&Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::Osaka),
+        )));
+        let variant = |name: &str, fields: &[Type]| VariantData {
+            name: name.to_string(),
+            explicit_discriminant: None,
+            fields: fields.to_vec(),
+        };
+        let choice = module.ctx.with_ty_store_mut(|store| {
+            let pair = store.make_array(Type::I256, 2);
+            store.make_enum(
+                "Choice",
+                &[
+                    variant("None", &[]),
+                    variant("Some", &[Type::I8, Type::I256]),
+                    variant("Many", &[Type::I1, pair, Type::Unit, Type::I64]),
+                ],
+                EnumReprHint::Default,
+            )
+        });
+        // The tag's word, then the largest payload: Many's four words.
+        assert_eq!(module.ctx.size_of_unchecked(choice), 160);
+        let offset = |variant, field| module.ctx.enum_variant_field_offset(choice, variant, field);
+        assert_eq!(offset(1, 0), Some((32, Type::I8)));
+        assert_eq!(offset(1, 1), Some((64, Type::I256)));
+        assert_eq!(offset(2, 0), Some((32, Type::I1)));
+        assert_eq!(offset(2, 3), Some((128, Type::I64)));
+        assert_eq!(offset(0, 0), None);
     }
 }

@@ -740,3 +740,81 @@ block0:
         }
     }
 }
+
+#[test]
+fn field_wise_copies_keep_fields_and_zero_padding() {
+    // Copies split at narrow fields and overlapping enum payloads, and write
+    // zeros to padding. Each copy kind passes the values on: `mload`, phis,
+    // object stores and loads, returns and `mstore`. Both types have too many
+    // fields to be held in registers.
+    let source = r#"
+type @Mixed = { i1, i32, i16, i64, i8 };
+type @Choice = enum { #Byte(i8), #Word(i64), #Flag(i1, i32) };
+func private %pass(v0.@Choice) -> @Choice {
+block0:
+    return v0;
+}
+func public %copy(v0.*@Mixed, v1.*@Mixed, v20.*i8, v30.*i8, v4.i64) {
+block0:
+    v2.*@Choice = bitcast v20 *@Choice;
+    v3.*@Choice = bitcast v30 *@Choice;
+    v5.@Mixed = mload v0 @Mixed;
+    v6.@Choice = mload v2 @Choice;
+    jump block1;
+block1:
+    v7.@Mixed = phi (v5 block0) (v11 block1);
+    v8.@Choice = phi (v6 block0) (v12 block1);
+    v9.i64 = phi (v4 block0) (v13 block1);
+    v10.objref<@Mixed> = obj.alloc @Mixed;
+    obj.store v10 v7;
+    v11.@Mixed = obj.load v10;
+    v12.@Choice = call %pass v8;
+    v13.i64 = sub v9 1.i64;
+    v14.i1 = gt v13 0.i64;
+    br v14 block1 block2;
+block2:
+    mstore v1 v11 @Mixed;
+    mstore v3 v12 @Choice;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let copy: unsafe extern "C" fn(*const u8, *mut u8, *const u8, *mut u8, i64) =
+            unsafe { std::mem::transmute(artifact.function_address("copy").unwrap()) };
+        // `@Mixed`: i1 at 0, i32 at 4, i16 at 8, i64 at 16, i8 at 24.
+        // `@Choice`: an i8 tag, then payloads from 8: `#Flag`'s i1 at 8 and
+        // i32 at 12.
+        let mut mixed: [u8; 32] = std::array::from_fn(|i| (i * 37 + 11) as u8);
+        mixed[0] = 1;
+        let mut choice: [u8; 16] = std::array::from_fn(|i| (i * 53 + 5) as u8);
+        choice[0] = 2;
+        choice[8] = 1;
+        let mut expected_mixed = mixed;
+        expected_mixed[1..4].fill(0);
+        expected_mixed[10..16].fill(0);
+        expected_mixed[25..32].fill(0);
+        let mut expected_choice = choice;
+        expected_choice[1..8].fill(0);
+        for rounds in [1, 3] {
+            let (mut mixed_out, mut choice_out) = ([0xa5u8; 32], [0xa5u8; 16]);
+            unsafe {
+                copy(
+                    mixed.as_ptr(),
+                    mixed_out.as_mut_ptr(),
+                    choice.as_ptr(),
+                    choice_out.as_mut_ptr(),
+                    rounds,
+                )
+            };
+            assert_eq!(mixed_out, expected_mixed, "{level:?} {rounds}");
+            assert_eq!(choice_out, expected_choice, "{level:?} {rounds}");
+        }
+    }
+}

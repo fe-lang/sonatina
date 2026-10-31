@@ -373,6 +373,7 @@ impl ObjectReachability {
                 || downcast::<&data::EnumProj>(is, data).is_some()
                 || downcast::<&data::EnumAssertVariantRef>(is, data).is_some()
                 || downcast::<&data::ObjMaterializeStack>(is, data).is_some()
+                || downcast::<&data::ObjFromPtr>(is, data).is_some()
                 || downcast::<&data::Gep>(is, data).is_some()
                 || downcast::<&cast::Bitcast>(is, data).is_some()
                 || downcast::<&control_flow::Phi>(is, data).is_some()
@@ -443,6 +444,8 @@ fn object_reference_bearing_ty(ctx: &ModuleCtx, ty: Type) -> bool {
 
 /// Raw bytes have no typed-leaf coordinates. Only the bounded direct-allocation
 /// exception proves that an access cannot interfere with typed object storage.
+/// An `alloca` that `obj.from_ptr` views is object storage too, but a view has
+/// no exact projection, so no object pass forwards or removes its accesses.
 pub(crate) fn raw_access_may_reach_objects(func: &Function, access: &MemoryAccess) -> bool {
     if access.space != func.ctx().address_spaces().default_space() {
         return false;

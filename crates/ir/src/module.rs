@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use bitflags::bitflags;
 use cranelift_entity::entity_impl;
@@ -18,6 +18,9 @@ use crate::{
     parallel,
     types::{CompoundType, TypeStore},
 };
+
+/// The store scalar layouts receive: they resolve no compound types.
+static NO_TYPES: LazyLock<TypeStore> = LazyLock::new(TypeStore::default);
 
 bitflags! {
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -356,12 +359,22 @@ impl ModuleCtx {
         }
     }
 
+    /// Scalars need no type store, so their layout takes no lock: callers may
+    /// already hold it.
+    pub fn size_align_of(&self, ty: Type) -> Result<(usize, usize), TypeLayoutError> {
+        if matches!(ty, Type::Compound(_) | Type::EnumTag(_)) {
+            self.with_ty_store(|store| self.type_layout.size_align_of(ty, store))
+        } else {
+            self.type_layout.size_align_of(ty, &NO_TYPES)
+        }
+    }
+
     pub fn size_of(&self, ty: Type) -> Result<usize, TypeLayoutError> {
-        self.type_layout.size_of(ty, self)
+        self.size_align_of(ty).map(|(size, _)| size)
     }
 
     pub fn align_of(&self, ty: Type) -> Result<usize, TypeLayoutError> {
-        self.type_layout.align_of(ty, self)
+        self.size_align_of(ty).map(|(_, align)| align)
     }
 
     pub fn size_of_unchecked(&self, ty: Type) -> usize {
@@ -417,6 +430,27 @@ impl ModuleCtx {
             | CompoundType::ConstRef(_)
             | CompoundType::Func { .. } => None,
         }
+    }
+
+    /// The offset and type of field `field` of variant `variant` of
+    /// `enum_ty`, as the target lays out enums.
+    pub fn enum_variant_field_offset(
+        &self,
+        enum_ty: Type,
+        variant: usize,
+        field: usize,
+    ) -> Option<(usize, Type)> {
+        let Type::Compound(cmpd) = enum_ty else {
+            return None;
+        };
+        self.with_ty_store(|store| {
+            let data = store.enum_data(cmpd)?;
+            let field_ty = *data.variants.get(variant)?.fields.get(field)?;
+            let offset = self
+                .type_layout
+                .enum_variant_field_offset(data, variant, field, store)?;
+            Some((offset, field_ty))
+        })
     }
 
     pub fn func_sig<F, R>(&self, func_ref: FuncRef, f: F) -> R

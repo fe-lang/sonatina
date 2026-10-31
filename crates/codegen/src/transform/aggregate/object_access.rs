@@ -75,6 +75,87 @@ pub(crate) struct ObjectInstEffects {
     pub initialization: SmallVec<[ObjectInitializationWrite; 4]>,
 }
 
+/// How far an object access may reach into memory that raw accesses reach.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum MemoryReach {
+    /// An exposed object's storage: memory other code may reach, never an
+    /// allocation the function makes itself.
+    Escaped,
+    /// Any memory, through an external or unknown reference, or an `alloca`
+    /// of the function viewed as an object.
+    Any,
+}
+
+/// The instructions whose object reads or writes may touch memory that raw
+/// accesses also reach, and how far.
+#[derive(Default)]
+pub(crate) struct RawObjectAccesses {
+    pub reads: FxHashMap<InstId, MemoryReach>,
+    pub writes: FxHashMap<InstId, MemoryReach>,
+}
+
+impl RawObjectAccesses {
+    pub(crate) fn new(func: &Function, summaries: Option<&ObjectEffectSummaryMap>) -> Self {
+        let mut this = Self::default();
+        // A raw instruction's own accesses are already memory accesses; only
+        // object instructions and calls access objects that raw analysis
+        // cannot see.
+        let insts: Vec<_> = func
+            .layout
+            .iter_all_insts()
+            .filter(|&inst| {
+                func.dfg.call_info(inst).is_some()
+                    || func
+                        .dfg
+                        .inst(inst)
+                        .collect_values()
+                        .into_iter()
+                        .any(|value| func.dfg.value_ty(value).is_obj_ref(func.ctx()))
+            })
+            .collect();
+        if insts.is_empty() {
+            return this;
+        }
+        let facts = ObjectAccessFacts::new(func, summaries);
+        // Raw accesses reach an `alloca` through its address whether or not
+        // anything exposes it, and raw analysis has no location for some part
+        // of an allocation, so a view of one may access any memory.
+        let root_reach = |root: RootValue| {
+            if func
+                .dfg
+                .value_inst(root.value())
+                .is_some_and(|inst| func.dfg.downcast::<&data::Alloca>(inst).is_some())
+            {
+                Some(MemoryReach::Any)
+            } else {
+                facts.exposed(root).then_some(MemoryReach::Escaped)
+            }
+        };
+        let reach = |accesses: &AccessSet| {
+            accesses
+                .iter()
+                .filter_map(|access| match *access {
+                    ObjectAccess::Exact(projection) | ObjectAccess::Within(projection) => {
+                        root_reach(projection.root_value)
+                    }
+                    ObjectAccess::Root(root) => root_reach(root),
+                    ObjectAccess::External | ObjectAccess::Unknown => Some(MemoryReach::Any),
+                })
+                .max()
+        };
+        for inst in insts {
+            let effects = facts.effects(func, inst, summaries);
+            if let Some(reach) = reach(&effects.reads) {
+                this.reads.insert(inst, reach);
+            }
+            if let Some(reach) = reach(&effects.writes) {
+                this.writes.insert(inst, reach);
+            }
+        }
+        this
+    }
+}
+
 pub(crate) struct ObjectAccessFacts {
     facts: AggregateFacts,
     reachability: ObjectReachability,
@@ -253,6 +334,11 @@ impl ObjectAccessFacts {
     /// to other code, or a caller's object, including a `noalias` one.
     pub(crate) fn observed_after_return(&self, root: RootValue) -> bool {
         self.exposed(root) || !self.reachability.aliases.is_fresh(root)
+    }
+
+    /// Whether `root`'s object holds an enum.
+    pub(crate) fn holds_enum(&self, root: RootValue) -> bool {
+        self.reachability.aliases.holds_enum(root)
     }
 
     pub(crate) fn may_overlap(&self, access: ObjectAccess, target: ObjectSlice) -> bool {

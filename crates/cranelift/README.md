@@ -71,9 +71,12 @@ signless; individual instructions select signed or unsigned semantics.
 Arrays use the element size as their stride and inherit its alignment.
 Struct fields are individually aligned; total size includes trailing padding
 to the maximum field alignment. Empty arrays/structs can have size zero but
-retain their layout alignment. Packed structs are unsupported. Enums are
-legalized to product layouts before native translation; do not assume a C
-enum or union layout. Use the legalized module's type layout for storage.
+retain their layout alignment. Packed structs are unsupported. An enum is its
+tag, the narrowest integer holding every variant's index, at offset zero,
+then every variant's fields placed like a struct's from one shared payload
+offset aligned for all of them; its size is rounded to that alignment
+(`ModuleCtx::enum_variant_field_offset` gives the offsets). Use the module's
+type layout for storage.
 
 Scalars use the host platform calling convention. LLVM ABI extensions are
 enabled so x86_64 can pass and return `i128`, including register/stack
@@ -188,7 +191,8 @@ The native instruction set includes integer arithmetic, comparisons, casts,
 control flow, direct calls, memory and aggregate/object operations. It also
 accepts `evm_add_mod` and `evm_mul_mod`: `(a + b) % m` and `(a * b) % m` at
 full precision, zero for a zero modulus, with narrower operands
-zero-extended. Enum operations must disappear during legalization.
+zero-extended. Enum operations are translated against the enum layout above;
+`enum.make` zeroes the bytes outside its variant's tag and fields.
 `get_function_ptr`, `sym_addr` and `sym_size` are unsupported. Dynamic
 allocation and object materialization use the allocation and lifetime rules
 above.

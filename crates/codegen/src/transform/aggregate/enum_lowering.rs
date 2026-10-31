@@ -1,292 +1,86 @@
+//! Enum lowering. Natively, `EnumTagLower` turns tags into integers and keeps
+//! enums for the backend to lay out. On EVM, object lowering replaces each
+//! enum by a struct of its tag and the payload parts its variants share.
+
+use std::{cmp::Reverse, rc::Rc};
+
 use rustc_hash::FxHashMap;
-use smallvec::smallvec;
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    Function, I256, Immediate, Module, Type, Value, ValueId,
-    func_cursor::{CursorLocation, FuncCursor, InstInserter},
+    Function, I256, Immediate, Inst, InstId, Module, Type, Value, ValueId,
     global_variable::GvInitializer,
-    inst::{cmp, data},
-    isa::TypeLayoutError,
+    inst::{cast, cmp, data},
     module::ModuleCtx,
-    types::{CompoundType, CompoundTypeRef, EnumData, EnumVariantRef, TypeStore},
-    visitor::VisitorMut,
+    types::{CompoundType, CompoundTypeRef, EnumData, EnumVariantRef},
 };
 
-#[derive(Clone)]
-struct EnumLayoutInfo {
-    lowered_cmpd: CompoundTypeRef,
-    tag_ty: Type,
-    variant_field_starts: Vec<u32>,
-    lowered_variant_field_tys: Vec<Vec<Type>>,
-}
+use crate::type_rewrite::{TypeRewrite, rewrite_function_type_uses};
 
-impl EnumLayoutInfo {
-    fn lowered_ty(&self) -> Type {
-        Type::Compound(self.lowered_cmpd)
-    }
-
-    fn tag_imm(&self, variant: EnumVariantRef) -> Immediate {
-        Immediate::from_i256(I256::from(u64::from(variant.index())), self.tag_ty)
-    }
-
-    fn payload_slot(&self, variant: EnumVariantRef, field_idx: usize) -> u32 {
-        self.variant_field_starts[usize::try_from(variant.index()).expect("variant index overflow")]
-            + u32::try_from(field_idx).expect("field index overflow")
-    }
-
-    fn payload_tys(&self, variant: EnumVariantRef) -> &[Type] {
-        &self.lowered_variant_field_tys
-            [usize::try_from(variant.index()).expect("variant index overflow")]
-    }
-}
-
+/// Rewrites enum tags to their integer types for a backend that lays out
+/// enums itself, keeping enum types and instructions.
 #[derive(Default)]
-struct EnumTypeLowerer {
-    changed: bool,
-    compound_map: FxHashMap<CompoundTypeRef, CompoundTypeRef>,
-    layouts: FxHashMap<CompoundTypeRef, EnumLayoutInfo>,
-}
+pub struct EnumTagLower;
 
-impl EnumTypeLowerer {
-    fn rewrite_type(&mut self, ctx: &ModuleCtx, ty: Type) -> Type {
-        match ty {
-            // Tags depend only on the variant count; building the product layout
-            // here would recurse forever when a payload holds its own enum's tag.
-            Type::EnumTag(enum_ty) => ctx.with_ty_store(|store| {
-                choose_tag_ty(
-                    store
-                        .enum_data(enum_ty)
-                        .expect("enum tag must reference an enum")
-                        .variants
-                        .len(),
-                )
-            }),
-            Type::Compound(compound) => Type::Compound(self.rewrite_compound(ctx, compound)),
-            _ => ty,
-        }
-    }
-
-    fn layout(&mut self, ctx: &ModuleCtx, enum_ty: CompoundTypeRef) -> EnumLayoutInfo {
-        if let Some(layout) = self.layouts.get(&enum_ty) {
-            return layout.clone();
-        }
-
-        let data = ctx
-            .with_ty_store(|store| store.enum_data(enum_ty).cloned())
-            .expect("layout requested for non-enum type");
-        let tag_ty = choose_tag_ty(data.variants.len());
-        let lowered_name = format!("__enum_lowered_{}_{}", data.name, enum_ty.as_u32());
-        let lowered_cmpd = ctx.with_ty_store_mut(|store| {
-            if let Some(existing) = store.lookup_struct(&lowered_name) {
-                existing
-            } else {
-                let Type::Compound(cmpd) = store.make_struct(&lowered_name, &[], false) else {
-                    unreachable!();
-                };
-                cmpd
-            }
-        });
-
-        self.compound_map.insert(enum_ty, lowered_cmpd);
-
-        let mut struct_fields = vec![tag_ty];
-        let mut variant_field_starts = Vec::with_capacity(data.variants.len());
-        let mut lowered_variant_field_tys = Vec::with_capacity(data.variants.len());
-        let mut next_slot = 1u32;
-        for variant in &data.variants {
-            variant_field_starts.push(next_slot);
-            let lowered_fields: Vec<_> = variant
-                .fields
-                .iter()
-                .map(|&field| self.rewrite_type(ctx, field))
-                .collect();
-            next_slot += u32::try_from(lowered_fields.len()).expect("too many enum payload fields");
-            struct_fields.extend(lowered_fields.iter().copied());
-            lowered_variant_field_tys.push(lowered_fields);
-        }
-
-        ctx.with_ty_store_mut(|store| store.update_struct_fields(&lowered_name, &struct_fields));
-
-        let layout = EnumLayoutInfo {
-            lowered_cmpd,
-            tag_ty,
-            variant_field_starts,
-            lowered_variant_field_tys,
-        };
-        self.layouts.insert(enum_ty, layout.clone());
-        self.changed = true;
-        layout
-    }
-
-    fn rewrite_compound(&mut self, ctx: &ModuleCtx, compound: CompoundTypeRef) -> CompoundTypeRef {
-        if let Some(&mapped) = self.compound_map.get(&compound) {
-            return mapped;
-        }
-
-        let current = ctx.with_ty_store(|store| store.resolve_compound(compound).clone());
-        self.compound_map.insert(compound, compound);
-
-        let mapped = match current {
-            CompoundType::Enum(EnumData { .. }) => self.layout(ctx, compound).lowered_cmpd,
-            CompoundType::Array { elem, len } => {
-                let elem = self.rewrite_type(ctx, elem);
-                ctx.with_ty_store_mut(|store| {
-                    let Type::Compound(mapped) = store.make_array(elem, len) else {
-                        unreachable!();
-                    };
-                    mapped
-                })
-            }
-            CompoundType::Ptr(elem) => {
-                let elem = self.rewrite_type(ctx, elem);
-                ctx.with_ty_store_mut(|store| {
-                    let Type::Compound(mapped) = store.make_ptr(elem) else {
-                        unreachable!();
-                    };
-                    mapped
-                })
-            }
-            CompoundType::ObjRef(elem) => {
-                let elem = self.rewrite_type(ctx, elem);
-                ctx.with_ty_store_mut(|store| {
-                    let Type::Compound(mapped) = store.make_obj_ref(elem) else {
-                        unreachable!();
-                    };
-                    mapped
-                })
-            }
-            CompoundType::ConstRef(elem) => {
-                let elem = self.rewrite_type(ctx, elem);
-                ctx.with_ty_store_mut(|store| {
-                    let Type::Compound(mapped) = store.make_const_ref(elem) else {
-                        unreachable!();
-                    };
-                    mapped
-                })
-            }
-            CompoundType::Func { args, ret_tys } => {
-                let args: Vec<_> = args
-                    .iter()
-                    .map(|&arg| self.rewrite_type(ctx, arg))
-                    .collect();
-                let ret_tys: Vec<_> = ret_tys
-                    .iter()
-                    .map(|&ret_ty| self.rewrite_type(ctx, ret_ty))
-                    .collect();
-                ctx.with_ty_store_mut(|store| {
-                    let Type::Compound(mapped) = store.make_func(&args, &ret_tys) else {
-                        unreachable!();
-                    };
-                    mapped
-                })
-            }
-            CompoundType::Struct(data) => {
-                let new_fields: Vec<_> = data
-                    .fields
-                    .iter()
-                    .map(|&field| self.rewrite_type(ctx, field))
-                    .collect();
-                if new_fields != data.fields {
-                    ctx.with_ty_store_mut(|store| {
-                        store.update_struct_fields(&data.name, &new_fields)
-                    });
-                    self.changed = true;
-                }
-                compound
-            }
-        };
-
-        if mapped != compound {
-            self.changed = true;
-        }
-        self.compound_map.insert(compound, mapped);
-        mapped
-    }
-}
-
-/// Concrete target layout after enum legalization, without rewriting the source
-/// module. The private context also preserves named structs, which enum lowering
-/// normally rewrites in place. Create a new query after changing source types.
-pub struct EnumLoweredLayout {
-    ctx: ModuleCtx,
-    ty: Type,
-    enumeration: Option<EnumLayoutInfo>,
-}
-
-impl EnumLoweredLayout {
-    pub fn new(ctx: &ModuleCtx, ty: Type) -> Self {
-        let ctx = ctx.fork();
-        let mut lowerer = EnumTypeLowerer::default();
-        let lowered = lowerer.rewrite_type(&ctx, ty);
-        let enumeration = match ty {
-            Type::Compound(compound) => lowerer.layouts.remove(&compound),
-            _ => None,
-        };
-        Self {
-            ctx,
-            ty: lowered,
-            enumeration,
-        }
-    }
-
-    pub fn tag_type(&self) -> Option<Type> {
-        self.enumeration
-            .as_ref()
-            .map(|enumeration| enumeration.tag_ty)
-    }
-
-    pub fn size(&self) -> Result<usize, TypeLayoutError> {
-        self.ctx.size_of(self.ty)
-    }
-
-    pub fn field_offset(&self, field: usize) -> Option<usize> {
-        // Enum payload coordinates are variant-relative, never struct indices.
-        if self.enumeration.is_some() {
-            return None;
-        }
-        self.ctx
-            .aggregate_elem_offset(self.ty, field)
-            .map(|(offset, _)| offset)
-    }
-
-    pub fn variant_field_offset(&self, variant: usize, field: usize) -> Option<usize> {
-        let enumeration = self.enumeration.as_ref()?;
-        enumeration
-            .lowered_variant_field_tys
-            .get(variant)?
-            .get(field)?;
-        let start = usize::try_from(*enumeration.variant_field_starts.get(variant)?).ok()?;
-        self.ctx
-            .aggregate_elem_offset(self.ty, start.checked_add(field)?)
-            .map(|(offset, _)| offset)
-    }
-}
-
-#[derive(Default)]
-pub struct EnumLowerToProduct;
-
-impl EnumLowerToProduct {
+impl EnumTagLower {
     pub fn run(&mut self, module: &Module) -> bool {
-        // Named structs are rewritten in place. Initializers must still be
-        // interpreted using their original field types, across all globals.
-        let original_types = module.ctx.with_ty_store(Clone::clone);
-        let mut lowerer = EnumTypeLowerer::default();
+        let mut lowerer = TagLowerer::default();
         let mut changed = rewrite_declared_signatures(module, &mut lowerer);
-        changed |= rewrite_global_types(module, &mut lowerer, &original_types);
-
+        changed |= lower_global_tags(module, &mut lowerer);
         for func_ref in module.funcs() {
             changed |= module.func_store.modify(func_ref, |function| {
-                rewrite_function_enum_insts(function, &mut lowerer);
-                rewrite_function_types(function, &mut lowerer)
+                let tags = lower_tag_immediates(function);
+                rewrite_function_type_uses(function, &mut lowerer, |_, _, _| None) || tags
             });
         }
-
         changed || lowerer.changed
     }
 }
 
-fn rewrite_declared_signatures(module: &Module, lowerer: &mut EnumTypeLowerer) -> bool {
+#[derive(Default)]
+struct TagLowerer {
+    changed: bool,
+    compound_map: FxHashMap<CompoundTypeRef, Type>,
+}
+
+impl TypeRewrite for TagLowerer {
+    fn compound_map(&mut self) -> &mut FxHashMap<CompoundTypeRef, Type> {
+        &mut self.compound_map
+    }
+
+    fn rewrite_leaf_type(&mut self, ctx: &ModuleCtx, ty: Type) -> Type {
+        tag_int_ty(ctx, ty)
+    }
+
+    fn note_compound_remap(&mut self, _compound: CompoundTypeRef, _mapped: Type) {
+        self.changed = true;
+    }
+
+    fn note_named_compound_update(&mut self, _compound: CompoundTypeRef) {
+        self.changed = true;
+    }
+}
+
+/// `ty`'s integer type if it is an enum tag, else `ty`.
+pub(super) fn tag_int_ty(ctx: &ModuleCtx, ty: Type) -> Type {
+    let Type::EnumTag(enum_ty) = ty else {
+        return ty;
+    };
+    ctx.with_ty_store(|store| {
+        store
+            .enum_data(enum_ty)
+            .expect("enum tag must reference an enum")
+            .tag_ty()
+    })
+}
+
+fn tag_imm(ctx: &ModuleCtx, variant: EnumVariantRef) -> Immediate {
+    let tag_ty = tag_int_ty(ctx, Type::EnumTag(variant.enum_ty()));
+    Immediate::from_i256(I256::from(u64::from(variant.index())), tag_ty)
+}
+
+fn rewrite_declared_signatures(module: &Module, lowerer: &mut impl TypeRewrite) -> bool {
     // Declaration maps iterate in hash order; rewriting in that order would
-    // create the lowered structs in a different order on each run.
+    // create lowered types in a different order on each run.
     let mut funcs: Vec<_> = module
         .ctx
         .declared_funcs
@@ -331,11 +125,9 @@ fn rewrite_declared_signatures(module: &Module, lowerer: &mut EnumTypeLowerer) -
     changed
 }
 
-fn rewrite_global_types(
-    module: &Module,
-    lowerer: &mut EnumTypeLowerer,
-    original_types: &TypeStore,
-) -> bool {
+/// Rewrites global types with `lowerer` and enum tag immediates in their
+/// initializers to integers. Initializers hold no enums.
+pub(super) fn lower_global_tags(module: &Module, lowerer: &mut impl TypeRewrite) -> bool {
     let globals: Vec<_> = module
         .ctx
         .with_gv_store(|store| store.all_gv_refs().collect());
@@ -345,19 +137,11 @@ fn rewrite_global_types(
         let Some(gv_data) = module.ctx.with_gv_store(|store| store.get(gv).cloned()) else {
             continue;
         };
-        let (new_ty, new_initializer) = if let Some(initializer) = gv_data.initializer.clone() {
-            let (new_ty, initializer) = rewrite_global_initializer(
-                &module.ctx,
-                lowerer,
-                original_types,
-                gv_data.ty,
-                initializer,
-            );
-            (new_ty, Some(initializer))
-        } else {
-            (lowerer.rewrite_type(&module.ctx, gv_data.ty), None)
-        };
-
+        let new_ty = lowerer.rewrite_type(&module.ctx, gv_data.ty);
+        let new_initializer = gv_data
+            .initializer
+            .clone()
+            .map(|init| lower_initializer_tags(&module.ctx, init));
         if new_ty != gv_data.ty || new_initializer != gv_data.initializer {
             module.ctx.with_gv_store_mut(|store| {
                 store.update_ty(gv, new_ty);
@@ -370,455 +154,754 @@ fn rewrite_global_types(
     changed
 }
 
-fn rewrite_global_initializer(
-    ctx: &ModuleCtx,
-    lowerer: &mut EnumTypeLowerer,
-    original_types: &TypeStore,
-    ty: Type,
-    initializer: GvInitializer,
-) -> (Type, GvInitializer) {
-    let compound = match ty {
-        Type::Compound(compound) => Some(original_types.resolve_compound(compound)),
-        _ => None,
-    };
-    let new_ty = lowerer.rewrite_type(ctx, ty);
-    let initializer = match (ty, compound, initializer) {
-        (
-            Type::EnumTag(expected_enum),
-            _,
-            GvInitializer::Immediate(Immediate::EnumTag { enum_ty, value }),
-        ) if enum_ty == expected_enum => {
-            GvInitializer::Immediate(Immediate::from_i256(value, new_ty))
-        }
-        (
-            Type::Compound(_),
-            Some(CompoundType::Array { elem, .. }),
-            GvInitializer::Array(items),
-        ) => GvInitializer::Array(
+fn lower_initializer_tags(ctx: &ModuleCtx, init: GvInitializer) -> GvInitializer {
+    match init {
+        GvInitializer::Immediate(imm) => GvInitializer::Immediate(lower_imm_tag(ctx, imm)),
+        GvInitializer::Array(items) => GvInitializer::Array(
             items
                 .into_iter()
-                .map(|item| rewrite_global_initializer(ctx, lowerer, original_types, *elem, item).1)
+                .map(|item| lower_initializer_tags(ctx, item))
                 .collect(),
         ),
-        (Type::Compound(_), Some(CompoundType::Struct(data)), GvInitializer::Struct(fields)) => {
-            GvInitializer::Struct(
-                fields
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, field)| {
-                        if let Some(field_ty) = data.fields.get(index) {
-                            rewrite_global_initializer(
-                                ctx,
-                                lowerer,
-                                original_types,
-                                *field_ty,
-                                field,
-                            )
-                            .1
-                        } else {
-                            field
-                        }
-                    })
-                    .collect(),
-            )
-        }
-        (_, _, initializer) => initializer,
-    };
-    (new_ty, initializer)
+        GvInitializer::Struct(fields) => GvInitializer::Struct(
+            fields
+                .into_iter()
+                .map(|field| lower_initializer_tags(ctx, field))
+                .collect(),
+        ),
+    }
 }
 
-fn rewrite_function_enum_insts(function: &mut Function, lowerer: &mut EnumTypeLowerer) -> bool {
-    let mut changed = false;
-
-    let blocks: Vec<_> = function.layout.iter_block().collect();
-    for block in blocks {
-        let insts: Vec<_> = function.layout.iter_inst(block).collect();
-        for inst in insts {
-            if !function.layout.is_inst_inserted(inst) {
-                continue;
-            }
-            changed |= rewrite_inst(function, inst, lowerer);
+fn lower_imm_tag(ctx: &ModuleCtx, imm: Immediate) -> Immediate {
+    match imm {
+        Immediate::EnumTag { enum_ty, value } => {
+            Immediate::from_i256(value, tag_int_ty(ctx, Type::EnumTag(enum_ty)))
         }
+        imm => imm,
     }
-
-    changed
 }
 
-fn rewrite_inst(
-    function: &mut Function,
-    inst: sonatina_ir::InstId,
-    lowerer: &mut EnumTypeLowerer,
-) -> bool {
-    if let Some(enum_make) = function.dfg.downcast::<&data::EnumMake>(inst).cloned() {
-        let layout = lowerer.layout(function.ctx(), enum_make.variant().enum_ty());
-        let aggregate = lower_enum_make(function, inst, &layout, &enum_make);
-        alias_and_remove_inst(function, inst, Some(aggregate));
-        return true;
-    }
-
-    if let Some(enum_tag) = function.dfg.downcast::<&data::EnumTag>(inst).cloned() {
-        let result = function
-            .dfg
-            .inst_result(inst)
-            .expect("enum.tag must have a result before lowering");
-        let Type::EnumTag(enum_ty) = function.dfg.value_ty(result) else {
-            panic!("enum.tag result must use enumtag type before lowering");
+/// Replaces `function`'s enum tag immediates by integers, which a type
+/// rewrite cannot retype.
+pub(super) fn lower_tag_immediates(function: &mut Function) -> bool {
+    let tags: Vec<_> = function
+        .dfg
+        .immediates
+        .iter()
+        .filter(|(imm, _)| matches!(imm, Immediate::EnumTag { .. }))
+        .map(|(&imm, &value)| (imm, value))
+        .collect();
+    for &(imm, value) in &tags {
+        let lowered = lower_imm_tag(function.ctx(), imm);
+        function.dfg.immediates.remove(&imm);
+        function.dfg.immediates.entry(lowered).or_insert(value);
+        function.dfg.values[value] = Value::Immediate {
+            imm: lowered,
+            ty: lowered.ty(),
         };
-        let layout = lowerer.layout(function.ctx(), enum_ty);
-        let tag = insert_extract_value_before(function, inst, *enum_tag.value(), 0, layout.tag_ty);
-        alias_and_remove_inst(function, inst, Some(tag));
-        return true;
+    }
+    !tags.is_empty()
+}
+
+/// An enum lowered for EVM memory, where every type with bytes takes whole
+/// 32-byte words: a struct of its tag and payload parts. Every variant's
+/// fields start at the payload's first word.
+///
+/// Each payload word has the type of every variant's leaf there joined: the
+/// widest integer, or a pointer if any variant has one. A part is the largest
+/// field, or child of a field, whose leaves are the joined words it covers;
+/// other variants' fields there map to its nodes and leaves.
+#[derive(Debug)]
+pub(super) struct LoweredEnum {
+    ty: Type,
+    tag_ty: Type,
+    /// The struct's fields after the tag: each part's first word and type.
+    parts: Vec<(u32, Type)>,
+    /// Each variant's fields: their first words and lowered types.
+    fields: Vec<Vec<(u32, Type)>>,
+}
+
+impl LoweredEnum {
+    fn field(&self, variant: EnumVariantRef, field: usize) -> (u32, Type) {
+        self.fields[variant.index() as usize][field]
     }
 
-    if let Some(enum_is_variant) = function.dfg.downcast::<&data::EnumIsVariant>(inst).cloned() {
-        let layout = lowerer.layout(function.ctx(), enum_is_variant.variant().enum_ty());
-        let tag =
-            insert_extract_value_before(function, inst, *enum_is_variant.value(), 0, layout.tag_ty);
-        let tag_const = function
+    /// The path from the struct to the node of type `ty` at payload `word`,
+    /// or else to the word's leaf, with each step's index and type.
+    fn path(&self, ctx: &ModuleCtx, word: u32, ty: Type) -> SmallVec<[(u32, Type); 4]> {
+        let part = self.parts.partition_point(|&(at, _)| at <= word) - 1;
+        let (mut at, mut node) = self.parts[part];
+        let mut path = smallvec![(part as u32 + 1, node)];
+        while !(at == word && node == ty)
+            && let Some(children) = children(ctx, node)
+        {
+            let (index, child) = children
+                .into_iter()
+                .enumerate()
+                .find(|&(_, child)| {
+                    let end = at + words(ctx, child);
+                    let contains = word < end;
+                    if !contains {
+                        at = end;
+                    }
+                    contains
+                })
+                .expect("a part covers its words");
+            node = child;
+            path.push((index as u32, node));
+        }
+        path
+    }
+}
+
+/// The enums a type rewrite has lowered to structs, by enum.
+#[derive(Default)]
+pub(super) struct LoweredEnums(FxHashMap<CompoundTypeRef, Rc<LoweredEnum>>);
+
+/// A type rewrite that lowers enums to their EVM structs.
+pub(super) trait EnumWordRewrite: TypeRewrite + Sized {
+    fn lowered_enums(&mut self) -> &mut LoweredEnums;
+}
+
+/// Lowers `enum_ty` to a struct of its tag and shared payload parts, its
+/// fields lowered by `rewriter`.
+pub(super) fn lower_enum_type<R: EnumWordRewrite>(
+    rewriter: &mut R,
+    ctx: &ModuleCtx,
+    enum_ty: CompoundTypeRef,
+    data: &EnumData,
+) -> Type {
+    let name = format!("__enum_lowered_{}_{}", data.name, enum_ty.as_u32());
+    let lowered = ctx.with_ty_store_mut(|store| {
+        store
+            .lookup_struct(&name)
+            .map(Type::Compound)
+            .unwrap_or_else(|| store.make_struct(&name, &[], false))
+    });
+    // A payload may point back to this enum.
+    rewriter.compound_map().insert(enum_ty, lowered);
+
+    let variants: Vec<Vec<Type>> = data
+        .variants
+        .iter()
+        .map(|variant| {
+            variant
+                .fields
+                .iter()
+                .map(|&field| rewriter.rewrite_type(ctx, field))
+                .collect()
+        })
+        .collect();
+    let parts = payload_parts(ctx, &variants);
+    let fields = variants
+        .into_iter()
+        .map(|fields| {
+            let mut word = 0;
+            fields
+                .into_iter()
+                .map(|ty| {
+                    let at = word;
+                    word += words(ctx, ty);
+                    (at, ty)
+                })
+                .collect()
+        })
+        .collect();
+    let tag_ty = data.tag_ty();
+    let struct_fields: Vec<_> = std::iter::once(tag_ty)
+        .chain(parts.iter().map(|&(_, ty)| ty))
+        .collect();
+    ctx.with_ty_store_mut(|store| store.update_struct_fields(&name, &struct_fields));
+    rewriter.lowered_enums().0.insert(
+        enum_ty,
+        Rc::new(LoweredEnum {
+            ty: lowered,
+            tag_ty,
+            parts,
+            fields,
+        }),
+    );
+    lowered
+}
+
+/// The parts that `variants`' fields, lowered, share: see `LoweredEnum`.
+fn payload_parts(ctx: &ModuleCtx, variants: &[Vec<Type>]) -> Vec<(u32, Type)> {
+    // The type each payload word must hold: every variant's leaf there joined.
+    let leaves: Vec<Vec<Type>> = variants
+        .iter()
+        .map(|fields| fields.iter().flat_map(|&ty| word_leaves(ctx, ty)).collect())
+        .collect();
+    let width = leaves.iter().map(Vec::len).max().unwrap_or(0);
+    let joined: Vec<Type> = (0..width)
+        .map(|word| {
+            let tys: Vec<Type> = leaves
+                .iter()
+                .filter_map(|tys| tys.get(word).copied())
+                .collect();
+            join_words(ctx, &tys)
+        })
+        .collect();
+
+    // Each variant's fields not yet placed, the next on top, starting at `word`.
+    let mut pending: Vec<Vec<Type>> = variants
+        .iter()
+        .map(|fields| fields.iter().rev().copied().collect())
+        .collect();
+    let mut parts = Vec::new();
+    let mut word = 0;
+    while word < width {
+        for fields in &mut pending {
+            while fields.last().is_some_and(|&ty| words(ctx, ty) == 0) {
+                fields.pop();
+            }
+        }
+        // The first of the largest fields starting here whose leaves are the
+        // joined words.
+        let part = pending
+            .iter()
+            .filter_map(|fields| fields.last().copied())
+            .filter(|&ty| {
+                let leaves = word_leaves(ctx, ty);
+                !leaves.is_empty() && joined[word..].starts_with(&leaves)
+            })
+            .min_by_key(|&ty| Reverse(words(ctx, ty)));
+        let Some(part) = part else {
+            for fields in &mut pending {
+                if let Some(&ty) = fields.last()
+                    && let Some(children) = children(ctx, ty)
+                {
+                    fields.pop();
+                    fields.extend(children.into_iter().rev());
+                }
+            }
+            continue;
+        };
+        let end = word + words(ctx, part) as usize;
+        for fields in &mut pending {
+            let mut at = word;
+            while at < end
+                && let Some(ty) = fields.pop()
+            {
+                let size = words(ctx, ty) as usize;
+                if at + size <= end {
+                    at += size;
+                } else {
+                    // Only an aggregate straddles a part's end.
+                    fields.extend(children(ctx, ty).unwrap().into_iter().rev());
+                }
+            }
+        }
+        parts.push((word as u32, part));
+        word = end;
+    }
+    parts
+}
+
+/// The single-word leaves of `ty` in EVM memory order.
+fn word_leaves(ctx: &ModuleCtx, ty: Type) -> Vec<Type> {
+    match children(ctx, ty) {
+        Some(children) => children
+            .into_iter()
+            .flat_map(|child| word_leaves(ctx, child))
+            .collect(),
+        None if words(ctx, ty) == 0 => Vec::new(),
+        None => vec![ty],
+    }
+}
+
+/// The words `ty` takes in EVM memory.
+fn words(ctx: &ModuleCtx, ty: Type) -> u32 {
+    let size = ctx
+        .size_of(ty)
+        .unwrap_or_else(|err| panic!("enum payload type {ty:?} has no EVM layout: {err:?}"));
+    u32::try_from(size / 32).expect("enum payload too large")
+}
+
+/// The fields or elements of aggregate `ty`.
+fn children(ctx: &ModuleCtx, ty: Type) -> Option<Vec<Type>> {
+    match ty.resolve_compound(ctx)? {
+        CompoundType::Struct(data) => Some(data.fields),
+        CompoundType::Array { elem, len } => Some(vec![elem; len]),
+        _ => None,
+    }
+}
+
+/// One word type that holds every single-word type in `tys`: the first
+/// pointer, else the widest integer.
+fn join_words(ctx: &ModuleCtx, tys: &[Type]) -> Type {
+    if let Some(&ptr) = tys
+        .iter()
+        .find(|&&ty| ctx.with_ty_store(|store| store.is_ptr(ty)))
+    {
+        return ptr;
+    }
+    tys.iter()
+        .copied()
+        .reduce(|a, b| {
+            assert!(
+                a.is_integral() && b.is_integral(),
+                "an EVM enum payload word cannot hold both {a:?} and {b:?}"
+            );
+            if a >= b { a } else { b }
+        })
+        .expect("a payload word holds a field")
+}
+
+/// Lowers enum instruction `inst` in `func`, whose types `rewriter` has
+/// lowered and whose objects are pointers. Returns whether it was one.
+pub(super) fn lower_enum_inst<R: EnumWordRewrite>(
+    rewriter: &mut R,
+    func: &mut Function,
+    inst: InstId,
+) -> bool {
+    let mut layout = |func: &Function, variant: EnumVariantRef| {
+        rewriter.rewrite_type(func.ctx(), Type::Compound(variant.enum_ty()));
+        Rc::clone(&rewriter.lowered_enums().0[&variant.enum_ty()])
+    };
+    let replacement = if let Some(make) = func.dfg.downcast::<&data::EnumMake>(inst).cloned() {
+        let layout = layout(func, *make.variant());
+        let tag = func
             .dfg
-            .make_imm_value(layout.tag_imm(*enum_is_variant.variant()));
-        let eq = insert_result_inst(
-            function,
+            .make_imm_value(tag_imm(func.ctx(), *make.variant()));
+        let mut value = func.dfg.make_undef_value(layout.ty);
+        value = insert_value(func, inst, value, 0, tag);
+        for (field, &payload) in make.values().iter().enumerate() {
+            let (word, ty) = layout.field(*make.variant(), field);
+            value = write_word_value(func, inst, &layout, value, word, ty, payload);
+        }
+        Some(value)
+    } else if let Some(tag) = func.dfg.downcast::<&data::EnumTag>(inst).cloned() {
+        let tag_ty = func.dfg.value_ty(func.dfg.inst_result(inst).unwrap());
+        Some(extract_value(func, inst, *tag.value(), 0, tag_ty))
+    } else if let Some(is_variant) = func.dfg.downcast::<&data::EnumIsVariant>(inst).cloned() {
+        let layout = layout(func, *is_variant.variant());
+        let tag = extract_value(func, inst, *is_variant.value(), 0, layout.tag_ty);
+        let expected = func
+            .dfg
+            .make_imm_value(tag_imm(func.ctx(), *is_variant.variant()));
+        let is = func.inst_set();
+        Some(insert_before(
+            func,
             inst,
-            Box::new(cmp::Eq::new_unchecked(function.inst_set(), tag, tag_const)),
+            cmp::Eq::new_unchecked(is, tag, expected),
             Type::I1,
-        );
-        alias_and_remove_inst(function, inst, Some(eq));
-        return true;
-    }
-
-    if function
+        ))
+    } else if func
         .dfg
         .downcast::<&data::EnumAssertVariant>(inst)
         .is_some()
     {
-        alias_and_remove_inst(function, inst, None);
-        return true;
-    }
-
-    if let Some(enum_assert_ref) = function.dfg.downcast::<&data::EnumAssertVariantRef>(inst) {
-        alias_and_remove_inst(function, inst, Some(*enum_assert_ref.object()));
-        return true;
-    }
-
-    if let Some(enum_extract) = function.dfg.downcast::<&data::EnumExtract>(inst).cloned() {
-        let layout = lowerer.layout(function.ctx(), enum_extract.variant().enum_ty());
-        let field_idx = function
-            .dfg
-            .value_imm(*enum_extract.field())
-            .expect("enum.extract field index must be immediate")
-            .to_nonnegative_usize()
-            .expect("enum.extract field index must be non-negative and fit in usize");
-        let result_ty = layout.payload_tys(*enum_extract.variant())[field_idx];
-        let slot = layout.payload_slot(*enum_extract.variant(), field_idx);
-        let value =
-            insert_extract_value_before(function, inst, *enum_extract.value(), slot, result_ty);
-        alias_and_remove_inst(function, inst, Some(value));
-        return true;
-    }
-
-    if let Some(enum_set_tag) = function.dfg.downcast::<&data::EnumSetTag>(inst).cloned() {
-        let layout = lowerer.layout(function.ctx(), enum_set_tag.variant().enum_ty());
-        let tag_slot =
-            insert_obj_proj_before(function, inst, *enum_set_tag.object(), 0, layout.tag_ty);
-        let tag_value = function
-            .dfg
-            .make_imm_value(layout.tag_imm(*enum_set_tag.variant()));
-        insert_no_result_inst(
-            function,
+        None
+    } else if let Some(assert) = func.dfg.downcast::<&data::EnumAssertVariantRef>(inst) {
+        Some(*assert.object())
+    } else if let Some(extract) = func.dfg.downcast::<&data::EnumExtract>(inst).cloned() {
+        let layout = layout(func, *extract.variant());
+        let (word, ty) = layout.field(*extract.variant(), field_index(func, *extract.field()));
+        Some(read_word_value(
+            func,
             inst,
-            Box::new(data::ObjStore::new_unchecked(
-                function.inst_set(),
-                tag_slot,
-                tag_value,
-            )),
-        );
-        alias_and_remove_inst(function, inst, None);
-        return true;
-    }
-
-    if let Some(enum_write) = function
-        .dfg
-        .downcast::<&data::EnumWriteVariant>(inst)
-        .cloned()
-    {
-        let layout = lowerer.layout(function.ctx(), enum_write.variant().enum_ty());
-        for (field_idx, &value) in enum_write.values().iter().enumerate() {
-            let field_ty = layout.payload_tys(*enum_write.variant())[field_idx];
-            let slot = layout.payload_slot(*enum_write.variant(), field_idx);
-            let field_obj =
-                insert_obj_proj_before(function, inst, *enum_write.object(), slot, field_ty);
-            insert_no_result_inst(
-                function,
-                inst,
-                Box::new(data::ObjStore::new_unchecked(
-                    function.inst_set(),
-                    field_obj,
-                    value,
-                )),
-            );
-        }
-
-        let tag_slot =
-            insert_obj_proj_before(function, inst, *enum_write.object(), 0, layout.tag_ty);
-        let tag_value = function
-            .dfg
-            .make_imm_value(layout.tag_imm(*enum_write.variant()));
-        insert_no_result_inst(
-            function,
+            &layout,
+            *extract.value(),
+            word,
+            ty,
+        ))
+    } else if let Some(proj) = func.dfg.downcast::<&data::EnumProj>(inst).cloned() {
+        let layout = layout(func, *proj.variant());
+        let (word, ty) = layout.field(*proj.variant(), field_index(func, *proj.field()));
+        Some(field_ptr(func, inst, &layout, *proj.object(), word, ty))
+    } else if let Some(get_tag) = func.dfg.downcast::<&data::EnumGetTag>(inst).cloned() {
+        let tag_ty = func.dfg.value_ty(func.dfg.inst_result(inst).unwrap());
+        let tag_ptr = part_ptr(func, inst, *get_tag.object(), 0, tag_ty);
+        let is = func.inst_set();
+        Some(insert_before(
+            func,
             inst,
-            Box::new(data::ObjStore::new_unchecked(
-                function.inst_set(),
-                tag_slot,
-                tag_value,
-            )),
-        );
-        alias_and_remove_inst(function, inst, None);
-        return true;
-    }
-
-    if let Some(enum_get_tag) = function.dfg.downcast::<&data::EnumGetTag>(inst).cloned() {
-        let result = function
-            .dfg
-            .inst_result(inst)
-            .expect("enum.get_tag must have a result before lowering");
-        let Type::EnumTag(enum_ty) = function.dfg.value_ty(result) else {
-            panic!("enum.get_tag result must use enumtag type before lowering");
-        };
-        let layout = lowerer.layout(function.ctx(), enum_ty);
-        let tag_slot =
-            insert_obj_proj_before(function, inst, *enum_get_tag.object(), 0, layout.tag_ty);
-        let tag = insert_result_inst(
-            function,
-            inst,
-            Box::new(data::ObjLoad::new_unchecked(function.inst_set(), tag_slot)),
-            layout.tag_ty,
-        );
-        alias_and_remove_inst(function, inst, Some(tag));
-        return true;
-    }
-
-    if let Some(enum_proj) = function.dfg.downcast::<&data::EnumProj>(inst).cloned() {
-        let layout = lowerer.layout(function.ctx(), enum_proj.variant().enum_ty());
-        let field_idx = function
-            .dfg
-            .value_imm(*enum_proj.field())
-            .expect("enum.proj field index must be immediate")
-            .to_nonnegative_usize()
-            .expect("enum.proj field index must be non-negative and fit in usize");
-        let field_ty = layout.payload_tys(*enum_proj.variant())[field_idx];
-        let slot = layout.payload_slot(*enum_proj.variant(), field_idx);
-        let field = insert_obj_proj_before(function, inst, *enum_proj.object(), slot, field_ty);
-        alias_and_remove_inst(function, inst, Some(field));
-        return true;
-    }
-
-    false
-}
-
-fn rewrite_function_types(function: &mut Function, lowerer: &mut EnumTypeLowerer) -> bool {
-    let mut changed = false;
-    let value_ids: Vec<_> = function.dfg.value_ids().collect();
-    for value_id in value_ids {
-        let old_ty = function.dfg.value_ty(value_id);
-        let new_ty = lowerer.rewrite_type(function.ctx(), old_ty);
-        if new_ty == old_ty {
-            continue;
-        }
-
-        function.dfg.values[value_id] = match function.dfg.value(value_id).clone() {
-            Value::Immediate { imm, .. } => Value::Immediate {
-                imm: if imm.ty() == new_ty {
-                    imm
-                } else {
-                    Immediate::from_i256(imm.as_i256(), new_ty)
-                },
-                ty: new_ty,
-            },
-            Value::Inst {
-                inst, result_idx, ..
-            } => Value::Inst {
-                inst,
-                result_idx,
-                ty: new_ty,
-            },
-            Value::Arg { idx, .. } => Value::Arg { idx, ty: new_ty },
-            Value::Global { gv, .. } => Value::Global { gv, ty: new_ty },
-            Value::Undef { .. } => Value::Undef { ty: new_ty },
-        };
-        changed = true;
-    }
-
-    struct TypeVisitor<'a> {
-        ctx: ModuleCtx,
-        lowerer: &'a mut EnumTypeLowerer,
-        changed: bool,
-    }
-
-    impl VisitorMut for TypeVisitor<'_> {
-        fn visit_ty(&mut self, item: &mut Type) {
-            let new_ty = self.lowerer.rewrite_type(&self.ctx, *item);
-            self.changed |= new_ty != *item;
-            *item = new_ty;
-        }
-    }
-
-    let mut visitor = TypeVisitor {
-        ctx: function.ctx().clone(),
-        lowerer,
-        changed: false,
-    };
-    let blocks: Vec<_> = function.layout.iter_block().collect();
-    for block in blocks {
-        let insts: Vec<_> = function.layout.iter_inst(block).collect();
-        for inst in insts {
-            if function.layout.is_inst_inserted(inst) {
-                function.dfg.inst_mut(inst).accept_mut(&mut visitor);
+            data::Mload::new_unchecked(is, tag_ptr, tag_ty),
+            tag_ty,
+        ))
+    } else if let Some(set_tag) = func.dfg.downcast::<&data::EnumSetTag>(inst).cloned() {
+        let layout = layout(func, *set_tag.variant());
+        store_tag(func, inst, &layout, *set_tag.object(), *set_tag.variant());
+        None
+    } else if let Some(write) = func.dfg.downcast::<&data::EnumWriteVariant>(inst).cloned() {
+        let layout = layout(func, *write.variant());
+        for (field, &payload) in write.values().iter().enumerate() {
+            let (word, ty) = layout.field(*write.variant(), field);
+            if words(func.ctx(), ty) != 0 {
+                let ptr = field_ptr(func, inst, &layout, *write.object(), word, ty);
+                let is = func.inst_set();
+                insert_before_no_result(
+                    func,
+                    inst,
+                    data::Mstore::new_unchecked(is, ptr, payload, ty),
+                );
             }
         }
-    }
-
-    changed || visitor.changed
-}
-
-fn lower_enum_make(
-    function: &mut Function,
-    inst: sonatina_ir::InstId,
-    layout: &EnumLayoutInfo,
-    enum_make: &data::EnumMake,
-) -> ValueId {
-    let mut aggregate = function.dfg.make_undef_value(layout.lowered_ty());
-    let tag = function
-        .dfg
-        .make_imm_value(layout.tag_imm(*enum_make.variant()));
-    aggregate = insert_insert_value_before(function, inst, aggregate, 0, tag, layout.lowered_ty());
-    for (field_idx, &value) in enum_make.values().iter().enumerate() {
-        let slot = layout.payload_slot(*enum_make.variant(), field_idx);
-        aggregate =
-            insert_insert_value_before(function, inst, aggregate, slot, value, layout.lowered_ty());
-    }
-    aggregate
-}
-
-fn choose_tag_ty(variant_count: usize) -> Type {
-    if variant_count <= 2 {
-        Type::I1
-    } else if u8::try_from(variant_count).is_ok() {
-        Type::I8
-    } else if u16::try_from(variant_count).is_ok() {
-        Type::I16
-    } else if u32::try_from(variant_count).is_ok() {
-        Type::I32
-    } else if u64::try_from(variant_count).is_ok() {
-        Type::I64
+        store_tag(func, inst, &layout, *write.object(), *write.variant());
+        None
     } else {
-        Type::I256
+        return false;
+    };
+
+    if let Some(result) = func.dfg.inst_result(inst)
+        && let Some(replacement) = replacement
+    {
+        func.dfg.change_to_alias(result, replacement);
     }
+    func.layout.remove_inst(inst);
+    func.erase_inst(inst);
+    true
 }
 
-fn insert_insert_value_before(
-    function: &mut Function,
-    inst: sonatina_ir::InstId,
+fn field_index(func: &Function, field: ValueId) -> usize {
+    func.dfg
+        .value_imm(field)
+        .and_then(|imm| imm.to_nonnegative_usize())
+        .expect("enum field index must be a non-negative immediate")
+}
+
+/// Inserts `value`, of type `ty` at payload `word`, into enum value `dest`.
+fn write_word_value(
+    func: &mut Function,
+    before: InstId,
+    layout: &LoweredEnum,
     dest: ValueId,
-    idx: u32,
+    word: u32,
+    ty: Type,
     value: ValueId,
-    ty: Type,
 ) -> ValueId {
-    let idx_value = function.dfg.make_imm_value(i64::from(idx));
-    insert_result_inst(
-        function,
-        inst,
-        Box::new(data::InsertValue::new_unchecked(
-            function.inst_set(),
-            dest,
-            idx_value,
-            value,
-        )),
-        ty,
-    )
+    if words(func.ctx(), ty) == 0 {
+        return dest;
+    }
+    let path = layout.path(func.ctx(), word, ty);
+    let node_ty = path.last().unwrap().1;
+    if node_ty == ty {
+        return insert_path(func, before, dest, &path, value);
+    }
+    let Some(children) = children(func.ctx(), ty) else {
+        let value = cast_word(func, before, value, node_ty);
+        return insert_path(func, before, dest, &path, value);
+    };
+    let mut dest = dest;
+    let mut at = word;
+    for (index, child) in children.into_iter().enumerate() {
+        let child_value = extract_value(func, before, value, index as u32, child);
+        dest = write_word_value(func, before, layout, dest, at, child, child_value);
+        at += words(func.ctx(), child);
+    }
+    dest
 }
 
-fn insert_extract_value_before(
-    function: &mut Function,
-    inst: sonatina_ir::InstId,
-    dest: ValueId,
-    idx: u32,
+/// The value of type `ty` at payload `word` of enum value `src`.
+fn read_word_value(
+    func: &mut Function,
+    before: InstId,
+    layout: &LoweredEnum,
+    src: ValueId,
+    word: u32,
     ty: Type,
 ) -> ValueId {
-    let idx_value = function.dfg.make_imm_value(i64::from(idx));
-    insert_result_inst(
-        function,
-        inst,
-        Box::new(data::ExtractValue::new_unchecked(
-            function.inst_set(),
-            dest,
-            idx_value,
-        )),
-        ty,
-    )
-}
-
-fn insert_obj_proj_before(
-    function: &mut Function,
-    inst: sonatina_ir::InstId,
-    object: ValueId,
-    idx: u32,
-    field_ty: Type,
-) -> ValueId {
-    let idx_value = function.dfg.make_imm_value(i64::from(idx));
-    let result_ty = function
-        .ctx()
-        .with_ty_store_mut(|store| store.make_obj_ref(field_ty));
-    insert_result_inst(
-        function,
-        inst,
-        Box::new(data::ObjProj::new_unchecked(
-            function.inst_set(),
-            smallvec![object, idx_value],
-        )),
-        result_ty,
-    )
-}
-
-fn insert_result_inst(
-    function: &mut Function,
-    before: sonatina_ir::InstId,
-    data: Box<dyn sonatina_ir::Inst>,
-    ty: Type,
-) -> ValueId {
-    let mut cursor = InstInserter::at_location(inst_insert_loc(function, before));
-    let inst = cursor.insert_inst_data_dyn_from(function, before, data);
-    let value = cursor.make_result(function, inst, ty);
-    cursor.attach_result(function, inst, value);
+    if words(func.ctx(), ty) == 0 {
+        return func.dfg.make_undef_value(ty);
+    }
+    let path = layout.path(func.ctx(), word, ty);
+    let node_ty = path.last().unwrap().1;
+    if node_ty == ty {
+        return extract_path(func, before, src, &path);
+    }
+    let Some(children) = children(func.ctx(), ty) else {
+        let leaf = extract_path(func, before, src, &path);
+        return cast_word(func, before, leaf, ty);
+    };
+    let mut value = func.dfg.make_undef_value(ty);
+    let mut at = word;
+    for (index, child) in children.into_iter().enumerate() {
+        let child_value = read_word_value(func, before, layout, src, at, child);
+        value = insert_value(func, before, value, index as u32, child_value);
+        at += words(func.ctx(), child);
+    }
     value
 }
 
-fn insert_no_result_inst(
-    function: &mut Function,
-    before: sonatina_ir::InstId,
-    data: Box<dyn sonatina_ir::Inst>,
-) {
-    let mut cursor = InstInserter::at_location(inst_insert_loc(function, before));
-    let _ = cursor.insert_inst_data_dyn_from(function, before, data);
+fn extract_path(
+    func: &mut Function,
+    before: InstId,
+    src: ValueId,
+    path: &[(u32, Type)],
+) -> ValueId {
+    path.iter().fold(src, |value, &(index, ty)| {
+        extract_value(func, before, value, index, ty)
+    })
 }
 
-fn inst_insert_loc(function: &Function, inst: sonatina_ir::InstId) -> CursorLocation {
-    function.layout.prev_inst_of(inst).map_or(
-        CursorLocation::BlockTop(function.layout.inst_block(inst)),
-        CursorLocation::At,
+fn insert_path(
+    func: &mut Function,
+    before: InstId,
+    dest: ValueId,
+    path: &[(u32, Type)],
+    value: ValueId,
+) -> ValueId {
+    let Some((&(index, ty), rest)) = path.split_first() else {
+        return value;
+    };
+    let value = if rest.is_empty() {
+        value
+    } else {
+        let child = inserted_part(func, dest, index)
+            .unwrap_or_else(|| extract_value(func, before, dest, index, ty));
+        insert_path(func, before, child, rest, value)
+    };
+    insert_value(func, before, dest, index, value)
+}
+
+/// Part `index` of `value` when `value` is undef or inserts its parts
+/// directly, as an enum value under construction does.
+fn inserted_part(func: &mut Function, value: ValueId, index: u32) -> Option<ValueId> {
+    if let Value::Undef { ty } = *func.dfg.value(value) {
+        let part_ty = children(func.ctx(), ty)?[index as usize];
+        return Some(func.dfg.make_undef_value(part_ty));
+    }
+    let insert = func
+        .dfg
+        .downcast::<&data::InsertValue>(func.dfg.value_inst(value)?)?
+        .clone();
+    if func.dfg.value_imm(*insert.idx())?.to_nonnegative_usize()? == index as usize {
+        Some(*insert.value())
+    } else {
+        inserted_part(func, *insert.dest(), index)
+    }
+}
+
+/// A pointer to the field of type `ty` at payload `word` of the enum at
+/// `base`.
+fn field_ptr(
+    func: &mut Function,
+    before: InstId,
+    layout: &LoweredEnum,
+    base: ValueId,
+    word: u32,
+    ty: Type,
+) -> ValueId {
+    let ptr_ty = func.ctx().with_ty_store_mut(|store| store.make_ptr(ty));
+    // A field without words reads nothing; any address in the enum will do.
+    if words(func.ctx(), ty) == 0 {
+        return bitcast_before(func, before, base, ptr_ty);
+    }
+    let path = layout.path(func.ctx(), word, ty);
+    let node_ty = path.last().unwrap().1;
+    let mut indices: SmallVec<[ValueId; 8]> = smallvec![base, func.dfg.make_imm_value(0i64)];
+    indices.extend(
+        path.iter()
+            .map(|&(index, _)| func.dfg.make_imm_value(i64::from(index))),
+    );
+    let node_ptr_ty = func
+        .ctx()
+        .with_ty_store_mut(|store| store.make_ptr(node_ty));
+    let is = func.inst_set();
+    let ptr = insert_before(
+        func,
+        before,
+        data::Gep::new_unchecked(is, indices),
+        node_ptr_ty,
+    );
+    if node_ty == ty {
+        ptr
+    } else {
+        bitcast_before(func, before, ptr, ptr_ty)
+    }
+}
+
+fn part_ptr(func: &mut Function, before: InstId, base: ValueId, part: u32, ty: Type) -> ValueId {
+    let zero = func.dfg.make_imm_value(0i64);
+    let index = func.dfg.make_imm_value(i64::from(part));
+    let ptr_ty = func.ctx().with_ty_store_mut(|store| store.make_ptr(ty));
+    let is = func.inst_set();
+    insert_before(
+        func,
+        before,
+        data::Gep::new_unchecked(is, smallvec![base, zero, index]),
+        ptr_ty,
     )
 }
 
-fn alias_and_remove_inst(
-    function: &mut Function,
-    inst: sonatina_ir::InstId,
-    replacement: Option<ValueId>,
+fn store_tag(
+    func: &mut Function,
+    before: InstId,
+    layout: &LoweredEnum,
+    base: ValueId,
+    variant: EnumVariantRef,
 ) {
-    if let Some(result) = function.dfg.inst_result(inst)
-        && let Some(replacement) = replacement
-    {
-        function.dfg.change_to_alias(result, replacement);
+    let tag_ptr = part_ptr(func, before, base, 0, layout.tag_ty);
+    let tag = func.dfg.make_imm_value(tag_imm(func.ctx(), variant));
+    let is = func.inst_set();
+    insert_before_no_result(
+        func,
+        before,
+        data::Mstore::new_unchecked(is, tag_ptr, tag, layout.tag_ty),
+    );
+}
+
+/// Converts single-word `value` to word type `to`.
+fn cast_word(func: &mut Function, before: InstId, value: ValueId, to: Type) -> ValueId {
+    let from = func.dfg.value_ty(value);
+    if from == to {
+        return value;
     }
-    function.layout.remove_inst(inst);
-    function.erase_inst(inst);
+    let is = func.inst_set();
+    let is_ptr = |ty| func.ctx().with_ty_store(|store| store.is_ptr(ty));
+    match (is_ptr(from), is_ptr(to)) {
+        (true, true) => bitcast_before(func, before, value, to),
+        (true, false) => insert_before(
+            func,
+            before,
+            cast::PtrToInt::new_unchecked(is, value, to),
+            to,
+        ),
+        (false, true) => insert_before(
+            func,
+            before,
+            cast::IntToPtr::new_unchecked(is, value, to),
+            to,
+        ),
+        (false, false) if from < to => {
+            insert_before(func, before, cast::Zext::new_unchecked(is, value, to), to)
+        }
+        (false, false) => {
+            insert_before(func, before, cast::Trunc::new_unchecked(is, value, to), to)
+        }
+    }
+}
+
+fn bitcast_before(func: &mut Function, before: InstId, value: ValueId, to: Type) -> ValueId {
+    let is = func.inst_set();
+    insert_before(
+        func,
+        before,
+        cast::Bitcast::new_unchecked(is, value, to),
+        to,
+    )
+}
+
+fn insert_value(
+    func: &mut Function,
+    before: InstId,
+    dest: ValueId,
+    index: u32,
+    value: ValueId,
+) -> ValueId {
+    let ty = func.dfg.value_ty(dest);
+    let index = func.dfg.make_imm_value(i64::from(index));
+    let is = func.inst_set();
+    insert_before(
+        func,
+        before,
+        data::InsertValue::new_unchecked(is, dest, index, value),
+        ty,
+    )
+}
+
+fn extract_value(
+    func: &mut Function,
+    before: InstId,
+    src: ValueId,
+    index: u32,
+    ty: Type,
+) -> ValueId {
+    let index = func.dfg.make_imm_value(i64::from(index));
+    let is = func.inst_set();
+    insert_before(
+        func,
+        before,
+        data::ExtractValue::new_unchecked(is, src, index),
+        ty,
+    )
+}
+
+fn insert_before(func: &mut Function, before: InstId, data: impl Inst, ty: Type) -> ValueId {
+    let inst = insert_before_no_result(func, before, data);
+    let result = func.dfg.make_value(Value::Inst {
+        inst,
+        result_idx: 0,
+        ty,
+    });
+    func.dfg.attach_result(inst, result);
+    result
+}
+
+fn insert_before_no_result(func: &mut Function, before: InstId, data: impl Inst) -> InstId {
+    let inst = func.dfg.make_inst(data);
+    func.propagate_inst_attribution(inst, before);
+    func.layout.insert_inst_before(inst, before);
+    inst
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::{Type, types::CompoundType};
+
+    use super::super::ObjectLowerToMemory;
+    use crate::test_support::{lookup_func, parse_test_module};
+
+    #[test]
+    fn variants_share_payload_parts_down_to_conflicting_words() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Point = {i256, i256};
+type @Option = enum { #None, #Some(@Point) };
+type @Mixed = enum { #None, #Pt(@Point), #Narrow(i8, i256), #Flag(i1) };
+type @Arr = enum { #Arr([i64; 3]), #Pair(i256, i1) };
+type @RefOrNum = enum { #Ref(objref<i256>), #Num(i64) };
+type @Zero = enum { #Z([i64; 0], i64), #W(i256) };
+type @Inner = enum { #Small(i8), #Wide(i256, i64) };
+type @Outer = enum { #Off, #On(@Inner, i64), #Raw(i256, i256, i256) };
+type @Code = enum { #A, #B, #C };
+type @Result = enum { #Err(@Code), #Ok(@Point) };
+type @Narrow = {i8, i256};
+type @Split = enum { #A(@Narrow), #B(i256, i256) };
+func public %f(v0.@Option, v1.@Mixed, v2.@Arr, v3.@RefOrNum, v4.@Zero, v5.@Outer, v6.@Result, v7.@Split) {
+block0:
+    return;
+}
+"#,
+        );
+        let ctx = &module.ctx;
+        let f = lookup_func(&module, "f");
+        let sizes: Vec<_> = ctx
+            .func_sig(f, |sig| sig.args().to_vec())
+            .into_iter()
+            .map(|ty| ctx.size_of(ty).unwrap())
+            .collect();
+        ObjectLowerToMemory.run(&module);
+
+        let point =
+            ctx.with_ty_store(|store| Type::Compound(store.lookup_struct("Point").unwrap()));
+        let ptr = ctx.with_ty_store_mut(|store| store.make_ptr(Type::I256));
+        let (i1, i8, i64, i256) = (Type::I1, Type::I8, Type::I64, Type::I256);
+        let expected = [
+            // One variant with a payload keeps its fields.
+            vec![i1, point],
+            // `Pt`'s point holds `Narrow`'s and `Flag`'s fields.
+            vec![i8, point],
+            vec![i1, i256, i64, i64],
+            // A word holding a pointer or an integer stays a pointer.
+            vec![i1, ptr],
+            // `Z`'s empty array takes no word.
+            vec![i1, i256],
+            // `On`'s inner enum splits: `Raw` needs a wider first word.
+            vec![i8, i256, i256, i256, i64],
+            // `Ok`'s point holds `Err`'s tag.
+            vec![i1, point],
+            // `A`'s struct splits: its first word is narrower than `B`'s.
+            vec![i1, i256, i256],
+        ];
+        let args = ctx.func_sig(f, |sig| sig.args().to_vec());
+        for ((arg, fields), size) in args.into_iter().zip(expected).zip(sizes) {
+            let Some(CompoundType::Struct(lowered)) = arg.resolve_compound(ctx) else {
+                panic!("{arg:?} should lower to a struct");
+            };
+            assert_eq!(lowered.fields, fields, "{}", lowered.name);
+            assert_eq!(ctx.size_of(arg).unwrap(), size, "{}", lowered.name);
+        }
+    }
 }

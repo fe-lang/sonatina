@@ -25,7 +25,7 @@ mod tail_calls;
 #[path = "cranelift/control_flow.rs"]
 mod wide_control_flow;
 
-use sonatina_codegen::{Compile, OptLevel, transform::aggregate::EnumLowerToProduct};
+use sonatina_codegen::{Compile, OptLevel};
 use sonatina_cranelift::{CraneliftError, CraneliftJitArtifact, CraneliftJitBackend};
 use sonatina_ir::{
     I256, Immediate, Linkage, Signature, Type, U256,
@@ -373,6 +373,312 @@ fn enum_instructions_are_legalized_before_translation() {
 }
 
 #[test]
+fn views_of_host_memory_are_objects_in_place() {
+    // One `%bump` serves a local object and a view of host memory; a raw load
+    // after a store through a view reads the stored value, also when the view
+    // is of an `alloca`.
+    let source = r#"
+type @Rec = { i8, i64, i256 };
+func private %bump(v0.objref<@Rec>, v1.i64) {
+block0:
+    v2.objref<i64> = obj.proj v0 1.i8;
+    v3.i64 = obj.load v2;
+    v4.i64 = add v3 v1;
+    obj.store v2 v4;
+    v5.objref<i256> = obj.proj v0 2.i8;
+    v6.i256 = zext v4 i256;
+    obj.store v5 v6;
+    return;
+}
+func public %bump_host(v10.*i8, v1.i64) {
+block0:
+    v0.*@Rec = bitcast v10 *@Rec;
+    v2.objref<@Rec> = obj.from_ptr v0;
+    call %bump v2 v1;
+    return;
+}
+func public %bump_local(v1.i64) -> i64 {
+block0:
+    v0.objref<@Rec> = obj.alloc @Rec;
+    v2.@Rec = insert_value undef.@Rec 0.i8 0.i8;
+    v3.@Rec = insert_value v2 1.i8 0.i64;
+    v4.@Rec = insert_value v3 2.i8 0.i256;
+    obj.store v0 v4;
+    call %bump v0 v1;
+    v5.objref<i64> = obj.proj v0 1.i8;
+    v6.i64 = obj.load v5;
+    return v6;
+}
+func public %store_through_view(v10.*i8) -> i64 {
+block0:
+    v0.*@Rec = bitcast v10 *@Rec;
+    v1.*i64 = gep v0 0.i64 1.i64;
+    mstore v1 1.i64 i64;
+    v2.objref<@Rec> = obj.from_ptr v0;
+    v3.objref<i64> = obj.proj v2 1.i8;
+    obj.store v3 5.i64;
+    v4.i64 = mload v1 i64;
+    return v4;
+}
+func public %view_alloca(v1.i64) -> i64 {
+block0:
+    v0.*@Rec = alloca @Rec;
+    v2.objref<@Rec> = obj.from_ptr v0;
+    v3.objref<i64> = obj.proj v2 1.i8;
+    v4.*i64 = gep v0 0.i64 1.i64;
+    obj.store v3 v1;
+    v5.i64 = mload v4 i64;
+    mstore v4 7.i64 i64;
+    v6.i64 = obj.load v3;
+    obj.store v3 9.i64;
+    v7.i64 = mload v4 i64;
+    v8.i64 = mul v5 100.i64;
+    v9.i64 = mul v6 10.i64;
+    v10.i64 = add v8 v9;
+    v11.i64 = add v10 v7;
+    return v11;
+}
+"#;
+    #[repr(C, align(16))]
+    struct Rec([u8; 48]);
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let function = |name| artifact.function_address(name).unwrap();
+        let bump_host: unsafe extern "C" fn(*mut Rec, i64) =
+            unsafe { std::mem::transmute(function("bump_host")) };
+        let bump_local: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(function("bump_local")) };
+        let store_through_view: unsafe extern "C" fn(*mut Rec) -> i64 =
+            unsafe { std::mem::transmute(function("store_through_view")) };
+        let view_alloca: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(function("view_alloca")) };
+        let mut rec = Rec([0; 48]);
+        unsafe { bump_host(&mut rec, 7) };
+        unsafe { bump_host(&mut rec, 7) };
+        assert_eq!(rec.0[8..16], 14i64.to_le_bytes(), "{level:?}");
+        let mut wide = [0; 32];
+        wide[0] = 14;
+        assert_eq!(rec.0[16..48], wide, "{level:?}");
+        assert_eq!(unsafe { bump_local(3) }, 3, "{level:?}");
+        assert_eq!(unsafe { store_through_view(&mut rec) }, 5, "{level:?}");
+        // Raw and object accesses of the `alloca` each read the other's store.
+        assert_eq!(unsafe { view_alloca(5) }, 579, "{level:?}");
+    }
+}
+
+#[test]
+fn enum_variants_share_payload_storage() {
+    // An i8 tag, then every variant's payload from offset 16, the i256's
+    // alignment: `Pair`'s fields lie inside `Some`'s.
+    let source = r#"
+type @Choice = enum { #None, #Some(i256), #Pair(i8, i64) };
+func public %write_pair(v10.*i8, v1.i64) {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v2.objref<@Choice> = obj.alloc @Choice;
+    enum.write_variant v2 #Pair (3.i8, v1);
+    v3.@Choice = obj.load v2;
+    mstore v0 v3 @Choice;
+    return;
+}
+func public %write_some(v10.*i8, v1.i64) {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v2.objref<@Choice> = obj.alloc @Choice;
+    enum.set_tag v2 #Some;
+    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v4.i256 = zext v1 i256;
+    obj.store v3 v4;
+    v5.@Choice = obj.load v2;
+    mstore v0 v5 @Choice;
+    return;
+}
+func public %read(v10.*i8) -> i64 {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v1.@Choice = mload v0 @Choice;
+    v2.i1 = enum.is_variant v1 #Pair;
+    br v2 block1 block2;
+block1:
+    enum.assert_variant v1 #Pair;
+    v3.i64 = enum.extract v1 #Pair 1.i8;
+    return v3;
+block2:
+    v4.i1 = enum.is_variant v1 #Some;
+    br v4 block3 block4;
+block3:
+    enum.assert_variant v1 #Some;
+    v5.i256 = enum.extract v1 #Some 0.i8;
+    v6.i64 = trunc v5 i64;
+    return v6;
+block4:
+    return -1.i64;
+}
+func public %object_tag(v10.*i8) -> i64 {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v1.@Choice = mload v0 @Choice;
+    v2.objref<@Choice> = obj.alloc @Choice;
+    obj.store v2 v1;
+    v3.enumtag(@Choice) = enum.get_tag v2;
+    br_table v3 block4 (0.enumtag(@Choice) block1) (1.enumtag(@Choice) block2) (2.enumtag(@Choice) block3);
+block1:
+    return 10.i64;
+block2:
+    return 11.i64;
+block3:
+    return 12.i64;
+block4:
+    return -1.i64;
+}
+func public %value_tag(v10.*i8) -> i64 {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v1.@Choice = mload v0 @Choice;
+    v2.enumtag(@Choice) = enum.tag v1;
+    br_table v2 block4 (0.enumtag(@Choice) block1) (1.enumtag(@Choice) block2) (2.enumtag(@Choice) block3);
+block1:
+    return 20.i64;
+block2:
+    return 21.i64;
+block3:
+    return 22.i64;
+block4:
+    return -1.i64;
+}
+"#;
+    #[repr(C, align(16))]
+    struct Choice([u8; 48]);
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let function = |name| artifact.function_address(name).unwrap();
+        let write_pair: unsafe extern "C" fn(*mut Choice, i64) =
+            unsafe { std::mem::transmute(function("write_pair")) };
+        let write_some: unsafe extern "C" fn(*mut Choice, i64) =
+            unsafe { std::mem::transmute(function("write_some")) };
+        let read: unsafe extern "C" fn(*const Choice) -> i64 =
+            unsafe { std::mem::transmute(function("read")) };
+        let object_tag: unsafe extern "C" fn(*const Choice) -> i64 =
+            unsafe { std::mem::transmute(function("object_tag")) };
+        let value_tag: unsafe extern "C" fn(*const Choice) -> i64 =
+            unsafe { std::mem::transmute(function("value_tag")) };
+        let mut choice = Choice([0xaa; 48]);
+        unsafe { write_pair(&mut choice, 0x1122_3344_5566_7788) };
+        assert_eq!(choice.0[0], 2, "{level:?}");
+        assert_eq!(choice.0[16], 3, "{level:?}");
+        assert_eq!(
+            choice.0[24..32],
+            0x1122_3344_5566_7788i64.to_le_bytes(),
+            "{level:?}"
+        );
+        assert_eq!(unsafe { read(&choice) }, 0x1122_3344_5566_7788, "{level:?}");
+        assert_eq!(unsafe { object_tag(&choice) }, 12, "{level:?}");
+        assert_eq!(unsafe { value_tag(&choice) }, 22, "{level:?}");
+        unsafe { write_some(&mut choice, 99) };
+        assert_eq!(choice.0[0], 1, "{level:?}");
+        let mut some = [0; 32];
+        some[0] = 99;
+        assert_eq!(choice.0[16..48], some, "{level:?}");
+        assert_eq!(unsafe { read(&choice) }, 99, "{level:?}");
+        assert_eq!(unsafe { object_tag(&choice) }, 11, "{level:?}");
+        assert_eq!(unsafe { value_tag(&choice) }, 21, "{level:?}");
+    }
+}
+
+#[test]
+fn enum_values_zero_bytes_outside_their_variant() {
+    // `Some`'s value dies before `Pair`'s and `None`'s are made, so the frame
+    // slot they share still holds its ones.
+    let source = r#"
+type @Choice = enum { #None, #Some(i256), #Pair(i8, i64) };
+func public %make(v10.*i8, v11.*i8, v12.*i8, v1.i64) {
+block0:
+    v0.*@Choice = bitcast v10 *@Choice;
+    v2.@Choice = enum.make @Choice #Some (-1.i256);
+    mstore v0 v2 @Choice;
+    v3.*@Choice = bitcast v11 *@Choice;
+    v4.@Choice = enum.make @Choice #Pair (3.i8, v1);
+    mstore v3 v4 @Choice;
+    v5.*@Choice = bitcast v12 *@Choice;
+    v6.@Choice = enum.make @Choice #None;
+    mstore v5 v6 @Choice;
+    return;
+}
+"#;
+    #[repr(C, align(16))]
+    struct Choice([u8; 48]);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let make: unsafe extern "C" fn(*mut Choice, *mut Choice, *mut Choice, i64) =
+            unsafe { std::mem::transmute(artifact.function_address("make").unwrap()) };
+        let [mut some, mut pair, mut none] = [0, 1, 2].map(|_| Choice([0xaa; 48]));
+        unsafe { make(&mut some, &mut pair, &mut none, 0x1122_3344_5566_7788) };
+        let mut expected = [0; 48];
+        expected[0] = 1;
+        expected[16..48].fill(0xff);
+        assert_eq!(some.0, expected, "{level:?}");
+        expected = [0; 48];
+        expected[0] = 2;
+        expected[16] = 3;
+        expected[24..32].copy_from_slice(&0x1122_3344_5566_7788i64.to_le_bytes());
+        assert_eq!(pair.0, expected, "{level:?}");
+        assert_eq!(none.0, [0; 48], "{level:?}");
+    }
+}
+
+#[test]
+fn undef_enum_values_read_as_zero() {
+    // Native undef values are zero, so an undef enum is its first variant.
+    for payload in ["i64", "i256"] {
+        let source = format!(
+            r#"
+type @Choice = enum {{ #Some({payload}), #None }};
+func public %read() -> i64 {{
+block0:
+    v0.enumtag(@Choice) = enum.tag undef.@Choice;
+    br_table v0 block3 (0.enumtag(@Choice) block1) (1.enumtag(@Choice) block3);
+block1:
+    v1.i1 = enum.is_variant undef.@Choice #Some;
+    br v1 block2 block3;
+block2:
+    return 1.i64;
+block3:
+    return -1.i64;
+}}
+"#
+        );
+        let artifact = Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(OptLevel::O0)
+        .compile()
+        .unwrap();
+        let read: unsafe extern "C" fn() -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("read").unwrap()) };
+        assert_eq!(unsafe { read() }, 1, "{payload}");
+    }
+}
+
+#[test]
 fn nested_enums_verify_before_lowering_and_execute_afterward() {
     let source = r#"
 type @OptionI64 = enum { #None, #Some(i64) };
@@ -411,10 +717,6 @@ block3:
     let config = VerifierConfig::for_level(VerificationLevel::Full);
     for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
         let module = parse_verified_native_module(source);
-        let lowered = parse_native_module(source);
-        assert!(EnumLowerToProduct.run(&lowered));
-        let report = verify_module(&lowered, &config);
-        assert!(!report.has_errors(), "{report}");
         let mut compile = Compile::new(module, CraneliftJitBackend::new()).with_opt_level(level);
         let report = verify_module(compile.optimize(), &config);
         assert!(!report.has_errors(), "{level:?}: {report}");

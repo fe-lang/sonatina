@@ -5,7 +5,7 @@ use sonatina_codegen::{
     isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
     object::{CompileOptions, compile_all_objects},
     optim::Pipeline,
-    transform::aggregate::{EnumLowerToProduct, EnumLoweredLayout},
+    transform::aggregate::{EnumTagLower, ObjectLowerToMemory},
 };
 use sonatina_ir::{
     I256, Immediate, Linkage, Module, Signature, Type,
@@ -38,7 +38,7 @@ fn test_enum_lowering(fixture: Fixture<&str>) {
         "enum IR should verify before lowering:\n{report}"
     );
 
-    EnumLowerToProduct.run(&parsed.module);
+    ObjectLowerToMemory.run(&parsed.module);
 
     let report = verify_module(
         &parsed.module,
@@ -95,7 +95,7 @@ block0:
 "#,
             )
             .expect("module should parse");
-            EnumLowerToProduct.run(&parsed.module);
+            ObjectLowerToMemory.run(&parsed.module);
             ModuleWriter::new(&parsed.module).dump_string()
         })
         .collect();
@@ -162,7 +162,7 @@ fn enum_tag_global_initializers_follow_lowered_types() {
         "global should initially verify:\n{before}"
     );
 
-    assert!(EnumLowerToProduct.run(&module));
+    assert!(ObjectLowerToMemory.run(&module));
 
     let after = verify_module(
         &module,
@@ -256,7 +256,7 @@ fn enum_tag_initializers_use_original_shared_struct_fields() {
     let before = verify_module(&module, &config);
     assert!(!before.has_errors(), "{before}");
 
-    assert!(EnumLowerToProduct.run(&module));
+    assert!(ObjectLowerToMemory.run(&module));
     let after = verify_module(&module, &config);
     assert!(!after.has_errors(), "{after}");
     let tag = GvInitializer::make_struct(vec![GvInitializer::make_imm(true)]);
@@ -269,7 +269,7 @@ fn enum_tag_initializers_use_original_shared_struct_fields() {
             assert_eq!(store.gv_data(global).initializer.as_ref(), Some(&expected));
         }
     });
-    assert!(!EnumLowerToProduct.run(&module));
+    assert!(!ObjectLowerToMemory.run(&module));
 }
 
 #[test]
@@ -681,7 +681,7 @@ fn test_backend() -> EvmBackend {
 }
 
 #[test]
-fn concrete_layout_queries_preserve_types_and_match_enum_legalization() {
+fn layout_queries_preserve_types_and_match_enum_legalization() {
     for native in [false, true] {
         let ctx = if native {
             ModuleCtx::new(&Native::new(TargetTriple::new(
@@ -731,20 +731,6 @@ fn concrete_layout_queries_preserve_types_and_match_enum_legalization() {
             ],
             EnumReprHint::Default,
         );
-        let wide = builder.declare_enum_type(
-            "Wide",
-            &vec![
-                VariantData {
-                    name: "Case".into(),
-                    explicit_discriminant: None,
-                    fields: vec![]
-                };
-                257
-            ],
-            EnumReprHint::Default,
-        );
-        let wide_layout = EnumLoweredLayout::new(&builder.ctx, wide);
-        assert_eq!(wide_layout.tag_type(), Some(Type::I16));
         let signature = builder
             .declare_function(Signature::new(
                 "observe",
@@ -755,73 +741,68 @@ fn concrete_layout_queries_preserve_types_and_match_enum_legalization() {
             .unwrap();
         let module = builder.build();
         let before = ModuleWriter::new(&module).dump_string();
-        let choice_layout = EnumLoweredLayout::new(&module.ctx, choice);
-        let array_layout = EnumLoweredLayout::new(&module.ctx, array);
-        let wrapper_layout = EnumLoweredLayout::new(&module.ctx, wrapper);
-        let outer_layout = EnumLoweredLayout::new(&module.ctx, outer);
-        let (size, first, second, last, wrapped_size, array_start, suffix, outer_size) = if native {
-            (24, 1, 8, 16, 64, 8, 56, 32)
+        let sizes = [choice, array, wrapper, outer].map(|ty| module.ctx.size_of(ty).ok());
+        if native {
+            // Natively the variants share one payload, from the i64's offset.
+            assert_eq!(sizes, [Some(24), Some(48), Some(64), Some(32)]);
+            let offset = |ty, variant, field| {
+                module
+                    .ctx
+                    .enum_variant_field_offset(ty, variant, field)
+                    .map(|(offset, _)| offset)
+            };
+            assert_eq!(offset(choice, 0, 0), Some(8));
+            assert_eq!(offset(choice, 1, 0), Some(8));
+            assert_eq!(offset(choice, 1, 1), Some(16));
+            assert_eq!(offset(choice, 1, 2), None);
+            assert_eq!(offset(choice, 2, 0), None);
+            assert_eq!(offset(outer, 0, 0), Some(8));
+            assert_eq!(module.ctx.aggregate_elem_offset(array, 1).unwrap().0, 24);
+            assert_eq!(module.ctx.aggregate_elem_offset(wrapper, 1).unwrap().0, 8);
+            assert_eq!(module.ctx.aggregate_elem_offset(wrapper, 2).unwrap().0, 56);
+            assert_eq!(ModuleWriter::new(&module).dump_string(), before);
+            EnumTagLower.run(&module);
+            let args = module.ctx.func_sig(signature, |sig| sig.args().to_vec());
+            let lowered: Vec<_> = args.iter().map(|&ty| module.ctx.size_of(ty).ok()).collect();
+            assert_eq!(lowered, sizes);
         } else {
-            (128, 32, 64, 96, 320, 32, 288, 160)
-        };
-        assert_eq!(choice_layout.size().unwrap(), size);
-        assert_eq!(choice_layout.tag_type(), Some(Type::I1));
-        assert_eq!(wrapper_layout.tag_type(), None);
-        assert_eq!(choice_layout.variant_field_offset(0, 0), Some(first));
-        assert_eq!(choice_layout.variant_field_offset(1, 0), Some(second));
-        assert_eq!(choice_layout.variant_field_offset(1, 1), Some(last));
-        assert_eq!(choice_layout.variant_field_offset(1, 2), None);
-        assert_eq!(choice_layout.variant_field_offset(2, 0), None);
-        assert_eq!(choice_layout.field_offset(0), None);
-        assert_eq!(array_layout.field_offset(1), Some(size));
-        assert_eq!(array_layout.field_offset(2), None);
-        assert_eq!(wrapper_layout.size().unwrap(), wrapped_size);
-        assert_eq!(wrapper_layout.field_offset(1), Some(array_start));
-        assert_eq!(wrapper_layout.field_offset(2), Some(suffix));
-        assert_eq!(wrapper_layout.variant_field_offset(0, 0), None);
-        assert_eq!(outer_layout.size().unwrap(), outer_size);
-        assert_eq!(outer_layout.variant_field_offset(0, 0), Some(array_start));
-        assert_eq!(ModuleWriter::new(&module).dump_string(), before);
-        assert!(EnumLowerToProduct.run(&module));
-        let args = module.ctx.func_sig(signature, |sig| sig.args().to_vec());
-        for (ty, query) in args.iter().zip([
-            &choice_layout,
-            &array_layout,
-            &wrapper_layout,
-            &outer_layout,
-        ]) {
-            assert_eq!(module.ctx.size_of(*ty).unwrap(), query.size().unwrap());
+            assert!(ObjectLowerToMemory.run(&module));
+            let args = module.ctx.func_sig(signature, |sig| sig.args().to_vec());
+            let sizes = args.iter().map(|&ty| module.ctx.size_of(ty).unwrap());
+            // `{ tag, i64, i8 }`: `A`'s i8 shares the word of `B`'s i64.
+            assert!(sizes.eq([96, 192, 256, 128]));
+            let offset = |ty, index| module.ctx.aggregate_elem_offset(ty, index).unwrap().0;
+            assert_eq!(module.ctx.aggregate_len(args[0]), Some(3));
+            assert_eq!(offset(args[0], 1), 32);
+            assert_eq!(offset(args[0], 2), 64);
+            assert_eq!(offset(args[1], 1), 96);
+            assert_eq!(offset(args[2], 1), 32);
+            assert_eq!(offset(args[2], 2), 224);
+            assert_eq!(offset(args[3], 1), 32);
         }
-        assert_eq!(
-            module.ctx.aggregate_elem_offset(args[0], 3).unwrap().0,
-            last
-        );
-        assert_eq!(
-            module.ctx.aggregate_elem_offset(args[2], 2).unwrap().0,
-            suffix
-        );
-        assert_eq!(
-            module.ctx.aggregate_elem_offset(args[3], 1).unwrap().0,
-            array_start
-        );
     }
 }
 
 #[test]
-fn concrete_layout_queries_lower_recursive_enum_tags() {
-    let parsed = common::parse_module(concat!(
+fn enum_tags_lay_out_without_their_enums() {
+    let source = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/test_files/enum_lowering/recursive_tags.sntn"
-    ));
+    ))
+    .unwrap()
+    .replace("evm-ethereum-osaka", "aarch64-unknown-native");
+    let parsed = sonatina_parser::parse_module(&source).unwrap();
     for (name, tag) in [("Loop", Type::I1), ("Ping", Type::I1), ("Pong", Type::I8)] {
-        let enum_ty = parsed
-            .module
-            .ctx
-            .with_ty_store(|store| store.lookup_enum(name))
-            .unwrap();
-        let layout = EnumLoweredLayout::new(&parsed.module.ctx, Type::Compound(enum_ty));
-        assert_eq!(layout.tag_type(), Some(tag));
-        assert_eq!(layout.size().unwrap(), 64);
-        assert_eq!(layout.variant_field_offset(0, 0), Some(32));
+        let ctx = &parsed.module.ctx;
+        let enum_ty = ctx.with_ty_store(|store| store.lookup_enum(name)).unwrap();
+        let tag_ty = ctx.with_ty_store(|store| store.enum_data(enum_ty).unwrap().tag_ty());
+        assert_eq!(tag_ty, tag);
+        // A one-byte tag, then one payload holding a one-byte tag.
+        assert_eq!(ctx.size_of(Type::Compound(enum_ty)).unwrap(), 2);
+        assert_eq!(
+            ctx.enum_variant_field_offset(Type::Compound(enum_ty), 0, 0)
+                .map(|(offset, _)| offset),
+            Some(1)
+        );
     }
 }

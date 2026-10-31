@@ -19,13 +19,15 @@ use super::{
 };
 
 /// Stack slots for indirectly represented SSA values: aggregates. (i256
-/// values are four limbs in Cranelift values.)
+/// values are four limbs in Cranelift values, and small aggregates their
+/// parts: see `register_parts`.)
 ///
 /// A value-producing instruction with an aggregate result writes a
-/// snapshot that nothing mutates afterwards. Phis, loads, call results
-/// and the heads of `insert_value` chains own storage. An `insert_value`
-/// that is the sole consumer of an earlier insert in its block continues
-/// that storage, and an extracted aggregate is a view into its base's. A
+/// snapshot that nothing mutates afterwards. Phis, loads, call results,
+/// `enum.make` and the heads of `insert_value` chains own storage. An
+/// `insert_value` that is the sole consumer of an earlier insert in its
+/// block continues that storage, and an aggregate extracted with
+/// `extract_value` or `enum.extract` is a view into its base's. A
 /// storage class is these values together, and it is live wherever one of
 /// them is.
 ///
@@ -290,7 +292,8 @@ impl Plan {
                     }
                     NativeInstKind::Mload(_)
                     | NativeInstKind::ObjLoad(_)
-                    | NativeInstKind::Call(_) => Some(position[inst]),
+                    | NativeInstKind::Call(_)
+                    | NativeInstKind::EnumMake(_) => Some(position[inst]),
                     NativeInstKind::InsertValue(insert) => {
                         let source = *insert.dest();
                         let continues = dfg.value_inst(source).is_some_and(|source_inst| {
@@ -313,6 +316,13 @@ impl Plan {
                     }
                     NativeInstKind::ExtractValue(extract) => {
                         if let Some(&class) = class_of.get(extract.dest()) {
+                            class_of.insert(result, class);
+                            plan.members[class].push(result);
+                        }
+                        None
+                    }
+                    NativeInstKind::EnumExtract(extract) => {
+                        if let Some(&class) = class_of.get(extract.value()) {
                             class_of.insert(result, class);
                             plan.members[class].push(result);
                         }

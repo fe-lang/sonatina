@@ -1,0 +1,652 @@
+type @Point = {i256, i256};
+type @Mixed = enum { #None, #Pt(@Point), #Narrow(i8, i256), #Flag(i1) };
+type @Inner = enum { #Small(i8), #Wide(i256, i64) };
+type @Outer = enum { #Off, #On(@Inner, i64), #Raw(i256, i256, i256) };
+type @Arr = enum { #Arr([i64; 3]), #Pair(i256, i1) };
+type @RefOrNum = enum { #Ref(objref<i256>), #Num(i64) };
+type @Big = enum { #Big([i256; 6]), #Small(i8) };
+type @List = enum { #Nil, #Cons(i64, objref<@List>) };
+type @Zero = enum { #Z([i64; 0], i64), #W(i256) };
+type @Holder = {i8, @Mixed, [@Inner; 2]};
+type @Shared = enum { #None, #A(i256, i64), #B(i64, i256) };
+type @Quad = {@Point, i256};
+type @Nest = enum { #Whole(@Quad), #Inner(@Point), #Tail(i8, i8, i64) };
+type @Left = {i256, i8};
+type @Right = {i8, i256};
+type @Straddle = enum { #A(i256, @Left), #B(@Right, i256) };
+
+func inline(never) private %mixed_sum(v0.@Mixed) -> i64 {
+block0:
+    v1.enumtag(@Mixed) = enum.tag v0;
+    br_table v1 block4 (1.enumtag(@Mixed) block1) (2.enumtag(@Mixed) block2) (3.enumtag(@Mixed) block3);
+block1:
+    enum.assert_variant v0 #Pt;
+    v2.@Point = enum.extract v0 #Pt 0.i8;
+    v3.i256 = extract_value v2 0.i8;
+    v4.i256 = extract_value v2 1.i8;
+    v5.i256 = sub v3 v4;
+    v6.i64 = trunc v5 i64;
+    return v6;
+block2:
+    enum.assert_variant v0 #Narrow;
+    v7.i8 = enum.extract v0 #Narrow 0.i8;
+    v8.i256 = enum.extract v0 #Narrow 1.i8;
+    v9.i64 = zext v7 i64;
+    v10.i64 = trunc v8 i64;
+    v11.i64 = mul v9 v10;
+    return v11;
+block3:
+    enum.assert_variant v0 #Flag;
+    v12.i1 = enum.extract v0 #Flag 0.i8;
+    v13.i64 = zext v12 i64;
+    v14.i64 = add v13 1000.i64;
+    return v14;
+block4:
+    return 7.i64;
+}
+
+func inline(never) private %choose_mixed(v0.i8) -> @Mixed {
+block0:
+    br_table v0 block4 (0.i8 block1) (1.i8 block2) (2.i8 block3);
+block1:
+    v1.@Point = insert_value undef.@Point 0.i8 -1.i256;
+    v2.@Point = insert_value v1 1.i8 -43.i256;
+    v3.@Mixed = enum.make @Mixed #Pt (v2);
+    jump block5;
+block2:
+    v4.@Mixed = enum.make @Mixed #Narrow (6.i8, 9.i256);
+    jump block5;
+block3:
+    v5.@Mixed = enum.make @Mixed #Flag (1.i1);
+    jump block5;
+block4:
+    v6.@Mixed = enum.make @Mixed #None;
+    jump block5;
+block5:
+    v7.@Mixed = phi (v3 block1) (v4 block2) (v5 block3) (v6 block4);
+    return v7;
+}
+
+func inline(never) private %fill_mixed(v0.objref<@Mixed>, v1.i8) {
+block0:
+    v2.@Mixed = call %choose_mixed v1;
+    obj.store v0 v2;
+    return;
+}
+
+func inline(never) public %point_object() -> i64 {
+block0:
+    v0.objref<@Mixed> = obj.alloc @Mixed;
+    v1.@Point = insert_value undef.@Point 0.i8 100.i256;
+    v2.@Point = insert_value v1 1.i8 1.i256;
+    enum.write_variant v0 #Pt (v2);
+    v3.objref<@Point> = enum.proj v0 #Pt 0.i8;
+    v4.objref<i256> = obj.proj v3 1.i8;
+    obj.store v4 58.i256;
+    v5.@Point = obj.load v3;
+    v6.i256 = extract_value v5 0.i8;
+    v7.@Mixed = obj.load v0;
+    v8.i64 = call %mixed_sum v7;
+    v9.i64 = trunc v6 i64;
+    v10.i64 = mul v9 1000.i64;
+    v11.i64 = add v10 v8;
+    return v11;
+}
+
+func inline(never) public %narrow_overwrite() -> i64 {
+block0:
+    v0.objref<@Mixed> = obj.alloc @Mixed;
+    v1.@Point = insert_value undef.@Point 0.i8 -1.i256;
+    v2.@Point = insert_value v1 1.i8 -1.i256;
+    enum.write_variant v0 #Pt (v2);
+    enum.write_variant v0 #Narrow (100.i8, 3.i256);
+    v3.objref<i8> = enum.proj v0 #Narrow 0.i8;
+    v4.i8 = obj.load v3;
+    v5.i64 = zext v4 i64;
+    v6.@Mixed = obj.load v0;
+    v7.i64 = call %mixed_sum v6;
+    v8.i64 = mul v5 1000.i64;
+    v9.i64 = add v8 v7;
+    return v9;
+}
+
+func inline(never) public %flag_retag() -> i64 {
+block0:
+    v0.objref<@Mixed> = obj.alloc @Mixed;
+    enum.write_variant v0 #Narrow (-1.i8, -1.i256);
+    enum.set_tag v0 #Flag;
+    v1.objref<i1> = enum.proj v0 #Flag 0.i8;
+    obj.store v1 1.i1;
+    v2.@Mixed = obj.load v0;
+    v3.i64 = call %mixed_sum v2;
+    return v3;
+}
+
+func inline(never) public %mixed_phi_sum() -> i64 {
+block0:
+    v0.@Mixed = call %choose_mixed 0.i8;
+    v1.@Mixed = call %choose_mixed 1.i8;
+    v2.@Mixed = call %choose_mixed 2.i8;
+    v3.@Mixed = call %choose_mixed 3.i8;
+    v4.i64 = call %mixed_sum v0;
+    v5.i64 = call %mixed_sum v1;
+    v6.i64 = call %mixed_sum v2;
+    v7.i64 = call %mixed_sum v3;
+    v8.i64 = mul v4 1000000.i64;
+    v9.i64 = mul v5 10000.i64;
+    v10.i64 = mul v6 1.i64;
+    v11.i64 = add v8 v9;
+    v12.i64 = add v11 v10;
+    v13.i64 = mul v7 100000000000.i64;
+    v14.i64 = add v12 v13;
+    return v14;
+}
+
+func inline(never) public %mixed_through_memory() -> i64 {
+block0:
+    v0.objref<@Mixed> = obj.alloc @Mixed;
+    call %fill_mixed v0 1.i8;
+    v1.@Mixed = obj.load v0;
+    v2.objref<@Mixed> = obj.alloc @Mixed;
+    obj.store v2 v1;
+    call %fill_mixed v0 0.i8;
+    v3.@Mixed = obj.load v2;
+    v4.i64 = call %mixed_sum v3;
+    v5.@Mixed = obj.load v0;
+    v6.i64 = call %mixed_sum v5;
+    v7.i64 = mul v4 100.i64;
+    v8.i64 = add v7 v6;
+    return v8;
+}
+
+func inline(never) private %outer_sum(v0.@Outer) -> i64 {
+block0:
+    v1.i1 = enum.is_variant v0 #On;
+    br v1 block1 block2;
+block1:
+    enum.assert_variant v0 #On;
+    v2.@Inner = enum.extract v0 #On 0.i8;
+    v3.i64 = enum.extract v0 #On 1.i8;
+    v4.i1 = enum.is_variant v2 #Wide;
+    br v4 block3 block4;
+block3:
+    enum.assert_variant v2 #Wide;
+    v5.i256 = enum.extract v2 #Wide 0.i8;
+    v6.i64 = enum.extract v2 #Wide 1.i8;
+    v7.i64 = trunc v5 i64;
+    v8.i64 = mul v7 100.i64;
+    v9.i64 = mul v6 10.i64;
+    v10.i64 = add v8 v9;
+    v11.i64 = add v10 v3;
+    return v11;
+block4:
+    enum.assert_variant v2 #Small;
+    v12.i8 = enum.extract v2 #Small 0.i8;
+    v13.i64 = zext v12 i64;
+    v14.i64 = mul v13 10.i64;
+    v15.i64 = add v14 v3;
+    v16.i64 = add v15 5000.i64;
+    return v16;
+block2:
+    v17.i1 = enum.is_variant v0 #Raw;
+    br v17 block5 block6;
+block5:
+    enum.assert_variant v0 #Raw;
+    v18.i256 = enum.extract v0 #Raw 2.i8;
+    v19.i64 = trunc v18 i64;
+    return v19;
+block6:
+    return 1.i64;
+}
+
+func inline(never) public %nested_object() -> i64 {
+block0:
+    v0.objref<@Outer> = obj.alloc @Outer;
+    enum.write_variant v0 #Raw (-1.i256, -1.i256, 77.i256);
+    v1.@Outer = obj.load v0;
+    v2.i64 = call %outer_sum v1;
+    v3.@Inner = enum.make @Inner #Wide (9.i256, 4.i64);
+    enum.write_variant v0 #On (v3, 3.i64);
+    v4.objref<@Inner> = enum.proj v0 #On 0.i8;
+    v5.objref<i64> = enum.proj v4 #Wide 1.i8;
+    obj.store v5 6.i64;
+    v6.@Outer = obj.load v0;
+    v7.i64 = call %outer_sum v6;
+    enum.write_variant v4 #Small (2.i8);
+    v8.@Outer = obj.load v0;
+    v9.i64 = call %outer_sum v8;
+    v10.i64 = mul v2 100000000.i64;
+    v11.i64 = mul v7 10000.i64;
+    v12.i64 = add v10 v11;
+    v13.i64 = add v12 v9;
+    return v13;
+}
+
+func inline(never) private %index_two() -> i64 {
+block0:
+    return 2.i64;
+}
+
+func inline(never) private %arr_sum(v0.@Arr) -> i64 {
+block0:
+    v1.i1 = enum.is_variant v0 #Arr;
+    br v1 block1 block2;
+block1:
+    enum.assert_variant v0 #Arr;
+    v2.[i64; 3] = enum.extract v0 #Arr 0.i8;
+    v3.i64 = extract_value v2 0.i8;
+    v4.i64 = extract_value v2 1.i8;
+    v5.i64 = extract_value v2 2.i8;
+    v6.i64 = mul v3 100.i64;
+    v7.i64 = mul v4 10.i64;
+    v8.i64 = add v6 v7;
+    v9.i64 = add v8 v5;
+    return v9;
+block2:
+    enum.assert_variant v0 #Pair;
+    v10.i256 = enum.extract v0 #Pair 0.i8;
+    v11.i1 = enum.extract v0 #Pair 1.i8;
+    v12.i64 = trunc v10 i64;
+    v13.i64 = zext v11 i64;
+    v14.i64 = add v12 v13;
+    return v14;
+}
+
+func inline(never) public %array_payload() -> i64 {
+block0:
+    v0.objref<@Arr> = obj.alloc @Arr;
+    enum.write_variant v0 #Pair (40.i256, 1.i1);
+    v1.@Arr = obj.load v0;
+    v2.i64 = call %arr_sum v1;
+    v3.[i64; 3] = insert_value undef.[i64; 3] 0.i8 1.i64;
+    v4.[i64; 3] = insert_value v3 1.i8 2.i64;
+    v5.[i64; 3] = insert_value v4 2.i8 3.i64;
+    enum.write_variant v0 #Arr (v5);
+    v6.objref<[i64; 3]> = enum.proj v0 #Arr 0.i8;
+    v7.i64 = call %index_two;
+    v8.objref<i64> = obj.index v6 v7;
+    v9.i64 = obj.load v8;
+    v10.i64 = add v9 5.i64;
+    obj.store v8 v10;
+    v11.@Arr = obj.load v0;
+    v12.i64 = call %arr_sum v11;
+    v13.i64 = mul v2 1000.i64;
+    v14.i64 = add v13 v12;
+    return v14;
+}
+
+func inline(never) private %ref_or_num(v0.@RefOrNum) -> i64 {
+block0:
+    v1.i1 = enum.is_variant v0 #Ref;
+    br v1 block1 block2;
+block1:
+    enum.assert_variant v0 #Ref;
+    v2.objref<i256> = enum.extract v0 #Ref 0.i8;
+    v3.i256 = obj.load v2;
+    v4.i256 = add v3 1.i256;
+    obj.store v2 v4;
+    v5.i64 = trunc v4 i64;
+    return v5;
+block2:
+    enum.assert_variant v0 #Num;
+    v6.i64 = enum.extract v0 #Num 0.i8;
+    return v6;
+}
+
+func inline(never) public %ref_or_num_words() -> i64 {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    obj.store v0 41.i256;
+    v1.@RefOrNum = enum.make @RefOrNum #Ref (v0);
+    v2.i64 = call %ref_or_num v1;
+    v3.@RefOrNum = enum.make @RefOrNum #Num (5.i64);
+    v4.i64 = call %ref_or_num v3;
+    v5.i256 = obj.load v0;
+    v6.i64 = trunc v5 i64;
+    v7.objref<@RefOrNum> = obj.alloc @RefOrNum;
+    enum.write_variant v7 #Num (-1.i64);
+    enum.write_variant v7 #Ref (v0);
+    v8.@RefOrNum = obj.load v7;
+    v9.i64 = call %ref_or_num v8;
+    v10.i64 = mul v2 1000000.i64;
+    v11.i64 = mul v4 10000.i64;
+    v12.i64 = mul v6 100.i64;
+    v13.i64 = add v10 v11;
+    v14.i64 = add v13 v12;
+    v15.i64 = add v14 v9;
+    return v15;
+}
+
+func inline(never) private %big_sum(v0.@Big) -> i64 {
+block0:
+    v1.i1 = enum.is_variant v0 #Big;
+    br v1 block1 block2;
+block1:
+    enum.assert_variant v0 #Big;
+    v2.[i256; 6] = enum.extract v0 #Big 0.i8;
+    v3.i256 = extract_value v2 0.i8;
+    v4.i256 = extract_value v2 5.i8;
+    v5.i256 = mul v3 10.i256;
+    v6.i256 = add v5 v4;
+    v7.i64 = trunc v6 i64;
+    return v7;
+block2:
+    enum.assert_variant v0 #Small;
+    v8.i8 = enum.extract v0 #Small 0.i8;
+    v9.i64 = zext v8 i64;
+    return v9;
+}
+
+func inline(never) private %big_echo(v0.@Big, v1.i1) -> @Big {
+block0:
+    br v1 block1 block2;
+block1:
+    return v0;
+block2:
+    v2.@Big = enum.make @Big #Small (33.i8);
+    return v2;
+}
+
+func inline(never) public %big_by_value() -> i64 {
+block0:
+    v0.[i256; 6] = insert_value undef.[i256; 6] 0.i8 4.i256;
+    v1.[i256; 6] = insert_value v0 5.i8 2.i256;
+    v2.@Big = enum.make @Big #Big (v1);
+    v3.i64 = call %big_sum v2;
+    v4.@Big = call %big_echo v2 1.i1;
+    v5.i64 = call %big_sum v4;
+    v6.@Big = call %big_echo v2 0.i1;
+    v7.i64 = call %big_sum v6;
+    v8.i64 = mul v3 10000.i64;
+    v9.i64 = mul v5 100.i64;
+    v10.i64 = add v8 v9;
+    v11.i64 = add v10 v7;
+    return v11;
+}
+
+func inline(never) private %six_mixed(v0.@Mixed, v1.@Mixed, v2.@Mixed, v3.@Mixed, v4.@Mixed, v5.@Mixed) -> i64 {
+block0:
+    v6.i64 = call %mixed_sum v0;
+    v7.i64 = call %mixed_sum v1;
+    v8.i64 = call %mixed_sum v2;
+    v9.i64 = call %mixed_sum v3;
+    v10.i64 = call %mixed_sum v4;
+    v11.i64 = call %mixed_sum v5;
+    v12.i64 = add v6 v7;
+    v13.i64 = add v12 v8;
+    v14.i64 = add v13 v9;
+    v15.i64 = mul v10 100.i64;
+    v16.i64 = add v14 v15;
+    v17.i64 = mul v11 10000.i64;
+    v18.i64 = add v16 v17;
+    return v18;
+}
+
+func inline(never) public %many_enum_args() -> i64 {
+block0:
+    v0.@Mixed = call %choose_mixed 0.i8;
+    v1.@Mixed = call %choose_mixed 1.i8;
+    v2.@Mixed = call %choose_mixed 2.i8;
+    v3.@Mixed = call %choose_mixed 3.i8;
+    v4.i64 = call %six_mixed v0 v1 v2 v3 v1 v0;
+    return v4;
+}
+
+func inline(never) public %list_sum() -> i64 {
+block0:
+    v0.objref<@List> = obj.alloc @List;
+    enum.set_tag v0 #Nil;
+    v1.objref<@List> = obj.alloc @List;
+    enum.write_variant v1 #Cons (3.i64, v0);
+    v2.objref<@List> = obj.alloc @List;
+    enum.write_variant v2 #Cons (20.i64, v1);
+    v3.objref<@List> = obj.alloc @List;
+    enum.write_variant v3 #Cons (100.i64, v2);
+    jump block1;
+block1:
+    v4.objref<@List> = phi (v3 block0) (v9 block2);
+    v5.i64 = phi (0.i64 block0) (v8 block2);
+    v6.enumtag(@List) = enum.get_tag v4;
+    br_table v6 block3 (1.enumtag(@List) block2);
+block2:
+    v10.objref<@List> = enum.assert_variant_ref v4 #Cons;
+    v11.objref<i64> = enum.proj v10 #Cons 0.i8;
+    v7.i64 = obj.load v11;
+    v8.i64 = add v5 v7;
+    v12.objref<objref<@List>> = enum.proj v10 #Cons 1.i8;
+    v9.objref<@List> = obj.load v12;
+    jump block1;
+block3:
+    return v5;
+}
+
+func inline(never) private %zero_sum(v0.@Zero) -> i64 {
+block0:
+    v1.i1 = enum.is_variant v0 #Z;
+    br v1 block1 block2;
+block1:
+    enum.assert_variant v0 #Z;
+    v2.i64 = enum.extract v0 #Z 1.i8;
+    return v2;
+block2:
+    enum.assert_variant v0 #W;
+    v3.i256 = enum.extract v0 #W 0.i8;
+    v4.i64 = trunc v3 i64;
+    return v4;
+}
+
+func inline(never) public %zero_sized_field() -> i64 {
+block0:
+    v0.@Zero = enum.make @Zero #Z (undef.[i64; 0], 7.i64);
+    v1.i64 = call %zero_sum v0;
+    v2.objref<@Zero> = obj.alloc @Zero;
+    enum.write_variant v2 #W (-1.i256);
+    enum.write_variant v2 #Z (undef.[i64; 0], 8.i64);
+    v3.objref<[i64; 0]> = enum.proj v2 #Z 0.i8;
+    v4.@Zero = obj.load v2;
+    v5.i64 = call %zero_sum v4;
+    v6.i64 = mul v1 10.i64;
+    v7.i64 = add v6 v5;
+    return v7;
+}
+
+func inline(never) public %holder_fields() -> i64 {
+block0:
+    v0.objref<@Holder> = obj.alloc @Holder;
+    v1.objref<@Mixed> = obj.proj v0 1.i8;
+    enum.write_variant v1 #Narrow (4.i8, 5.i256);
+    v2.objref<[@Inner; 2]> = obj.proj v0 2.i8;
+    v3.objref<@Inner> = obj.index v2 1.i64;
+    enum.write_variant v3 #Wide (-1.i256, 9.i64);
+    v4.objref<@Inner> = obj.index v2 0.i64;
+    enum.write_variant v4 #Small (8.i8);
+    v5.@Mixed = obj.load v1;
+    v6.i64 = call %mixed_sum v5;
+    v7.objref<i64> = enum.proj v3 #Wide 1.i8;
+    v8.i64 = obj.load v7;
+    v9.objref<i8> = enum.proj v4 #Small 0.i8;
+    v10.i8 = obj.load v9;
+    v11.i64 = zext v10 i64;
+    v12.i64 = mul v6 10000.i64;
+    v13.i64 = mul v8 100.i64;
+    v14.i64 = add v12 v13;
+    v15.i64 = add v14 v11;
+    return v15;
+}
+
+func inline(never) private %fill_shared(v0.objref<@Shared>, v1.i1) {
+block0:
+    br v1 block1 block2;
+block1:
+    enum.write_variant v0 #A (7.i256, 8.i64);
+    return;
+block2:
+    enum.write_variant v0 #B (5.i64, 9.i256);
+    return;
+}
+
+func inline(never) private %read_shared(v0.@Shared) -> i64 {
+block0:
+    v1.i1 = enum.is_variant v0 #A;
+    br v1 block1 block2;
+block1:
+    enum.assert_variant v0 #A;
+    v2.i256 = enum.extract v0 #A 0.i8;
+    v3.i64 = enum.extract v0 #A 1.i8;
+    v4.i64 = trunc v2 i64;
+    v5.i64 = mul v4 v3;
+    return v5;
+block2:
+    enum.assert_variant v0 #B;
+    v6.i64 = enum.extract v0 #B 0.i8;
+    v7.i256 = enum.extract v0 #B 1.i8;
+    v8.i64 = trunc v7 i64;
+    v9.i64 = sub v8 v6;
+    return v9;
+}
+
+func inline(never) private %filled_shared(v0.i1) -> i64 {
+block0:
+    v1.objref<@Shared> = obj.alloc @Shared;
+    call %fill_shared v1 v0;
+    v2.@Shared = obj.load v1;
+    v3.i64 = call %read_shared v2;
+    return v3;
+}
+
+func inline(never) public %swapped_fields() -> i64 {
+block0:
+    v0.i64 = call %filled_shared 1.i1;
+    v1.i64 = call %filled_shared 0.i1;
+    v2.i64 = mul v0 100.i64;
+    v3.i64 = add v2 v1;
+    return v3;
+}
+
+func inline(never) public %retargeted_shared() -> i64 {
+block0:
+    v0.objref<@Shared> = obj.alloc @Shared;
+    call %fill_shared v0 1.i1;
+    enum.set_tag v0 #B;
+    v1.objref<i64> = enum.proj v0 #B 0.i8;
+    obj.store v1 2.i64;
+    v2.objref<i256> = enum.proj v0 #B 1.i8;
+    obj.store v2 30.i256;
+    v3.@Shared = obj.load v0;
+    v4.i64 = call %read_shared v3;
+    return v4;
+}
+
+func inline(never) private %nest_sum(v0.@Nest) -> i64 {
+block0:
+    v1.enumtag(@Nest) = enum.tag v0;
+    br_table v1 block3 (0.enumtag(@Nest) block1) (1.enumtag(@Nest) block2);
+block1:
+    enum.assert_variant v0 #Whole;
+    v2.@Quad = enum.extract v0 #Whole 0.i8;
+    v3.@Point = extract_value v2 0.i8;
+    v4.i256 = extract_value v3 1.i8;
+    v5.i256 = extract_value v2 1.i8;
+    v6.i256 = add v4 v5;
+    v7.i64 = trunc v6 i64;
+    return v7;
+block2:
+    enum.assert_variant v0 #Inner;
+    v8.@Point = enum.extract v0 #Inner 0.i8;
+    v9.i256 = extract_value v8 0.i8;
+    v10.i256 = extract_value v8 1.i8;
+    v11.i256 = mul v9 v10;
+    v12.i64 = trunc v11 i64;
+    return v12;
+block3:
+    enum.assert_variant v0 #Tail;
+    v13.i8 = enum.extract v0 #Tail 0.i8;
+    v14.i8 = enum.extract v0 #Tail 1.i8;
+    v15.i64 = enum.extract v0 #Tail 2.i8;
+    v16.i64 = zext v13 i64;
+    v17.i64 = zext v14 i64;
+    v18.i64 = mul v16 v17;
+    v19.i64 = add v18 v15;
+    return v19;
+}
+
+func inline(never) public %nested_nodes() -> i64 {
+block0:
+    v0.objref<@Nest> = obj.alloc @Nest;
+    v1.@Point = insert_value undef.@Point 0.i8 -1.i256;
+    v2.@Point = insert_value v1 1.i8 30.i256;
+    v3.@Quad = insert_value undef.@Quad 0.i8 v2;
+    v4.@Quad = insert_value v3 1.i8 12.i256;
+    enum.write_variant v0 #Whole (v4);
+    v5.@Nest = obj.load v0;
+    v6.i64 = call %nest_sum v5;
+    v7.@Point = insert_value undef.@Point 0.i8 6.i256;
+    v8.@Point = insert_value v7 1.i8 7.i256;
+    enum.write_variant v0 #Inner (v8);
+    v9.objref<@Point> = enum.proj v0 #Inner 0.i8;
+    v10.objref<i256> = obj.proj v9 1.i8;
+    obj.store v10 8.i256;
+    v11.@Nest = obj.load v0;
+    v12.i64 = call %nest_sum v11;
+    v13.@Nest = enum.make @Nest #Tail (3.i8, 5.i8, 100.i64);
+    v14.i64 = call %nest_sum v13;
+    v15.i64 = mul v6 1000000.i64;
+    v16.i64 = mul v12 1000.i64;
+    v17.i64 = add v15 v16;
+    v18.i64 = add v17 v14;
+    return v18;
+}
+
+func inline(never) private %straddle_sum(v0.@Straddle) -> i64 {
+block0:
+    v1.i1 = enum.is_variant v0 #A;
+    br v1 block1 block2;
+block1:
+    enum.assert_variant v0 #A;
+    v2.i256 = enum.extract v0 #A 0.i8;
+    v3.@Left = enum.extract v0 #A 1.i8;
+    v4.i256 = extract_value v3 0.i8;
+    v5.i8 = extract_value v3 1.i8;
+    v6.i256 = add v2 v4;
+    v7.i64 = trunc v6 i64;
+    v8.i64 = zext v5 i64;
+    v9.i64 = mul v8 1000.i64;
+    v10.i64 = add v7 v9;
+    return v10;
+block2:
+    enum.assert_variant v0 #B;
+    v11.@Right = enum.extract v0 #B 0.i8;
+    v12.i8 = extract_value v11 0.i8;
+    v13.i256 = extract_value v11 1.i8;
+    v14.i256 = enum.extract v0 #B 1.i8;
+    v15.i256 = mul v13 v14;
+    v16.i64 = trunc v15 i64;
+    v17.i64 = zext v12 i64;
+    v18.i64 = mul v17 1000.i64;
+    v19.i64 = add v16 v18;
+    return v19;
+}
+
+func inline(never) public %straddling_fields() -> i64 {
+block0:
+    v0.objref<@Straddle> = obj.alloc @Straddle;
+    v1.@Left = insert_value undef.@Left 0.i8 20.i256;
+    v2.@Left = insert_value v1 1.i8 9.i8;
+    enum.write_variant v0 #A (22.i256, v2);
+    v3.objref<@Left> = enum.proj v0 #A 1.i8;
+    v4.objref<i8> = obj.proj v3 1.i8;
+    obj.store v4 4.i8;
+    v5.@Straddle = obj.load v0;
+    v6.i64 = call %straddle_sum v5;
+    v7.@Right = insert_value undef.@Right 0.i8 7.i8;
+    v8.@Right = insert_value v7 1.i8 -1.i256;
+    enum.write_variant v0 #B (v8, 3.i256);
+    v9.objref<@Right> = enum.proj v0 #B 0.i8;
+    v10.objref<i256> = obj.proj v9 1.i8;
+    obj.store v10 11.i256;
+    v11.@Straddle = obj.load v0;
+    v12.i64 = call %straddle_sum v11;
+    v13.i64 = mul v6 100000.i64;
+    v14.i64 = add v13 v12;
+    return v14;
+}

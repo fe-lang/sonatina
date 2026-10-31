@@ -4246,6 +4246,7 @@ dependencies = [
  "cranelift-native",
  "cranelift-object",
  "rustc-hash",
+ "smallvec",
  "sonatina-codegen",
  "sonatina-ir",
  "sonatina-triple",

@@ -73,9 +73,9 @@ impl<'a> EvmPipeline<'a> {
         .entered();
 
         ctx.run_phase(
-            "enum_and_const_lowering",
+            "const_lowering",
             "mandatory",
-            EvmPipelineContext::run_enum_and_const_lowering,
+            EvmPipelineContext::run_const_lowering,
         )?;
         if optional_cleanup {
             ctx.run_phase(
@@ -188,8 +188,7 @@ impl EvmPipelineContext<'_> {
         ))
     }
 
-    fn run_enum_and_const_lowering(&mut self) -> Result<(), String> {
-        crate::transform::aggregate::EnumLowerToProduct.run(self.module());
+    fn run_const_lowering(&mut self) -> Result<(), String> {
         let stats = specialize_private_constrefs(self.module(), &self.funcs);
         if stats.changed {
             run_dead_arg_elim(self.module(), &self.roots, DeadArgElimConfig::default());

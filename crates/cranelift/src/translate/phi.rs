@@ -12,15 +12,15 @@ use sonatina_ir::{
 };
 
 use super::{
-    ValueMap, aggregate_elem_offset, constant_value_index, copy_bytes, frame::FrameSlots,
-    resolve_i256, resolve_value, stack_slot_data, store_indirect,
-    uses_indirect_value_representation, value_storage_size,
+    ValueMap, aggregate_elem_offset, constant_value_index, copy_value, frame::FrameSlots,
+    register_parts, resolve_i256, resolve_parts, resolve_value, stack_slot_data, store_indirect,
+    uses_indirect_value_representation,
 };
 
-/// Lowers CFG edges. Scalar phis receive Cranelift block arguments, and an
-/// i256 phi four, one per limb. Each aggregate phi owns a slot that its
-/// incoming edges copy into, so a phi costs one copy per edge rather than
-/// one block parameter per word.
+/// Lowers CFG edges. Scalar phis receive Cranelift block arguments, an i256
+/// phi four, one per limb, and an aggregate held in registers one per part.
+/// Each other aggregate phi owns a slot that its incoming edges copy into, so
+/// a phi costs one copy per edge rather than one block parameter per word.
 pub(super) struct Edges<'a> {
     pub function: &'a Function,
     pub block_map: &'a HashMap<BlockId, clif::Block>,
@@ -125,8 +125,9 @@ impl Edges<'_> {
         uses_indirect_value_representation(self.function.ctx(), self.function.dfg.value_ty(value))
     }
 
-    /// The block arguments of the edge's non-aggregate phis: four limbs
-    /// for an i256 phi, otherwise one value.
+    /// The block arguments of the edge's phis not in storage: four limbs
+    /// for an i256 phi, the parts of an aggregate held in registers,
+    /// otherwise one value.
     fn scalar_args(
         &self,
         pred: BlockId,
@@ -136,9 +137,13 @@ impl Edges<'_> {
     ) -> Result<Vec<BlockArg>, String> {
         let mut args = Vec::new();
         for (phi, input) in self.phi_inputs(pred, succ) {
-            if self.function.dfg.value_ty(phi) == Type::I256 {
+            let ty = self.function.dfg.value_ty(phi);
+            if ty == Type::I256 {
                 let limbs = resolve_i256(self.function, input, value_map, builder)?;
                 args.extend(limbs.map(BlockArg::Value));
+            } else if let Some(parts) = register_parts(self.function.ctx(), ty) {
+                let values = resolve_parts(self.function, input, &parts, value_map, builder)?;
+                args.extend(values.into_iter().map(BlockArg::Value));
             } else if !self.is_aggregate(phi) {
                 let value = resolve_value(self.function, input, value_map, builder)?;
                 args.push(BlockArg::Value(value));
@@ -205,7 +210,14 @@ impl Edges<'_> {
                     let dst = builder
                         .ins()
                         .stack_addr(self.config.pointer_type(), slot, 0);
-                    copy_bytes(src, dst, self.size(phi)?, self.config, builder);
+                    copy_value(
+                        self.function.dfg.value_ty(phi),
+                        src,
+                        dst,
+                        self.function.ctx(),
+                        self.config,
+                        builder,
+                    )?;
                     for &reader in &pending {
                         if let Some((read, offset)) = copies[reader].reads
                             && read == index
@@ -219,19 +231,19 @@ impl Edges<'_> {
             };
             let copy = &copies[index];
             let dst = self.frame.address(copy.phi, builder)?;
-            let size = self.size(copy.phi)?;
+            let ty = self.function.dfg.value_ty(copy.phi);
             match copy.saved {
                 Some((slot, offset)) => {
                     let src = builder
                         .ins()
                         .stack_addr(self.config.pointer_type(), slot, offset);
-                    copy_bytes(src, dst, size, self.config, builder);
+                    copy_value(ty, src, dst, self.function.ctx(), self.config, builder)?;
                 }
                 None => store_indirect(
                     self.function,
                     copy.input,
                     dst,
-                    size,
+                    ty,
                     value_map,
                     self.config,
                     builder,
@@ -257,9 +269,5 @@ impl Edges<'_> {
             value = base;
         }
         Ok((value, offset))
-    }
-
-    fn size(&self, phi: ValueId) -> Result<u32, String> {
-        value_storage_size(self.function.dfg.value_ty(phi), self.function.ctx())
     }
 }
