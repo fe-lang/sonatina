@@ -922,6 +922,11 @@ fn simplify_checked_binary_with_facts(
     let one = Immediate::one(ty);
     let lhs_imm = facts.known_imm(lhs);
     let rhs_imm = facts.known_imm(rhs);
+    // Read as signed, `1.i1` is -1, which is no identity for signed
+    // multiplication or division.
+    let no_one = ty == Type::I1 && matches!(kind, BinaryInstKind::Smulo | BinaryInstKind::EvmSdivo);
+    let lhs_one = !no_one && lhs_imm == Some(one);
+    let rhs_one = !no_one && rhs_imm == Some(one);
 
     match kind {
         BinaryInstKind::Uaddo | BinaryInstKind::Saddo => {
@@ -939,18 +944,18 @@ fn simplify_checked_binary_with_facts(
         BinaryInstKind::Umulo | BinaryInstKind::Smulo => {
             if lhs_imm == Some(zero) || rhs_imm == Some(zero) {
                 Some(checked_value_no_overflow(SimplifiedResult::Const(zero)))
-            } else if lhs_imm == Some(one) {
+            } else if lhs_one {
                 Some(checked_value_no_overflow(SimplifiedResult::Copy(rhs)))
-            } else if rhs_imm == Some(one) {
+            } else if rhs_one {
                 Some(checked_value_no_overflow(SimplifiedResult::Copy(lhs)))
             } else {
                 None
             }
         }
-        BinaryInstKind::EvmUdivo | BinaryInstKind::EvmSdivo if rhs_imm == Some(one) => {
+        BinaryInstKind::EvmUdivo | BinaryInstKind::EvmSdivo if rhs_one => {
             Some(checked_value_no_overflow(SimplifiedResult::Copy(lhs)))
         }
-        BinaryInstKind::EvmUmodo | BinaryInstKind::EvmSmodo if rhs_imm == Some(one) => {
+        BinaryInstKind::EvmUmodo | BinaryInstKind::EvmSmodo if rhs_one => {
             Some(checked_value_no_overflow(SimplifiedResult::Const(zero)))
         }
         BinaryInstKind::Uaddsat | BinaryInstKind::Saddsat => {
