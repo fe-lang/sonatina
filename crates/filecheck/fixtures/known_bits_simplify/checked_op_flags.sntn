@@ -1,0 +1,74 @@
+target = "evm-ethereum-osaka"
+
+# A checked op's overflow flag depends on every operand bit, so a mask feeding
+# an op whose only used result is its flag must stay.
+
+# sameln: func public %keeps_mask_before_uaddo_flag(v0.i8, v1.i8) -> i1 {
+# check:       v2.i8 = and v0 7.i8;
+# nextln:      (v3.i8, v4.i1) = uaddo v2 v1;
+func public %keeps_mask_before_uaddo_flag(v0.i8, v1.i8) -> i1 {
+block0:
+    v2.i8 = and v0 7.i8;
+    (v3.i8, v4.i1) = uaddo v2 v1;
+    return v4;
+}
+
+# sameln: func public %keeps_mask_before_usubo_flag(v0.i8, v1.i8) -> i1 {
+# check:       v2.i8 = and v0 7.i8;
+# nextln:      (v3.i8, v4.i1) = usubo v2 v1;
+func public %keeps_mask_before_usubo_flag(v0.i8, v1.i8) -> i1 {
+block0:
+    v2.i8 = and v0 7.i8;
+    (v3.i8, v4.i1) = usubo v2 v1;
+    return v4;
+}
+
+# sameln: func public %keeps_mask_before_umulo_flag(v0.i8, v1.i8) -> i1 {
+# check:       v2.i8 = and v0 7.i8;
+# nextln:      (v3.i8, v4.i1) = umulo v2 v1;
+func public %keeps_mask_before_umulo_flag(v0.i8, v1.i8) -> i1 {
+block0:
+    v2.i8 = and v0 7.i8;
+    (v3.i8, v4.i1) = umulo v2 v1;
+    return v4;
+}
+
+# sameln: func public %keeps_mask_before_saddo_flag(v0.i8, v1.i8) -> i1 {
+# check:       v2.i8 = and v0 7.i8;
+# nextln:      (v3.i8, v4.i1) = saddo v2 v1;
+func public %keeps_mask_before_saddo_flag(v0.i8, v1.i8) -> i1 {
+block0:
+    v2.i8 = and v0 7.i8;
+    (v3.i8, v4.i1) = saddo v2 v1;
+    return v4;
+}
+
+# sameln: func public %keeps_mask_before_ssubo_flag(v0.i8, v1.i8) -> i1 {
+# check:       v2.i8 = and v0 7.i8;
+# nextln:      (v3.i8, v4.i1) = ssubo v2 v1;
+func public %keeps_mask_before_ssubo_flag(v0.i8, v1.i8) -> i1 {
+block0:
+    v2.i8 = and v0 7.i8;
+    (v3.i8, v4.i1) = ssubo v2 v1;
+    return v4;
+}
+
+# sameln: func public %keeps_mask_before_smulo_flag(v0.i8, v1.i8) -> i1 {
+# check:       v2.i8 = and v0 7.i8;
+# nextln:      (v3.i8, v4.i1) = smulo v2 v1;
+func public %keeps_mask_before_smulo_flag(v0.i8, v1.i8) -> i1 {
+block0:
+    v2.i8 = and v0 7.i8;
+    (v3.i8, v4.i1) = smulo v2 v1;
+    return v4;
+}
+
+# sameln: func public %keeps_mask_before_snego_flag(v0.i8) -> i1 {
+# check:       v1.i8 = and v0 -127.i8;
+# nextln:      (v2.i8, v3.i1) = snego v1;
+func public %keeps_mask_before_snego_flag(v0.i8) -> i1 {
+block0:
+    v1.i8 = and v0 -127.i8;
+    (v2.i8, v3.i1) = snego v1;
+    return v3;
+}
