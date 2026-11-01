@@ -508,3 +508,188 @@ func public %f(v0.i32) -> i32 {
         }
     }
 }
+
+/// Whether a function body of the module has a `memory.copy`.
+fn has_memory_copy(bytes: &[u8]) -> bool {
+    wasmparser::Parser::new(0).parse_all(bytes).any(|payload| {
+        let Ok(wasmparser::Payload::CodeSectionEntry(body)) = payload else {
+            return false;
+        };
+        body.get_operators_reader()
+            .expect("the body has operators")
+            .into_iter()
+            .any(|op| matches!(op, Ok(wasmparser::Operator::MemoryCopy { .. })))
+    })
+}
+
+#[test]
+fn an_aggregate_above_the_inline_copy_size_passes_by_value() {
+    // 96 bytes: larger than the 64 that are copied with loads and stores, so
+    // arguments, results and stores of it are `memory.copy`.
+    let source = "type @Big = { i256, [i64; 6], i8 };
+func private %make(v0.i64) -> @Big {
+    block0:
+        v1.i256 = zext v0 i256;
+        v2.i256 = shl 200.i256 v1;
+        v3.@Big = insert_value undef.@Big 0.i32 v2;
+        v4.[i64; 6] = insert_value undef.[i64; 6] 0.i32 v0;
+        v5.[i64; 6] = insert_value v4 5.i32 9.i64;
+        v6.@Big = insert_value v3 1.i32 v5;
+        v7.@Big = insert_value v6 2.i32 -1.i8;
+        return v7;
+}
+func private %bump(v0.@Big) -> @Big {
+    block0:
+        v1.[i64; 6] = extract_value v0 1.i32;
+        v2.i64 = extract_value v1 5.i32;
+        v3.i64 = add v2 1.i64;
+        v4.[i64; 6] = insert_value v1 5.i32 v3;
+        v5.@Big = insert_value v0 1.i32 v4;
+        return v5;
+}
+func public %run(v0.i64, v1.*@Big, v2.*@Big) {
+    block0:
+        v3.@Big = call %make v0;
+        v4.@Big = call %bump v3;
+        mstore v1 v3 @Big;
+        mstore v2 v4 @Big;
+        return;
+}";
+    let words = |bytes: Vec<u8>| -> Vec<u64> {
+        bytes
+            .chunks(8)
+            .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect()
+    };
+    for level in LEVELS {
+        let bytes = build(source, level);
+        assert!(has_memory_copy(&bytes), "{level:?}");
+        let mut machine = Machine::new(&bytes);
+        let out = machine.memory_size();
+        machine.grow_memory(1);
+        let run = machine.func("run");
+        machine.call(
+            &run,
+            &[Val::I64(5), Val::I32(out as i32), Val::I32(out as i32 + 96)],
+        );
+        // The callee changed its copy of the argument, not the caller's value.
+        for (base, last) in [(out, 9), (out + 96, 10)] {
+            let fields = words(machine.read(base, 80));
+            assert_eq!(fields[..4], [0, 0, 0, 5 << 8], "{level:?}");
+            assert_eq!(fields[4..], [5, 0, 0, 0, 0, last], "{level:?}");
+            assert_eq!(machine.read(base + 80, 1), [0xff], "{level:?}");
+        }
+    }
+}
+
+#[test]
+fn an_insert_into_an_extracted_view_leaves_the_parent_unchanged() {
+    let source = "type @Pair = { i64, i64 };
+type @Outer = { @Pair, i64 };
+func public %snapshots(v0.i64, v1.i64, v2.*[i64; 6]) {
+    block0:
+        v3.@Pair = insert_value undef.@Pair 0.i32 v0;
+        v4.@Pair = insert_value v3 1.i32 v1;
+        v5.@Outer = insert_value undef.@Outer 0.i32 v4;
+        v6.@Outer = insert_value v5 1.i32 7.i64;
+        v7.@Pair = extract_value v6 0.i32;
+        v8.@Pair = insert_value v7 0.i32 91.i64;
+        v9.@Outer = insert_value v6 0.i32 v8;
+        v10.@Outer = insert_value v9 1.i32 93.i64;
+        v11.@Pair = extract_value v6 0.i32;
+        v12.i64 = extract_value v11 0.i32;
+        v13.i64 = extract_value v11 1.i32;
+        v14.@Pair = extract_value v10 0.i32;
+        v15.i64 = extract_value v14 0.i32;
+        v16.i64 = extract_value v14 1.i32;
+        v17.i64 = extract_value v6 1.i32;
+        v18.i64 = extract_value v10 1.i32;
+        v19.[i64; 6] = insert_value undef.[i64; 6] 0.i32 v12;
+        v20.[i64; 6] = insert_value v19 1.i32 v13;
+        v21.[i64; 6] = insert_value v20 2.i32 v15;
+        v22.[i64; 6] = insert_value v21 3.i32 v16;
+        v23.[i64; 6] = insert_value v22 4.i32 v17;
+        v24.[i64; 6] = insert_value v23 5.i32 v18;
+        mstore v2 v24 [i64; 6];
+        return;
+}";
+    for level in LEVELS {
+        let mut machine = Machine::new(&build(source, level));
+        let out = machine.memory_size();
+        machine.grow_memory(1);
+        let snapshots = machine.func("snapshots");
+        machine.call(
+            &snapshots,
+            &[Val::I64(11), Val::I64(22), Val::I32(out as i32)],
+        );
+        let words: Vec<i64> = machine
+            .read(out, 48)
+            .chunks(8)
+            .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+        assert_eq!(words, [11, 22, 91, 22, 7, 93], "{level:?}");
+    }
+}
+
+#[test]
+fn global_addresses_merge_in_phis_and_constant_fields_load() {
+    let source = "type @Record = { i8, i128, [i16; 3], i256 };
+global private i64 $counter = 41;
+global private i64 $zero = 0;
+global private const @Record $data = {1, 2, [3, 4, 5], 6};
+func public %bump(v0.i64) -> i64 {
+    block0:
+        v1.i64 = mload $counter i64;
+        v2.i64 = add v1 v0;
+        mstore $counter v2 i64;
+        return v2;
+}
+func public %read(v0.i8) -> i64 {
+    block0:
+        v1.i1 = is_zero v0;
+        br v1 block1 block2;
+    block1:
+        jump block3;
+    block2:
+        jump block3;
+    block3:
+        v2.*i64 = phi ($counter block1) ($zero block2);
+        v3.i64 = mload v2 i64;
+        return v3;
+}
+func public %field() -> i64 {
+    block0:
+        v0.constref<@Record> = const.ref $data;
+        v1.constref<[i16; 3]> = const.proj v0 2.i32;
+        v2.constref<i16> = const.index v1 2.i32;
+        v3.i16 = const.load v2;
+        v4.constref<i256> = const.proj v0 3.i32;
+        v5.i256 = const.load v4;
+        v6.i64 = zext v3 i64;
+        v7.i64 = trunc v5 i64;
+        v8.i64 = mul v6 v7;
+        return v8;
+}";
+    for level in LEVELS {
+        let mut machine = Machine::new(&build(source, level));
+        let bump = machine.func("bump");
+        // The counter keeps its value across calls.
+        for (arg, want) in [(1, 42), (2, 44)] {
+            assert_eq!(
+                machine.call(&bump, &[Val::I64(arg)])[0].unwrap_i64(),
+                want,
+                "{level:?} bump({arg})"
+            );
+        }
+        let read = machine.func("read");
+        for (arg, want) in [(0, 44), (1, 0)] {
+            assert_eq!(
+                machine.call(&read, &[Val::I32(arg)])[0].unwrap_i64(),
+                want,
+                "{level:?} read({arg})"
+            );
+        }
+        let field = machine.func("field");
+        assert_eq!(machine.call(&field, &[])[0].unwrap_i64(), 30, "{level:?}");
+    }
+}

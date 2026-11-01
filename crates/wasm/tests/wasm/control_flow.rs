@@ -4,7 +4,10 @@ use sonatina_codegen::{Compile, OptLevel};
 use sonatina_wasm::WasmBackend;
 use wasmtime::Val;
 
-use crate::harness::{Machine, compile_valid, i32s, parse, validate};
+use crate::{
+    aggregates::build_at,
+    harness::{Machine, compile_valid, i32s, parse, validate},
+};
 
 fn machine(source: &str) -> Machine {
     Machine::new(&compile_valid(&parse(source)))
@@ -195,6 +198,53 @@ func public %joined(v0.i64) -> i64 {
             machine.call(&joined, &[Val::I64(input)])[0].unwrap_i64(),
             want
         );
+    }
+}
+
+#[test]
+fn br_table_cases_compare_at_the_width_of_the_scrutinee() {
+    let source = "func public %classify(v0.i64) -> i32 {
+    block0:
+        v1.i256 = zext v0 i256;
+        br_table v1 block4 (1.i256 block1) (7.i256 block2) (-1.i256 block3);
+    block1:
+        return 10.i32;
+    block2:
+        return 70.i32;
+    block3:
+        return 99.i32;
+    block4:
+        return 0.i32;
+}
+func public %narrow(v0.i8) -> i32 {
+    block0:
+        br_table v0 block2 (-1.i8 block1);
+    block1:
+        return 1.i32;
+    block2:
+        return 0.i32;
+}
+";
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let mut machine = Machine::new(&build_at(source, level));
+        let classify = machine.func("classify");
+        // -1 zero-extended is not the 256-bit -1.
+        for (input, want) in [(1, 10), (7, 70), (3, 0), (-1, 0)] {
+            assert_eq!(
+                i32s(&machine.call(&classify, &[Val::I64(input)])),
+                [want],
+                "{level:?} classify({input})"
+            );
+        }
+        // The host may pass bits above the width of the i8 parameter.
+        let narrow = machine.func("narrow");
+        for (input, want) in [(-1, 1), (0x1ff, 1), (0xff, 1), (0x7f, 0), (0x100, 0)] {
+            assert_eq!(
+                i32s(&machine.call(&narrow, &[Val::I32(input)])),
+                [want],
+                "{level:?} narrow({input:#x})"
+            );
+        }
     }
 }
 
