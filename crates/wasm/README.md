@@ -267,8 +267,8 @@ does not wrap.
 
 Multiplication, division and variable shifts are functions of the module,
 emitted only when used. Division traps on a zero divisor. It is one 64-bit
-division when both operands fit in 64 bits, and otherwise one step per bit of the
-dividend.
+division when both operands fit in 64 bits, no step when the dividend is below
+the divisor, and otherwise one step per bit of the dividend.
 
 ## Instruction semantics
 

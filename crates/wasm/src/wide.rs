@@ -576,7 +576,8 @@ pub(super) fn build_shift(
 
 /// `udivrem(a, b)` returns the quotient and the remainder of unsigned
 /// division, and traps if `b` is zero. Values that fit in 64 bits take one
-/// division. Others take one step per bit of `a`.
+/// division, and a dividend below the divisor is the remainder. Others take
+/// one step per bit of `a`.
 pub(super) fn build_udivrem(
     wmod: &waffle::Module<'static>,
     sig: waffle::Signature,
@@ -593,6 +594,8 @@ pub(super) fn build_udivrem(
     body.set_terminator(trap, Terminator::Unreachable);
     let checked = body.add_block();
     let fast = body.add_block();
+    let compare = body.add_block();
+    let below = body.add_block();
     let setup = body.add_block();
     let header = body.add_block();
     let step = body.add_block();
@@ -627,7 +630,7 @@ pub(super) fn build_udivrem(
         Terminator::CondBr {
             cond: small,
             if_true: target(fast, vec![]),
-            if_false: target(setup, vec![]),
+            if_false: target(compare, vec![]),
         },
     );
     let mut e = Emit {
@@ -641,6 +644,32 @@ pub(super) fn build_udivrem(
         fast,
         Terminator::Return {
             values: vec![quotient, zero, zero, zero, remainder, zero, zero, zero],
+        },
+    );
+
+    // A dividend below the divisor is the remainder, and the quotient is zero.
+    let less = Emit {
+        body: &mut body,
+        block: compare,
+    }
+    .wide_compare(Cmp::Lt, false, a, b);
+    body.set_terminator(
+        compare,
+        Terminator::CondBr {
+            cond: less,
+            if_true: target(below, vec![]),
+            if_false: target(setup, vec![]),
+        },
+    );
+    let zero = Emit {
+        body: &mut body,
+        block: below,
+    }
+    .wide_zero();
+    body.set_terminator(
+        below,
+        Terminator::Return {
+            values: zero.into_iter().chain(a).collect(),
         },
     );
 

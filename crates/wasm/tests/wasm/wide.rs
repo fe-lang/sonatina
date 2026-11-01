@@ -615,6 +615,49 @@ fn division_by_zero_traps_and_leaves_the_instance_usable() {
     );
 }
 
+#[test]
+fn a_dividend_below_the_divisor_is_the_remainder() {
+    let source = format!(
+        "{PRELUDE}func public %f(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> (i64, i64, i64, i64, i64, i64, i64, i64) {{
+    block0:
+        v8.i256 = call %pack v0 v1 v2 v3;
+        v9.i256 = call %pack v4 v5 v6 v7;
+        v10.i256 = udiv v8 v9;
+        v11.i256 = umod v8 v9;
+        (v12.i64, v13.i64, v14.i64, v15.i64) = call %unpack v10;
+        (v16.i64, v17.i64, v18.i64, v19.i64) = call %unpack v11;
+        return (v12, v13, v14, v15, v16, v17, v18, v19);
+}}"
+    );
+    let big = U256::one() << 200;
+    // Below the divisor, equal to it and just above it, with operands that
+    // do not fit in 64 bits.
+    let pairs = [
+        (big, big + 1),
+        (big - 1, big),
+        (U256::MAX - 1, U256::MAX),
+        (U256::from(5), big),
+        (U256::from(u64::MAX), U256::one() << 64),
+        (big, big),
+        (big + 1, big),
+        (U256::MAX, U256::one() << 64),
+    ];
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let mut machine = Machine::new(&build_at(&source, level));
+        let f = machine.func("f");
+        for (a, b) in pairs {
+            let got: Vec<u64> = machine
+                .call(&f, &arguments(a, b))
+                .iter()
+                .map(|v| v.unwrap_i64() as u64)
+                .collect();
+            let what = format!("{level:?} a={a:#x} b={b:#x}");
+            assert_eq!(from_limbs(&got[..4]), a / b, "udiv {what}");
+            assert_eq!(from_limbs(&got[4..]), a % b, "umod {what}");
+        }
+    }
+}
+
 /// `(a + b) mod n` or `(a * b) mod n` in full precision, and zero if `n` is
 /// zero.
 fn modular_reference(product: bool, a: U256, b: U256, n: U256) -> U256 {
