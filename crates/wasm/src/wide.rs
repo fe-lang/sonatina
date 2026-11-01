@@ -7,15 +7,16 @@
 //! values, and memory holds it as 32 little-endian bytes.
 //!
 //! Supported: constants, `zext`, `sext`, `trunc`, `add`, `sub`, `neg`, `not`,
-//! `and`, `or`, `xor`, the ten comparisons, `is_zero`, `uaddo`, `usubo`,
-//! `saddo`, `ssubo`, `snego`, `bswap`, multiplication, division and shifts. The
-//! saturating forms are rejected with an error that names the instruction.
+//! `and`, `or`, `xor`, the ten comparisons, `is_zero`, the checked forms
+//! (`uaddo`, `usubo`, `umulo`, `saddo`, `ssubo`, `smulo`, `snego`), the
+//! saturating forms (`uaddsat`, `usubsat`, `umulsat`, `saddsat`, `ssubsat`,
+//! `smulsat`), `bswap`, multiplication, division and shifts.
 
 use waffle::{Operator, Type as WType};
 
 use sonatina_ir::I256;
 
-use super::arith::{Cmp, Emit, Int};
+use super::arith::{Arith, Cmp, Emit, Int};
 
 type V = waffle::Value;
 
@@ -188,6 +189,54 @@ impl Emit<'_> {
         let shift = self.c64(63);
         let bit = self.op(Operator::I64ShrU, &[both, shift], WType::I64);
         self.op(Operator::I32WrapI64, &[bit], WType::I32)
+    }
+
+    /// The result of a saturating operation: `result`, or when `overflow` is
+    /// set, the bound in the direction of the overflow. Unsigned operations
+    /// saturate to zero for a subtraction and to the maximum otherwise. Signed
+    /// ones saturate toward the sign of `lhs` for addition and subtraction, and
+    /// toward the sign of the product for multiplication.
+    pub(super) fn wide_saturate(
+        &mut self,
+        arith: Arith,
+        signed: bool,
+        lhs: Limbs,
+        rhs: Limbs,
+        result: Limbs,
+        overflow: V,
+    ) -> Limbs {
+        let top = LIMBS - 1;
+        let bound: Limbs = if signed {
+            let sign_source = match arith {
+                Arith::Mul => self.op(Operator::I64Xor, &[lhs[top], rhs[top]], WType::I64),
+                Arith::Add | Arith::Sub => lhs[top],
+            };
+            // The minimum is the complement of the maximum, so flip the maximum
+            // by the sign fill of the direction.
+            let shift = self.c64(63);
+            let fill = self.op(Operator::I64ShrS, &[sign_source, shift], WType::I64);
+            std::array::from_fn(|index| {
+                let max = self.c64(if index == top {
+                    u64::MAX >> 1
+                } else {
+                    u64::MAX
+                });
+                self.op(Operator::I64Xor, &[max, fill], WType::I64)
+            })
+        } else {
+            let bound = match arith {
+                Arith::Add | Arith::Mul => u64::MAX,
+                Arith::Sub => 0,
+            };
+            self.c64_limbs([bound; LIMBS])
+        };
+        std::array::from_fn(|index| {
+            self.op(
+                Operator::Select,
+                &[bound[index], result[index], overflow],
+                WType::I64,
+            )
+        })
     }
 
     pub(super) fn wide_snego(&mut self, value: Limbs) -> (Limbs, V) {

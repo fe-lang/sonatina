@@ -255,10 +255,11 @@ A front end whose `usize` has 256 bits makes every array index and loop counter 
 The backend supports `add`, `sub`, `mul`, `neg`, `udiv`, `sdiv`, `umod`, `smod`,
 `shl`, `shr`, `sar`, `and`, `or`, `xor`, `not`, all comparisons, `is_zero`,
 `zext`, `sext` and `trunc` between `i256` and the narrower types, the checked
-forms `uaddo`, `usubo`, `umulo`, `saddo`, `ssubo`, `smulo` and `snego`, loads and
-stores of `i256`, `bswap`, `ptr_to_int` to `i256`, `int_to_ptr` from `i256` and
-`br_table` on `i256`. Not translated: the saturating forms. `int_to_ptr` traps
-if the value does not fit in 32 bits.
+forms `uaddo`, `usubo`, `umulo`, `saddo`, `ssubo`, `smulo` and `snego`, the
+saturating forms `uaddsat`, `usubsat`, `umulsat`, `saddsat`, `ssubsat` and
+`smulsat`, loads and stores of `i256`, `bswap`, `ptr_to_int` to `i256`,
+`int_to_ptr` from `i256` and `br_table` on `i256`. `int_to_ptr` traps if the
+value does not fit in 32 bits.
 
 `evm_add_mod` and `evm_mul_mod` compute at 256 bits for every width: narrower
 operands are zero-extended, as on the native target, so the sum or product

@@ -1,7 +1,7 @@
 //! 256-bit integers, compared with `U256` and `I256` arithmetic.
 
 use sonatina_codegen::OptLevel;
-use sonatina_ir::{I256, U256};
+use sonatina_ir::{I256, Immediate, U256};
 use wasmtime::Val;
 
 use super::{aggregates::build_at, harness::Machine};
@@ -138,6 +138,13 @@ fn zero_divisor(_: U256, b: U256) -> bool {
 
 fn signed(value: U256) -> I256 {
     I256::from_u256(value)
+}
+
+/// The interpreter's result of a 256-bit operation.
+fn interpret(op: fn(Immediate, Immediate) -> Immediate, a: U256, b: U256) -> U256 {
+    op(Immediate::I256(signed(a)), Immediate::I256(signed(b)))
+        .as_i256()
+        .to_u256()
 }
 
 fn signed_overflow(sub: bool, a: U256, b: U256, r: U256) -> bool {
@@ -303,6 +310,48 @@ fn cases() -> Vec<Case> {
                 let result = if negative { negate(product) } else { product };
                 (result, overflow || too_big)
             },
+        },
+        Case {
+            name: "uaddsat",
+            instruction: "v10.i256 = uaddsat v8 v9;",
+            shape: Shape::Value,
+            skip: never,
+            reference: |a, b| (interpret(Immediate::saturating_uadd, a, b), false),
+        },
+        Case {
+            name: "usubsat",
+            instruction: "v10.i256 = usubsat v8 v9;",
+            shape: Shape::Value,
+            skip: never,
+            reference: |a, b| (interpret(Immediate::saturating_usub, a, b), false),
+        },
+        Case {
+            name: "umulsat",
+            instruction: "v10.i256 = umulsat v8 v9;",
+            shape: Shape::Value,
+            skip: never,
+            reference: |a, b| (interpret(Immediate::saturating_umul, a, b), false),
+        },
+        Case {
+            name: "saddsat",
+            instruction: "v10.i256 = saddsat v8 v9;",
+            shape: Shape::Value,
+            skip: never,
+            reference: |a, b| (interpret(Immediate::saturating_sadd, a, b), false),
+        },
+        Case {
+            name: "ssubsat",
+            instruction: "v10.i256 = ssubsat v8 v9;",
+            shape: Shape::Value,
+            skip: never,
+            reference: |a, b| (interpret(Immediate::saturating_ssub, a, b), false),
+        },
+        Case {
+            name: "smulsat",
+            instruction: "v10.i256 = smulsat v8 v9;",
+            shape: Shape::Value,
+            skip: never,
+            reference: |a, b| (interpret(Immediate::saturating_smul, a, b), false),
         },
         Case {
             name: "udiv",

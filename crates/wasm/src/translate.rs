@@ -227,6 +227,8 @@ fn wide_op_of(kind: &NativeInstKind<'_>) -> Option<(WideOp, ValueId, ValueId)> {
         NativeInstKind::Mul(i) => (WideOp::Mul, *i.lhs(), *i.rhs()),
         NativeInstKind::Umulo(i) => (WideOp::Umulo, *i.lhs(), *i.rhs()),
         NativeInstKind::Smulo(i) => (WideOp::Smulo, *i.lhs(), *i.rhs()),
+        NativeInstKind::Umulsat(i) => (WideOp::Umulsat, *i.lhs(), *i.rhs()),
+        NativeInstKind::Smulsat(i) => (WideOp::Smulsat, *i.lhs(), *i.rhs()),
         NativeInstKind::Udiv(i) => (WideOp::Udiv, *i.lhs(), *i.rhs()),
         NativeInstKind::Umod(i) => (WideOp::Umod, *i.lhs(), *i.rhs()),
         NativeInstKind::Sdiv(i) => (WideOp::Sdiv, *i.lhs(), *i.rhs()),
@@ -1337,9 +1339,7 @@ impl<'a> FunctionTranslator<'a> {
         Int::from_type(ty).ok_or_else(|| {
             if ty == Type::I256 {
                 return unsupported(format!(
-                    "function `{}`: `{op}` on i256 is not supported by the wasm32 backend \
-                     (256-bit integers support arithmetic, shifts, bitwise operations, \
-                     comparisons, conversions and `bswap`, but not the saturating forms)",
+                    "function `{}`: `{op}` on i256 is not supported by the wasm32 backend",
                     self.name
                 ));
             }
@@ -1651,25 +1651,8 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), WasmError> {
         let op = self.function.dfg.inst(inst_id).as_text();
         if self.is_wide(lhs) {
-            if matches!(arith, Arith::Mul) {
-                return Err(invalid(format!(
-                    "function `{}`: `{op}` on i256 reached the unsigned lowering",
-                    self.name
-                )));
-            }
             let (lhs, rhs) = self.wide_operands(wb, op, lhs, rhs)?;
-            let sub = matches!(arith, Arith::Sub);
-            let mut emit = self.emit(wb);
-            let (result, carry) = if sub {
-                emit.wide_sub(lhs, rhs)
-            } else {
-                emit.wide_add(lhs, rhs)
-            };
-            let flag = if signed {
-                emit.wide_signed_overflow(sub, lhs, rhs, result)
-            } else {
-                carry
-            };
+            let (result, flag) = self.wide_overflowing(wb, arith, signed, lhs, rhs)?;
             self.define_wide(inst_id, 0, result)?;
             return self.define(inst_id, 1, flag, Type::I1);
         }
@@ -1677,6 +1660,30 @@ impl<'a> FunctionTranslator<'a> {
         let (value, overflow) = self.emit(wb).overflow(int, arith, signed, lhs, rhs);
         self.define(inst_id, 0, value, ty)?;
         self.define(inst_id, 1, overflow, Type::I1)
+    }
+
+    /// A saturating instruction: the result, or the bound in the direction of
+    /// the overflow.
+    fn saturating(
+        &mut self,
+        wb: waffle::Block,
+        inst_id: InstId,
+        (lhs, rhs): (ValueId, ValueId),
+        arith: Arith,
+        signed: bool,
+    ) -> Result<(), WasmError> {
+        if self.is_wide(lhs) {
+            let op = self.function.dfg.inst(inst_id).as_text();
+            let (lhs, rhs) = self.wide_operands(wb, op, lhs, rhs)?;
+            let (result, overflow) = self.wide_overflowing(wb, arith, signed, lhs, rhs)?;
+            let limbs = self
+                .emit(wb)
+                .wide_saturate(arith, signed, lhs, rhs, result, overflow);
+            return self.define_wide(inst_id, 0, limbs);
+        }
+        self.binary(wb, inst_id, (lhs, rhs), |e, int, l, r| {
+            e.saturating(int, arith, signed, l, r)
+        })
     }
 
     fn shift(
@@ -2029,34 +2036,22 @@ impl<'a> FunctionTranslator<'a> {
                 }
             }
             NativeInstKind::Uaddsat(i) => {
-                self.binary(*wb, inst_id, (*i.lhs(), *i.rhs()), |e, int, l, r| {
-                    e.saturating(int, Arith::Add, false, l, r)
-                })?
+                self.saturating(*wb, inst_id, (*i.lhs(), *i.rhs()), Arith::Add, false)?
             }
             NativeInstKind::Usubsat(i) => {
-                self.binary(*wb, inst_id, (*i.lhs(), *i.rhs()), |e, int, l, r| {
-                    e.saturating(int, Arith::Sub, false, l, r)
-                })?
+                self.saturating(*wb, inst_id, (*i.lhs(), *i.rhs()), Arith::Sub, false)?
             }
             NativeInstKind::Umulsat(i) => {
-                self.binary(*wb, inst_id, (*i.lhs(), *i.rhs()), |e, int, l, r| {
-                    e.saturating(int, Arith::Mul, false, l, r)
-                })?
+                self.saturating(*wb, inst_id, (*i.lhs(), *i.rhs()), Arith::Mul, false)?
             }
             NativeInstKind::Saddsat(i) => {
-                self.binary(*wb, inst_id, (*i.lhs(), *i.rhs()), |e, int, l, r| {
-                    e.saturating(int, Arith::Add, true, l, r)
-                })?
+                self.saturating(*wb, inst_id, (*i.lhs(), *i.rhs()), Arith::Add, true)?
             }
             NativeInstKind::Ssubsat(i) => {
-                self.binary(*wb, inst_id, (*i.lhs(), *i.rhs()), |e, int, l, r| {
-                    e.saturating(int, Arith::Sub, true, l, r)
-                })?
+                self.saturating(*wb, inst_id, (*i.lhs(), *i.rhs()), Arith::Sub, true)?
             }
             NativeInstKind::Smulsat(i) => {
-                self.binary(*wb, inst_id, (*i.lhs(), *i.rhs()), |e, int, l, r| {
-                    e.saturating(int, Arith::Mul, true, l, r)
-                })?
+                self.saturating(*wb, inst_id, (*i.lhs(), *i.rhs()), Arith::Mul, true)?
             }
 
             NativeInstKind::Eq(i) => {

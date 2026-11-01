@@ -19,7 +19,7 @@ fn message(source: &str) -> String {
 }
 
 #[test]
-fn i256_parameters_results_and_operations_are_named() {
+fn i256_parameters_and_results_of_exports_are_named() {
     let parameter = message(
         "func public %f(v0.i256) -> i32 {
     block0:
@@ -42,27 +42,6 @@ fn i256_parameters_results_and_operations_are_named() {
         result.contains("i256") && result.contains("result 0"),
         "{result}"
     );
-
-    // The saturating forms are not translated for 256 bits.
-    for (op, line) in [
-        ("umulsat", "v3.i256 = umulsat v1 v1;"),
-        ("saddsat", "v3.i256 = saddsat v1 v1;"),
-    ] {
-        let message = message(&format!(
-            "func public %h(v0.i32) -> i32 {{
-    block0:
-        v1.i256 = zext v0 i256;
-        {line}
-        v5.i32 = trunc v3 i32;
-        return v5;
-}}"
-        ));
-        assert!(
-            message.contains("i256") && message.contains(&format!("`{op}`")),
-            "{op}: {message}"
-        );
-        assert!(message.contains("function `h`"), "{op}: {message}");
-    }
 }
 
 #[test]
