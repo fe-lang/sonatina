@@ -1,6 +1,6 @@
-//! 256-bit multiplication, division and shifts: calls to the helper functions
-//! of the module, and the signed, checked and saturating forms built from the
-//! unsigned ones.
+//! 128- and 256-bit multiplication, division and shifts: calls to the helper
+//! functions of the module, and the signed, checked and saturating forms built
+//! from the unsigned ones.
 
 use waffle::{Func, Operator, Type as WType};
 
@@ -10,7 +10,7 @@ use super::{FunctionTranslator, V, invalid};
 use crate::{
     WasmError,
     arith::Arith,
-    wide::{LIMBS, Limbs},
+    wide::{LIMBS, Limbs, Wide},
 };
 
 /// The helper functions that a module needs, declared before any body is
@@ -25,7 +25,7 @@ pub(super) struct WideHelpers {
     pub(super) mulmod: Option<Func>,
 }
 
-/// The 256-bit operation that an instruction asks for.
+/// The 128- or 256-bit operation that an instruction asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WideOp {
     Mul,
@@ -130,16 +130,31 @@ impl FunctionTranslator<'_> {
         Ok(([out[0], out[1], out[2], out[3]], out[4]))
     }
 
-    /// The wrapped result of a 256-bit addition, subtraction or multiplication,
-    /// and whether the exact result does not fit, as unsigned or signed values.
+    /// The result of an addition, subtraction or multiplication of `wide`, and
+    /// whether the exact result does not fit, as unsigned or signed values. The
+    /// operands are extended to 256 bits, with the sign when `signed`. A 128-bit
+    /// result is the low 128 bits of the 256-bit one.
     pub(super) fn wide_overflowing(
         &mut self,
         wb: waffle::Block,
+        wide: Wide,
         arith: Arith,
         signed: bool,
         a: Limbs,
         b: Limbs,
     ) -> Result<(Limbs, V), WasmError> {
+        if wide == Wide::I128 {
+            // The operands are below 2^128 in magnitude, so a result that fits
+            // in 128 bits is exact at 256 bits. The low 256 bits of a product
+            // are the same for signed operands as for unsigned ones.
+            let result = match arith {
+                Arith::Add => self.emit(wb).wide_add(a, b).0,
+                Arith::Sub => self.emit(wb).wide_sub(a, b).0,
+                Arith::Mul => self.unsigned_mulo(wb, self.wide_helpers.mulo, a, b)?.0,
+            };
+            let overflow = self.emit(wb).wide_exceeds(wide, signed, result);
+            return Ok((result, overflow));
+        }
         let sub = match arith {
             Arith::Add => false,
             Arith::Sub => true,
@@ -218,49 +233,94 @@ impl FunctionTranslator<'_> {
         Ok((result, overflow))
     }
 
-    /// Translate a 256-bit multiplication (wrapping, checked or saturating),
-    /// division or shift.
+    /// The result of a saturating operation of `wide`: the wrapped result, or
+    /// when it overflows, the bound in the direction of the overflow. The
+    /// operands are as for [`Self::wide_overflowing`]. Unsigned operations
+    /// saturate to zero for a subtraction and to the maximum otherwise. Signed
+    /// ones saturate toward the sign of `a` for addition and subtraction, and
+    /// toward the sign of the product for multiplication.
+    pub(super) fn wide_saturating(
+        &mut self,
+        wb: waffle::Block,
+        wide: Wide,
+        arith: Arith,
+        signed: bool,
+        a: Limbs,
+        b: Limbs,
+    ) -> Result<Limbs, WasmError> {
+        let (result, overflow) = self.wide_overflowing(wb, wide, arith, signed, a, b)?;
+        let top = wide.limbs() - 1;
+        let mut e = self.emit(wb);
+        let fill = signed.then(|| {
+            let sign = match arith {
+                Arith::Mul => e.op(Operator::I64Xor, &[a[top], b[top]], WType::I64),
+                Arith::Add | Arith::Sub => a[top],
+            };
+            e.sign_fill(sign)
+        });
+        let mut saturated = result;
+        for (index, limb) in saturated.iter_mut().enumerate().take(top + 1) {
+            let bound = match fill {
+                // The minimum is the complement of the maximum, so flip the
+                // maximum by the sign fill of the direction.
+                Some(fill) => {
+                    let max = e.c64(if index == top {
+                        u64::MAX >> 1
+                    } else {
+                        u64::MAX
+                    });
+                    e.op(Operator::I64Xor, &[max, fill], WType::I64)
+                }
+                None => e.c64(match arith {
+                    Arith::Sub => 0,
+                    Arith::Add | Arith::Mul => u64::MAX,
+                }),
+            };
+            *limb = e.op(Operator::Select, &[bound, *limb, overflow], WType::I64);
+        }
+        Ok(saturated)
+    }
+
+    /// Translate a 128- or 256-bit multiplication (wrapping, checked or
+    /// saturating), division or shift.
     pub(super) fn wide_arith(
         &mut self,
         wb: waffle::Block,
-        helpers: WideHelpers,
         inst_id: InstId,
+        wide: Wide,
         op: WideOp,
-        lhs: ValueId,
-        rhs: ValueId,
+        (lhs, rhs): (ValueId, ValueId),
     ) -> Result<(), WasmError> {
         let name = self.function.dfg.inst(inst_id).as_text();
-        let (a, b) = self.wide_operands(wb, name, lhs, rhs)?;
+        let signed = matches!(
+            op,
+            WideOp::Smulo | WideOp::Smulsat | WideOp::Sdiv | WideOp::Smod
+        );
+        let (a, b) = self.wide_operands(wb, name, wide, signed, (lhs, rhs))?;
+        let helpers = self.wide_helpers;
         match op {
             WideOp::Mul => {
                 let (result, _) = self.unsigned_mulo(wb, helpers.mulo, a, b)?;
-                self.define_wide(inst_id, 0, result)
+                self.define_wide(wb, inst_id, 0, wide, result)
             }
             WideOp::Umulo | WideOp::Smulo => {
-                let signed = op == WideOp::Smulo;
-                let (result, overflow) = self.wide_overflowing(wb, Arith::Mul, signed, a, b)?;
-                self.define_wide(inst_id, 0, result)?;
+                let (result, overflow) =
+                    self.wide_overflowing(wb, wide, Arith::Mul, signed, a, b)?;
+                self.define_wide(wb, inst_id, 0, wide, result)?;
                 self.define(inst_id, 1, overflow, Type::I1)
             }
             WideOp::Umulsat | WideOp::Smulsat => {
-                let signed = op == WideOp::Smulsat;
-                let (result, overflow) = self.wide_overflowing(wb, Arith::Mul, signed, a, b)?;
-                let limbs = self
-                    .emit(wb)
-                    .wide_saturate(Arith::Mul, signed, a, b, result, overflow);
-                self.define_wide(inst_id, 0, limbs)
+                let limbs = self.wide_saturating(wb, wide, Arith::Mul, signed, a, b)?;
+                self.define_wide(wb, inst_id, 0, wide, limbs)
             }
             WideOp::Udiv | WideOp::Umod => {
                 let (quotient, remainder) = self.unsigned_divrem(wb, helpers.udivrem, a, b)?;
-                self.define_wide(
-                    inst_id,
-                    0,
-                    if op == WideOp::Udiv {
-                        quotient
-                    } else {
-                        remainder
-                    },
-                )
+                let result = if op == WideOp::Udiv {
+                    quotient
+                } else {
+                    remainder
+                };
+                self.define_wide(wb, inst_id, 0, wide, result)
             }
             WideOp::Sdiv | WideOp::Smod => {
                 let (sign_a, sign_b) = (self.sign_of(wb, a), self.sign_of(wb, b));
@@ -270,7 +330,8 @@ impl FunctionTranslator<'_> {
                     self.unsigned_divrem(wb, helpers.udivrem, magnitude_a, magnitude_b)?;
                 let result = if op == WideOp::Sdiv {
                     // The quotient is negative if the signs differ. The minimum
-                    // divided by -1 wraps to the minimum, as on native.
+                    // divided by -1 wraps to the minimum, as on native: for
+                    // 128 bits, the low bits of 2^127 are the minimum.
                     let differ = self
                         .emit(wb)
                         .op(Operator::I32Xor, &[sign_a, sign_b], WType::I32);
@@ -279,23 +340,24 @@ impl FunctionTranslator<'_> {
                     // The remainder takes the sign of the dividend.
                     self.negate_if(wb, sign_a, remainder)
                 };
-                self.define_wide(inst_id, 0, result)
+                self.define_wide(wb, inst_id, 0, wide, result)
             }
-            WideOp::Shl => {
-                let func = self.helper(helpers.shl, "shift")?;
+            // A 128-bit shift by 128 to 255 bits leaves zero in the low 128
+            // bits, as a shift by at least the width does.
+            WideOp::Shl | WideOp::Shr => {
+                let func = if op == WideOp::Shl {
+                    self.helper(helpers.shl, "shift")?
+                } else {
+                    self.helper(helpers.shr, "shift")?
+                };
                 let args: Vec<V> = a.into_iter().chain(b).collect();
                 let out = self.call_helper(wb, func, &args, &[WType::I64; LIMBS]);
-                self.define_wide(inst_id, 0, [out[0], out[1], out[2], out[3]])
-            }
-            WideOp::Shr => {
-                let func = self.helper(helpers.shr, "shift")?;
-                let args: Vec<V> = a.into_iter().chain(b).collect();
-                let out = self.call_helper(wb, func, &args, &[WType::I64; LIMBS]);
-                self.define_wide(inst_id, 0, [out[0], out[1], out[2], out[3]])
+                self.define_wide(wb, inst_id, 0, wide, [out[0], out[1], out[2], out[3]])
             }
             WideOp::Sar => {
                 // For a negative value, shift the complement and complement the
-                // result, so the vacated bits are ones.
+                // result, so the vacated bits are ones. The count is unsigned.
+                let a = self.emit(wb).wide_sign_extend(wide, a);
                 let func = self.helper(helpers.shr, "shift")?;
                 let sign = self.sign_of(wb, a);
                 let flipped = self.emit(wb).wide_not(a);
@@ -317,7 +379,7 @@ impl FunctionTranslator<'_> {
                         WType::I64,
                     );
                 }
-                self.define_wide(inst_id, 0, result)
+                self.define_wide(wb, inst_id, 0, wide, result)
             }
         }
     }
@@ -327,7 +389,8 @@ impl FunctionTranslator<'_> {
     /// `evm_add_mod` or `evm_mul_mod`: a call to the 256-bit helper function,
     /// with narrower operands zero-extended, as on the native target. The sum
     /// or product is exact, and zero if the modulus is zero. The result is
-    /// below the modulus, so it fits the operands' width.
+    /// below the modulus, so it fits the operands' width. 128-bit operands are
+    /// held zero-extended already.
     pub(super) fn wide_modular(
         &mut self,
         wb: waffle::Block,
@@ -346,32 +409,33 @@ impl FunctionTranslator<'_> {
                 self.name
             )));
         }
-        let int = (ty != Type::I256)
-            .then(|| self.int_ty(name, ty))
-            .transpose()?;
         let func = if product {
             self.helper(self.wide_helpers.mulmod, "modular multiplication")?
         } else {
             self.helper(self.wide_helpers.addmod, "modular addition")?
         };
+        let wide = Wide::from_type(ty);
         let mut args = Vec::with_capacity(3 * LIMBS);
         for value in operands {
-            match int {
-                Some(int) => {
+            let limbs = match wide {
+                Some(_) => self.wide_operand(wb, value)?,
+                None => {
+                    let int = self.int_ty(name, ty)?;
                     let value = self.operand(wb, value)?;
-                    args.extend(self.emit(wb).wide_extend(int, false, value));
+                    self.emit(wb).wide_extend(int, false, value)
                 }
-                None => args.extend(self.wide_operand(wb, value)?),
-            }
+            };
+            args.extend(limbs);
         }
         let out = self.call_helper(wb, func, &args, &[WType::I64; LIMBS]);
         let limbs = [out[0], out[1], out[2], out[3]];
-        match int {
-            Some(int) => {
+        match wide {
+            Some(wide) => self.define_wide(wb, inst_id, 0, wide, limbs),
+            None => {
+                let int = self.int_ty(name, ty)?;
                 let value = self.emit(wb).wide_trunc(int, limbs);
                 self.define(inst_id, 0, value, ty)
             }
-            None => self.define_wide(inst_id, 0, limbs),
         }
     }
 }

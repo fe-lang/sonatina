@@ -21,7 +21,12 @@ use sonatina_ir::{
 use super::{
     Access, FunctionTranslator, Repr, V, align_up, emit_call, invalid, repr, type_name, unsupported,
 };
-use crate::{WasmError, arith::Int, memory::ALIGN, wide::Limbs};
+use crate::{
+    WasmError,
+    arith::Int,
+    memory::ALIGN,
+    wide::{Limbs, Wide},
+};
 
 /// Aggregates of at most this many bytes are copied with loads and stores.
 const INLINE_COPY_BYTES: u32 = 64;
@@ -29,7 +34,7 @@ const INLINE_COPY_BYTES: u32 = 64;
 /// A value read from memory.
 enum Loaded {
     One(V),
-    Wide(Limbs),
+    Wide(Wide, Limbs),
 }
 
 impl FunctionTranslator<'_> {
@@ -208,15 +213,15 @@ impl FunctionTranslator<'_> {
             Some(Repr::Int(Int::I32) | Repr::Pointer) => Ok(Access::Word),
             Some(Repr::Int(Int::I64)) => Ok(Access::Double),
             _ => Err(unsupported(format!(
-                "function `{}`: `{op}` of {}; only integers, pointers, 256-bit integers and \
-                 aggregates are stored in memory",
+                "function `{}`: `{op}` of {}; only integers, pointers and aggregates are \
+                 stored in memory",
                 self.name,
                 type_name(&self.module.ctx, ty)
             ))),
         }
     }
 
-    /// Read a scalar, a pointer or a 256-bit integer at `addr + offset`.
+    /// Read a scalar, a pointer or a 128- or 256-bit integer at `addr + offset`.
     fn load_value(
         &mut self,
         wb: waffle::Block,
@@ -225,18 +230,20 @@ impl FunctionTranslator<'_> {
         addr: V,
         offset: u32,
     ) -> Result<Loaded, WasmError> {
-        if ty == Type::I256 {
-            let mut limbs = [addr; 4];
-            for (index, limb) in limbs.iter_mut().enumerate() {
-                let memarg = self.memarg(Access::Double, offset + 8 * index as u32);
-                *limb = self.body.add_op(
-                    wb,
-                    Operator::I64Load { memory: memarg },
-                    &[addr],
-                    &[WType::I64],
-                );
-            }
-            return Ok(Loaded::Wide(limbs));
+        if let Some(wide) = Wide::from_type(ty) {
+            let carried: Vec<V> = (0..wide.limbs())
+                .map(|index| {
+                    let memarg = self.memarg(Access::Double, offset + 8 * index as u32);
+                    self.body.add_op(
+                        wb,
+                        Operator::I64Load { memory: memarg },
+                        &[addr],
+                        &[WType::I64],
+                    )
+                })
+                .collect();
+            let limbs = self.emit(wb).wide_from_carried(wide, &carried);
+            return Ok(Loaded::Wide(wide, limbs));
         }
         let access = self.scalar_access(op, ty)?;
         let (load, carrier) = access.load_u(self.memarg(access, offset));
@@ -271,9 +278,9 @@ impl FunctionTranslator<'_> {
                 let dest = self.offset_address(wb, addr, offset);
                 self.copy_bytes(wb, dest, source, size);
             }
-            Some(Repr::Wide) => {
+            Some(Repr::Wide(wide)) => {
                 let limbs = self.wide_operand(wb, id)?;
-                for (index, limb) in limbs.into_iter().enumerate() {
+                for (index, &limb) in limbs[..wide.limbs()].iter().enumerate() {
                     let memarg = self.memarg(Access::Double, offset + 8 * index as u32);
                     self.body.add_op(
                         wb,
@@ -296,6 +303,7 @@ impl FunctionTranslator<'_> {
     /// Define the result of `inst_id` from a value read from memory.
     fn define_loaded(
         &mut self,
+        wb: waffle::Block,
         inst_id: InstId,
         index: usize,
         ty: Type,
@@ -303,7 +311,7 @@ impl FunctionTranslator<'_> {
     ) -> Result<(), WasmError> {
         match loaded {
             Loaded::One(value) => self.define(inst_id, index, value, ty),
-            Loaded::Wide(limbs) => self.define_wide(inst_id, index, limbs),
+            Loaded::Wide(wide, limbs) => self.define_wide(wb, inst_id, index, wide, limbs),
         }
     }
 
@@ -333,9 +341,10 @@ impl FunctionTranslator<'_> {
         signed: bool,
     ) -> Result<V, WasmError> {
         let ty = self.function.dfg.value_ty(id);
-        if ty == Type::I256 {
+        if let Some(wide) = Wide::from_type(ty) {
             let limbs = self.wide_operand(*wb, id)?;
             let exceeds = if signed {
+                let limbs = self.emit(*wb).wide_sign_extend(wide, limbs);
                 self.emit(*wb).wide_exceeds_i32(limbs)
             } else {
                 self.emit(*wb).wide_exceeds_u32(limbs)
@@ -480,7 +489,7 @@ impl FunctionTranslator<'_> {
             return self.snapshot(*wb, inst_id, ty, addr, 0);
         }
         let loaded = self.load_value(*wb, op, ty, addr, 0)?;
-        self.define_loaded(inst_id, 0, ty, loaded)
+        self.define_loaded(*wb, inst_id, 0, ty, loaded)
     }
 
     pub(super) fn mstore(
@@ -750,7 +759,7 @@ impl FunctionTranslator<'_> {
             return self.define(inst_id, 0, address, ty);
         }
         let loaded = self.load_value(wb, "obj.load", ty, address, 0)?;
-        self.define_loaded(inst_id, 0, ty, loaded)
+        self.define_loaded(wb, inst_id, 0, ty, loaded)
     }
 
     pub(super) fn obj_store(
@@ -868,7 +877,7 @@ impl FunctionTranslator<'_> {
             return self.define(inst_id, 0, view, result_ty);
         }
         let loaded = self.load_value(wb, "extract_value", result_ty, base, offset)?;
-        self.define_loaded(inst_id, 0, result_ty, loaded)
+        self.define_loaded(wb, inst_id, 0, result_ty, loaded)
     }
 
     /// The offset and type of field `field` of `variant`.
@@ -988,7 +997,7 @@ impl FunctionTranslator<'_> {
         let address = self.operand(wb, source)?;
         let ty = self.result_ty(inst_id)?;
         let loaded = self.load_value(wb, op, ty, address, 0)?;
-        self.define_loaded(inst_id, 0, ty, loaded)
+        self.define_loaded(wb, inst_id, 0, ty, loaded)
     }
 
     pub(super) fn enum_is_variant(
@@ -1044,7 +1053,7 @@ impl FunctionTranslator<'_> {
             return self.define(inst_id, 0, view, ty);
         }
         let loaded = self.load_value(wb, op, ty, base, offset)?;
-        self.define_loaded(inst_id, 0, ty, loaded)
+        self.define_loaded(wb, inst_id, 0, ty, loaded)
     }
 
     /// `enum.proj`: the address of a field of a variant of an enum object.
@@ -1077,9 +1086,11 @@ impl FunctionTranslator<'_> {
         to_ty: Type,
     ) -> Result<(), WasmError> {
         let from_ty = self.function.dfg.value_ty(from);
-        if from_ty == Type::I256 && to_ty == Type::I256 {
+        if let Some(wide) = Wide::from_type(from_ty)
+            && from_ty == to_ty
+        {
             let limbs = self.wide_operand(*wb, from)?;
-            return self.define_wide(inst_id, 0, limbs);
+            return self.define_wide(*wb, inst_id, 0, wide, limbs);
         }
         let ctx = &self.module.ctx;
         let from_repr = repr(ctx, from_ty);
@@ -1120,7 +1131,7 @@ impl FunctionTranslator<'_> {
             return self.snapshot(*wb, inst_id, to_ty, source, 0);
         }
         let loaded = self.load_value(*wb, op, to_ty, source, 0)?;
-        self.define_loaded(inst_id, 0, to_ty, loaded)
+        self.define_loaded(*wb, inst_id, 0, to_ty, loaded)
     }
 }
 
@@ -1169,6 +1180,9 @@ fn immediate_value(imm: Immediate, signed: bool) -> Option<i128> {
         (Immediate::I32(value), false) => i128::from(value as u32),
         (Immediate::I64(value), true) => i128::from(value),
         (Immediate::I64(value), false) => i128::from(value as u64),
+        (Immediate::I128(value), true) => value,
+        // A value above `i128::MAX` is not small.
+        (Immediate::I128(value), false) => i128::try_from(value as u128).ok()?,
         (Immediate::I256(value), _) => {
             let bits = value.to_u256();
             let small =

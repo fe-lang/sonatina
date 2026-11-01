@@ -7,7 +7,7 @@ is, so EVM and native users do not build it. Translation uses the
 control flow and encodes the module.
 
 The backend translates integer programs, structs and arrays held in linear
-memory, global data, dynamic allocation and 256-bit integers. Floating point,
+memory, global data, dynamic allocation and 128- and 256-bit integers. Floating point,
 indirect calls and function pointers are not translated; see
 [Unsupported input](#unsupported-input).
 
@@ -37,8 +37,8 @@ The `wasm32` ISA shares the instruction set and little-endian layout of the
 native ISA, with 4-byte pointers represented as `i32`. There is one address
 space, the module's linear memory. Sizes and alignments are those of the native
 layout with 4-byte pointers: scalars are aligned to their size, a struct to
-its widest field, an array to its element, and `i256` takes 32 bytes aligned to
-16. An enum has its tag at offset zero and the fields of every variant from one
+its widest field, an array to its element, `i128` takes 16 bytes aligned to 16
+and `i256` 32 bytes aligned to 16. An enum has its tag at offset zero and the fields of every variant from one
 payload offset, aligned for the widest field of any variant, so the payloads of
 different variants share bytes.
 
@@ -48,9 +48,10 @@ different variants share bytes.
 | `i64` | `i64` |
 | `*T`, `objref<T>`, `constref<T>` | `i32`, an offset into linear memory |
 | struct, array, enum | `i32`, the address of the value in memory |
+| `i128` | two `i64` values, least significant limb first |
 | `i256` | four `i64` values, least significant limb first |
 
-`i128`, `unit` and function types cannot be parameters, results, phi values or
+`unit` and function types cannot be parameters, results, phi values or
 operands. A module that uses one is rejected with an error naming the type.
 Enum tags become their integer types before translation, as on the native
 target.
@@ -70,7 +71,7 @@ are canonical: an `i8` holding -1 is returned as 255.
 - A function with `public` linkage is exported under its symbol. `private`
   functions are only callable from the module. Export names must be unique. The
   parameters and results of an exported function are integers of at most 64 bits
-  and pointers (as `i32`); a struct, array, `i256` or reference in the signature
+  and pointers (as `i32`); a struct, array, `i128`, `i256` or reference in the signature
   of a public function is an error.
 - A function with `external` linkage and no body is imported as a function
   whose field name is its symbol. The module name is `env` unless
@@ -249,17 +250,21 @@ aggregate combination and object returns the backend runs first.
   time: one that does not fit in 32 bits traps when it is executed.
 - Aggregate `undef` is zero-filled storage.
 
-## 256-bit integers
+## 128- and 256-bit integers
 
 A front end whose `usize` has 256 bits makes every array index and loop counter an `i256`.
-The backend supports `add`, `sub`, `mul`, `neg`, `udiv`, `sdiv`, `umod`, `smod`,
-`shl`, `shr`, `sar`, `and`, `or`, `xor`, `not`, all comparisons, `is_zero`,
-`zext`, `sext` and `trunc` between `i256` and the narrower types, the checked
-forms `uaddo`, `usubo`, `umulo`, `saddo`, `ssubo`, `smulo` and `snego`, the
-saturating forms `uaddsat`, `usubsat`, `umulsat`, `saddsat`, `ssubsat` and
-`smulsat`, loads and stores of `i256`, `bswap`, `ptr_to_int` to `i256`,
-`int_to_ptr` from `i256` and `br_table` on `i256`. `int_to_ptr` traps if the
+The backend supports, for `i128` and `i256`, `add`, `sub`, `mul`, `neg`, `udiv`,
+`sdiv`, `umod`, `smod`, `shl`, `shr`, `sar`, `and`, `or`, `xor`, `not`, all
+comparisons, `is_zero`, `zext`, `sext` and `trunc` between them and to and from
+the narrower types, the checked forms `uaddo`, `usubo`, `umulo`, `saddo`,
+`ssubo`, `smulo` and `snego`, the saturating forms `uaddsat`, `usubsat`,
+`umulsat`, `saddsat`, `ssubsat` and `smulsat`, loads and stores, `bswap`,
+`evm_clz`, `ptr_to_int`, `int_to_ptr` and `br_table`. `int_to_ptr` traps if the
 value does not fit in 32 bits.
+
+An `i128` is computed with the 256-bit code: its operands are extended to 256
+bits, with the sign for a signed operation, and the result is the low 128 bits.
+Calls, returns, phis and memory carry only its two limbs.
 
 `evm_add_mod` and `evm_mul_mod` compute at 256 bits for every width: narrower
 operands are zero-extended, as on the native target, so the sum or product
@@ -283,7 +288,7 @@ native backend:
   (`uaddsat`, `saddsat`, ...) clamp to the bound in the direction of overflow.
 - `sdiv` of the minimum value by -1 wraps to the minimum value. Division or
   remainder by zero is undefined in the IR and traps in WebAssembly.
-- `mload` and `mstore` access `i1`, `i8`, `i16`, `i32`, `i64`, `i256`, pointers
+- `mload` and `mstore` access `i1`, `i8`, `i16`, `i32`, `i64`, `i128`, `i256`, pointers
   and aggregates. An access outside the memory traps. Natural alignment is only
   a hint, so unaligned addresses are valid. An `i1` load keeps the low bit of the
   byte.
@@ -302,7 +307,7 @@ model at every optimization level.
 
 Every instruction of the native instruction set is either translated or
 rejected with an error that names it. These are rejected: `get_function_ptr`,
-`sym_addr`, `sym_size`, and any instruction whose type is `i128` or a function
+`sym_addr`, `sym_size`, and any instruction whose type is a function
 type. Public and external global variables are rejected as a
 module-level error. Errors are returned from `compile_module`; the backend does
 not panic on unsupported input.

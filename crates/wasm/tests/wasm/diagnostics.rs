@@ -19,40 +19,33 @@ fn message(source: &str) -> String {
 }
 
 #[test]
-fn i256_parameters_and_results_of_exports_are_named() {
-    let parameter = message(
-        "func public %f(v0.i256) -> i32 {
+fn wide_parameters_and_results_of_exports_are_named() {
+    for ty in ["i128", "i256"] {
+        let parameter = message(&format!(
+            "func public %f(v0.{ty}) -> i32 {{
     block0:
         return 0.i32;
-}",
-    );
-    assert!(
-        parameter.contains("i256") && parameter.contains("parameter 0"),
-        "{parameter}"
-    );
-    assert!(parameter.contains("function `f`"), "{parameter}");
+}}"
+        ));
+        assert!(
+            parameter.contains(ty)
+                && parameter.contains("parameter 0")
+                && parameter.contains("cannot cross the module boundary"),
+            "{parameter}"
+        );
+        assert!(parameter.contains("function `f`"), "{parameter}");
 
-    let result = message(
-        "func public %g() -> i256 {
+        let result = message(&format!(
+            "func public %g() -> {ty} {{
     block0:
-        return 1.i256;
-}",
-    );
-    assert!(
-        result.contains("i256") && result.contains("result 0"),
-        "{result}"
-    );
-}
-
-#[test]
-fn i128_is_rejected_like_i256() {
-    let message = message(
-        "func public %f(v0.i128) -> i128 {
-    block0:
-        return v0;
-}",
-    );
-    assert!(message.contains("i128"), "{message}");
+        return 1.{ty};
+}}"
+        ));
+        assert!(
+            result.contains(ty) && result.contains("result 0"),
+            "{result}"
+        );
+    }
 }
 
 #[test]
@@ -250,16 +243,6 @@ func public %f(v0.i64, v1.*i8) {
         return;
 }",
             "argument 0",
-        ),
-        (
-            "a 128-bit value read from memory",
-            "func public %f(v0.*i128) -> i32 {
-    block0:
-        v1.i128 = mload v0 i128;
-        v2.i32 = trunc v1 i32;
-        return v2;
-}",
-            "i128",
         ),
     ];
     for (what, source, needle) in cases {

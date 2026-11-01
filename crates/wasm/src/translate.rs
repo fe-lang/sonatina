@@ -15,7 +15,8 @@
 //! An integer of at most 64 bits is one WebAssembly value. A pointer, an
 //! `objref`, a `constref` and a value of struct or array type are one `i32`:
 //! the address of the value in linear memory (aggregates live in memory, as
-//! on the native target). A 256-bit integer is four `i64` values.
+//! on the native target). A 256-bit integer is four `i64` values and a 128-bit
+//! integer two.
 //!
 //! # Frames
 //!
@@ -48,7 +49,7 @@ use super::{
         self, ALIGN, MemoryPlan, RuntimeGlobals, align_up, build_arena_mark,
         declare_runtime_globals,
     },
-    wide::{self, LIMBS, Limbs},
+    wide::{self, LIMBS, Limbs, Wide},
 };
 mod aggregate;
 mod wide_ops;
@@ -76,8 +77,8 @@ fn invalid(message: String) -> WasmError {
 enum Repr {
     /// An integer of at most 64 bits: one value.
     Int(Int),
-    /// A 256-bit integer: four `i64` values.
-    Wide,
+    /// A 128- or 256-bit integer: two or four `i64` values.
+    Wide(Wide),
     /// A pointer, `objref` or `constref`: an `i32` address.
     Pointer,
     /// A struct or array: an `i32` address of the value in memory.
@@ -88,8 +89,8 @@ fn repr(ctx: &ModuleCtx, ty: Type) -> Option<Repr> {
     if let Some(int) = Int::from_type(ty) {
         return Some(Repr::Int(int));
     }
-    if ty == Type::I256 {
-        return Some(Repr::Wide);
+    if let Some(wide) = Wide::from_type(ty) {
+        return Some(Repr::Wide(wide));
     }
     match ty.resolve_compound(ctx)? {
         CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => {
@@ -106,7 +107,7 @@ impl Repr {
     fn push_carriers(self, out: &mut Vec<WType>) {
         match self {
             Self::Int(int) => out.push(int.carrier()),
-            Self::Wide => out.extend([WType::I64; LIMBS]),
+            Self::Wide(wide) => out.extend(std::iter::repeat_n(WType::I64, wide.limbs())),
             Self::Pointer | Self::Aggregate => out.push(WType::I32),
         }
     }
@@ -220,8 +221,8 @@ fn kind_needs_runtime(kind: &NativeInstKind<'_>) -> bool {
     )
 }
 
-/// The 256-bit operation of an instruction that calls a helper, and its first
-/// operand.
+/// The operation of an instruction that calls a 256-bit helper when its
+/// operands are 128- or 256-bit, and its two operands.
 fn wide_op_of(kind: &NativeInstKind<'_>) -> Option<(WideOp, ValueId, ValueId)> {
     Some(match kind {
         NativeInstKind::Mul(i) => (WideOp::Mul, *i.lhs(), *i.rhs()),
@@ -290,7 +291,7 @@ fn scan_module(module: &Module) -> Scan {
                         arena = true;
                     }
                     if let Some((op, lhs, _)) = wide_op_of(&kind)
-                        && function.dfg.value_ty(lhs) == Type::I256
+                        && Wide::from_type(function.dfg.value_ty(lhs)).is_some()
                     {
                         let (mulo, divrem, shl, shr) = op.needs();
                         helpers.0 |= mulo;
@@ -852,7 +853,7 @@ fn declared_signature(
                     type_name(&module.ctx, ty)
                 )));
             };
-            if external && matches!(representation, Repr::Wide | Repr::Aggregate)
+            if external && matches!(representation, Repr::Wide(_) | Repr::Aggregate)
                 || external && is_reference(&module.ctx, ty)
             {
                 return Err(unsupported(format!(
@@ -1029,8 +1030,8 @@ struct FunctionTranslator<'a> {
     free: Option<Func>,
     wide_helpers: WideHelpers,
     return_tys: Vec<Type>,
-    /// Sonatina values defined so far, in canonical WAFFLE form. Not 256-bit
-    /// values, which are in `wide`.
+    /// Sonatina values defined so far, in canonical WAFFLE form. Not 128- or
+    /// 256-bit values, which are in `wide`, zero-extended to four limbs.
     values: FxHashMap<ValueId, V>,
     wide: FxHashMap<ValueId, Limbs>,
     blocks: FxHashMap<BlockId, waffle::Block>,
@@ -1166,14 +1167,10 @@ impl<'a> FunctionTranslator<'a> {
                 ))
             })?;
             match representation {
-                Repr::Wide => {
-                    let limbs: Limbs = [
-                        params[next],
-                        params[next + 1],
-                        params[next + 2],
-                        params[next + 3],
-                    ];
-                    next += LIMBS;
+                Repr::Wide(wide) => {
+                    let carried = &params[next..next + wide.limbs()];
+                    next += wide.limbs();
+                    let limbs = self.emit(prologue).wide_from_carried(wide, carried);
                     self.wide.insert(arg, limbs);
                 }
                 Repr::Int(int) => {
@@ -1221,9 +1218,11 @@ impl<'a> FunctionTranslator<'a> {
                 })?;
                 let wb = self.blocks[&block];
                 match representation {
-                    Repr::Wide => {
-                        let limbs: Limbs =
-                            std::array::from_fn(|_| self.body.add_blockparam(wb, WType::I64));
+                    Repr::Wide(wide) => {
+                        let carried: Vec<V> = (0..wide.limbs())
+                            .map(|_| self.body.add_blockparam(wb, WType::I64))
+                            .collect();
+                        let limbs = self.emit(wb).wide_from_carried(wide, &carried);
                         self.wide.insert(result, limbs);
                     }
                     Repr::Int(int) => {
@@ -1337,10 +1336,11 @@ impl<'a> FunctionTranslator<'a> {
     /// instruction that needs it.
     fn int_ty(&self, op: &str, ty: Type) -> Result<Int, WasmError> {
         Int::from_type(ty).ok_or_else(|| {
-            if ty == Type::I256 {
+            if Wide::from_type(ty).is_some() {
                 return unsupported(format!(
-                    "function `{}`: `{op}` on i256 is not supported by the wasm32 backend",
-                    self.name
+                    "function `{}`: `{op}` on {} is not supported by the wasm32 backend",
+                    self.name,
+                    type_name(&self.module.ctx, ty)
                 ));
             }
             unsupported(format!(
@@ -1359,8 +1359,9 @@ impl<'a> FunctionTranslator<'a> {
         )
     }
 
-    fn is_wide(&self, id: ValueId) -> bool {
-        self.function.dfg.value_ty(id) == Type::I256
+    /// The width of a 128- or 256-bit operand.
+    fn wide_ty(&self, id: ValueId) -> Option<Wide> {
+        Wide::from_type(self.function.dfg.value_ty(id))
     }
 
     fn operand(&mut self, wb: waffle::Block, id: ValueId) -> Result<V, WasmError> {
@@ -1406,18 +1407,18 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// The limbs of a 256-bit operand.
+    /// The limbs of a 128- or 256-bit operand, zero-extended to 256 bits.
     fn wide_operand(&mut self, wb: waffle::Block, id: ValueId) -> Result<Limbs, WasmError> {
         if let Some(&limbs) = self.wide.get(&id) {
             return Ok(limbs);
         }
         let function = self.function;
         match function.dfg.value(id) {
-            Value::Immediate {
-                imm: Immediate::I256(value),
-                ..
-            } => Ok(self.emit(wb).wide_const(*value)),
-            Value::Undef { ty: Type::I256 } => Ok(self.emit(wb).wide_zero()),
+            // An `i128` is zero-extended.
+            Value::Immediate { imm, .. } if Wide::from_type(imm.ty()).is_some() => {
+                Ok(self.emit(wb).wide_const(imm.zext(Type::I256).as_i256()))
+            }
+            Value::Undef { ty } if Wide::from_type(*ty).is_some() => Ok(self.emit(wb).wide_zero()),
             Value::Immediate { imm, .. } => Err(self.unsupported_type("an immediate", imm.ty())),
             _ => Err(invalid(format!(
                 "function `{}`: value v{} is used before it is defined",
@@ -1448,13 +1449,18 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Record result `index` of an instruction of type `wide`. A 128-bit
+    /// result is the low 128 bits of `limbs`.
     fn define_wide(
         &mut self,
+        wb: waffle::Block,
         inst_id: InstId,
         index: usize,
+        wide: Wide,
         limbs: Limbs,
     ) -> Result<(), WasmError> {
-        let result = self.result_of(inst_id, index, Type::I256)?;
+        let result = self.result_of(inst_id, index, wide.ty())?;
+        let limbs = self.emit(wb).wide_wrap(wide, limbs);
         self.wide.insert(result, limbs);
         Ok(())
     }
@@ -1540,21 +1546,27 @@ impl<'a> FunctionTranslator<'a> {
         Ok((int, ty, arg))
     }
 
-    /// Operands of a two-operand 256-bit instruction.
+    /// Operands of a two-operand instruction of `wide`, extended to 256 bits,
+    /// with the sign when `signed`.
     fn wide_operands(
         &mut self,
         wb: waffle::Block,
         op: &str,
-        lhs: ValueId,
-        rhs: ValueId,
+        wide: Wide,
+        signed: bool,
+        (lhs, rhs): (ValueId, ValueId),
     ) -> Result<(Limbs, Limbs), WasmError> {
-        if self.function.dfg.value_ty(rhs) != Type::I256 {
+        if self.function.dfg.value_ty(rhs) != wide.ty() {
             return Err(invalid(format!(
                 "function `{}`: `{op}` operands have different types",
                 self.name
             )));
         }
-        Ok((self.wide_operand(wb, lhs)?, self.wide_operand(wb, rhs)?))
+        let mut operands = [self.wide_operand(wb, lhs)?, self.wide_operand(wb, rhs)?];
+        if signed {
+            operands = operands.map(|limbs| self.emit(wb).wide_sign_extend(wide, limbs));
+        }
+        Ok((operands[0], operands[1]))
     }
 
     /// An integer instruction with one result of the operand type.
@@ -1571,21 +1583,22 @@ impl<'a> FunctionTranslator<'a> {
         self.define(inst_id, 0, value, ty)
     }
 
-    /// A 256-bit instruction with one 256-bit result, when the operands are
-    /// 256-bit; otherwise the integer lowering.
+    /// An instruction of 128 or 256 bits with one result of the operand type,
+    /// computed from the zero-extended operands, when the operands are held as
+    /// limbs; otherwise the integer lowering.
     fn binary_any(
         &mut self,
         wb: waffle::Block,
         inst_id: InstId,
         (lhs, rhs): (ValueId, ValueId),
-        wide: impl FnOnce(&mut Emit<'_>, Limbs, Limbs) -> Limbs,
+        wide_lower: impl FnOnce(&mut Emit<'_>, Limbs, Limbs) -> Limbs,
         lower: impl FnOnce(&mut Emit<'_>, Int, V, V) -> V,
     ) -> Result<(), WasmError> {
-        if self.is_wide(lhs) {
+        if let Some(wide) = self.wide_ty(lhs) {
             let op = self.function.dfg.inst(inst_id).as_text();
-            let (lhs, rhs) = self.wide_operands(wb, op, lhs, rhs)?;
-            let limbs = wide(&mut self.emit(wb), lhs, rhs);
-            self.define_wide(inst_id, 0, limbs)
+            let (lhs, rhs) = self.wide_operands(wb, op, wide, false, (lhs, rhs))?;
+            let limbs = wide_lower(&mut self.emit(wb), lhs, rhs);
+            self.define_wide(wb, inst_id, 0, wide, limbs)
         } else {
             self.binary(wb, inst_id, (lhs, rhs), lower)
         }
@@ -1604,18 +1617,19 @@ impl<'a> FunctionTranslator<'a> {
         self.define(inst_id, 0, value, ty)
     }
 
+    /// The one-operand form of [`Self::binary_any`].
     fn unary_any(
         &mut self,
         wb: waffle::Block,
         inst_id: InstId,
         arg: ValueId,
-        wide: impl FnOnce(&mut Emit<'_>, Limbs) -> Limbs,
+        wide_lower: impl FnOnce(&mut Emit<'_>, Wide, Limbs) -> Limbs,
         lower: impl FnOnce(&mut Emit<'_>, Int, V) -> V,
     ) -> Result<(), WasmError> {
-        if self.is_wide(arg) {
+        if let Some(wide) = self.wide_ty(arg) {
             let limbs = self.wide_operand(wb, arg)?;
-            let limbs = wide(&mut self.emit(wb), limbs);
-            self.define_wide(inst_id, 0, limbs)
+            let limbs = wide_lower(&mut self.emit(wb), wide, limbs);
+            self.define_wide(wb, inst_id, 0, wide, limbs)
         } else {
             self.unary(wb, inst_id, arg, lower)
         }
@@ -1630,8 +1644,8 @@ impl<'a> FunctionTranslator<'a> {
         signed: bool,
     ) -> Result<(), WasmError> {
         let op = self.function.dfg.inst(inst_id).as_text();
-        if self.is_wide(lhs) {
-            let (lhs, rhs) = self.wide_operands(wb, op, lhs, rhs)?;
+        if let Some(wide) = self.wide_ty(lhs) {
+            let (lhs, rhs) = self.wide_operands(wb, op, wide, signed, (lhs, rhs))?;
             let value = self.emit(wb).wide_compare(cmp, signed, lhs, rhs);
             return self.define(inst_id, 0, value, Type::I1);
         }
@@ -1650,10 +1664,10 @@ impl<'a> FunctionTranslator<'a> {
         signed: bool,
     ) -> Result<(), WasmError> {
         let op = self.function.dfg.inst(inst_id).as_text();
-        if self.is_wide(lhs) {
-            let (lhs, rhs) = self.wide_operands(wb, op, lhs, rhs)?;
-            let (result, flag) = self.wide_overflowing(wb, arith, signed, lhs, rhs)?;
-            self.define_wide(inst_id, 0, result)?;
+        if let Some(wide) = self.wide_ty(lhs) {
+            let (lhs, rhs) = self.wide_operands(wb, op, wide, signed, (lhs, rhs))?;
+            let (result, flag) = self.wide_overflowing(wb, wide, arith, signed, lhs, rhs)?;
+            self.define_wide(wb, inst_id, 0, wide, result)?;
             return self.define(inst_id, 1, flag, Type::I1);
         }
         let (int, ty, lhs, rhs) = self.binary_operands(wb, op, lhs, rhs)?;
@@ -1672,14 +1686,11 @@ impl<'a> FunctionTranslator<'a> {
         arith: Arith,
         signed: bool,
     ) -> Result<(), WasmError> {
-        if self.is_wide(lhs) {
+        if let Some(wide) = self.wide_ty(lhs) {
             let op = self.function.dfg.inst(inst_id).as_text();
-            let (lhs, rhs) = self.wide_operands(wb, op, lhs, rhs)?;
-            let (result, overflow) = self.wide_overflowing(wb, arith, signed, lhs, rhs)?;
-            let limbs = self
-                .emit(wb)
-                .wide_saturate(arith, signed, lhs, rhs, result, overflow);
-            return self.define_wide(inst_id, 0, limbs);
+            let (lhs, rhs) = self.wide_operands(wb, op, wide, signed, (lhs, rhs))?;
+            let limbs = self.wide_saturating(wb, wide, arith, signed, lhs, rhs)?;
+            return self.define_wide(wb, inst_id, 0, wide, limbs);
         }
         self.binary(wb, inst_id, (lhs, rhs), |e, int, l, r| {
             e.saturating(int, arith, signed, l, r)
@@ -1799,7 +1810,9 @@ impl<'a> FunctionTranslator<'a> {
                 )));
             }
             match repr(&self.module.ctx, ty) {
-                Some(Repr::Wide) => args.extend(self.wide_operand(wb, input)?),
+                Some(Repr::Wide(wide)) => {
+                    args.extend_from_slice(&self.wide_operand(wb, input)?[..wide.limbs()])
+                }
                 Some(Repr::Aggregate) => {
                     let mut address = self.operand(wb, input)?;
                     if aggregate_phis > 1 {
@@ -1884,9 +1897,9 @@ impl<'a> FunctionTranslator<'a> {
         let function = self.function;
         let kind = self.resolve(inst)?;
         if let Some((wide_op, lhs, rhs)) = wide_op_of(&kind)
-            && self.is_wide(lhs)
+            && let Some(wide) = self.wide_ty(lhs)
         {
-            return self.wide_arith(*wb, self.wide_helpers, inst_id, wide_op, lhs, rhs);
+            return self.wide_arith(*wb, inst_id, wide, wide_op, (lhs, rhs));
         }
         match kind {
             // Phi inputs are passed as block arguments by the predecessors.
@@ -1922,21 +1935,21 @@ impl<'a> FunctionTranslator<'a> {
                 *wb,
                 inst_id,
                 *i.arg(),
-                |e, v| e.wide_neg(v),
+                |e, _, v| e.wide_neg(v),
                 |e, int, v| e.neg(int, v),
             )?,
             NativeInstKind::Not(i) => self.unary_any(
                 *wb,
                 inst_id,
                 *i.arg(),
-                |e, v| e.wide_not(v),
+                |e, _, v| e.wide_not(v),
                 |e, int, v| e.not(int, v),
             )?,
             NativeInstKind::EvmClz(i) => self.unary_any(
                 *wb,
                 inst_id,
                 *i.word(),
-                |e, v| e.wide_clz(v),
+                |e, wide, v| e.wide_clz(wide, v),
                 |e, int, v| e.clz(int, v),
             )?,
             NativeInstKind::Bswap(i) => {
@@ -1947,7 +1960,7 @@ impl<'a> FunctionTranslator<'a> {
                     *wb,
                     inst_id,
                     *i.arg(),
-                    |e, v| e.wide_bswap(v),
+                    |e, wide, v| e.wide_bswap(wide, v),
                     |e, int, v| e.bswap(int, v),
                 )?
             }
@@ -2023,10 +2036,14 @@ impl<'a> FunctionTranslator<'a> {
                 self.overflow(*wb, inst_id, (*i.lhs(), *i.rhs()), Arith::Mul, true)?
             }
             NativeInstKind::Snego(i) => {
-                if self.is_wide(*i.arg()) {
+                if let Some(wide) = self.wide_ty(*i.arg()) {
+                    // `0 - arg` overflows only for the minimum.
                     let arg = self.wide_operand(*wb, *i.arg())?;
-                    let (value, overflow) = self.emit(*wb).wide_snego(arg);
-                    self.define_wide(inst_id, 0, value)?;
+                    let arg = self.emit(*wb).wide_sign_extend(wide, arg);
+                    let zero = self.emit(*wb).wide_zero();
+                    let (value, overflow) =
+                        self.wide_overflowing(*wb, wide, Arith::Sub, true, zero, arg)?;
+                    self.define_wide(*wb, inst_id, 0, wide, value)?;
                     self.define(inst_id, 1, overflow, Type::I1)?;
                 } else {
                     let (int, ty, arg) = self.unary_operand(*wb, op, *i.arg())?;
@@ -2085,7 +2102,7 @@ impl<'a> FunctionTranslator<'a> {
                 self.compare(*wb, inst_id, (*i.lhs(), *i.rhs()), Cmp::Ge, true)?
             }
             NativeInstKind::IsZero(i) => {
-                if self.is_wide(*i.lhs()) {
+                if self.wide_ty(*i.lhs()).is_some() {
                     let arg = self.wide_operand(*wb, *i.lhs())?;
                     let value = self.emit(*wb).wide_is_zero(arg);
                     self.define(inst_id, 0, value, Type::I1)?;
@@ -2123,9 +2140,9 @@ impl<'a> FunctionTranslator<'a> {
                 }
                 let to_ty = *i.ty();
                 let arg = self.operand(*wb, *i.from())?;
-                if to_ty == Type::I256 {
+                if let Some(wide) = Wide::from_type(to_ty) {
                     let limbs = self.emit(*wb).wide_extend(Int::I32, false, arg);
-                    self.define_wide(inst_id, 0, limbs)?;
+                    self.define_wide(*wb, inst_id, 0, wide, limbs)?;
                 } else {
                     let to = self.int_ty(op, to_ty)?;
                     let value = self.emit(*wb).resize(Int::I32, to, false, arg);
@@ -2141,9 +2158,9 @@ impl<'a> FunctionTranslator<'a> {
             // zero in WebAssembly, so freezing changes nothing.
             NativeInstKind::Freeze(i) => {
                 let arg = *i.arg();
-                if self.is_wide(arg) {
+                if let Some(wide) = self.wide_ty(arg) {
                     let limbs = self.wide_operand(*wb, arg)?;
-                    self.define_wide(inst_id, 0, limbs)?
+                    self.define_wide(*wb, inst_id, 0, wide, limbs)?
                 } else {
                     let ty = function.dfg.value_ty(arg);
                     let value = self.operand(*wb, arg)?;
@@ -2210,7 +2227,7 @@ impl<'a> FunctionTranslator<'a> {
             }
             NativeInstKind::BrTable(table) => {
                 let scrutinee_ty = function.dfg.value_ty(*table.scrutinee());
-                let scrutinee = if scrutinee_ty == Type::I256 {
+                let scrutinee = if Wide::from_type(scrutinee_ty).is_some() {
                     Scrutinee::Wide(self.wide_operand(*wb, *table.scrutinee())?)
                 } else {
                     let int = self.int_ty(op, scrutinee_ty)?;
@@ -2324,24 +2341,29 @@ impl<'a> FunctionTranslator<'a> {
         signed: bool,
     ) -> Result<(), WasmError> {
         let from_ty = self.function.dfg.value_ty(from);
-        match (from_ty == Type::I256, to_ty == Type::I256) {
-            (false, true) => {
+        match (Wide::from_type(from_ty), Wide::from_type(to_ty)) {
+            (None, Some(to)) => {
                 let from_int = self.int_ty(op, from_ty)?;
                 let value = self.operand(wb, from)?;
                 let limbs = self.emit(wb).wide_extend(from_int, signed, value);
-                self.define_wide(inst_id, 0, limbs)
+                self.define_wide(wb, inst_id, 0, to, limbs)
             }
-            (true, false) => {
+            (Some(_), None) => {
                 let to_int = self.int_ty(op, to_ty)?;
                 let limbs = self.wide_operand(wb, from)?;
                 let value = self.emit(wb).wide_trunc(to_int, limbs);
                 self.define(inst_id, 0, value, to_ty)
             }
-            (true, true) => Err(invalid(format!(
-                "function `{}`: `{op}` between 256-bit integers",
-                self.name
-            ))),
-            (false, false) => {
+            // `zext` keeps the zero-extended limbs, and `trunc` drops the
+            // limbs above the result.
+            (Some(from_wide), Some(to)) => {
+                let mut limbs = self.wide_operand(wb, from)?;
+                if signed {
+                    limbs = self.emit(wb).wide_sign_extend(from_wide, limbs);
+                }
+                self.define_wide(wb, inst_id, 0, to, limbs)
+            }
+            (None, None) => {
                 let (from_int, _, value) = self.unary_operand(wb, op, from)?;
                 let to_int = self.int_ty(op, to_ty)?;
                 let value = self.emit(wb).resize(from_int, to_int, signed, value);
@@ -2486,8 +2508,8 @@ impl<'a> FunctionTranslator<'a> {
             None => None,
         };
         for &arg in call_args {
-            if self.is_wide(arg) {
-                args.extend(self.wide_operand(wb, arg)?);
+            if let Some(wide) = self.wide_ty(arg) {
+                args.extend_from_slice(&self.wide_operand(wb, arg)?[..wide.limbs()]);
             } else {
                 args.push(self.operand(wb, arg)?);
             }
@@ -2518,15 +2540,11 @@ impl<'a> FunctionTranslator<'a> {
         let mut next = 0;
         for (index, ty) in callee.rets.iter().enumerate() {
             match repr(&self.module.ctx, *ty).expect("signature types were checked") {
-                Repr::Wide => {
-                    let limbs: Limbs = [
-                        values[next],
-                        values[next + 1],
-                        values[next + 2],
-                        values[next + 3],
-                    ];
-                    next += LIMBS;
-                    self.define_wide(inst_id, index, limbs)?;
+                Repr::Wide(wide) => {
+                    let carried = &values[next..next + wide.limbs()];
+                    next += wide.limbs();
+                    let limbs = self.emit(wb).wide_from_carried(wide, carried);
+                    self.define_wide(wb, inst_id, index, wide, limbs)?;
                 }
                 Repr::Int(int) => {
                     let mut value = values[next];
@@ -2574,8 +2592,8 @@ impl<'a> FunctionTranslator<'a> {
         }
         let mut values = Vec::with_capacity(args.len());
         for &arg in args {
-            if self.is_wide(arg) {
-                values.extend(self.wide_operand(wb, arg)?);
+            if let Some(wide) = self.wide_ty(arg) {
+                values.extend_from_slice(&self.wide_operand(wb, arg)?[..wide.limbs()]);
             } else {
                 values.push(self.operand(wb, arg)?);
             }

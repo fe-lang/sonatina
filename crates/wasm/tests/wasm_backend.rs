@@ -21,6 +21,8 @@ mod enums;
 mod harness;
 #[path = "wasm/heap.rs"]
 mod heap;
+#[path = "wasm/int128.rs"]
+mod int128;
 #[path = "wasm/memory_and_calls.rs"]
 mod memory_and_calls;
 #[path = "wasm/memory_runtime.rs"]

@@ -1,29 +1,71 @@
-//! 256-bit integers, as far as indexing and counting need them.
+//! 128- and 256-bit integers.
 //!
 //! Fe's `usize` has 256 bits, so every array index and every loop counter over
-//! an array is an `i256` in the IR. A 256-bit value is held as four `i64`
-//! limbs, least significant first, which are four WebAssembly values: a phi of
-//! this type has four block parameters, a function takes or returns four
-//! values, and memory holds it as 32 little-endian bytes.
+//! an array is an `i256` in the IR, and Fe's `u128` and `i128` are `i128`. A
+//! 256-bit value is held as four `i64` limbs, least significant first, which
+//! are four WebAssembly values: a phi of this type has four block parameters, a
+//! function takes or returns four values, and memory holds it as 32
+//! little-endian bytes.
+//!
+//! A 128-bit value is held as four limbs too, zero-extended: its upper two
+//! limbs are zero, as the bits above a narrow integer in its `i32` are. Calls,
+//! returns and phis carry only the two lower limbs, and memory holds 16 bytes.
+//! An operation extends its operands to 256 bits, with the sign for a signed
+//! operation, and computes with the 256-bit code. The low 128 bits of the
+//! result are the 128-bit result. A checked operation overflows when the
+//! 256-bit result is not the extension of its low 128 bits: a sum, difference
+//! or product of such operands that fits in 128 bits is exact at 256 bits.
 //!
 //! Supported: constants, `zext`, `sext`, `trunc`, `add`, `sub`, `neg`, `not`,
 //! `and`, `or`, `xor`, the ten comparisons, `is_zero`, the checked forms
 //! (`uaddo`, `usubo`, `umulo`, `saddo`, `ssubo`, `smulo`, `snego`), the
 //! saturating forms (`uaddsat`, `usubsat`, `umulsat`, `saddsat`, `ssubsat`,
-//! `smulsat`), `bswap`, multiplication, division and shifts.
+//! `smulsat`), `bswap`, `evm_clz`, multiplication, division and shifts.
 
 use waffle::{Operator, Type as WType};
 
-use sonatina_ir::I256;
+use sonatina_ir::{I256, Type};
 
-use super::arith::{Arith, Cmp, Emit, Int};
+use super::arith::{Cmp, Emit, Int};
 
 type V = waffle::Value;
 
-/// The limbs of a 256-bit value, least significant first.
+/// The limbs of a 128- or 256-bit value, least significant first.
 pub(super) type Limbs = [V; 4];
 
 pub(super) const LIMBS: usize = 4;
+
+/// The integer types held as limbs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Wide {
+    I128,
+    I256,
+}
+
+impl Wide {
+    pub(super) fn from_type(ty: Type) -> Option<Self> {
+        match ty {
+            Type::I128 => Some(Self::I128),
+            Type::I256 => Some(Self::I256),
+            _ => None,
+        }
+    }
+
+    pub(super) fn ty(self) -> Type {
+        match self {
+            Self::I128 => Type::I128,
+            Self::I256 => Type::I256,
+        }
+    }
+
+    /// The limbs that hold the value. The limbs above them are zero.
+    pub(super) fn limbs(self) -> usize {
+        match self {
+            Self::I128 => 2,
+            Self::I256 => LIMBS,
+        }
+    }
+}
 
 /// The four little-endian 64-bit words of a constant.
 pub(super) fn limbs_of(value: I256) -> [u64; LIMBS] {
@@ -49,6 +91,58 @@ impl Emit<'_> {
         self.c64_limbs([0; LIMBS])
     }
 
+    /// A value of `wide` from the limbs that hold it, as calls, phis and
+    /// memory carry it.
+    pub(super) fn wide_from_carried(&mut self, wide: Wide, carried: &[V]) -> Limbs {
+        let mut limbs = [carried[0]; LIMBS];
+        limbs[..wide.limbs()].copy_from_slice(&carried[..wide.limbs()]);
+        self.wide_wrap(wide, limbs)
+    }
+
+    /// The value modulo 2^bits of `wide`: the limbs above those that hold it
+    /// become zero.
+    pub(super) fn wide_wrap(&mut self, wide: Wide, mut value: Limbs) -> Limbs {
+        if wide.limbs() < LIMBS {
+            let zero = self.c64(0);
+            value[wide.limbs()..].fill(zero);
+        }
+        value
+    }
+
+    /// A value of `wide` sign-extended to 256 bits.
+    pub(super) fn wide_sign_extend(&mut self, wide: Wide, mut value: Limbs) -> Limbs {
+        let count = wide.limbs();
+        if count < LIMBS {
+            let fill = self.sign_fill(value[count - 1]);
+            value[count..].fill(fill);
+        }
+        value
+    }
+
+    /// All ones if the top bit of `limb` is set, and zero otherwise.
+    pub(super) fn sign_fill(&mut self, limb: V) -> V {
+        let shift = self.c64(63);
+        self.op(Operator::I64ShrS, &[limb, shift], WType::I64)
+    }
+
+    /// An `i32` that is non-zero if a 256-bit value is not the extension of
+    /// its low bits of `wide`, with the sign when `signed`.
+    pub(super) fn wide_exceeds(&mut self, wide: Wide, signed: bool, value: Limbs) -> V {
+        let count = wide.limbs();
+        let fill = if signed {
+            self.sign_fill(value[count - 1])
+        } else {
+            self.c64(0)
+        };
+        let mut diff = self.c64(0);
+        for &limb in &value[count..] {
+            let x = self.op(Operator::I64Xor, &[limb, fill], WType::I64);
+            diff = self.op(Operator::I64Or, &[diff, x], WType::I64);
+        }
+        let zero = self.c64(0);
+        self.op(Operator::I64Ne, &[diff, zero], WType::I32)
+    }
+
     fn cmp64(&mut self, op: Operator, a: V, b: V) -> V {
         self.op(op, &[a, b], WType::I32)
     }
@@ -57,8 +151,7 @@ impl Emit<'_> {
     pub(super) fn wide_extend(&mut self, from: Int, signed: bool, value: V) -> Limbs {
         let low = self.resize(from, Int::I64, signed, value);
         let fill = if signed {
-            let shift = self.c64(63);
-            self.op(Operator::I64ShrS, &[low, shift], WType::I64)
+            self.sign_fill(low)
         } else {
             self.c64(0)
         };
@@ -119,33 +212,38 @@ impl Emit<'_> {
         self.wide_sub(zero, value).0
     }
 
-    /// Byte reversal: the limbs in the opposite order, each reversed.
-    pub(super) fn wide_bswap(&mut self, value: Limbs) -> Limbs {
+    /// Byte reversal: the limbs that hold the value in the opposite order,
+    /// each reversed.
+    pub(super) fn wide_bswap(&mut self, wide: Wide, value: Limbs) -> Limbs {
+        let count = wide.limbs();
         let mut result = value;
-        for index in 0..LIMBS {
-            result[index] = self.bswap(Int::I64, value[LIMBS - 1 - index]);
+        for index in 0..count {
+            result[index] = self.bswap(Int::I64, value[count - 1 - index]);
         }
         result
     }
 
-    /// Leading zero bits of a 256-bit value. The count is at most 256, so it
+    /// Leading zero bits of a value of `wide`. The count is at most 256, so it
     /// is held in the lowest limb.
-    pub(super) fn wide_clz(&mut self, value: Limbs) -> Limbs {
+    pub(super) fn wide_clz(&mut self, wide: Wide, value: Limbs) -> Limbs {
+        let count = wide.limbs();
         let zero = self.c64(0);
-        let base = self.c64(192);
+        // The zero bits above limb `index`.
+        let above = |index: usize| 64 * (count - 1 - index) as u64;
+        let base = self.c64(above(0));
         let low = self.op(Operator::I64Clz, &[value[0]], WType::I64);
-        let mut count = self.op(Operator::I64Add, &[low, base], WType::I64);
-        for (index, bits) in [(1, 128), (2, 64), (3, 0)] {
-            let mut here = self.op(Operator::I64Clz, &[value[index]], WType::I64);
-            if bits != 0 {
-                let bits = self.c64(bits);
+        let mut leading = self.op(Operator::I64Add, &[low, base], WType::I64);
+        for (index, &limb) in value.iter().enumerate().take(count).skip(1) {
+            let mut here = self.op(Operator::I64Clz, &[limb], WType::I64);
+            if above(index) != 0 {
+                let bits = self.c64(above(index));
                 here = self.op(Operator::I64Add, &[here, bits], WType::I64);
             }
-            let nonzero = self.op(Operator::I64Ne, &[value[index], zero], WType::I32);
-            count = self.op(Operator::Select, &[here, count, nonzero], WType::I64);
+            let nonzero = self.op(Operator::I64Ne, &[limb, zero], WType::I32);
+            leading = self.op(Operator::Select, &[here, leading, nonzero], WType::I64);
         }
         let mut result = [zero; LIMBS];
-        result[0] = count;
+        result[0] = leading;
         result
     }
 
@@ -189,68 +287,6 @@ impl Emit<'_> {
         let shift = self.c64(63);
         let bit = self.op(Operator::I64ShrU, &[both, shift], WType::I64);
         self.op(Operator::I32WrapI64, &[bit], WType::I32)
-    }
-
-    /// The result of a saturating operation: `result`, or when `overflow` is
-    /// set, the bound in the direction of the overflow. Unsigned operations
-    /// saturate to zero for a subtraction and to the maximum otherwise. Signed
-    /// ones saturate toward the sign of `lhs` for addition and subtraction, and
-    /// toward the sign of the product for multiplication.
-    pub(super) fn wide_saturate(
-        &mut self,
-        arith: Arith,
-        signed: bool,
-        lhs: Limbs,
-        rhs: Limbs,
-        result: Limbs,
-        overflow: V,
-    ) -> Limbs {
-        let top = LIMBS - 1;
-        let bound: Limbs = if signed {
-            let sign_source = match arith {
-                Arith::Mul => self.op(Operator::I64Xor, &[lhs[top], rhs[top]], WType::I64),
-                Arith::Add | Arith::Sub => lhs[top],
-            };
-            // The minimum is the complement of the maximum, so flip the maximum
-            // by the sign fill of the direction.
-            let shift = self.c64(63);
-            let fill = self.op(Operator::I64ShrS, &[sign_source, shift], WType::I64);
-            std::array::from_fn(|index| {
-                let max = self.c64(if index == top {
-                    u64::MAX >> 1
-                } else {
-                    u64::MAX
-                });
-                self.op(Operator::I64Xor, &[max, fill], WType::I64)
-            })
-        } else {
-            let bound = match arith {
-                Arith::Add | Arith::Mul => u64::MAX,
-                Arith::Sub => 0,
-            };
-            self.c64_limbs([bound; LIMBS])
-        };
-        std::array::from_fn(|index| {
-            self.op(
-                Operator::Select,
-                &[bound[index], result[index], overflow],
-                WType::I64,
-            )
-        })
-    }
-
-    pub(super) fn wide_snego(&mut self, value: Limbs) -> (Limbs, V) {
-        let negated = self.wide_neg(value);
-        // Only the minimum value is its own negation among non-zero values.
-        let min_top = self.c64(1 << 63);
-        let top_is_min = self.cmp64(Operator::I64Eq, value[LIMBS - 1], min_top);
-        let mut rest = self.c64(0);
-        for &limb in &value[..LIMBS - 1] {
-            rest = self.op(Operator::I64Or, &[rest, limb], WType::I64);
-        }
-        let rest_is_zero = self.op(Operator::I64Eqz, &[rest], WType::I32);
-        let overflow = self.op(Operator::I32And, &[top_is_min, rest_is_zero], WType::I32);
-        (negated, overflow)
     }
 
     pub(super) fn wide_is_zero(&mut self, value: Limbs) -> V {
@@ -328,8 +364,7 @@ impl Emit<'_> {
         let low = self.op(Operator::I32WrapI64, &[value[0]], WType::I32);
         let extended = self.op(Operator::I64ExtendI32S, &[low], WType::I64);
         let mut diff = self.op(Operator::I64Xor, &[extended, value[0]], WType::I64);
-        let shift = self.c64(63);
-        let fill = self.op(Operator::I64ShrS, &[value[0], shift], WType::I64);
+        let fill = self.sign_fill(value[0]);
         for &limb in &value[1..] {
             let x = self.op(Operator::I64Xor, &[limb, fill], WType::I64);
             diff = self.op(Operator::I64Or, &[diff, x], WType::I64);
