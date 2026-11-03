@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use sonatina_ir::{
-    BlockId, Function, Module, Type, Value, ValueId,
+    BlockId, Function, Module, Type, ValueId,
     inst::{InstId, control_flow, data},
     module::FuncRef,
     types::CompoundType,
@@ -218,31 +218,15 @@ fn tail_switch(
 }
 
 /// Whether `arg` neither lives in the caller's frame nor refers to it. i256
-/// and aggregate arguments pass as the address of caller storage, and a
-/// constref is outside the frame only when it reaches a global or one of
-/// the caller's own arguments through projections: a constref call result
-/// is a copy in the frame.
+/// and aggregate arguments pass as the address of caller storage; a constref
+/// is the address of a constant.
 fn outside_frame(function: &Function, arg: ValueId) -> bool {
     let ty = function.dfg.value_ty(arg);
-    match ty.resolve_compound(function.ctx()) {
-        _ if ty == Type::I256 => false,
-        Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_)) => false,
-        Some(CompoundType::ConstRef(_)) => constref_outside_frame(function, arg),
-        _ => true,
-    }
-}
-
-fn constref_outside_frame(function: &Function, value: ValueId) -> bool {
-    let Value::Inst { inst, .. } = *function.dfg.value(value) else {
-        return matches!(function.dfg.value(value), Value::Arg { .. });
-    };
-    if let Some(proj) = function.dfg.downcast::<&data::ConstProj>(inst) {
-        return constref_outside_frame(function, proj.values()[0]);
-    }
-    if let Some(index) = function.dfg.downcast::<&data::ConstIndex>(inst) {
-        return constref_outside_frame(function, *index.object());
-    }
-    function.dfg.downcast::<&data::ConstRef>(inst).is_some()
+    !(ty == Type::I256
+        || matches!(
+            ty.resolve_compound(function.ctx()),
+            Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_))
+        ))
 }
 
 /// Whether a callee could reach storage in this function's frame: an

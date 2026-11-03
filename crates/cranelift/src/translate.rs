@@ -1229,8 +1229,6 @@ fn translate_function(
                             return Err("indirect return requires exactly one value".to_string());
                         };
                         let val_ty = function.dfg.value_ty(*val_id);
-                        let storage_ty = indirect_return_storage_type(&module.ctx, linkage, val_ty)
-                            .ok_or("indirect return value has no storage type")?;
                         if val_ty == Type::I256 || register_parts(&module.ctx, val_ty).is_some() {
                             store_value(function, *val_id, sret, 0, &value_map, &mut builder)?;
                         } else if !frame.in_return_buffer(*val_id) {
@@ -1238,7 +1236,7 @@ fn translate_function(
                                 function,
                                 *val_id,
                                 sret,
-                                storage_ty,
+                                val_ty,
                                 &value_map,
                                 target_config,
                                 &mut builder,
@@ -1276,14 +1274,11 @@ fn translate_function(
                         clif_module.declare_func_in_func(*clif_func_id, builder.func);
                     let ir_results = function.dfg.inst_results(inst_id);
                     let callee_linkage = module.ctx.func_linkage(callee);
-                    let indirect_storage_ty = match ir_results {
-                        [result] => indirect_return_storage_type(
-                            &module.ctx,
-                            callee_linkage,
-                            function.dfg.value_ty(*result),
-                        ),
-                        _ => None,
-                    };
+                    let indirect = matches!(ir_results, [result] if passes_by_reference(
+                        &module.ctx,
+                        callee_linkage,
+                        function.dfg.value_ty(*result),
+                    ));
 
                     let tail_call = tail_calls.is_tail_call(func_ref, inst_id);
                     let mut call_args = Vec::new();
@@ -1291,20 +1286,14 @@ fn translate_function(
                         // An indirect result goes to the caller's own buffer.
                         call_args.extend(sret_ptr);
                         None
-                    } else if let Some(storage_ty) = indirect_storage_ty {
+                    } else if indirect {
                         let result_ty = function.dfg.value_ty(ir_results[0]);
-                        // A constref result's copy of its referent stays
-                        // in a slot of its own.
                         let addr = if result_ty == Type::I256 {
                             i256_storage.result(&mut builder)
                         } else if register_parts(&module.ctx, result_ty).is_some() {
                             create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?
-                        } else if storage_ty == result_ty {
-                            frame.address(ir_results[0], &mut builder)?
                         } else {
-                            let slot = builder
-                                .create_sized_stack_slot(stack_slot_data(storage_ty, &module.ctx)?);
-                            builder.ins().stack_addr(pointer_type, slot, 0)
+                            frame.address(ir_results[0], &mut builder)?
                         };
                         call_args.push(addr);
                         Some(addr)
