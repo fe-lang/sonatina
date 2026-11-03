@@ -320,10 +320,21 @@ pub(super) fn instruction(
     } else if downcast::<&data::ObjFromPtr>(is, inst).is_some() {
         // Like a reference loaded from memory, a view of the memory at a
         // pointer reaches an object outside this function or an exposed one.
+        // Only the payloads of local objects keep their guards: a payload of
+        // an object outside the function's control is imported memory to the
+        // view, as it is to a callee viewing the same pointer.
         let result = result.unwrap();
         let sources = ImportSources::new(ctx, state, std::iter::empty());
         let root = Root::Imported(result);
-        let value = Source::RawLoad(&sources).value(ctx, root, verifier.func.dfg.value_ty(result));
+        let mut value =
+            Source::RawLoad(&sources).value(ctx, root, verifier.func.dfg.value_ty(result));
+        value.references.views = std::mem::take(&mut value.references.views)
+            .into_iter()
+            .map(|mut view| {
+                view.guards.retain(|guard| guard.place.root.is_local());
+                view
+            })
+            .collect();
         state.bind(verifier, result, value, None);
         state.exposed.insert(root);
         state.close_exposure(ctx);

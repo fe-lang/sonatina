@@ -18,7 +18,7 @@ pub(super) enum Root {
 impl Root {
     /// Whether code outside this function reaches the root only once the
     /// function exposes it: its allocations and its `noalias` arguments.
-    fn is_local(self) -> bool {
+    pub fn is_local(self) -> bool {
         matches!(self, Self::Noalias(_) | Self::Recent(_) | Self::Summary(_))
     }
 

@@ -81,3 +81,32 @@ fn enum_payloads_of_views_need_variant_proofs() {
         }
     }
 }
+
+// A view of raw memory may alias any accessible payload of its type. A local
+// object's payloads keep their guards, since only exposure gives them a raw
+// address. Other objects' are imported memory to the view, as they are to a
+// callee given the same pointer, even after this function changes their tag.
+#[test]
+fn views_take_guards_only_from_local_payloads() {
+    for (setup, valid) in [
+        ("", true),
+        (
+            "v1.objref<@E> = obj.from_ptr v8;\n enum.set_tag v1 #None;",
+            true,
+        ),
+        ("enum.set_tag v0 #None;", true),
+        (
+            "v1.objref<@E> = obj.alloc @E;\n enum.write_variant v1 #Some (17.i256);\n v2.*@E = obj.materialize.stack v1;",
+            true,
+        ),
+        (
+            "v1.objref<@E> = obj.alloc @E;\n enum.write_variant v1 #Some (17.i256);\n v2.*@E = obj.materialize.stack v1;\n enum.set_tag v1 #None;",
+            false,
+        ),
+    ] {
+        let report = report(&format!(
+            "func private %f(v0.objref<@E>, v8.*@E, v9.*i256) -> i256 {{\nblock0:\n {setup}\n v3.objref<i256> = obj.from_ptr v9;\n v4.i256 = obj.load v3;\n return v4;\n}}"
+        ));
+        assert_eq!(report.is_ok(), valid, "{setup}: {report}");
+    }
+}

@@ -136,6 +136,13 @@ from the capabilities available before the effect, keeping guards and private
 allocation separation. Imported holders remain externally accessible, so later
 stores into them publish contained references.
 
+`obj.from_ptr` views the memory at a pointer as a recovered reference, with
+one difference: its candidates keep the guards of local objects only. A local
+object gets a raw address only once exposed, so a raw view of its payload
+keeps the payload's obligation. A payload of an incoming or imported object is
+imported memory to the view, as it is to a callee viewing the same pointer, so
+inlining that callee adds no obligation.
+
 Recovered references enumerate accessible local candidates separately from
 their external alternative. Only those explicit candidates can alias a local
 allocation; the external alternative is not a wildcard for private locals.
@@ -172,6 +179,7 @@ An unsupported producer yields unknown local provenance, not an empty view.
 | `call`, `return` | Publish reachable reference-bearing values at the interface boundary; calls invalidate mutable guarantees. |
 | `bitcast` | Reject by-value object-reference contents before semantic analysis; raw pointers retain their ordinary cast rules. |
 | Raw loads and other opaque producers | Retain possible local aliases/guards in reference-bearing results. |
+| `obj.from_ptr` | Recover a view like a raw load, keeping only local candidates' guards. |
 | Raw stores/copies and other memory writes | Publish reference-bearing stored values and invalidate potentially affected facts. |
 | Other instructions | Require explicit proof of irrelevance to enum state/reference transport, or apply the conservative opaque rule. |
 
