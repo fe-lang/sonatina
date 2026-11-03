@@ -83,12 +83,18 @@ impl<'a> DemandedBitsQuery<'a> {
         else {
             return;
         };
-        if *result_idx != 0 {
-            return;
-        }
 
         let demand = self.for_value(value);
         if demand == U256::zero() {
+            return;
+        }
+
+        // A later result, such as a checked op's overflow flag, can depend on
+        // every operand bit.
+        if *result_idx != 0 {
+            for arg in self.func.dfg.inst(*inst).collect_values() {
+                self.add_demand(arg, type_mask_or_zero(self.func, arg), worklist, queued);
+            }
             return;
         }
 
