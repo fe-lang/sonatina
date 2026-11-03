@@ -105,7 +105,10 @@ and create a raw alias to a private allocation. The check follows value fields,
 not raw-pointer pointees, and does not enumerate array elements.
 
 Calls publish their reference-bearing arguments and can mutate the objects
-reachable from those arguments or prior external exposure. Preserve facts and
+reachable from those arguments or prior external exposure. A `nocapture`
+argument (`object-aliasing.md`) is published for the call only: the call can
+mutate what it reaches, but after it the objects it alone exposed are private
+again, and no exposed object or result holds a reference to them. Preserve facts and
 reference cells in fresh private objects that the call cannot reach. Incoming
 and opaque imported roots are externally accessible even without a local
 materialization, except a `noalias` argument (`object-aliasing.md`): like a
@@ -176,7 +179,7 @@ An unsupported producer yields unknown local provenance, not an empty view.
 | `phi` | Substitute every incoming value on its predecessor edge before merging. |
 | `const.ref`, `const.proj`, `const.index`, `const.load` | Transport typed constant shapes; do not fabricate mutable local aliases. |
 | `obj.materialize.stack` | Seed exposure, followed by containment closure. |
-| `call`, `return` | Publish reachable reference-bearing values at the interface boundary; calls invalidate mutable guarantees. |
+| `call`, `return` | Publish reachable reference-bearing values at the interface boundary, lending `nocapture` arguments for the call only; calls invalidate mutable guarantees. |
 | `bitcast` | Reject by-value object-reference contents before semantic analysis; raw pointers retain their ordinary cast rules. |
 | Raw loads and other opaque producers | Retain possible local aliases/guards in reference-bearing results. |
 | `obj.from_ptr` | Recover a view like a raw load, keeping only local candidates' guards. |

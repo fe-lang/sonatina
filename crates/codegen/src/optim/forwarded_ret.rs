@@ -58,6 +58,10 @@ impl SignatureRewritePlan for FuncPlan {
         &self.new_ret_tys
     }
 
+    fn new_arg(&self, old: usize) -> Option<usize> {
+        Some(old)
+    }
+
     fn is_higher_order_compatible(&self, other: &Self) -> bool {
         self.forwarded_args == other.forwarded_args && self.new_arg_tys == other.new_arg_tys
     }

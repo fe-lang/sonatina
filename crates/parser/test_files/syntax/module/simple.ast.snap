@@ -21,17 +21,23 @@ Module {
                 ..
             },
             params: [
-                Type {
-                    kind: Int(
-                        I8,
-                    ),
-                    ..
+                FuncParamType {
+                    nocapture: false,
+                    ty: Type {
+                        kind: Int(
+                            I8,
+                        ),
+                        ..
+                    },
                 },
-                Type {
-                    kind: Int(
-                        I8,
-                    ),
-                    ..
+                FuncParamType {
+                    nocapture: false,
+                    ty: Type {
+                        kind: Int(
+                            I8,
+                        ),
+                        ..
+                    },
                 },
             ],
             ret_types: [
@@ -205,6 +211,7 @@ Module {
                 params: [
                     FuncParam {
                         noalias: false,
+                        nocapture: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v0",
@@ -403,6 +410,7 @@ Module {
                 params: [
                     FuncParam {
                         noalias: false,
+                        nocapture: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v0",
@@ -423,6 +431,7 @@ Module {
                     },
                     FuncParam {
                         noalias: false,
+                        nocapture: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v1",
@@ -444,6 +453,7 @@ Module {
                     },
                     FuncParam {
                         noalias: false,
+                        nocapture: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v2",
@@ -470,6 +480,7 @@ Module {
                     },
                     FuncParam {
                         noalias: false,
+                        nocapture: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v3",
@@ -497,6 +508,7 @@ Module {
                     },
                     FuncParam {
                         noalias: false,
+                        nocapture: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v4",
@@ -512,6 +524,7 @@ Module {
                     },
                     FuncParam {
                         noalias: false,
+                        nocapture: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v5",
@@ -571,6 +584,7 @@ Module {
                 params: [
                     FuncParam {
                         noalias: false,
+                        nocapture: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v0",
@@ -767,6 +781,7 @@ Module {
                 params: [
                     FuncParam {
                         noalias: false,
+                        nocapture: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v0",

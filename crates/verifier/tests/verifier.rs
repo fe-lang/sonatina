@@ -3279,3 +3279,42 @@ block0:
         "{report}"
     );
 }
+
+#[test]
+fn nocapture_is_only_valid_on_object_reference_arguments() {
+    let source = |arg: &str| {
+        format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(noalias nocapture v0.{arg}) {{
+block0:
+    return;
+}}
+"#
+        )
+    };
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    let valid = parse_module(&source("objref<i256>")).unwrap();
+    assert!(!verify_module(&valid.module, &config).has_errors());
+    let text = ModuleWriter::new(&valid.module).dump_string();
+    assert!(
+        text.contains("%f(noalias nocapture v0.objref<i256>)"),
+        "{text}"
+    );
+    // A declaration has no object references, so no valid `nocapture` mark.
+    let invalid =
+        source("i256").replace("\nfunc", "\ndeclare external %g(i1, nocapture i256);\nfunc");
+    let invalid = parse_module(&invalid).unwrap();
+    let text = ModuleWriter::new(&invalid.module).dump_string();
+    assert!(text.contains("%g(i1, nocapture i256)"), "{text}");
+    let report = verify_module(&invalid.module, &config);
+    assert_eq!(
+        report
+            .errors()
+            .filter(|diagnostic| diagnostic.message
+                == "only an object reference argument can be nocapture")
+            .count(),
+        2,
+        "{report}"
+    );
+}

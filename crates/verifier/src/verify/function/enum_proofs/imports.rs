@@ -19,7 +19,14 @@ pub(super) struct ImportSources {
 }
 
 impl ImportSources {
-    pub fn new(ctx: &ModuleCtx, state: &State, args: impl Iterator<Item = ValueState>) -> Self {
+    /// The references code outside this function can find in the objects
+    /// `exposed` makes accessible, given the arguments of a call.
+    pub fn new(
+        ctx: &ModuleCtx,
+        state: &State,
+        exposed: &BTreeSet<Root>,
+        args: impl Iterator<Item = ValueState>,
+    ) -> Self {
         let mut sources = Self {
             candidates: FxHashMap::default(),
             unresolved: false,
@@ -28,13 +35,13 @@ impl ImportSources {
             sources.unresolved |= arg.captured(ctx).unknown;
         }
         for value in state.values.values() {
-            sources.contents(ctx, value, &state.exposed);
+            sources.contents(ctx, value, exposed);
         }
         for (&root, value) in &state.objects {
-            if root.externally_accessible(&state.exposed) {
+            if root.externally_accessible(exposed) {
                 sources.unresolved |= value.captured(ctx).unknown;
                 sources.subobjects(ctx, value.ty, &References::root(root));
-                sources.contents(ctx, value, &state.exposed);
+                sources.contents(ctx, value, exposed);
             }
         }
         for fact in state.views.values() {
@@ -43,13 +50,13 @@ impl ImportSources {
             let mut refs = fact.references.clone();
             refs.asserted = None;
             refs.views
-                .retain(|view| view.place.root.externally_accessible(&state.exposed));
+                .retain(|view| view.place.root.externally_accessible(exposed));
             // An unrelated unresolved SSA value is not itself a call input.
             // Unknown published inputs/contents are tracked separately above.
             if !refs.views.is_empty() {
                 sources.subobjects(ctx, fact.value.ty, &refs);
                 sources.unresolved |= fact.value.captured(ctx).unknown;
-                sources.contents(ctx, &fact.value, &state.exposed);
+                sources.contents(ctx, &fact.value, exposed);
             }
         }
         sources

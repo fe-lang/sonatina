@@ -258,6 +258,8 @@ struct Caller {
     offset: usize,
     values: BTreeMap<ValueId, Node>,
     results: Vec<ValueId>,
+    /// The objects exposed only through the call's `nocapture` arguments.
+    lent: BTreeSet<usize>,
 }
 
 impl World {
@@ -711,11 +713,22 @@ fn execute_block(
             )))
         } else if let Some(call) = downcast::<&control_flow::Call>(is, data) {
             let args: Vec<_> = call.args().iter().map(|&arg| value(arg)).collect();
-            let mut published = vec![];
-            for arg in &args {
-                arg.references(&mut published);
+            let nocapture: Vec<_> = module
+                .ctx
+                .func_sig(*call.callee(), |sig| sig.nocapture_args().collect());
+            let (mut published, mut lent) = (vec![], vec![]);
+            for (index, arg) in args.iter().enumerate() {
+                arg.references(if nocapture.contains(&index) {
+                    &mut lent
+                } else {
+                    &mut published
+                });
             }
             world.exposed.extend(published);
+            world.close_exposure();
+            // A `nocapture` argument is exposed during the call only.
+            let kept = world.exposed.clone();
+            world.exposed.extend(lent);
             world.close_exposure();
             world.callers.push(Caller {
                 func: func_ref,
@@ -724,6 +737,7 @@ fn execute_block(
                 offset: index + 1,
                 values: std::mem::take(&mut world.values),
                 results: func.dfg.inst_results(inst).to_vec(),
+                lent: world.exposed.difference(&kept).copied().collect(),
             });
             module.func_store.view(*call.callee(), |callee| {
                 assert_eq!(args.len(), callee.arg_values.len());
@@ -767,12 +781,17 @@ fn execute_block(
             let values: Vec<_> = ret.args().iter().map(|&arg| value(arg)).collect();
             if let Some(caller) = world.callers.pop() {
                 assert_eq!(caller.results.len(), values.len());
+                world.exposed.retain(|object| !caller.lent.contains(object));
                 let mut published = vec![];
                 for value in &values {
                     value.references(&mut published);
                 }
                 world.exposed.extend(published);
                 world.close_exposure();
+                assert!(
+                    world.exposed.is_disjoint(&caller.lent),
+                    "a nocapture argument outlived its call"
+                );
                 world.values = caller.values;
                 world.values.extend(caller.results.into_iter().zip(values));
                 pending.push((

@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    GlobalVariableRef, Linkage, Module, Signature, Type, Value,
+    GlobalVariableRef, Linkage, Module, Type, Value,
     builder::{BuilderError, ModuleBuilder},
     module::FuncRef,
     types::{CompoundType, CompoundTypeRef, EnumData, StructData},
@@ -656,8 +656,6 @@ impl ModuleLinker {
         let mut ref_map = self.module_ref_map.get_mut(&module_ref).unwrap();
 
         let sig = self.modules[&module_ref].ctx.func_sig(func_ref, |sig| {
-            let name = &sig.name();
-            let linkage = sig.linkage();
             let args: Vec<_> = sig
                 .args()
                 .iter()
@@ -668,7 +666,7 @@ impl ModuleLinker {
                 .iter()
                 .map(|ty| ref_map.lookup_type(*ty))
                 .collect();
-            Signature::new(name, linkage, &args, &ret_tys)
+            sig.with_types(&args, &ret_tys)
         });
 
         let Some(linked_func_ref) = self.builder.lookup_func(sig.name()) else {
@@ -714,7 +712,8 @@ impl ModuleLinker {
 mod tests {
     use super::*;
     use crate::{
-        Linkage, Object, ObjectName, builder::test_util::test_module_builder, types::Type,
+        Linkage, Object, ObjectName, Signature, builder::test_util::test_module_builder,
+        types::Type,
     };
 
     #[test]
