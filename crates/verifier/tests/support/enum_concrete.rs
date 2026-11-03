@@ -369,7 +369,11 @@ pub fn execute(source: &str, instruction_limit: usize) -> Execution {
                             .map(|node| {
                                 let mut world = world.clone();
                                 let view = world.allocate(node, None);
-                                world.exposed.insert(view.location.object);
+                                // Other code reaches a `noalias` argument only
+                                // once the function publishes it.
+                                if !func.is_noalias_arg(arg) {
+                                    world.exposed.insert(view.location.object);
+                                }
                                 world.values.insert(arg, Node::reference(view));
                                 world
                             })

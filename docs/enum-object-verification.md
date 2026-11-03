@@ -82,10 +82,11 @@ Pure-value elimination, unused-result removal, and sinking to positions the
 extraction dominates remain permitted.
 
 An incoming `objref<T>` has no encoded parent-enum obligation. It predates fresh
-allocations in this invocation. Incoming references may alias each other; a
-reference recovered later from a holder or opaque call may alias a fresh local
-allocation. These are different origins. An unresolved local origin is never
-silently reclassified as an imported reference without an obligation.
+allocations in this invocation. Incoming references may alias each other unless
+one is `noalias`; a reference recovered later from a holder or opaque call may
+alias a fresh local allocation. These are different origins. An unresolved
+local origin is never silently reclassified as an imported reference without an
+obligation.
 
 Object references have no implicit raw representation. `bitcast` rejects them
 in either operand/result type, including references nested by value in structs,
@@ -97,8 +98,11 @@ Calls publish their reference-bearing arguments and can mutate the objects
 reachable from those arguments or prior external exposure. Preserve facts and
 reference cells in fresh private objects that the call cannot reach. Incoming
 and opaque imported roots are externally accessible even without a local
-materialization. Apply this same accessibility rule to mutable object facts,
-cached view contents, ancestor guards and saved tag observations.
+materialization, except a `noalias` argument (`object-aliasing.md`): like a
+fresh private object, it is reached from outside only once the function
+publishes it, and it overlaps no other root. Apply this same accessibility rule
+to mutable object facts, cached view contents, ancestor guards and saved tag
+observations.
 
 A call can derive typed subobject references from accessible objects even when
 the caller has never formed those projections. Retain these alternatives and
@@ -141,7 +145,7 @@ An unsupported producer yields unknown local provenance, not an empty view.
 
 | Family | Required behavior |
 | --- | --- |
-| Function arguments | Import typed boundary values; distinguish preexisting roots from recovered aliases. |
+| Function arguments | Import typed boundary values; distinguish preexisting roots from recovered aliases. A `noalias` argument starts unexposed. |
 | `obj.alloc` | Allocate a fresh, uninitialized instance. |
 | `enum.proj`, `obj.proj`, `obj.index` | Derive a typed view, preserving and extending guards. |
 | `enum.assert_variant_ref` | Refine current object state; preserve identity and existing ancestor guards. |
