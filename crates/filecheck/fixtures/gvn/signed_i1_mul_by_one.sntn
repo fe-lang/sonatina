@@ -1,0 +1,50 @@
+target = "evm-ethereum-london"
+
+# Read as signed, `1.i1` is -1, which is no identity for signed multiplication
+# or division: (-1) * (-1) and (-1) / (-1) overflow at i1. (`smulsat` takes no
+# i1 operands.)
+
+# sameln: func public %keeps_i1_smulo_by_one_lhs(v0.i1) -> i1 {
+# check:       (v1.i1, v2.i1) = smulo 1.i1 v0;
+# nextln:      return v2;
+func public %keeps_i1_smulo_by_one_lhs(v0.i1) -> i1 {
+    block0:
+        (v1.i1, v2.i1) = smulo 1.i1 v0;
+        return v2;
+}
+
+# sameln: func public %keeps_i1_smulo_by_one_rhs(v0.i1) -> i1 {
+# check:       (v1.i1, v2.i1) = smulo v0 1.i1;
+# nextln:      return v2;
+func public %keeps_i1_smulo_by_one_rhs(v0.i1) -> i1 {
+    block0:
+        (v1.i1, v2.i1) = smulo v0 1.i1;
+        return v2;
+}
+
+# sameln: func public %keeps_i1_evm_sdivo_by_one(v0.i1) -> i1 {
+# check:       (v1.i1, v2.i1) = evm_sdivo v0 1.i1;
+# nextln:      return v2;
+func public %keeps_i1_evm_sdivo_by_one(v0.i1) -> i1 {
+    block0:
+        (v1.i1, v2.i1) = evm_sdivo v0 1.i1;
+        return v2;
+}
+
+# sameln: func public %folds_i1_umulo_by_one(v0.i1) -> i1 {
+# not:         umulo
+# check:       return 0.i1;
+func public %folds_i1_umulo_by_one(v0.i1) -> i1 {
+    block0:
+        (v1.i1, v2.i1) = umulo 1.i1 v0;
+        return v2;
+}
+
+# sameln: func public %folds_i8_smulo_by_one(v0.i8) -> i1 {
+# not:         smulo
+# check:       return 0.i1;
+func public %folds_i8_smulo_by_one(v0.i8) -> i1 {
+    block0:
+        (v1.i8, v2.i1) = smulo v0 1.i8;
+        return v2;
+}
