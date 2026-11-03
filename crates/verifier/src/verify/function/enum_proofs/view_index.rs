@@ -264,6 +264,7 @@ mod tests {
                     path: vec![],
                 },
                 variant: 0,
+                assumed: false,
                 witness: None,
                 anchor: None,
             }]),

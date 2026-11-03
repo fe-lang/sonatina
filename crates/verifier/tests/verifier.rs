@@ -484,33 +484,50 @@ block2:
     assert!(report.is_ok(), "expected no verifier errors, got {report}");
 }
 
-#[test]
-fn enum_assert_variant_ref_is_invalidated_by_later_tag_write() {
-    let src = r#"
+/// `%entry` asserts `v0` is `Some`, then runs `effect` and reads the payload
+/// through `projected`, the assertion's result `v1` or its operand `v0`.
+fn assertion_entry(effect: &str, projected: &str) -> String {
+    format!(
+        r#"
 target = "evm-ethereum-osaka"
 
-type @OptionI256 = enum {
+type @OptionI256 = enum {{
     #None,
     #Some(i256),
-};
+}};
 
-func private %bad(v0.objref<@OptionI256>) -> i256 {
+func private %retag(v0.objref<@OptionI256>) -> unit {{
+block0:
+    enum.set_tag v0 #None;
+    return;
+}}
+
+func private %entry(v0.objref<@OptionI256>) -> i256 {{
 block0:
     v1.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
-    enum.set_tag v0 #None;
-    v2.objref<i256> = enum.proj v1 #Some 0.i8;
+    {effect}
+    v2.objref<i256> = enum.proj {projected} #Some 0.i8;
     v3.i256 = obj.load v2;
     return v3;
+}}
+"#
+    )
 }
-"#;
 
-    let parsed = parse_module(src).expect("module should parse");
+// What `enum.assert_variant_ref` proves of its operand's object ends at a
+// write or call that may change it. A payload view of its result takes the
+// assertion to every read.
+#[test]
+fn enum_assert_variant_ref_holds_for_payload_views_of_its_result() {
     let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
-    let report = verify_module(&parsed.module, &cfg);
-    assert!(
-        has_code(&report, "IR0600"),
-        "expected enum payload load verification failure after tag write, got {report}"
-    );
+    for effect in ["enum.set_tag v0 #None;", "call %retag v0;"] {
+        let parsed = parse_module(&assertion_entry(effect, "v0")).expect("module should parse");
+        let report = verify_module(&parsed.module, &cfg);
+        assert!(has_code(&report, "IR0600"), "{effect}: {report}");
+        let parsed = parse_module(&assertion_entry(effect, "v1")).expect("module should parse");
+        let report = verify_module(&parsed.module, &cfg);
+        assert!(report.is_ok(), "{effect}: {report}");
+    }
 }
 
 #[test]
@@ -537,41 +554,6 @@ block0:
     let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
     let report = verify_module(&parsed.module, &cfg);
     assert!(report.is_ok(), "expected no verifier errors, got {report}");
-}
-
-#[test]
-fn enum_assert_variant_ref_is_invalidated_by_intervening_call() {
-    let src = r#"
-target = "evm-ethereum-osaka"
-
-type @OptionI256 = enum {
-    #None,
-    #Some(i256),
-};
-
-func private %retag(v0.objref<@OptionI256>) -> unit {
-block0:
-    enum.set_tag v0 #None;
-    return;
-}
-
-func private %bad(v0.objref<@OptionI256>) -> i256 {
-block0:
-    v1.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
-    call %retag v0;
-    v2.objref<i256> = enum.proj v1 #Some 0.i8;
-    v3.i256 = obj.load v2;
-    return v3;
-}
-"#;
-
-    let parsed = parse_module(src).expect("module should parse");
-    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
-    let report = verify_module(&parsed.module, &cfg);
-    assert!(
-        has_code(&report, "IR0600"),
-        "expected enum payload load verification failure after call barrier, got {report}"
-    );
 }
 
 #[test]
@@ -2501,7 +2483,7 @@ type @Choice = enum {{ #None, #Some(i256) }};
 func private %entry(v0.objref<@Choice>) -> i256 {{
 block0:
 v1.objref<@Choice> = enum.assert_variant_ref v0 #Some;
-v2.objref<i256> = enum.proj v1 #Some 0.i8;
+v2.objref<i256> = enum.proj v0 #Some 0.i8;
 v3.*@Choice = obj.materialize.stack v0;
 v4.enumtag(@Choice) = enum.get_tag v0;
 {operation}
@@ -2588,11 +2570,11 @@ block1:
 fn enum_proofs_analyze_disconnected_components_from_empty_entries() {
     for (body, valid) in [
         (
-            "block1:\n    v2.objref<@Choice> = enum.assert_variant_ref v0 #Some;\n    v3.objref<i256> = enum.proj v2 #Some 0.i8;\n    v4.i256 = obj.load v3;\n    return v4;",
+            "block1:\n    v2.objref<@Choice> = enum.assert_variant_ref v0 #Some;\n    v3.objref<i256> = enum.proj v0 #Some 0.i8;\n    v4.i256 = obj.load v3;\n    return v4;",
             true,
         ),
         (
-            "block1:\n    v2.objref<@Choice> = enum.assert_variant_ref v0 #Some;\n    v3.objref<i256> = enum.proj v2 #Some 0.i8;\n    jump block2;\nblock2:\n    v4.i256 = obj.load v3;\n    br v1 block2 block3;\nblock3:\n    return v4;",
+            "block1:\n    v2.objref<@Choice> = enum.assert_variant_ref v0 #Some;\n    v3.objref<i256> = enum.proj v0 #Some 0.i8;\n    jump block2;\nblock2:\n    v4.i256 = obj.load v3;\n    br v1 block2 block3;\nblock3:\n    return v4;",
             true,
         ),
         (
@@ -2604,7 +2586,7 @@ fn enum_proofs_analyze_disconnected_components_from_empty_entries() {
             true,
         ),
         (
-            "block1:\n    v2.objref<@Choice> = enum.assert_variant_ref v0 #Some;\n    v3.objref<i256> = enum.proj v2 #Some 0.i8;\n    enum.set_tag v0 #None;\n    v4.i256 = obj.load v3;\n    return v4;",
+            "block1:\n    v2.objref<@Choice> = enum.assert_variant_ref v0 #Some;\n    v3.objref<i256> = enum.proj v0 #Some 0.i8;\n    enum.set_tag v0 #None;\n    v4.i256 = obj.load v3;\n    return v4;",
             false,
         ),
     ] {
@@ -2646,8 +2628,8 @@ global private const i256 $word = 42;
 func private %entry(v0.objref<@Choice>) -> i256 {{
 block0:
     v1.objref<@Choice> = enum.assert_variant_ref v0 #Some;
-    v2.objref<i256> = enum.proj v1 #Some 0.i8;
-    v3.objref<i256> = enum.proj v1 #Some 1.i8;
+    v2.objref<i256> = enum.proj v0 #Some 0.i8;
+    v3.objref<i256> = enum.proj v0 #Some 1.i8;
     {write}
     jump block1;
 block1:
@@ -2674,8 +2656,8 @@ type @Choice = enum { #None, #Some(i256,@Pair) };
 func private %entry(v0.objref<@Choice>) -> i256 {
 block0:
     v1.objref<@Choice> = enum.assert_variant_ref v0 #Some;
-    v2.objref<i256> = enum.proj v1 #Some 0.i8;
-    v3.objref<@Pair> = enum.proj v1 #Some 1.i8;
+    v2.objref<i256> = enum.proj v0 #Some 0.i8;
+    v3.objref<@Pair> = enum.proj v0 #Some 1.i8;
     v4.objref<i256> = obj.proj v3 0.i8;
     obj.store v4 42.i256;
     v5.i256 = obj.load v2;
@@ -2749,8 +2731,8 @@ block1:
     return v4;
 block2:
     v1.objref<@Choice> = enum.assert_variant_ref v0 #Some;
-    v2.objref<i256> = enum.proj v1 #Some 0.i8;
-    v3.objref<i256> = enum.proj v1 #Some 1.i8;
+    v2.objref<i256> = enum.proj v0 #Some 0.i8;
+    v3.objref<i256> = enum.proj v0 #Some 1.i8;
     {write}
     jump block1;
 }}
@@ -2777,7 +2759,7 @@ type @Choice = enum { #None, #Some(i256) };
 func private %entry(v0.objref<@Choice>) -> i256 {
 block0:
     v1.objref<@Choice> = enum.assert_variant_ref v0 #Some;
-    v2.objref<i256> = enum.proj v1 #Some 0.i8;
+    v2.objref<i256> = enum.proj v0 #Some 0.i8;
     v3.i256 = obj.load v2;
     enum.set_tag v0 #None;
     v4.i256 = obj.load v2;
@@ -2805,7 +2787,7 @@ fn enum_field_load_proofs_follow_all_control_flow_paths() {
             r#"
 block0:
     v2.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
-    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v3.objref<i256> = enum.proj v0 #Some 0.i8;
     jump block1;
 block1:
     v4.i256 = obj.load v3;
@@ -2818,7 +2800,7 @@ block1:
             r#"
 block0:
     v2.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
-    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v3.objref<i256> = enum.proj v0 #Some 0.i8;
     br v1 block1 block2;
 block1:
     jump block3;
@@ -2887,7 +2869,7 @@ block2:
             r#"
 block0:
     v2.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
-    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v3.objref<i256> = enum.proj v0 #Some 0.i8;
     jump block1;
 block1:
     v4.i256 = obj.load v3;
@@ -2916,7 +2898,7 @@ block2:
             r#"
 block0:
     v2.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
-    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v3.objref<i256> = enum.proj v0 #Some 0.i8;
     jump block1;
 block1:
     v4.i256 = obj.load v3;
@@ -2934,7 +2916,7 @@ block3:
             r#"
 block0:
     v2.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
-    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v3.objref<i256> = enum.proj v0 #Some 0.i8;
     jump block1;
 block1:
     enum.set_tag v2 #None;
@@ -2950,7 +2932,7 @@ block2:
             r#"
 block0:
     v2.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
-    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v3.objref<i256> = enum.proj v0 #Some 0.i8;
     br v1 block1 block2;
 block1:
     call %retag v0;
@@ -2968,7 +2950,7 @@ block3:
             r#"
 block0:
     v2.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
-    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v3.objref<i256> = enum.proj v0 #Some 0.i8;
     jump block1;
 block1:
     call %retag v0;

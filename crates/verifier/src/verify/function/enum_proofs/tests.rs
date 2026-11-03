@@ -345,6 +345,7 @@ fn retiring_a_binding_preserves_unrelated_roots_and_invalidates_each_proof_posit
             path: vec![Step::Index(Index::Symbol(ValueId::from_u32(34)))],
         },
         variant: 1,
+        assumed: false,
         witness: Some(ValueId::from_u32(35)),
         anchor: Some(Anchor {
             value: ValueId::from_u32(36),

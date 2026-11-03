@@ -181,6 +181,8 @@ pub(super) fn instruction(
         state.write(ctx, &refs, ty, true, |value| {
             value.assert_variant(ctx, assertion.variant().index())
         });
+        let mut refs = refs;
+        refs.asserted = Some(assertion.variant().index());
         state.bind(
             verifier,
             result.unwrap(),

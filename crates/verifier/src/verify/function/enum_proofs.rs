@@ -55,12 +55,18 @@ fn read(
         };
         let value = state.contents(verifier.ctx, refs, ty);
         let mut guarded = refs.clone();
-        guarded.views.retain(|view| !view.guards.is_empty());
+        guarded.views.retain(|view| {
+            !view.guards.is_empty() && !view.guards.iter().any(|guard| guard.assumed)
+        });
         guarded.cache = None;
-        // An imported, unguarded alternative has no local payload obligation.
-        // The symbolic view can prove all alternatives at once; otherwise only
-        // the guarded candidates demand a subtree proof.
-        if initialized(&value) || initialized(&state.contents(verifier.ctx, &guarded, ty)) {
+        // An imported, unguarded alternative has no local payload obligation,
+        // and an assumed guard asserts its whole payload readable. The
+        // symbolic view can prove all alternatives at once; otherwise only the
+        // other guarded candidates demand a subtree proof.
+        if guarded.views.is_empty()
+            || initialized(&value)
+            || initialized(&state.contents(verifier.ctx, &guarded, ty))
+        {
             Proof::Proven
         } else {
             Proof::Unproved("the demanded enum payload subtree is not proven initialized")

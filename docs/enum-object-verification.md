@@ -10,12 +10,15 @@ walk; read queries do not consult either former mechanism.
 
 An enum payload reference is a **view**: a typed location together with the
 ancestor variants that must be active when its contents are read. `enum.proj`
-adds an ancestor guard. `obj.proj` and `obj.index` preserve existing guards.
+adds an ancestor guard, an assumed one when it projects the result of an
+`enum.assert_variant_ref` for the asserted variant. `obj.proj` and `obj.index`
+preserve existing guards.
 Address formation is permitted before initialization, so constructing an enum
 with `enum.set_tag`, projections and field stores remains legal.
 
 At each covered read, all applicable guards must hold and the demanded subtree
-must be initialized. A scalar read does not demand initialized sibling fields.
+must be initialized. An assumed guard holds, and makes the subtree within its
+payload readable. A scalar read does not demand initialized sibling fields.
 A whole product read demands all its children. A whole enum read demands its
 tag and the fields of its active variant, including nested enums. Every local
 reference carrier preserves this obligation, including phis, SSA aggregates,
@@ -65,11 +68,18 @@ bytes. Loss of logical readability alone cannot remove a may-containment edge.
 
 ### Trust and interface boundaries
 
-`enum.assert_variant_ref` is a trusted assumption at its program point, including
-readability of the selected payload. It does not initialize storage or check a
-runtime tag; lowering erases it. Its result aliases its operand. Later uses do
-not reassert the assumption, and an assertion on a nested enum does not assert
-the variants of its ancestors.
+`enum.assert_variant_ref` is a trusted assumption, including readability of the
+selected payload. It does not initialize storage or check a runtime tag;
+lowering erases it. Its result aliases its operand. At its program point it
+refines the object's state, which later writes and calls can change like any
+other fact. A payload view projected from its result for the asserted variant
+also carries it: each read through the view assumes the assertion again, after
+any call or write, so the view needs no proof that the variant stays active.
+A frontend that keeps an enum's variant while a reference into its payload is
+held, as Fe's access checker does, asserts it at each payload projection.
+Views of the operand, payload views for another variant and reads of the
+result itself do not reassert it, and an assertion on a nested enum does not
+assert the variants of its ancestors.
 
 `enum.assert_variant` refines an immutable SSA enum value. A copied value remains
 a snapshot when its source object changes; references within the snapshot still
@@ -147,8 +157,8 @@ An unsupported producer yields unknown local provenance, not an empty view.
 | --- | --- |
 | Function arguments | Import typed boundary values; distinguish preexisting roots from recovered aliases. A `noalias` argument starts unexposed. |
 | `obj.alloc` | Allocate a fresh, uninitialized instance. |
-| `enum.proj`, `obj.proj`, `obj.index` | Derive a typed view, preserving and extending guards. |
-| `enum.assert_variant_ref` | Refine current object state; preserve identity and existing ancestor guards. |
+| `enum.proj`, `obj.proj`, `obj.index` | Derive a typed view, preserving and extending guards; a payload of an asserted reference takes an assumed guard. |
+| `enum.assert_variant_ref` | Refine current object state; preserve identity and existing ancestor guards; mark the result asserted. |
 | `obj.load` | Query the cell read; copy value state and stored reference views. |
 | `enum.get_tag` | Query ancestor guards and tag readability; create a saved tag observation. It does not demand the enum's payload. |
 | `obj.store` | Transfer value state into the written subtree; update reference cells. |
@@ -326,7 +336,8 @@ lose facts conservatively and terminate deterministically.
 
 The independent concrete model uses fresh dynamic object identities, nested
 storage, guarded references, immutable copies and explicit execution paths.
-Assertions filter its executions without initializing memory. Bounded exploration
+Assertions filter its executions without initializing memory, at the assertion
+and at each read through a view it assumes. Bounded exploration
 reports exhaustion separately; an unexplored path is not evidence of safety.
 
 Maintain separate checks for:

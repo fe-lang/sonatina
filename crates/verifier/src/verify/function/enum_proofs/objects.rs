@@ -195,10 +195,11 @@ impl State {
             && !refs.undefined
             && refs.views.iter().all(|view| {
                 view.guards.iter().all(|guard| {
-                    guard
-                        .witness
-                        .and_then(|id| self.views.get(&id))
-                        .is_some_and(|fact| fact.guards)
+                    guard.assumed
+                        || guard
+                            .witness
+                            .and_then(|id| self.views.get(&id))
+                            .is_some_and(|fact| fact.guards)
                         || guard.anchor.as_ref().is_some_and(|anchor| {
                             self.views.get(&anchor.value).is_some_and(|fact| {
                                 fact.value.at(ctx, &anchor.path).active(guard.variant)

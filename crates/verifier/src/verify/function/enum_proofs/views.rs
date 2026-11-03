@@ -119,6 +119,10 @@ impl Place {
 pub(super) struct Guard {
     pub place: Place,
     pub variant: u32,
+    /// The guard of a payload view of an `enum.assert_variant_ref` result for
+    /// the variant it asserts. The assertion holds at every read through the
+    /// view, so the guard needs no proof.
+    pub assumed: bool,
     // A phi's edge-substituted guarantee can prove a guard even when merging
     // the candidate allocation facts alone loses the necessary correlation.
     pub witness: Option<ValueId>,
@@ -146,6 +150,9 @@ pub(super) struct References {
     pub undefined: bool,
     pub anchors: BTreeSet<Anchor>,
     pub cache: Option<ValueId>,
+    /// The variant an `enum.assert_variant_ref` asserted this reference's
+    /// enum to be in. Its payload views take assumed guards.
+    pub asserted: Option<u32>,
 }
 
 impl References {
@@ -203,6 +210,9 @@ impl References {
         if self.cache != other.cache {
             self.cache = None;
         }
+        if self.asserted != other.asserted {
+            self.asserted = None;
+        }
     }
 
     pub fn relation(&self, other: &Self) -> Option<(Relation, Vec<Step>)> {
@@ -256,6 +266,7 @@ impl References {
     pub fn project(&self, step: Step) -> Self {
         let mut result = self.clone();
         result.cache = None;
+        result.asserted = None;
         result.views = self
             .views
             .iter()
@@ -265,6 +276,7 @@ impl References {
                     view.guards.insert(Guard {
                         place: view.place.clone(),
                         variant,
+                        assumed: self.asserted == Some(variant),
                         witness: None,
                         anchor: self.cache.map(|value| Anchor {
                             value,

@@ -38,7 +38,10 @@ impl ImportSources {
             }
         }
         for fact in state.views.values() {
+            // A reference recovered from an object is no projection of an
+            // assertion's result, so its payload views take no assumption.
             let mut refs = fact.references.clone();
+            refs.asserted = None;
             refs.views
                 .retain(|view| view.place.root.externally_accessible(&state.exposed));
             // An unrelated unresolved SSA value is not itself a call input.
@@ -58,6 +61,7 @@ impl ImportSources {
         }
         if let Some(CompoundType::ObjRef(elem)) = value.ty.resolve_compound(ctx) {
             let mut refs = value.references.clone();
+            refs.asserted = None;
             refs.views
                 .retain(|view| view.place.root.externally_accessible(exposed));
             if !refs.views.is_empty() {
