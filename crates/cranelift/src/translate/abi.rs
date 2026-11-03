@@ -1,6 +1,6 @@
 use cranelift_codegen::ir::{self as clif, ArgumentPurpose};
 use cranelift_module::Module as ClifModule;
-use sonatina_ir::{Linkage, Signature, Type, module::ModuleCtx, types::CompoundType};
+use sonatina_ir::{Linkage, Signature, Type, module::ModuleCtx};
 use sonatina_triple::TargetTriple;
 
 use super::{Parts, is_aggregate, register_parts};
@@ -23,28 +23,14 @@ pub(super) fn passed_parts(ctx: &ModuleCtx, linkage: Linkage, ty: Type) -> Optio
 }
 
 /// Whether a function of `linkage` passes and returns `ty` values through
-/// memory.
-fn passes_by_reference(ctx: &ModuleCtx, linkage: Linkage, ty: Type) -> bool {
+/// memory. A `constref` is the address of its constant, which outlives every
+/// frame.
+pub(super) fn passes_by_reference(ctx: &ModuleCtx, linkage: Linkage, ty: Type) -> bool {
     ty == Type::I256 || is_aggregate(ctx, ty) && passed_parts(ctx, linkage, ty).is_none()
 }
 
 pub(super) fn returns_indirect(ctx: &ModuleCtx, sig: &Signature) -> bool {
-    sig.ret_tys().len() == 1
-        && indirect_return_storage_type(ctx, sig.linkage(), sig.ret_tys()[0]).is_some()
-}
-
-pub(super) fn indirect_return_storage_type(
-    ctx: &ModuleCtx,
-    linkage: Linkage,
-    ty: Type,
-) -> Option<Type> {
-    if passes_by_reference(ctx, linkage, ty) {
-        Some(ty)
-    } else if let Some(CompoundType::ConstRef(inner)) = ty.resolve_compound(ctx) {
-        Some(inner)
-    } else {
-        None
-    }
+    matches!(sig.ret_tys(), [ty] if passes_by_reference(ctx, sig.linkage(), *ty))
 }
 
 pub(super) fn validate_cranelift_signature(ctx: &ModuleCtx, sig: &Signature) -> Result<(), String> {
@@ -63,7 +49,7 @@ pub(super) fn validate_cranelift_signature(ctx: &ModuleCtx, sig: &Signature) -> 
         && sig
             .ret_tys()
             .iter()
-            .any(|ty| indirect_return_storage_type(ctx, sig.linkage(), *ty).is_some())
+            .any(|ty| passes_by_reference(ctx, sig.linkage(), *ty))
     {
         return Err(format!(
             "Cranelift backend does not support multi-return signatures containing indirect return types: {}",

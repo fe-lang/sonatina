@@ -606,3 +606,90 @@ block2:
         }
     }
 }
+
+#[test]
+fn constref_results_are_the_addresses_of_their_constants() {
+    // The first result stays live through a phi while the loop calls again,
+    // and `count` tail-calls itself with a call's result.
+    let source = r#"
+global private const i32 $one = 1;
+global private const i32 $two = 2;
+global private const i64 $seven = 7;
+
+func private %pick(v0.i32) -> constref<i32> {
+    block0:
+        v1.i1 = eq v0 0.i32;
+        br v1 block1 block2;
+    block1:
+        v2.constref<i32> = const.ref $one;
+        return v2;
+    block2:
+        v3.constref<i32> = const.ref $two;
+        return v3;
+}
+
+func public %first() -> i32 {
+    block0:
+        v0.constref<i32> = const.ref $two;
+        jump block1;
+    block1:
+        v1.i32 = phi (0.i32 block0) (v4 block3);
+        v2.constref<i32> = phi (v0 block0) (v6 block3);
+        v3.constref<i32> = call %pick v1;
+        v4.i32 = add v1 1.i32;
+        v5.i1 = eq v1 0.i32;
+        br v5 block2 block3;
+    block2:
+        jump block3;
+    block3:
+        v6.constref<i32> = phi (v3 block2) (v2 block1);
+        v7.i1 = lt v4 2.i32;
+        br v7 block1 block4;
+    block4:
+        v8.i32 = const.load v6;
+        return v8;
+}
+
+func private %make(v0.i64) -> constref<i64> {
+    block0:
+        v1.constref<i64> = const.ref $seven;
+        return v1;
+}
+
+func private %count(v0.constref<i64>, v1.i64) -> i64 {
+    block0:
+        v2.i1 = eq v1 0.i64;
+        br v2 block1 block2;
+    block1:
+        v3.i64 = const.load v0;
+        return v3;
+    block2:
+        v4.i64 = sub v1 1.i64;
+        v5.constref<i64> = call %make v4;
+        v6.i64 = call %count v5 v4;
+        return v6;
+}
+
+func public %run(v0.i64) -> i64 {
+    block0:
+        v1.constref<i64> = call %make v0;
+        v2.i64 = call %count v1 v0;
+        return v2;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let first: unsafe extern "C" fn() -> i32 =
+            unsafe { std::mem::transmute(artifact.function_address("first").unwrap()) };
+        let run: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        assert_eq!(unsafe { first() }, 1, "{level:?}");
+        assert_eq!(unsafe { run(1000) }, 7, "{level:?}");
+    }
+}

@@ -222,7 +222,7 @@ func private %narrows(v0.i64) -> i32 {
     }
 
     #[test]
-    fn constrefs_from_arguments_pass_on() {
+    fn constrefs_pass_on() {
         let (module, tail_calls) = tail_calls(
             r#"
 type @pair = { i64, i64 };
@@ -256,7 +256,7 @@ func private %first(v0.constref<@pair>, v1.i64) -> i64 {
 "#,
         );
         assert_eq!(tail_call_count(&module, &tail_calls, "passes_argument"), 1);
-        assert_eq!(tail_call_count(&module, &tail_calls, "passes_result"), 0);
+        assert_eq!(tail_call_count(&module, &tail_calls, "passes_result"), 1);
     }
 
     #[test]
