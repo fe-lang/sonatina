@@ -35,11 +35,19 @@ impl State {
         for &arg in &verifier.func.arg_values {
             let ty = verifier.func.dfg.value_ty(arg);
             let value = if let Some(elem) = verifier.objref_ty(ty) {
-                let root = Root::Incoming(arg);
+                let noalias = verifier.func.is_noalias_arg(arg);
+                let root = if noalias {
+                    Root::Noalias(arg)
+                } else {
+                    Root::Incoming(arg)
+                };
                 state
                     .objects
                     .insert(root, Self::imported(verifier.ctx, arg, elem, false));
-                state.exposed.insert(root);
+                // A `noalias` argument is exposed once the function publishes it.
+                if !noalias {
+                    state.exposed.insert(root);
+                }
                 ValueState::reference(ty, References::root(root))
             } else {
                 Self::imported(verifier.ctx, arg, ty, true)

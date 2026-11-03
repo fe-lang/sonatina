@@ -5,6 +5,9 @@ use sonatina_ir::{ValueId, types::CompoundTypeRef};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum Root {
     Incoming(ValueId),
+    /// A `noalias` argument: until the function publishes it, only this
+    /// function's own references reach its object.
+    Noalias(ValueId),
     IncomingNested(ValueId, CompoundTypeRef),
     Recent(ValueId),
     Summary(ValueId),
@@ -13,8 +16,10 @@ pub(super) enum Root {
 }
 
 impl Root {
+    /// Whether code outside this function reaches the root only once the
+    /// function exposes it: its allocations and its `noalias` arguments.
     fn is_local(self) -> bool {
-        matches!(self, Self::Recent(_) | Self::Summary(_))
+        matches!(self, Self::Noalias(_) | Self::Recent(_) | Self::Summary(_))
     }
 
     pub fn externally_accessible(self, exposed: &BTreeSet<Self>) -> bool {
@@ -22,7 +27,7 @@ impl Root {
     }
 
     pub fn single(self) -> bool {
-        matches!(self, Self::Incoming(_) | Self::Recent(_))
+        matches!(self, Self::Incoming(_) | Self::Noalias(_) | Self::Recent(_))
     }
 
     pub fn may_alias(self, other: Self) -> bool {

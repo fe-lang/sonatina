@@ -206,6 +206,122 @@ fn calls_preserve_private_objects_and_reference_cells() {
     }
 }
 
+/// An entry that reads the payload of its argument `v0` after `effect`. `v9`
+/// is a second enum argument, `v7` raw memory, `v8` a local holder of an enum
+/// reference and `v6` a local raw slot for one.
+fn noalias_entry(noalias: bool, effect: &str) -> String {
+    let noalias = if noalias { "noalias " } else { "" };
+    format!(
+        r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+type @Holder = {{ objref<@E> }};
+func private %noise(v100.i256) -> i256 {{
+block0:
+ return v100;
+}}
+func private %consume(v100.objref<@E>) {{
+block0:
+ return;
+}}
+func private %retag(v100.objref<@E>) {{
+block0:
+ enum.set_tag v100 #None;
+ return;
+}}
+func private %retag_held(v100.objref<@Holder>) {{
+block0:
+ v101.objref<objref<@E>> = obj.proj v100 0.i8;
+ v102.objref<@E> = obj.load v101;
+ enum.set_tag v102 #None;
+ return;
+}}
+func private %stash(v100.objref<@E>, v101.*objref<@E>) {{
+block0:
+ mstore v101 v100 objref<@E>;
+ return;
+}}
+func private %retag_stashed(v100.*objref<@E>) {{
+block0:
+ v101.objref<@E> = mload v100 objref<@E>;
+ enum.set_tag v101 #None;
+ return;
+}}
+func private %entry({noalias}v0.objref<@E>, v9.objref<@E>, v7.*i256) -> i256 {{
+block0:
+ v8.objref<@Holder> = obj.alloc @Holder;
+ v5.objref<objref<@E>> = obj.proj v8 0.i8;
+ v6.*objref<@E> = alloca objref<@E>;
+ v1.objref<@E> = enum.assert_variant_ref v0 #Some;
+ v2.objref<i256> = enum.proj v1 #Some 0.i8;
+ {effect}
+ v3.i256 = obj.load v2;
+ return v3;
+}}
+"#
+    )
+}
+
+// Until it is published, a `noalias` argument's object is reached only through
+// the function's own references, so calls, raw writes and writes through other
+// arguments leave its variant active.
+#[test]
+fn unpublished_noalias_arguments_keep_their_guards() {
+    for effect in [
+        "v4.i256 = call %noise 3.i256;",
+        "call %retag v9;",
+        "enum.set_tag v9 #None;",
+        "mstore v7 0.i256 i256;",
+        "obj.store v5 v9;\n call %retag_held v8;",
+        "call %stash v9 v6;\n call %retag_stashed v6;",
+    ] {
+        let run = execute(&noalias_entry(true, effect), 256);
+        assert_eq!(run.invalid_reads(), 0, "{effect}");
+        assert!(run.returned > 0, "{effect}");
+        // An argument without the mark may be the object those effects write.
+        assert_eq!(
+            errors(&noalias_entry(false, effect)),
+            ["an ancestor enum variant is not proven active"],
+            "{effect}"
+        );
+    }
+}
+
+// Publishing a `noalias` argument, or a reference to it, lets later effects
+// reach it: by passing it to a call, storing it into a published holder or
+// raw memory, or materializing it.
+#[test]
+fn published_noalias_arguments_lose_their_guards() {
+    for effect in [
+        "call %retag v0;",
+        "call %retag v1;",
+        "obj.store v5 v0;\n call %retag_held v8;",
+        "call %stash v1 v6;\n call %retag_stashed v6;",
+    ] {
+        let run = execute(&noalias_entry(true, effect), 256);
+        assert!(run.invalid_reads() > 0, "{effect}");
+    }
+    let incoming_holder = noalias_entry(
+        true,
+        "v11.objref<objref<@E>> = obj.proj v10 0.i8;\n obj.store v11 v0;\n v4.i256 = call %noise 3.i256;",
+    )
+    .replace("v7.*i256)", "v7.*i256, v10.objref<@Holder>)");
+    for source in [
+        noalias_entry(true, "call %consume v0;\n v4.i256 = call %noise 3.i256;"),
+        noalias_entry(
+            true,
+            "v4.*@E = obj.materialize.stack v0;\n mstore v7 0.i256 i256;",
+        ),
+        incoming_holder,
+    ] {
+        assert_eq!(
+            errors(&source),
+            ["an ancestor enum variant is not proven active"],
+            "{source}"
+        );
+    }
+}
+
 #[test]
 fn call_eligibility_includes_unresolved_enum_reference_arguments() {
     // The only enum-typed value in the caller is the argument, loaded from an
