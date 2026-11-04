@@ -69,6 +69,19 @@ still the caller's object: its stores stay live at return. The mark belongs
 to the argument value; a transformation that rebuilds an argument drops it,
 and inlining discards the callee's marks.
 
+## Nocapture arguments
+
+`func %f(nocapture v0.objref<T>, ..)` promises that no reference to the
+argument's object, or to an object reached through it, outlives the call:
+`%f` keeps none in memory, as a raw address or in a result. The callee
+guarantees it; Fe marks every object parameter, since its accesses cannot be stored,
+returned or captured by a closure. The mark is part of the signature, so
+callers see it. A call still publishes the argument for its own duration and
+can change its object, but afterwards the object is as private as before the
+call. Only the enum proofs use the mark. Dead argument elimination, argument
+promotion and return rewrites keep the marks of the arguments they pass on;
+other signature rebuilds drop them.
+
 ## Consumers and coordinate-query audit
 
 | Consumer / remaining coordinate check | Required interpretation |

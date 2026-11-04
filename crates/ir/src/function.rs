@@ -378,6 +378,10 @@ pub struct Signature {
 
     args: SmallVec<[Type; 8]>,
     ret_tys: SmallVec<[Type; 2]>,
+
+    /// The sorted indices of the arguments marked `nocapture`; see
+    /// [`Self::is_nocapture_arg`].
+    nocapture_args: SmallVec<[usize; 4]>,
 }
 
 impl Signature {
@@ -387,6 +391,19 @@ impl Signature {
             linkage,
             args: args.into(),
             ret_tys: ret_tys.into(),
+            nocapture_args: SmallVec::new(),
+        }
+    }
+
+    /// This signature with argument types `args` and return types `ret_tys`,
+    /// for a rewrite that keeps each argument in place, so its `nocapture`
+    /// mark too.
+    pub fn with_types(&self, args: &[Type], ret_tys: &[Type]) -> Self {
+        debug_assert_eq!(args.len(), self.args.len());
+        Self {
+            args: args.into(),
+            ret_tys: ret_tys.into(),
+            ..self.clone()
         }
     }
 
@@ -412,6 +429,28 @@ impl Signature {
 
     pub fn args(&self) -> &[Type] {
         &self.args
+    }
+
+    /// Whether argument `idx` is a `nocapture` object reference: no reference
+    /// to its object, or to an object reached through it, outlives the call,
+    /// whether kept in memory, as a raw address or in a result. Like
+    /// `noalias`, the mark is trusted; it binds the callee, and a
+    /// transformation that rebuilds an argument drops it.
+    pub fn is_nocapture_arg(&self, idx: usize) -> bool {
+        self.nocapture_args.binary_search(&idx).is_ok()
+    }
+
+    /// The indices of the `nocapture` arguments, in order.
+    pub fn nocapture_args(&self) -> impl Iterator<Item = usize> + '_ {
+        self.nocapture_args.iter().copied()
+    }
+
+    /// Marks argument `idx` `nocapture`; see [`Self::is_nocapture_arg`].
+    pub fn set_nocapture_arg(&mut self, idx: usize) {
+        debug_assert!(idx < self.args.len());
+        if let Err(pos) = self.nocapture_args.binary_search(&idx) {
+            self.nocapture_args.insert(pos, idx);
+        }
     }
 
     pub fn ret_tys(&self) -> &[Type] {
@@ -456,7 +495,15 @@ where
     {
         self.linkage.write(w, ctx)?;
         write!(w, " %{}(", self.name)?;
-        self.args.write_with_delim(w, ", ", ctx)?;
+        for (idx, arg) in self.args.iter().enumerate() {
+            if idx > 0 {
+                write!(w, ", ")?;
+            }
+            if self.is_nocapture_arg(idx) {
+                write!(w, "nocapture ")?;
+            }
+            arg.write(w, ctx)?;
+        }
         write!(w, ")")?;
 
         match self.ret_tys.as_slice() {

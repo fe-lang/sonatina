@@ -195,10 +195,11 @@ impl State {
             && !refs.undefined
             && refs.views.iter().all(|view| {
                 view.guards.iter().all(|guard| {
-                    guard
-                        .witness
-                        .and_then(|id| self.views.get(&id))
-                        .is_some_and(|fact| fact.guards)
+                    guard.assumed
+                        || guard
+                            .witness
+                            .and_then(|id| self.views.get(&id))
+                            .is_some_and(|fact| fact.guards)
                         || guard.anchor.as_ref().is_some_and(|anchor| {
                             self.views.get(&anchor.value).is_some_and(|fact| {
                                 fact.value.at(ctx, &anchor.path).active(guard.variant)
@@ -482,24 +483,49 @@ impl State {
         }
     }
 
-    pub fn havoc(&mut self, ctx: &ModuleCtx, sources: &ImportSources) {
+    /// The effects of a call or raw write on the exposed objects, which can
+    /// come to hold any reference in `sources`. A call's `nocapture`
+    /// arguments are exposed during it only: `kept` is what stays exposed,
+    /// and the only references its objects can come to hold.
+    pub fn havoc(
+        &mut self,
+        ctx: &ModuleCtx,
+        sources: &ImportSources,
+        kept: Option<(&BTreeSet<Root>, &ImportSources)>,
+    ) {
+        let exposed = &self.exposed;
+        let sources_of = |lent: bool| match kept {
+            Some((_, kept)) if !lent => kept,
+            _ => sources,
+        };
+        let lent = |root: Root| {
+            kept.is_some_and(|(kept, _)| {
+                root.externally_accessible(exposed) && !root.externally_accessible(kept)
+            })
+        };
         for (&root, value) in &mut self.objects {
-            if root.externally_accessible(&self.exposed) {
+            if root.externally_accessible(exposed) {
                 value.forget(ctx);
                 let ty = value.ty;
                 value.copy_references(
                     ctx,
-                    &Source::RawLoad(sources).value(ctx, Root::External, ty),
+                    &Source::RawLoad(sources_of(lent(root))).value(ctx, Root::External, ty),
                 );
             }
         }
         for fact in self.views.values_mut() {
-            if fact.references.externally_accessible(&self.exposed) {
+            if fact.references.externally_accessible(exposed) {
                 fact.value.forget(ctx);
                 let ty = fact.value.ty;
+                let lent = fact.references.unknown
+                    || fact
+                        .references
+                        .views
+                        .iter()
+                        .any(|view| lent(view.place.root));
                 fact.value.copy_references(
                     ctx,
-                    &Source::RawLoad(sources).value(ctx, Root::External, ty),
+                    &Source::RawLoad(sources_of(lent)).value(ctx, Root::External, ty),
                 );
             }
             if fact
@@ -507,13 +533,13 @@ impl State {
                 .views
                 .iter()
                 .flat_map(|view| &view.guards)
-                .any(|guard| guard.place.root.externally_accessible(&self.exposed))
+                .any(|guard| guard.place.root.externally_accessible(exposed))
             {
                 fact.guards = false;
             }
         }
         self.observations
-            .retain(|_, refs| !refs.externally_accessible(&self.exposed));
+            .retain(|_, refs| !refs.externally_accessible(exposed));
         // Interference can replace reference cells, but cannot discover a
         // private allocation absent from its pre-effect capabilities.
         self.close_exposure(ctx);

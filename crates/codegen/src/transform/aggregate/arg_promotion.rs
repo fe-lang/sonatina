@@ -1,6 +1,10 @@
 //! Pass private object arguments as a bounded set of scalars read at callee entry.
 
-use std::{cmp::Reverse, collections::BTreeMap, slice};
+use std::{
+    cmp::{Ordering, Reverse},
+    collections::BTreeMap,
+    slice,
+};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -68,6 +72,14 @@ impl SignatureRewritePlan for Plan {
 
     fn new_ret_tys(&self) -> &[Type] {
         &self.ret_tys
+    }
+
+    fn new_arg(&self, old: usize) -> Option<usize> {
+        match old.cmp(&self.arg_index) {
+            Ordering::Less => Some(old),
+            Ordering::Equal => None,
+            Ordering::Greater => Some(old + self.reads.fields.len() - 1),
+        }
     }
 }
 
@@ -523,6 +535,33 @@ block0:
             );
             assert!(args <= 16);
         }
+    }
+
+    #[test]
+    fn keeps_nocapture_marks_of_the_other_args() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+func private %read(nocapture v0.objref<@Pair>, nocapture v1.objref<i256>) {
+block0:
+    v2.objref<i256> = obj.proj v0 0.i8;
+    v3.i256 = obj.load v2;
+    v4.objref<i256> = obj.proj v0 1.i8;
+    v5.i256 = obj.load v4;
+    v6.i256 = add v3 v5;
+    obj.store v1 v6;
+    return;
+}
+"#;
+        let module = parse_module(source).unwrap().module;
+        let config = VerifierConfig::for_level(VerificationLevel::Full);
+        assert_eq!(ObjectArgPromotion::default().run(&module).promoted_args, 1);
+        verify_module_or_panic(&module, &config);
+        let marks = module.ctx.func_sig(module.funcs()[0], |sig| {
+            assert_eq!(sig.args().len(), 3);
+            sig.nocapture_args().collect::<Vec<_>>()
+        });
+        assert_eq!(marks, [2]);
     }
 
     #[test]

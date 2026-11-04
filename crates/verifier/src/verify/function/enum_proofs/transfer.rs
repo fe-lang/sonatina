@@ -181,6 +181,8 @@ pub(super) fn instruction(
         state.write(ctx, &refs, ty, true, |value| {
             value.assert_variant(ctx, assertion.variant().index())
         });
+        let mut refs = refs;
+        refs.asserted = Some(assertion.variant().index());
         state.bind(
             verifier,
             result.unwrap(),
@@ -318,10 +320,21 @@ pub(super) fn instruction(
     } else if downcast::<&data::ObjFromPtr>(is, inst).is_some() {
         // Like a reference loaded from memory, a view of the memory at a
         // pointer reaches an object outside this function or an exposed one.
+        // Only the payloads of local objects keep their guards: a payload of
+        // an object outside the function's control is imported memory to the
+        // view, as it is to a callee viewing the same pointer.
         let result = result.unwrap();
-        let sources = ImportSources::new(ctx, state, std::iter::empty());
+        let sources = ImportSources::new(ctx, state, &state.exposed, std::iter::empty());
         let root = Root::Imported(result);
-        let value = Source::RawLoad(&sources).value(ctx, root, verifier.func.dfg.value_ty(result));
+        let mut value =
+            Source::RawLoad(&sources).value(ctx, root, verifier.func.dfg.value_ty(result));
+        value.references.views = std::mem::take(&mut value.references.views)
+            .into_iter()
+            .map(|mut view| {
+                view.guards.retain(|guard| guard.place.root.is_local());
+                view
+            })
+            .collect();
         state.bind(verifier, result, value, None);
         state.exposed.insert(root);
         state.close_exposure(ctx);
@@ -342,27 +355,57 @@ pub(super) fn instruction(
         let publish = call.is_some()
             || downcast::<&control_flow::Return>(is, inst).is_some()
             || inst.declared_effect_hint().has_write_effect();
+        let nocapture: Vec<_> = call.map_or_else(Vec::new, |call| {
+            ctx.func_sig(*call.callee(), |sig| sig.nocapture_args().collect())
+        });
+        let nocapture = nocapture.as_slice();
+        let mut lent = vec![];
         if publish {
-            for value in collect_inst_refs(inst).values {
-                state.expose(ctx, &state.value(verifier, value).captured(ctx));
+            // A call's operands are its arguments, in order.
+            for (index, value) in collect_inst_refs(inst).values.into_iter().enumerate() {
+                let captured = state.value(verifier, value).captured(ctx);
+                if nocapture.contains(&index) {
+                    lent.push(captured);
+                } else {
+                    state.expose(ctx, &captured);
+                }
             }
         }
+        // A call lends its `nocapture` arguments: they are exposed during it,
+        // but no reference to them outlives it, in an object or a result.
+        let mut kept = (!lent.is_empty()).then(|| state.exposed.clone());
+        for refs in &lent {
+            state.expose(ctx, refs);
+        }
+        kept = kept.filter(|kept| *kept != state.exposed);
         // Snapshot capabilities before mutation. Both raw writes and calls can
         // replace reference cells with aliases derived from accessible roots.
-        let sources = (clobber || raw_load).then(|| {
-            ImportSources::new(
-                ctx,
-                state,
-                call.into_iter()
-                    .flat_map(|call| call.args())
-                    .map(|&arg| state.value(verifier, arg)),
-            )
-        });
+        let args = |lent: bool| {
+            call.into_iter()
+                .flat_map(|call| call.args().iter().enumerate())
+                .filter(move |(index, _)| lent || !nocapture.contains(index))
+                .map(|(_, &arg)| state.value(verifier, arg))
+        };
+        let sources = (clobber || raw_load)
+            .then(|| ImportSources::new(ctx, state, &state.exposed, args(true)));
+        let kept_sources = kept
+            .as_ref()
+            .map(|kept| ImportSources::new(ctx, state, kept, args(false)));
         if clobber {
-            state.havoc(ctx, sources.as_ref().unwrap());
+            state.havoc(
+                ctx,
+                sources.as_ref().unwrap(),
+                kept.as_ref().zip(kept_sources.as_ref()),
+            );
+        }
+        if let Some(kept) = kept {
+            state.exposed = kept;
+            state.close_exposure(ctx);
         }
         let source = match sources.as_ref() {
-            Some(sources) if call.is_some() => Source::Call(sources),
+            Some(sources) if call.is_some() => {
+                Source::Call(kept_sources.as_ref().unwrap_or(sources))
+            }
             Some(sources) if raw_load => Source::RawLoad(sources),
             _ => Source::Unsupported,
         };

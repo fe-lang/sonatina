@@ -113,12 +113,7 @@ fn rewrite_declared_signatures(module: &Module, lowerer: &mut impl TypeRewrite) 
             .declared_funcs
             .get_mut(&func)
             .expect("declared signature must exist")
-            .clone_from(&sonatina_ir::Signature::new(
-                sig.name(),
-                sig.linkage(),
-                &new_args,
-                &new_rets,
-            ));
+            .clone_from(&sig.with_types(&new_args, &new_rets));
         changed = true;
     }
 

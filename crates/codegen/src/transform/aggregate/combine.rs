@@ -247,26 +247,13 @@ impl AggregateCombine {
         let mut replacement = None;
         let mut tag_variant = None;
         let mut written_object = None;
+        // An `enum.assert_variant_ref` stays even where the facts prove it:
+        // the payload views of its result take it to every later read.
         if let Some(tag) = downcast::<&data::EnumGetTag>(func.inst_set(), data) {
             tag_variant = aliases
                 .exact_enum(func, *tag.object())
                 .and_then(|object| state.facts.get(&object))
                 .map(|fact| fact.variant);
-        } else if let Some(assertion) =
-            downcast::<&data::EnumAssertVariantRef>(func.inst_set(), data)
-        {
-            if aliases
-                .exact_enum(func, *assertion.object())
-                .and_then(|object| state.facts.get(&object))
-                .is_some_and(|fact| {
-                    fact.variant == *assertion.variant()
-                        && fact.payloads.iter().all(|payload| {
-                            payload.is_some_and(|value| self.payload_is_readable(func, value))
-                        })
-                })
-            {
-                replacement = Some(*assertion.object());
-            }
         } else if let Some(load) = downcast::<&data::ObjLoad>(func.inst_set(), data) {
             if let Some(projection) = enum_proj_of_value(func, *load.object())
                 && let Some(object) = aliases.exact_enum(func, *projection.object())
@@ -1729,10 +1716,6 @@ block0:
         });
 
         let dumped = dump_func(&module, func_ref);
-        assert!(
-            !dumped.contains("enum.assert_variant_ref"),
-            "redundant enum.assert_variant_ref should be removed:\n{dumped}"
-        );
         assert!(
             !dumped.contains("obj.load"),
             "known enum payload load should fold away:\n{dumped}"

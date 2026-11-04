@@ -57,6 +57,10 @@ impl SignatureRewritePlan for FuncPlan {
         &self.new_ret_tys
     }
 
+    fn new_arg(&self, old: usize) -> Option<usize> {
+        self.keep_args[old].then(|| self.keep_args[..old].iter().filter(|&&keep| keep).count())
+    }
+
     fn is_higher_order_compatible(&self, other: &Self) -> bool {
         self.keep_args == other.keep_args && self.new_ret_tys == other.new_ret_tys
     }
@@ -513,6 +517,38 @@ func public %entry(v0.i256) -> i256 {
         assert_sig(&parsed.module, "id", 1, 1);
         let dumped = dump_module(&parsed.module);
         assert!(dumped.contains("v1.i256 = call %id v0;"));
+        assert_verified(&parsed.module);
+    }
+
+    #[test]
+    fn keeps_nocapture_marks_of_the_remaining_args() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %read(v0.i256, nocapture v1.objref<i256>, v2.i256, nocapture v3.objref<i256>) -> i256 {
+    block0:
+        v4.i256 = obj.load v1;
+        return v4;
+}
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<i256> = obj.alloc i256;
+        obj.store v0 1.i256;
+        v1.i256 = call %read 0.i256 v0 0.i256 v0;
+        return v1;
+}
+"#,
+        );
+
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
+
+        assert_eq!(stats.removed_args, 3);
+        assert!(
+            dump_function(&parsed.module, "read")
+                .contains("func private %read(nocapture v1.objref<i256>) -> i256")
+        );
         assert_verified(&parsed.module);
     }
 

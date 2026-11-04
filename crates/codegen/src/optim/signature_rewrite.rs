@@ -13,6 +13,13 @@ pub(crate) trait SignatureRewritePlan {
     fn new_arg_tys(&self) -> &[Type];
     fn new_ret_tys(&self) -> &[Type];
 
+    /// The new position of old argument `old`, if the plan passes it on
+    /// unchanged, keeping its `nocapture` mark. A plan that passes none on
+    /// drops every mark.
+    fn new_arg(&self, _old: usize) -> Option<usize> {
+        None
+    }
+
     fn is_higher_order_compatible(&self, other: &Self) -> bool {
         self.new_arg_tys() == other.new_arg_tys() && self.new_ret_tys() == other.new_ret_tys()
     }
@@ -72,17 +79,21 @@ pub(crate) fn rewrite_declared_signatures<P: SignatureRewritePlan>(
             .get_sig(func)
             .expect("planned function should have signature");
         old_sigs.insert(func, sig.clone());
+        let mut new_sig = Signature::new(
+            sig.name(),
+            sig.linkage(),
+            plan.new_arg_tys(),
+            plan.new_ret_tys(),
+        );
+        for arg in sig.nocapture_args().filter_map(|old| plan.new_arg(old)) {
+            new_sig.set_nocapture_arg(arg);
+        }
         module
             .ctx
             .declared_funcs
             .get_mut(&func)
             .expect("planned function signature should exist")
-            .clone_from(&Signature::new(
-                sig.name(),
-                sig.linkage(),
-                plan.new_arg_tys(),
-                plan.new_ret_tys(),
-            ));
+            .clone_from(&new_sig);
     }
 
     old_sigs
@@ -239,7 +250,7 @@ fn rewrite_signature_types(
             .declared_funcs
             .get_mut(&func)
             .expect("declared function should exist")
-            .clone_from(&Signature::new(sig.name(), sig.linkage(), &args, &ret_tys));
+            .clone_from(&sig.with_types(&args, &ret_tys));
     }
 }
 

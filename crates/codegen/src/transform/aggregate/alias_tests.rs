@@ -1348,39 +1348,30 @@ block3:
     }
 }
 
+// Combine keeps an `enum.assert_variant_ref` that its facts prove: the
+// payload views of its result take the assertion to reads the facts don't
+// reach, here past a raw write that may change the exposed enum.
 #[test]
-fn combine_keeps_readability_assumption_for_uninitialized_snapshot() {
-    for (source, keeps_assertion) in [
-        ("v2.@Inner = obj.load v1;", true),
-        ("v2.@Inner = enum.make @Inner #Empty ();", false),
-    ] {
-        let text = run_pass(
-            &format!(
-                r#"
+fn combine_keeps_assertions_its_facts_prove() {
+    let text = run_pass(
+        r#"
 target = "evm-ethereum-osaka"
-type @Inner = enum {{ #Empty, #Value(i256) }};
-type @Outer = enum {{ #None, #Some(@Inner) }};
-func private %f() -> @Inner {{
+type @E = enum { #None, #Some(i256) };
+func private %f(v9.*i256) -> i256 {
 block0:
-    v0.objref<@Outer> = obj.alloc @Outer;
-    v1.objref<@Inner> = obj.alloc @Inner;
-    {source}
-    enum.write_variant v0 #Some (v2);
-    v3.objref<@Outer> = enum.assert_variant_ref v0 #Some;
-    v4.@Outer = obj.load v3;
-    v5.@Inner = enum.extract v4 #Some 0.i8;
-    return v5;
-}}
-"#
-            ),
-            Pass::AggregateCombine,
-        );
-        assert_eq!(
-            text.contains("enum.assert_variant_ref"),
-            keeps_assertion,
-            "{text}"
-        );
-    }
+    v0.objref<@E> = obj.alloc @E;
+    enum.write_variant v0 #Some (17.i256);
+    v1.objref<@E> = enum.assert_variant_ref v0 #Some;
+    v2.objref<i256> = enum.proj v1 #Some 0.i8;
+    v3.*@E = obj.materialize.stack v0;
+    mstore v9 0.i256 i256;
+    v4.i256 = obj.load v2;
+    return v4;
+}
+"#,
+        Pass::AggregateCombine,
+    );
+    assert!(text.contains("enum.assert_variant_ref v1 #Some"), "{text}");
 }
 
 #[test]

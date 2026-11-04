@@ -117,11 +117,16 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
             let params = func
                 .params
                 .iter()
-                .map(|t| ctx.type_(&builder, t))
+                .map(|param| ctx.type_(&builder, &param.ty))
                 .collect::<Vec<_>>();
             let ret_tys = ctx.ret_tys(&builder, &func.ret_types);
 
-            let sig = Signature::new(&func.name.name, func.linkage, &params, &ret_tys);
+            let mut sig = Signature::new(&func.name.name, func.linkage, &params, &ret_tys);
+            for (idx, param) in func.params.iter().enumerate() {
+                if param.nocapture {
+                    sig.set_nocapture_arg(idx);
+                }
+            }
 
             // Safe to unwrap: function name checked for duplicate above
             let func_ref = builder.declare_function(sig).unwrap();
@@ -146,7 +151,13 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
                     .collect::<Vec<_>>();
 
                 let ret_tys = ctx.ret_tys(&builder, &sig.ret_types);
-                let sig = Signature::new(&sig.name.name, sig.linkage, &args, &ret_tys);
+                let params = &sig.params;
+                let mut sig = Signature::new(&sig.name.name, sig.linkage, &args, &ret_tys);
+                for (idx, param) in params.iter().enumerate() {
+                    if param.nocapture {
+                        sig.set_nocapture_arg(idx);
+                    }
+                }
 
                 // Safe to unwrap: function name checked for duplicate above
                 let func_ref = builder.declare_function(sig).unwrap();

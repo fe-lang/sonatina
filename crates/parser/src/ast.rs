@@ -162,8 +162,23 @@ pub struct FuncDeclaration {
     pub linkage: Linkage,
     pub inline_hint: InlineHint,
     pub name: FunctionName,
-    pub params: Vec<Type>,
+    pub params: Vec<FuncParamType>,
     pub ret_types: Vec<Type>,
+}
+
+#[derive(Debug)]
+pub struct FuncParamType {
+    pub nocapture: bool,
+    pub ty: Type,
+}
+
+impl FromSyntax<Error> for FuncParamType {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        FuncParamType {
+            nocapture: node.get_opt(Rule::nocapture).is_some(),
+            ty: node.single(Rule::type_name),
+        }
+    }
 }
 
 impl FromSyntax<Error> for FuncDeclaration {
@@ -174,7 +189,9 @@ impl FromSyntax<Error> for FuncDeclaration {
             linkage,
             inline_hint: node.single_opt(Rule::inline_hint).unwrap_or_default(),
             name: node.single(Rule::function_identifier),
-            params: node.descend_into(Rule::function_param_type_list, |n| n.multi(Rule::type_name)),
+            params: node.descend_into(Rule::function_param_type_list, |n| {
+                n.multi(Rule::function_param_type)
+            }),
             ret_types: node
                 .descend_into_opt(Rule::function_ret_type, |n| n.multi(Rule::type_name))
                 .unwrap_or_default(),
@@ -371,6 +388,7 @@ pub struct FuncSignature {
 #[derive(Debug)]
 pub struct FuncParam {
     pub noalias: bool,
+    pub nocapture: bool,
     pub decl: ValueDeclaration,
 }
 
@@ -378,6 +396,7 @@ impl FromSyntax<Error> for FuncParam {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         FuncParam {
             noalias: node.get_opt(Rule::noalias).is_some(),
+            nocapture: node.get_opt(Rule::nocapture).is_some(),
             decl: node.single(Rule::value_declaration),
         }
     }

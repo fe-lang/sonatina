@@ -29,7 +29,11 @@ struct Location {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct View {
     location: Location,
-    guards: Vec<(Location, usize)>,
+    /// Each ancestor enum's location and variant, and whether the variant is
+    /// an `enum.assert_variant_ref` assumption rather than an obligation.
+    guards: Vec<(Location, usize, bool)>,
+    /// The variant an `enum.assert_variant_ref` asserted for this enum.
+    asserted: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -254,6 +258,8 @@ struct Caller {
     offset: usize,
     values: BTreeMap<ValueId, Node>,
     results: Vec<ValueId>,
+    /// The objects exposed only through the call's `nocapture` arguments.
+    lent: BTreeSet<usize>,
 }
 
 impl World {
@@ -270,6 +276,7 @@ impl World {
                 path: vec![],
             },
             guards: vec![],
+            asserted: None,
         }
     }
 
@@ -305,9 +312,20 @@ impl World {
     }
 
     fn guards_hold(&self, view: &View) -> bool {
-        view.guards.iter().all(|(location, variant)| {
+        view.guards.iter().all(|(location, variant, assumed)| {
             let node = self.at(location);
-            matches!(node.data, Data::Enum { tag, .. } if node.initialized && tag == *variant)
+            *assumed
+                || matches!(node.data, Data::Enum { tag, .. } if node.initialized && tag == *variant)
+        })
+    }
+
+    /// Whether each assumed guard of `view` holds: its enum is readable in
+    /// the asserted variant.
+    fn assumptions_hold(&self, view: &View) -> bool {
+        view.guards.iter().all(|(location, variant, assumed)| {
+            let node = self.at(location);
+            !*assumed
+                || matches!(node.data, Data::Enum { tag, .. } if tag == *variant) && node.readable()
         })
     }
 
@@ -478,35 +496,43 @@ fn execute_block(
             let mut view = value(*proj.object()).view();
             let variant = proj.variant().index() as usize;
             let index = value(*proj.field()).integer() as usize;
-            view.guards.push((view.location.clone(), variant));
+            let assumed = view.asserted.take() == Some(variant);
+            view.guards.push((view.location.clone(), variant, assumed));
             view.location.path.push(Step::Payload(variant, index));
             Some(Node::reference(view))
         } else if let Some(proj) = downcast::<&data::ObjProj>(is, data) {
             let mut args = proj.values().iter();
             let mut view = value(*args.next().expect("projection base")).view();
+            if args.len() > 0 {
+                view.asserted = None;
+            }
             view.location
                 .path
                 .extend(args.map(|&index| Step::Field(value(index).integer() as usize)));
             Some(Node::reference(view))
         } else if let Some(index) = downcast::<&data::ObjIndex>(is, data) {
             let mut view = value(*index.object()).view();
+            view.asserted = None;
             view.location
                 .path
                 .push(Step::Field(value(*index.index()).integer() as usize));
             Some(Node::reference(view))
         } else if let Some(assertion) = downcast::<&data::EnumAssertVariantRef>(is, data) {
-            let reference = value(*assertion.object());
-            let view = reference.view();
+            let mut view = value(*assertion.object()).view();
+            let variant = assertion.variant().index() as usize;
             let node = world.at(&view.location);
-            if !matches!(node.data, Data::Enum { tag, .. } if tag == assertion.variant().index() as usize)
-                || !node.readable()
-            {
+            if !matches!(node.data, Data::Enum { tag, .. } if tag == variant) || !node.readable() {
                 execution.assumptions_pruned += 1;
                 return;
             }
-            Some(reference)
+            view.asserted = Some(variant);
+            Some(Node::reference(view))
         } else if let Some(load) = downcast::<&data::ObjLoad>(is, data) {
             let view = value(*load.object()).view();
+            if !world.assumptions_hold(&view) {
+                execution.assumptions_pruned += 1;
+                return;
+            }
             let node = world.at(&view.location);
             if !view.guards.is_empty() {
                 execution.read(func_ref, inst, world.guards_hold(&view) && node.readable());
@@ -514,6 +540,10 @@ fn execute_block(
             Some(node.clone())
         } else if let Some(tag) = downcast::<&data::EnumGetTag>(is, data) {
             let view = value(*tag.object()).view();
+            if !world.assumptions_hold(&view) {
+                execution.assumptions_pruned += 1;
+                return;
+            }
             let node = world.at(&view.location);
             if !view.guards.is_empty() {
                 execution.read(func_ref, inst, world.guards_hold(&view) && node.initialized);
@@ -683,11 +713,22 @@ fn execute_block(
             )))
         } else if let Some(call) = downcast::<&control_flow::Call>(is, data) {
             let args: Vec<_> = call.args().iter().map(|&arg| value(arg)).collect();
-            let mut published = vec![];
-            for arg in &args {
-                arg.references(&mut published);
+            let nocapture: Vec<_> = module
+                .ctx
+                .func_sig(*call.callee(), |sig| sig.nocapture_args().collect());
+            let (mut published, mut lent) = (vec![], vec![]);
+            for (index, arg) in args.iter().enumerate() {
+                arg.references(if nocapture.contains(&index) {
+                    &mut lent
+                } else {
+                    &mut published
+                });
             }
             world.exposed.extend(published);
+            world.close_exposure();
+            // A `nocapture` argument is exposed during the call only.
+            let kept = world.exposed.clone();
+            world.exposed.extend(lent);
             world.close_exposure();
             world.callers.push(Caller {
                 func: func_ref,
@@ -696,6 +737,7 @@ fn execute_block(
                 offset: index + 1,
                 values: std::mem::take(&mut world.values),
                 results: func.dfg.inst_results(inst).to_vec(),
+                lent: world.exposed.difference(&kept).copied().collect(),
             });
             module.func_store.view(*call.callee(), |callee| {
                 assert_eq!(args.len(), callee.arg_values.len());
@@ -739,12 +781,17 @@ fn execute_block(
             let values: Vec<_> = ret.args().iter().map(|&arg| value(arg)).collect();
             if let Some(caller) = world.callers.pop() {
                 assert_eq!(caller.results.len(), values.len());
+                world.exposed.retain(|object| !caller.lent.contains(object));
                 let mut published = vec![];
                 for value in &values {
                     value.references(&mut published);
                 }
                 world.exposed.extend(published);
                 world.close_exposure();
+                assert!(
+                    world.exposed.is_disjoint(&caller.lent),
+                    "a nocapture argument outlived its call"
+                );
                 world.values = caller.values;
                 world.values.extend(caller.results.into_iter().zip(values));
                 pending.push((

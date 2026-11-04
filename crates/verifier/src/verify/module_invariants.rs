@@ -657,6 +657,19 @@ pub(super) fn collect_signature_invariants(
             );
         }
     }
+    for index in sig.nocapture_args() {
+        if !sig.args().get(index).is_some_and(|ty| ty.is_obj_ref(ctx)) {
+            report.push(
+                Diagnostic::error(
+                    DiagnosticCode::InvalidSignature,
+                    "only an object reference argument can be nocapture",
+                    Location::Function(func_ref),
+                )
+                .with_note(format!("arg index {index}")),
+                cfg.max_diagnostics,
+            );
+        }
+    }
 }
 
 fn has_obj_ref_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {

@@ -28,6 +28,7 @@ Module {
                 params: [
                     FuncParam {
                         noalias: false,
+                        nocapture: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v0",
@@ -43,6 +44,7 @@ Module {
                     },
                     FuncParam {
                         noalias: false,
+                        nocapture: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v1",

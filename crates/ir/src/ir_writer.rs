@@ -441,10 +441,10 @@ impl IrWrite<FuncWriteCtx<'_>> for FunctionSignature {
 
         write!(w, "func ")?;
         write_inline_hint(w, m_ctx.inline_hint(func_ref))?;
-        m_ctx.func_sig(func_ref, |sig| {
+        let nocapture = m_ctx.func_sig(func_ref, |sig| {
             sig.linkage().write(w, ctx)?;
             write!(w, " %{}(", sig.name())?;
-            io::Result::Ok(())
+            io::Result::Ok(sig.nocapture_args().collect::<Vec<_>>())
         })?;
         for (idx, &value) in ctx.func.arg_values.iter().enumerate() {
             if idx > 0 {
@@ -452,6 +452,9 @@ impl IrWrite<FuncWriteCtx<'_>> for FunctionSignature {
             }
             if ctx.func.is_noalias_arg(value) {
                 write!(w, "noalias ")?;
+            }
+            if nocapture.contains(&idx) {
+                write!(w, "nocapture ")?;
             }
             ValueWithTy(value).write(w, ctx)?;
         }

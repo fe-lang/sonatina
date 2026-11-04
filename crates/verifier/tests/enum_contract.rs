@@ -253,7 +253,7 @@ block0:
  v5.objref<objref<@E>> = obj.proj v8 0.i8;
  v6.*objref<@E> = alloca objref<@E>;
  v1.objref<@E> = enum.assert_variant_ref v0 #Some;
- v2.objref<i256> = enum.proj v1 #Some 0.i8;
+ v2.objref<i256> = enum.proj v0 #Some 0.i8;
  {effect}
  v3.i256 = obj.load v2;
  return v3;
@@ -319,6 +319,83 @@ fn published_noalias_arguments_lose_their_guards() {
             ["an ancestor enum variant is not proven active"],
             "{source}"
         );
+    }
+}
+
+/// An entry that holds `v2`, a view of its local enum `v0`'s payload, through
+/// `effect`. `v8` is a local holder of `v0` and `v7` raw memory.
+fn nocapture_entry(nocapture: bool, effect: &str) -> String {
+    let nocapture = if nocapture { "nocapture " } else { "" };
+    format!(
+        r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+type @Holder = {{ objref<@E> }};
+func private %peek({nocapture}v100.objref<@E>) {{
+block0:
+ return;
+}}
+func private %peek_held({nocapture}v100.objref<@Holder>) {{
+block0:
+ return;
+}}
+func private %retag({nocapture}v100.objref<@E>) {{
+block0:
+ enum.set_tag v100 #None;
+ return;
+}}
+func private %keep(v100.objref<@E>) {{
+block0:
+ return;
+}}
+func private %entry(v7.*i256) -> i256 {{
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.write_variant v0 #Some (17.i256);
+ v8.objref<@Holder> = obj.alloc @Holder;
+ v5.objref<objref<@E>> = obj.proj v8 0.i8;
+ obj.store v5 v0;
+ v2.objref<i256> = enum.proj v0 #Some 0.i8;
+ {effect}
+ v3.i256 = obj.load v2;
+ return v3;
+}}
+"#
+    )
+}
+
+// A call lends a `nocapture` argument, and the objects it reaches: they are
+// exposed during the call, so it can change them, but not after it. Once the
+// caller proves the variant again, a later raw write cannot reach the object.
+#[test]
+fn nocapture_arguments_are_exposed_only_during_the_call() {
+    let reassert = "v1.objref<@E> = enum.assert_variant_ref v0 #Some;\n mstore v7 0.i256 i256;";
+    for (effect, lent) in [
+        (format!("call %peek v0;\n {reassert}"), true),
+        (format!("call %peek_held v8;\n {reassert}"), true),
+        // An exposed holder cannot come to hold the lent object.
+        (
+            format!(
+                "v10.objref<@Holder> = obj.alloc @Holder;\n v11.*@Holder = obj.materialize.stack v10;\n call %peek v0;\n {reassert}"
+            ),
+            true,
+        ),
+        ("call %retag v0;".to_owned(), false),
+        (
+            format!("v9.*@E = obj.materialize.stack v0;\n call %peek v0;\n {reassert}"),
+            false,
+        ),
+        (
+            format!("call %peek v0;\n call %keep v0;\n {reassert}"),
+            false,
+        ),
+    ] {
+        let run = execute(&nocapture_entry(true, &effect), 256);
+        assert_eq!(run.invalid_reads() == 0, lent, "{effect}");
+        assert!(run.returned > 0, "{effect}");
+        // Without the mark, the call publishes the object for good.
+        let run = execute(&nocapture_entry(false, &effect), 256);
+        assert!(run.invalid_reads() > 0, "{effect}");
     }
 }
 
@@ -401,8 +478,8 @@ fn call_returned_objects_are_externally_reachable() {
                 let mut source = source.replace("mstore v100 0.i256 i256;", write);
                 if observed {
                     source = source
-                    .replace(" v2.objref<i256> = enum.proj v1 #Some 0.i8;", " v2.enumtag(@E) = enum.get_tag v1;")
-                    .replace(" v3.i256 = obj.load v2;", " br_table v2 block2 (1.enumtag(@E) block1);\nblock1:\n v4.objref<i256> = enum.proj v1 #Some 0.i8;\n v3.i256 = obj.load v4;")
+                    .replace(" v2.objref<i256> = enum.proj v0 #Some 0.i8;", " v2.enumtag(@E) = enum.get_tag v1;")
+                    .replace(" v3.i256 = obj.load v2;", " br_table v2 block2 (1.enumtag(@E) block1);\nblock1:\n v4.objref<i256> = enum.proj v0 #Some 0.i8;\n v3.i256 = obj.load v4;")
                     .replace(" return v3;", " return v3;\nblock2:\n return 0.i256;");
                 }
                 let run = execute(&source, 128);

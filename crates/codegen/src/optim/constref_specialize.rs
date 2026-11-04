@@ -198,12 +198,16 @@ fn clone_specialized_func(module: &Module, key: &SpecializationKey) -> FuncRef {
 }
 
 fn specialized_sig(module: &Module, key: &SpecializationKey, sig: &Signature) -> Signature {
-    Signature::new(
+    let mut specialized = Signature::new(
         &fresh_func_name(module, key, sig.name()),
         Linkage::Private,
         sig.args(),
         sig.ret_tys(),
-    )
+    );
+    for arg in sig.nocapture_args() {
+        specialized.set_nocapture_arg(arg);
+    }
+    specialized
 }
 
 fn fresh_func_name(module: &Module, key: &SpecializationKey, base: &str) -> String {
