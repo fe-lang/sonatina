@@ -817,3 +817,65 @@ block2:
         }
     }
 }
+
+#[test]
+fn switch_bit_tests_leave_wide_values_and_keys_alone() {
+    // A 128-bit scrutinee has bits a 64-bit test would miss, and the lowest key
+    // of the second switch has no 64-bit negation.
+    let source = r#"
+func public %is_wide(v0.*i128) -> i64 {
+block0:
+    v1.i128 = mload v0 i128;
+    br_table v1 block2 (1.i128 block1) (2.i128 block1) (3.i128 block1);
+block1:
+    return 1.i64;
+block2:
+    return 0.i64;
+}
+
+func public %is_lowest(v0.i64) -> i64 {
+block0:
+    br_table v0 block2 (-9223372036854775808.i64 block1) (-9223372036854775807.i64 block1) (-9223372036854775745.i64 block1);
+block1:
+    return 1.i64;
+block2:
+    return 0.i64;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let is_wide: unsafe extern "C" fn(*const u128) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("is_wide").unwrap()) };
+        for (value, expected) in [
+            (0, 0),
+            (1, 1),
+            (2, 1),
+            (3, 1),
+            (4, 0),
+            (1 + (1u128 << 64), 0),
+            (3 + (1u128 << 127), 0),
+        ] {
+            assert_eq!(unsafe { is_wide(&value) }, expected, "{value}");
+        }
+        let is_lowest: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("is_lowest").unwrap()) };
+        for (value, expected) in [
+            (i64::MIN, 1),
+            (i64::MIN + 1, 1),
+            (i64::MIN + 2, 0),
+            (i64::MIN + 63, 1),
+            (i64::MIN + 64, 0),
+            (i64::MAX, 0),
+            (0, 0),
+            (-1, 0),
+        ] {
+            assert_eq!(unsafe { is_lowest(value) }, expected, "{value}");
+        }
+    }
+}

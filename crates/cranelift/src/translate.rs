@@ -1180,15 +1180,21 @@ fn translate_function(
                         )?,
                     };
                     // Keys that share a destination and fit in a word are a bit
-                    // test, as `c == ' ' || c == '\n' || c == '\t'` forms.
-                    let bit_test = limbs.is_none().then(|| bit_test(&keys)).flatten();
+                    // test, as `c == ' ' || c == '\n' || c == '\t'` forms. A wider
+                    // scrutinee has bits the mask would not see.
+                    let bit_test = (builder.func.dfg.value_type(scrutinee).bits() <= 64
+                        && limbs.is_none())
+                    .then(|| bit_test(&keys))
+                    .flatten();
                     if let Some(test) = bit_test {
                         let wide = if builder.func.dfg.value_type(scrutinee) == clif::types::I64 {
                             scrutinee
                         } else {
                             builder.ins().uextend(clif::types::I64, scrutinee)
                         };
-                        let offset = builder.ins().iadd_imm_s(wide, -(test.first as i64));
+                        let offset = builder
+                            .ins()
+                            .iadd_imm_s(wide, (test.first as i64).wrapping_neg());
                         let in_range =
                             builder
                                 .ins()
