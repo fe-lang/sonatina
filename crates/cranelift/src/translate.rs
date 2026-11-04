@@ -1,4 +1,5 @@
 mod abi;
+mod black_box;
 mod division;
 mod enums;
 mod frame;
@@ -38,6 +39,7 @@ use sonatina_triple::TargetTriple;
 
 use self::{
     abi::*,
+    black_box::BlackBoxBarrier,
     division::{Divider, DividerCall, Numerator, addmod, div_rem, div_rem_i128, mulmod},
     enums::{store_tag, store_variant, tag_clif_type, variant_field_offset},
     frame::FrameSlots,
@@ -113,6 +115,7 @@ pub(super) fn translate_module(
 
     let funcs = module.funcs();
     let mut divider = Divider::default();
+    let mut black_box = BlackBoxBarrier::default();
     let tail_calls = TailCalls::new(module);
     let mut function_tables = HashMap::new();
 
@@ -142,6 +145,7 @@ pub(super) fn translate_module(
                         return Ok(None);
                     }
                     divider.start_function();
+                    black_box.start_function();
                     translate_function(
                         module,
                         function,
@@ -151,6 +155,7 @@ pub(super) fn translate_module(
                         &func_id_map,
                         &data_ids,
                         &mut divider,
+                        &mut black_box,
                         clif_module,
                     )
                     .map(Some)
@@ -176,6 +181,12 @@ pub(super) fn translate_module(
             .finish(clif_module)
             .into_iter()
             .map(|(func_id, ctx)| ("the divider".to_string(), func_id, ctx)),
+    );
+    translated.extend(
+        black_box
+            .finish(clif_module)
+            .into_iter()
+            .map(|(func_id, ctx)| ("the black box".to_string(), func_id, ctx)),
     );
 
     // Functions compile independently; defining them in order keeps the
@@ -321,6 +332,7 @@ fn translate_function(
     func_id_map: &HashMap<FuncRef, FuncId>,
     data_ids: &GlobalDataMap,
     divider: &mut Divider,
+    black_box: &mut BlackBoxBarrier,
     clif_module: &mut impl ClifModule,
 ) -> Result<Context, String> {
     let target_config = clif_module.target_config();
@@ -657,6 +669,22 @@ fn translate_function(
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
+                    }
+                }
+                NativeInstKind::BlackBox(op) => {
+                    let arg = *op.arg();
+                    let result = function
+                        .dfg
+                        .inst_result(inst_id)
+                        .ok_or("black_box has no result")?;
+                    if function.dfg.value_ty(arg) == Type::I256 {
+                        let limbs = resolve_i256(function, arg, &value_map, &mut builder)?;
+                        let limbs = black_box.hide(limbs, clif_module, &mut builder)?;
+                        value_map.insert_limbs(result, limbs);
+                    } else {
+                        let value = resolve_value(function, arg, &value_map, &mut builder)?;
+                        let [value] = black_box.hide([value], clif_module, &mut builder)?;
+                        value_map.insert(result, value);
                     }
                 }
                 NativeInstKind::Bswap(bswap) => {
