@@ -1284,8 +1284,12 @@ impl GvnSolver {
             if let InstClassKind::Unary(UnaryInstKind::IsZero) = insn_expr.kind()
                 && let Some(arg) = insn_expr.unary_arg()
             {
+                let arg_ty = func.dfg.value_ty(arg);
+                // A pointer has no immediate form.
+                if !arg_ty.is_integral() {
+                    return None;
+                }
                 if expected_true {
-                    let arg_ty = func.dfg.value_ty(arg);
                     let zero = self.make_imm(&mut func.dfg, Immediate::zero(arg_ty));
                     return Some(PredicateRelation::Eq {
                         lhs: arg,
@@ -1293,7 +1297,6 @@ impl GvnSolver {
                     });
                 }
 
-                let arg_ty = func.dfg.value_ty(arg);
                 if arg_ty == Type::I1 || known_bits.fits_in_low_bits(func, arg, 1) {
                     let one = self.make_bool_imm(&mut func.dfg, arg_ty, true)?;
                     return Some(PredicateRelation::Eq { lhs: arg, rhs: one });
