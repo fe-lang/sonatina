@@ -224,3 +224,35 @@ block0:
         assert!(output[1..].iter().all(|&byte| byte == 0), "{level:?}");
     }
 }
+
+#[test]
+fn private_functions_and_globals_may_share_a_name() {
+    // Functions and globals have one object namespace.
+    let source = r#"
+global private i64 $shared;
+func inline(never) private %shared() -> i64 {
+block0:
+    return 5.i64;
+}
+func public %run() -> i64 {
+block0:
+    v0.i64 = call %shared;
+    mstore $shared v0 i64;
+    v1.i64 = mload $shared i64;
+    v2.i64 = add v1 1.i64;
+    return v2;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let run: unsafe extern "C" fn() -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        assert_eq!(unsafe { run() }, 6, "{level:?}");
+    }
+}

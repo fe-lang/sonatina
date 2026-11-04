@@ -58,48 +58,55 @@ const HOST_ALLOCATOR: &str = "malloc";
 
 /// The object symbols of a module's functions and globals.
 ///
-/// The backend calls some symbols on its own: Cranelift's libcalls and the
-/// host allocator. An object resolves such a call to any symbol of that name
-/// it defines, private ones included, so a private function or global with
-/// one of those names takes another one.
+/// An object has one namespace, and resolves a call the backend makes on its
+/// own (Cranelift's libcalls and the host allocator) to any symbol of that
+/// name it defines, private ones included. A private function or global keeps
+/// its name only if nothing else in the object needs it, and otherwise takes
+/// another one.
 struct ObjectSymbols {
-    taken: HashSet<String>,
-    backend: HashSet<String>,
+    /// Every name in the module, and each new one, which a new one must avoid.
+    names: HashSet<String>,
+    /// The names no further private symbol can take.
+    occupied: HashSet<String>,
 }
 
 impl ObjectSymbols {
     fn new(module: &Module) -> Self {
         let libcall_names = cranelift_module::default_libcall_names();
-        let backend = clif::LibCall::all_libcalls()
+        let mut occupied = clif::LibCall::all_libcalls()
             .iter()
             .map(|&libcall| libcall_names(libcall))
             .chain([HOST_ALLOCATOR.to_string()])
             .collect::<HashSet<_>>();
-        let mut taken = module
-            .funcs()
-            .into_iter()
-            .map(|func_ref| module.ctx.func_sig(func_ref, |sig| sig.name().to_string()))
-            .collect::<HashSet<_>>();
+        let mut names = occupied.clone();
+        for func_ref in module.funcs() {
+            let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
+            if module.ctx.func_linkage(func_ref) != SonatinaLinkage::Private {
+                occupied.insert(name.clone());
+            }
+            names.insert(name);
+        }
         module.ctx.with_gv_store(|globals| {
-            taken.extend(
-                globals
-                    .all_gv_refs()
-                    .map(|global| globals.gv_data(global).symbol.clone()),
-            )
+            for global in globals.all_gv_refs() {
+                let data = globals.gv_data(global);
+                if data.linkage != SonatinaLinkage::Private {
+                    occupied.insert(data.symbol.clone());
+                }
+                names.insert(data.symbol.clone());
+            }
         });
-        taken.extend(backend.iter().cloned());
-        Self { taken, backend }
+        Self { names, occupied }
     }
 
     fn symbol(&mut self, name: &str, linkage: Linkage) -> String {
-        if linkage != Linkage::Local || !self.backend.contains(name) {
+        if linkage != Linkage::Local || self.occupied.insert(name.to_string()) {
             return name.to_string();
         }
         let symbol = (1..)
             .map(|suffix| format!("{name}.{suffix}"))
-            .find(|symbol| !self.taken.contains(symbol))
+            .find(|symbol| !self.names.contains(symbol))
             .expect("some suffix is free");
-        self.taken.insert(symbol.clone());
+        self.names.insert(symbol.clone());
         symbol
     }
 }
