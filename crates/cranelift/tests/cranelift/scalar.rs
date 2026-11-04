@@ -626,3 +626,42 @@ block2:
         assert_eq!(unsafe { is_null(&byte) }, 0, "{level:?}");
     }
 }
+
+#[test]
+fn black_box_returns_its_operand_at_every_width() {
+    for (ty, literal) in [
+        ("i1", "1"),
+        ("i8", "-85"),
+        ("i16", "-21555"),
+        ("i32", "-1412567278"),
+        ("i64", "-6066930334832433271"),
+        ("i128", "-111914144268397404893097173176100974321"),
+        (
+            "i256",
+            "-38082381820413527299138373923093541917439398027851369961089083197252413128367",
+        ),
+    ] {
+        let source = format!(
+            r#"func public %matches() -> i8 {{
+block0:
+    v0.{ty} = black_box {literal}.{ty};
+    v1.i1 = eq v0 {literal}.{ty};
+    v2.i8 = zext v1 i8;
+    return v2;
+}}
+"#
+        );
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+            let artifact = Compile::new(
+                parse_verified_native_module(&source),
+                CraneliftJitBackend::new(),
+            )
+            .with_opt_level(level)
+            .compile()
+            .unwrap_or_else(|errors| panic!("{ty} {level:?}: {errors:?}"));
+            let matches: unsafe extern "C" fn() -> u8 =
+                unsafe { std::mem::transmute(artifact.function_address("matches").unwrap()) };
+            assert_eq!(unsafe { matches() }, 1, "{ty} {level:?}");
+        }
+    }
+}

@@ -59,6 +59,7 @@ pub struct NativeInstSet(
     data::Mstore,
     data::Memzero,
     data::Memcopy,
+    data::BlackBox,
     data::Freeze,
     data::Gep,
     data::GetFunctionPtr,
