@@ -1,0 +1,32 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/private_dead_malloc_revert_scratch.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %main() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        (v5.i256, v6.i1) = uaddo v0 v1;
+        br v6 block1 block2;
+
+    block1:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block2:
+        v7.*i8 = evm_malloc 32.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        mstore v8 v5 i256;
+        evm_return v8 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %main;
+    }
+}
