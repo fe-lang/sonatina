@@ -2,13 +2,14 @@
 //!
 //! Local non-escape alone is insufficient: removing an allocation can change
 //! later addresses and the free pointer, and removing stores can change MSIZE.
-//! We require all memory accesses to stay within constant-size fresh allocations,
-//! no calls or internal returns, and no observable allocation-derived integers.
-//! This deliberately leaves raw memory/allocator interactions to memory planning.
+//! We require all memory accesses to stay within constant-size fresh allocations
+//! or scratch memory below the free-pointer slot, no calls or internal returns,
+//! and no observable allocation-derived integers. This deliberately leaves other
+//! raw memory/allocator interactions to memory planning.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    AccessKind, AccessLoc, Function, I256, Type,
+    AccessKind, AccessLoc, Function, I256, Immediate, Type,
     inst::{
         BinaryInstKind, CastInstKind, InstClassKind, control_flow::Return, data::Mstore, downcast,
         evm::EvmMalloc,
@@ -16,7 +17,18 @@ use sonatina_ir::{
     isa::evm::space::MEMORY,
 };
 
-use crate::analysis::memory_access::MemoryAccessAnalysis;
+use crate::{analysis::memory_access::MemoryAccessAnalysis, isa::evm::FREE_PTR_SLOT};
+
+/// Whether `bytes` at `addr` lie in scratch memory below the free-pointer slot.
+///
+/// Such an access sees no allocation's bytes: the backend places compiler-managed
+/// memory above its range, unless it belongs to a terminal payload, which reads only
+/// what it just wrote. Removing an allocation changes nothing it reads.
+fn lies_in_scratch(addr: Immediate, bytes: i64) -> bool {
+    let addr = addr.as_i256();
+    let slot = i64::from(FREE_PTR_SLOT);
+    addr >= I256::zero() && addr < I256::from(slot) && bytes <= slot - addr.trunc_to_i64()
+}
 
 pub(super) fn eliminate_dead_mallocs(func: &mut Function) -> bool {
     let mut sizes = FxHashMap::default();
@@ -70,6 +82,11 @@ pub(super) fn eliminate_dead_mallocs(func: &mut Function) -> bool {
         {
             let (addr, bytes) = match access.loc {
                 AccessLoc::LinearExact { addr, bytes, .. } => (addr, i64::from(bytes)),
+                AccessLoc::LinearExactImm { addr, bytes, .. }
+                    if lies_in_scratch(addr, i64::from(bytes)) =>
+                {
+                    continue;
+                }
                 AccessLoc::LinearRange { addr, len } => {
                     let Some(bytes) = func.dfg.value_imm(len).map(|imm| imm.as_i256()) else {
                         return false;
@@ -82,7 +99,12 @@ pub(super) fn eliminate_dead_mallocs(func: &mut Function) -> bool {
                 // Includes MSIZE, free-pointer access and unknown call effects.
                 _ => return false,
             };
-            if bytes == 0 {
+            if bytes == 0
+                || func
+                    .dfg
+                    .value_imm(addr)
+                    .is_some_and(|addr| lies_in_scratch(addr, bytes))
+            {
                 continue;
             }
             let Some(&(base, offset)) = derived.get(&addr) else {
@@ -306,10 +328,46 @@ mod tests {
             "v6.*i8 = evm_malloc 32.i256; v7.i256 = ptr_to_int v6 i256; mstore v6 v7 i256; evm_return v6 32.i256;",
             "v6.i256 = add v4 64.i256; mstore v6 1.i256 i256; evm_stop;",
             "v6.*i8 = evm_malloc v0; evm_return v6 32.i256;",
+            "v6.i256 = mload 33.i256 i256; evm_sstore 0.i256 v6; evm_stop;",
+            "mstore 40.i256 0.i256 i256; evm_stop;",
+            "evm_return 32.i256 64.i256;",
+            "evm_return 0.i256 v0;",
+            "evm_return 1.i256 9223372036854775807.i256;",
+            "mstore 0.i256 v2 i256; evm_return 0.i256 32.i256;",
         ] {
             let (changed, dumped) = optimize(&format!("{GRAPH}{observer}"));
             assert!(!changed, "unexpected removal with {observer}:\n{dumped}");
             assert!(dumped.contains("mstore v4 v2"), "{dumped}");
+        }
+    }
+
+    #[test]
+    fn removes_dead_graph_beside_scratch_accesses() {
+        let (changed, dumped) = optimize(&format!(
+            "{GRAPH}
+            v6.i1 = eq v0 0.i256;
+            br v6 block1 block2;
+            block1:
+                mstore 0.i256 1.i256 i256;
+                mstore 4.i256 17.i256 i256;
+                evm_revert 0.i256 36.i256;
+            block2:
+                mstore 32.i256 v0 i256;
+                v7.i256 = mload 0.i256 i256;
+                evm_sstore 0.i256 v7;
+                evm_stop;"
+        ));
+        assert!(changed, "{dumped}");
+        assert!(!dumped.contains("evm_malloc"), "{dumped}");
+        assert!(!dumped.contains("mstore v"), "{dumped}");
+        for scratch in [
+            "mstore 0.i256 1.i256",
+            "mstore 4.i256 17.i256",
+            "evm_revert 0.i256 36.i256",
+            "mstore 32.i256 v0",
+            "mload 0.i256",
+        ] {
+            assert!(dumped.contains(scratch), "{dumped}");
         }
     }
 
