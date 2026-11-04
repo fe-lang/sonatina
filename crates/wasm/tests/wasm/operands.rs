@@ -11,6 +11,30 @@ use super::{aggregates::build_at, harness::Machine};
 const LEVELS: [OptLevel; 2] = [OptLevel::O0, OptLevel::O2];
 
 #[test]
+fn black_box_returns_its_operand() {
+    let source = "func public %narrow(v0.i32) -> i32 {
+    block0:
+        v1.i32 = black_box v0;
+        return v1;
+}
+func public %wide(v0.i64) -> i64 {
+    block0:
+        v1.i256 = zext v0 i256;
+        v2.i256 = black_box v1;
+        v3.i64 = trunc v2 i64;
+        return v3;
+}";
+    for level in LEVELS {
+        let bytes = build_at(source, level);
+        let mut machine = Machine::new(&bytes);
+        let narrow = machine.func("narrow");
+        assert_eq!(machine.call(&narrow, &[Val::I32(7)])[0].unwrap_i32(), 7);
+        let wide = machine.func("wide");
+        assert_eq!(machine.call(&wide, &[Val::I64(-2)])[0].unwrap_i64(), -2);
+    }
+}
+
+#[test]
 fn a_constant_gep_index_steps_as_the_same_index_at_run_time() {
     // `true` of type `i1` is -1, as a constant and at run time.
     let source = "func public %constant(v0.*i32) -> i32 {

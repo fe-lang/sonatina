@@ -1468,6 +1468,23 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Record the result of an instruction as a copy of `arg`.
+    fn copy_value(
+        &mut self,
+        wb: waffle::Block,
+        inst_id: InstId,
+        arg: ValueId,
+    ) -> Result<(), WasmError> {
+        if let Some(wide) = self.wide_ty(arg) {
+            let limbs = self.wide_operand(wb, arg)?;
+            self.define_wide(wb, inst_id, 0, wide, limbs)
+        } else {
+            let ty = self.function.dfg.value_ty(arg);
+            let value = self.operand(wb, arg)?;
+            self.define(inst_id, 0, value, ty)
+        }
+    }
+
     /// Record result `index` of an instruction of type `wide`. A 128-bit
     /// result is the low 128 bits of `limbs`.
     fn define_wide(
@@ -2175,17 +2192,10 @@ impl<'a> FunctionTranslator<'a> {
             NativeInstKind::Memcopy(i) => self.memcopy(wb, op, *i.dest(), *i.src(), *i.len())?,
             // Every use of a value sees one value, and an undefined one reads as
             // zero in WebAssembly, so freezing changes nothing.
-            NativeInstKind::Freeze(i) => {
-                let arg = *i.arg();
-                if let Some(wide) = self.wide_ty(arg) {
-                    let limbs = self.wide_operand(*wb, arg)?;
-                    self.define_wide(*wb, inst_id, 0, wide, limbs)?
-                } else {
-                    let ty = function.dfg.value_ty(arg);
-                    let value = self.operand(*wb, arg)?;
-                    self.define(inst_id, 0, value, ty)?
-                }
-            }
+            NativeInstKind::Freeze(i) => self.copy_value(*wb, inst_id, *i.arg())?,
+            // Sonatina's passes keep it in place. WebAssembly has no way to hide
+            // a value from the engine, so the module passes it on unchanged.
+            NativeInstKind::BlackBox(i) => self.copy_value(*wb, inst_id, *i.arg())?,
             NativeInstKind::Gep(i) => self.gep(wb, inst_id, op, i.values())?,
             NativeInstKind::Alloca(i) => self.alloca(*wb, inst_id, *i.ty())?,
             NativeInstKind::MemAllocDynamic(i) => {
