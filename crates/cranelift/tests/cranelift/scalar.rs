@@ -595,3 +595,34 @@ fn wide_division_operand_classes_preserve_signed_and_unsigned_results() {
         }
     }
 }
+
+#[test]
+fn branches_on_a_pointer_null_test() {
+    let source = r#"func public %is_null(v0.*i8) -> i8 {
+block0:
+    v1.i1 = is_zero v0;
+    br v1 block1 block2;
+
+block1:
+    return 1.i8;
+
+block2:
+    return 0.i8;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let address = artifact.function_address("is_null").unwrap();
+        let is_null: unsafe extern "C" fn(*const u8) -> u8 =
+            unsafe { std::mem::transmute(address) };
+        let byte = 0u8;
+        assert_eq!(unsafe { is_null(std::ptr::null()) }, 1, "{level:?}");
+        assert_eq!(unsafe { is_null(&byte) }, 0, "{level:?}");
+    }
+}

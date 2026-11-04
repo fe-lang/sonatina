@@ -1,0 +1,17 @@
+target = "evm-ethereum-london"
+
+# A pointer has no immediate form, so neither edge of a null test records a value
+# for the pointer.
+# check: br v1 block1 block2;
+func public %pointer_is_zero(v0.*i8) -> i1 {
+    block0:
+        v1.i1 = is_zero v0;
+        br v1 block1 block2;
+
+    block1:
+        v2.i1 = is_zero v0;
+        return v2;
+
+    block2:
+        return 0.i1;
+}
