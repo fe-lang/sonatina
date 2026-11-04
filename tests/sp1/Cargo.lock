@@ -641,7 +641,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "cranelift-assembler-x64-meta",
 ]
@@ -649,7 +649,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64-meta"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "cranelift-srcgen",
 ]
@@ -657,7 +657,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bforest"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "cranelift-entity 0.135.2",
  "wasmtime-internal-core 48.0.2",
@@ -666,7 +666,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bitset"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "wasmtime-internal-core 48.0.2",
 ]
@@ -683,7 +683,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "bumpalo",
  "cranelift-assembler-x64",
@@ -709,7 +709,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-meta"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "cranelift-assembler-x64-meta",
  "cranelift-codegen-shared",
@@ -720,12 +720,12 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-shared"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 
 [[package]]
 name = "cranelift-control"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "arbitrary",
 ]
@@ -733,7 +733,7 @@ dependencies = [
 [[package]]
 name = "cranelift-entity"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "cranelift-bitset 0.135.2",
  "wasmtime-internal-core 48.0.2",
@@ -752,7 +752,7 @@ dependencies = [
 [[package]]
 name = "cranelift-frontend"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "cranelift-codegen",
  "hashbrown 0.17.1",
@@ -764,12 +764,12 @@ dependencies = [
 [[package]]
 name = "cranelift-isle"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 
 [[package]]
 name = "cranelift-module"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "anyhow",
  "cranelift-codegen",
@@ -779,7 +779,7 @@ dependencies = [
 [[package]]
 name = "cranelift-native"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "cranelift-codegen",
  "libc",
@@ -789,7 +789,7 @@ dependencies = [
 [[package]]
 name = "cranelift-object"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "anyhow",
  "cranelift-codegen",
@@ -804,7 +804,7 @@ dependencies = [
 [[package]]
 name = "cranelift-srcgen"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 
 [[package]]
 name = "crash-context"
@@ -3302,8 +3302,7 @@ dependencies = [
 [[package]]
 name = "regalloc2"
 version = "0.15.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "757712e8e61590d6d4f5d563483755538b5aa13467837a3b41cd9832509a7f85"
+source = "git+https://github.com/fe-lang/regalloc2?rev=251df3d653bd4bda3ce861a740430fb280da0263#251df3d653bd4bda3ce861a740430fb280da0263"
 dependencies = [
  "allocator-api2",
  "bumpalo",
@@ -5713,7 +5712,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-core"
 version = "48.0.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
+source = "git+https://github.com/fe-lang/wasmtime?rev=898d17fad69338ec14192dc498445af73fc48e87#898d17fad69338ec14192dc498445af73fc48e87"
 dependencies = [
  "hashbrown 0.17.1",
  "libm",
