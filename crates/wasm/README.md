@@ -138,8 +138,9 @@ heap. No object does: every `obj.alloc` is a slot of the frame. The heap is an
 allocator with size classes and free lists.
 
 - Every block starts with a 16-byte header, so that payloads are 16-byte
-  aligned. The class is at offset 0 and the state at offset 4 (1 when the block
-  is in use, 2 when it is free). A block of class `k` has a payload of `2**k`
+  aligned. The class is at offset 0, the state at offset 4 (1 when the block is
+  in use, 2 when it is free), and at offset 8 the address of the block cut before
+  it (0 for the first block). A block of class `k` has a payload of `2**k`
   bytes, for `k` from 4 to 31. A request takes the smallest class that holds it,
   at least 16 bytes, so a block takes `2**k + 16` bytes: up to twice the request
   plus the header. A request of zero bytes gets a block of its own.
@@ -185,7 +186,7 @@ rejected with an error that names the function):
 | --- | --- |
 | `alloc(size: i32) -> i32` | Cuts a block from the top of the heap. The block is zero, and its payload is 16-byte aligned and 16 bytes after its header. It never takes a block from a free list. The call traps, and changes nothing, if the request cannot be met. |
 | `arena_mark() -> i32` | The top of the heap. The next block cut from the top has its header at this address and its payload 16 bytes later. It has no side effect. |
-| `arena_release(mark: i32)` | Frees every block at or above `mark`: the free blocks that end above the mark are unlinked from their lists, the bytes from `mark` to the top are cleared, and the top moves back to `mark`. Traps, and changes nothing, unless `mark` is a multiple of 16, not below the start of the heap and not above the top. |
+| `arena_release(mark: i32)` | Frees every block at or above `mark`: the free blocks that end above the mark are unlinked from their lists, the bytes from `mark` to the top are cleared, and the top moves back to `mark`. Traps, and changes nothing, unless `mark` is a multiple of 16, not below the start of the heap, not above the top, and a block boundary. |
 
 The protocol for one call is `mark = arena_mark()`, one `alloc` per argument,
 the call, reading whatever the call returned by address, and
@@ -193,11 +194,15 @@ the call, reading whatever the call returned by address, and
 from the top of the heap, so an export must not keep heap data for a later call.
 A block that the call took from a free list, and did not free, stays allocated,
 as it would on a native target. The memory that the heap grew stays; a release
-does not shrink it. Releasing to a mark that an earlier release has already
-passed traps, which catches a host that releases twice. The release first
-walks every free list and checks each block it visits (aligned, inside the heap,
-in the state "free"), and it traps, changing nothing, if a list is damaged, for
-example by a write to a freed block. Only a second walk unlinks.
+does not shrink it.
+
+A release first follows the back links from the top down to the mark, which
+visits only the blocks it forgets, and checks each one (aligned, inside the heap,
+a valid class, ending where the walk expects). It traps, changing nothing, if
+the walk steps past the mark: the mark is inside a block. It then walks every free
+list and checks each block it visits (aligned, inside the heap, in the state
+"free"), and it traps, changing nothing, if a list is damaged, for example by a
+write to a freed block. Only a second walk unlinks.
 
 A call that frees what it allocates, outside any mark, does not make the heap
 grow: freed blocks are reused. A call with a text argument is bounded between
@@ -205,9 +210,11 @@ calls by the release.
 
 Marks may be nested, if the releases are made innermost first: an import that
 calls back into an export that takes text takes its own mark above the outer one.
-An address that `arena_mark` never returned but that is aligned and between the
-start of the heap and the top is accepted by a release; it frees the blocks that
-end above it, and a block that crosses it is forgotten as well.
+A mark is only an address, so a release cannot tell a stale mark from a valid one
+at the same address. A mark that an earlier release passed traps while it is above
+the top or inside a block. Once blocks are cut over it and it lands on a boundary,
+it is accepted and frees what lies above it, including blocks in use. Releasing
+the same mark twice in a row does nothing the second time.
 
 ## Aggregates, objects and constants
 

@@ -680,8 +680,19 @@ pub(super) fn translate_module(
         let arena_top = globals
             .arena_top
             .expect("the heap global exists with a heap");
+        let arena_last = globals
+            .arena_last
+            .expect("the heap global exists with a heap");
         let lists = plan.lists;
-        let body = heap::build_malloc(&wmod, sig, memory, arena_top, lists, Mode::Module);
+        let body = heap::build_malloc(
+            &wmod,
+            sig,
+            memory,
+            arena_top,
+            arena_last,
+            lists,
+            Mode::Module,
+        );
         wmod.funcs[func] = FuncDecl::Body(sig, "heap_malloc".to_string(), body);
         if let Some((free, free_sig)) = free_func {
             let body = heap::build_free(
@@ -700,8 +711,15 @@ pub(super) fn translate_module(
             // The host allocator cuts zeroed blocks from the top and traps on
             // failure; the allocator of the module reuses freed blocks.
             let host_sig = heap::alloc_signature(&mut wmod);
-            let host_body =
-                heap::build_malloc(&wmod, host_sig, memory, arena_top, lists, Mode::Host);
+            let host_body = heap::build_malloc(
+                &wmod,
+                host_sig,
+                memory,
+                arena_top,
+                arena_last,
+                lists,
+                Mode::Host,
+            );
             let host_func = wmod
                 .funcs
                 .push(FuncDecl::Body(host_sig, alloc.to_string(), host_body));
@@ -726,6 +744,7 @@ pub(super) fn translate_module(
                     release_sig,
                     memory,
                     arena_top,
+                    arena_last,
                     lists,
                     plan.stack_limit,
                 ),

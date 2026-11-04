@@ -253,6 +253,8 @@ pub(super) struct RuntimeGlobals {
     pub(super) stack_top: Global,
     /// The address of the next free byte of the arena.
     pub(super) arena_top: Option<Global>,
+    /// The header of the last block cut from the top, 0 when there is none.
+    pub(super) arena_last: Option<Global>,
 }
 
 pub(super) fn declare_runtime_globals(
@@ -271,9 +273,17 @@ pub(super) fn declare_runtime_globals(
             mutable: true,
         })
     });
+    let arena_last = plan.arena.then(|| {
+        wmod.globals.push(GlobalData {
+            ty: WType::I32,
+            value: Some(0),
+            mutable: true,
+        })
+    });
     RuntimeGlobals {
         stack_top,
         arena_top,
+        arena_last,
     }
 }
 

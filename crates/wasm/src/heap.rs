@@ -1,13 +1,15 @@
 //! The heap: a size-class allocator with free lists.
 //!
 //! Every block starts with a 16-byte header, so payloads stay 16-byte aligned:
-//! the class at offset 0 and the state at offset 4. A block of class `k` has a
+//! the class at offset 0, the state at offset 4, and at offset 8 the address of
+//! the block cut before it (0 for the first block). A block of class `k` has a
 //! payload of `2**k` bytes, for `k` from 4 to 31. A freed block goes on the list
 //! of its class and is the first one reused. The first word of a free payload is
 //! the link to the next free block of the class. Blocks are only cut from the top
-//! of the heap and are never split or merged, so every block lies wholly below or
-//! wholly above any past value of the top. That is what makes
-//! `arena_release` safe (see [`build_release`]).
+//! of the heap and are never split or merged, so the blocks fill the heap from its
+//! start to the top, and the back links name their boundaries. `arena_release`
+//! accepts only a boundary, so it never cuts a block in two (see
+//! [`build_release`]).
 //!
 //! The functions here are leaf functions of the module. They take no stack
 //! argument, do not touch `stack_top` and call no imports, so a host callback
@@ -26,6 +28,8 @@ use super::{
 
 /// The size of a block header.
 pub(super) const HEADER: u32 = 16;
+/// The offset in a header of the address of the block cut before it.
+const PREVIOUS: u32 = 8;
 /// The smallest class: a payload of 16 bytes.
 pub(super) const MIN_CLASS: u32 = 4;
 /// The number of entries in the table of list heads, indexed by class.
@@ -113,6 +117,7 @@ pub(super) fn build_malloc(
     sig: Signature,
     memory: Memory,
     top: Global,
+    last: Global,
     lists: u32,
     mode: Mode,
 ) -> FunctionBody {
@@ -314,10 +319,25 @@ pub(super) fn build_malloc(
     };
     let end32 = d.op(Operator::I32WrapI64, &[end], WType::I32);
     let live = d.c32(LIVE);
+    let previous = d.op(Operator::GlobalGet { global_index: last }, &[], WType::I32);
     d.body.add_op(
         ready,
         Operator::GlobalSet { global_index: top },
         &[end32],
+        &[],
+    );
+    body.add_op(
+        ready,
+        Operator::GlobalSet { global_index: last },
+        &[block],
+        &[],
+    );
+    body.add_op(
+        ready,
+        Operator::I32Store {
+            memory: word_at(memory, PREVIOUS),
+        },
+        &[block, previous],
         &[],
     );
     body.add_op(
@@ -524,23 +544,29 @@ pub(super) fn build_free(
 
 /// `arena_release(mark)`: frees every block at or above `mark`.
 ///
-/// `mark` must be 16-byte aligned, not below the start of the heap and not above
-/// the top; otherwise the call traps and changes nothing. Then every free list is
-/// walked to check every node (aligned, inside the heap, state `FREE`), with at
-/// most as many nodes as the heap can hold, and the call traps otherwise, still
-/// changing nothing; this stops a loop made by damage to a freed block. A second
-/// walk unlinks each free block that does not end at or below `mark`, keeping
+/// `mark` must be 16-byte aligned, not below the start of the heap, not above the
+/// top, and a block boundary. Otherwise the call traps and changes nothing. The
+/// boundary check walks the back links from the top down to the mark, and checks
+/// that each block it visits is aligned, inside the heap, of a valid class and
+/// ends where the walk expects. It visits only blocks that the release forgets.
+/// Then every free list is walked to check every node (aligned, inside the heap,
+/// state `FREE`), with at most as many nodes as the heap can hold, and the call
+/// traps otherwise, still changing nothing; this stops a loop made by damage to a
+/// freed block. A second walk unlinks each free block at or above `mark`, keeping
 /// the order of the others. Only then are the bytes from `mark` to the top
 /// cleared and the top moved back to `mark`, so the blocks the host allocator
 /// hands out next are zero again.
 ///
 /// Blocks in use that were cut above the mark are forgotten with the rest of the
-/// region. Blocks that were taken from a list below the mark stay as they are.
+/// region. Blocks that were taken from a list below the mark stay as they are. A
+/// stale mark that lands on a boundary cannot be told from a valid one, and frees
+/// what lies above it.
 pub(super) fn build_release(
     wmod: &WModule<'static>,
     sig: Signature,
     memory: Memory,
     top: Global,
+    last: Global,
     lists: u32,
     heap_start: u32,
 ) -> FunctionBody {
@@ -567,6 +593,7 @@ pub(super) fn build_release(
     let bad_low = e.op(Operator::I32Ne, &[low_bits, no_bits], WType::I32);
     let bad = e.op(Operator::I32Or, &[below, above], WType::I32);
     let bad = e.op(Operator::I32Or, &[bad, bad_low], WType::I32);
+    let last_block = e.op(Operator::GlobalGet { global_index: last }, &[], WType::I32);
 
     // Two walks over every list, each from the first list and with a budget of
     // the most nodes the heap can hold (each block takes at least 32 bytes). The
@@ -778,12 +805,114 @@ pub(super) fn build_release(
         );
         exit = walk;
     }
+
+    // The mark must be a block boundary: walk the back links from the top. Each
+    // step moves down, so the walk ends. Nothing is written until it has.
+    let boundary_walk = body.add_block();
+    let at_or_below = body.add_block();
+    let check_block = body.add_block();
+    let load_block = body.add_block();
+    let boundary = body.add_blockparam(boundary_walk, WType::I32);
+    let block = body.add_blockparam(boundary_walk, WType::I32);
+    let above = Emit {
+        body: &mut body,
+        block: boundary_walk,
+    }
+    .op(Operator::I32GtU, &[boundary, mark], WType::I32);
+    body.set_terminator(
+        boundary_walk,
+        Terminator::CondBr {
+            cond: above,
+            if_true: target(check_block, vec![]),
+            if_false: target(at_or_below, vec![]),
+        },
+    );
+    let on_mark = Emit {
+        body: &mut body,
+        block: at_or_below,
+    }
+    .op(Operator::I32Eq, &[boundary, mark], WType::I32);
+    body.set_terminator(
+        at_or_below,
+        Terminator::CondBr {
+            cond: on_mark,
+            if_true: target(exit, vec![]),
+            if_false: target(trap, vec![]),
+        },
+    );
+
+    // The block must be aligned, inside the heap and below the boundary.
+    let mut k = Emit {
+        body: &mut body,
+        block: check_block,
+    };
+    let align_mask = k.c32(ALIGN - 1);
+    let low_bits = k.op(Operator::I32And, &[block, align_mask], WType::I32);
+    let no_bits = k.c32(0);
+    let misaligned = k.op(Operator::I32Ne, &[low_bits, no_bits], WType::I32);
+    let before = k.op(Operator::I32LtU, &[block, start], WType::I32);
+    let not_below = k.op(Operator::I32GeU, &[block, boundary], WType::I32);
+    let bad_block = k.op(Operator::I32Or, &[misaligned, before], WType::I32);
+    let bad_block = k.op(Operator::I32Or, &[bad_block, not_below], WType::I32);
+    body.set_terminator(
+        check_block,
+        Terminator::CondBr {
+            cond: bad_block,
+            if_true: target(trap, vec![]),
+            if_false: target(load_block, vec![]),
+        },
+    );
+
+    // Its class must be valid and make it end at the boundary. A bad class makes
+    // the shift irrelevant: the branch to the trap is taken.
+    let mut l = Emit {
+        body: &mut body,
+        block: load_block,
+    };
+    let class = l.op(
+        Operator::I32Load {
+            memory: word(memory),
+        },
+        &[block],
+        WType::I32,
+    );
+    let previous = l.op(
+        Operator::I32Load {
+            memory: word_at(memory, PREVIOUS),
+        },
+        &[block],
+        WType::I32,
+    );
+    let min_class = l.c32(MIN_CLASS);
+    let too_small = l.op(Operator::I32LtU, &[class, min_class], WType::I32);
+    let max_class = l.c32(CLASSES - 1);
+    let too_large = l.op(Operator::I32GtU, &[class, max_class], WType::I32);
+    let one64 = l.c64(1);
+    let class64 = l.op(Operator::I64ExtendI32U, &[class], WType::I64);
+    let payload = l.op(Operator::I64Shl, &[one64, class64], WType::I64);
+    let block64 = l.op(Operator::I64ExtendI32U, &[block], WType::I64);
+    let header = l.c64(u64::from(HEADER));
+    let with_header = l.op(Operator::I64Add, &[block64, header], WType::I64);
+    let end = l.op(Operator::I64Add, &[with_header, payload], WType::I64);
+    let boundary64 = l.op(Operator::I64ExtendI32U, &[boundary], WType::I64);
+    let wrong_end = l.op(Operator::I64Ne, &[end, boundary64], WType::I32);
+    let bad_header = l.op(Operator::I32Or, &[too_small, too_large], WType::I32);
+    let bad_header = l.op(Operator::I32Or, &[bad_header, wrong_end], WType::I32);
+    body.set_terminator(
+        load_block,
+        Terminator::CondBr {
+            cond: bad_header,
+            if_true: target(trap, vec![]),
+            if_false: target(boundary_walk, vec![block, previous]),
+        },
+    );
+
     body.set_terminator(
         entry,
         Terminator::CondBr {
             cond: bad,
             if_true: target(trap, vec![]),
-            if_false: target(exit, vec![]),
+            if_false: target(boundary_walk, vec![top_value, last_block]),
         },
     );
 
@@ -804,6 +933,13 @@ pub(super) fn build_release(
         clear,
         Operator::GlobalSet { global_index: top },
         &[mark],
+        &[],
+    );
+    // The block whose end the walk stopped at is now the last one.
+    body.add_op(
+        clear,
+        Operator::GlobalSet { global_index: last },
+        &[block],
         &[],
     );
     body.set_terminator(clear, Terminator::Return { values: vec![] });

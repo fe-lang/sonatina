@@ -360,16 +360,135 @@ fn marks_nest() {
 }
 
 #[test]
-fn a_mark_inside_a_block_does_not_corrupt_the_free_lists() {
+fn a_mark_inside_a_block_traps_and_changes_nothing() {
+    for level in LEVELS {
+        for freed in [false, true] {
+            let mut machine = machine(level, usize::MAX);
+            let block = m(&mut machine, 100);
+            machine.write(block, &[0xbb; 128]);
+            if freed {
+                free(&mut machine, block).unwrap();
+            }
+            let before = machine.read(block - 16, 144);
+            let top = mark(&mut machine);
+            // Between the header and the payload, and inside the payload.
+            for inside in [block, block + 16, block + 112] {
+                assert!(release(&mut machine, inside).is_err(), "{level:?} {freed}");
+            }
+            assert_eq!(mark(&mut machine), top, "the top did not move");
+            assert_eq!(machine.read(block - 16, 144), before, "{level:?} {freed}");
+            // The block is as it was: on its list, or still in use.
+            if freed {
+                assert_eq!(m(&mut machine, 100), block, "{level:?}");
+            }
+            free(&mut machine, block).unwrap();
+            assert_eq!(m(&mut machine, 100), block, "{level:?}");
+        }
+    }
+}
+
+#[test]
+fn a_stale_mark_inside_a_later_block_traps_and_changes_nothing() {
+    for level in LEVELS {
+        let mut machine = machine(level, usize::MAX);
+        let outer = mark(&mut machine);
+        m(&mut machine, 100);
+        let inner = mark(&mut machine);
+        release(&mut machine, outer).unwrap();
+        assert!(release(&mut machine, inner).is_err(), "above the top");
+        // A block cut over the stale mark.
+        let big = m(&mut machine, 1000);
+        machine.write(big, &[0xbb; 1000]);
+        assert!(big < inner && inner < big + 1024);
+        let top = mark(&mut machine);
+        assert!(release(&mut machine, inner).is_err(), "inside a block");
+        assert_eq!(mark(&mut machine), top, "{level:?}");
+        assert_eq!(machine.read(big, 1000), vec![0xbb; 1000], "{level:?}");
+        // The heap goes on working: a later block does not overlap, and the
+        // block that the mark fell in frees and comes back.
+        let newer = m(&mut machine, 2000);
+        assert_eq!(newer, top + 16, "{level:?}");
+        free(&mut machine, big).unwrap();
+        assert_eq!(m(&mut machine, 1000), big, "{level:?}");
+        release(&mut machine, outer).unwrap();
+        assert_eq!(mark(&mut machine), outer, "{level:?}");
+    }
+}
+
+#[test]
+fn a_stale_mark_on_a_block_boundary_cannot_be_told_from_a_valid_one() {
     let mut machine = machine(OptLevel::O2, usize::MAX);
     let start = heap_start();
-    let block = m(&mut machine, 100);
-    free(&mut machine, block).unwrap();
-    // A 16-byte-aligned address that `arena_mark` never returned.
-    release(&mut machine, start + 32).unwrap();
-    assert_eq!(mark(&mut machine), start + 32);
-    // The block that crossed the mark is not handed out again.
-    assert_eq!(m(&mut machine, 100), start + 32 + 16);
+    release(&mut machine, start).unwrap();
+    release(&mut machine, start).unwrap();
+    let live = m(&mut machine, 100);
+    release(&mut machine, start).unwrap();
+    assert_eq!(mark(&mut machine), start);
+    // The block in use is forgotten with the region.
+    assert!(free(&mut machine, live).is_err());
+}
+
+#[test]
+fn a_release_reaches_each_earlier_boundary_after_earlier_releases() {
+    for level in LEVELS {
+        let mut machine = machine(level, usize::MAX);
+        let start = heap_start();
+        for size in [1u32, 100, 16, 5000, 17] {
+            m(&mut machine, size);
+        }
+        // Back from the top, one block at a time, over a block cut by the host.
+        let top = mark(&mut machine);
+        machine.alloc(40).unwrap();
+        release(&mut machine, top).unwrap();
+        let mut boundaries = vec![start];
+        for size in [1u32, 100, 16, 5000, 17] {
+            let payload = *boundaries.last().unwrap() + 16;
+            boundaries.push(payload + (1 << Model::class(size)));
+        }
+        assert_eq!(boundaries.last(), Some(&top), "{level:?}");
+        for &boundary in boundaries.iter().rev() {
+            release(&mut machine, boundary).unwrap();
+            assert_eq!(mark(&mut machine), boundary, "{level:?}");
+        }
+        // The chain starts over from the start of the heap.
+        let a = m(&mut machine, 100);
+        assert_eq!(a, start + 16, "{level:?}");
+        let middle = mark(&mut machine);
+        m(&mut machine, 100);
+        release(&mut machine, middle).unwrap();
+        assert!(release(&mut machine, a).is_err(), "{level:?}");
+        release(&mut machine, start).unwrap();
+    }
+}
+
+#[test]
+fn a_release_that_finds_a_damaged_header_traps_and_changes_nothing() {
+    for (offset, bytes, what) in [
+        (0, 3u32.to_le_bytes(), "a class that is too small"),
+        (0, 32u32.to_le_bytes(), "a class that is too large"),
+        (
+            0,
+            9u32.to_le_bytes(),
+            "a class that does not reach the boundary",
+        ),
+        (8, 8u32.to_le_bytes(), "a link below the heap"),
+        (8, u32::MAX.to_le_bytes(), "a link above the block"),
+    ] {
+        let mut machine = machine(OptLevel::O0, usize::MAX);
+        let before = mark(&mut machine);
+        m(&mut machine, 100);
+        let upper = m(&mut machine, 100);
+        machine.write(upper - 16 + offset, &bytes);
+        let top = mark(&mut machine);
+        let image = machine.read(before, (top - before) as usize);
+        assert!(release(&mut machine, before).is_err(), "{what}");
+        assert_eq!(mark(&mut machine), top, "{what}");
+        assert_eq!(
+            machine.read(before, (top - before) as usize),
+            image,
+            "{what}"
+        );
+    }
 }
 
 #[test]
@@ -485,7 +604,10 @@ fn churn_between_text_calls_stays_bounded() {
 /// A model of the heap: the same classes, last-in-first-out lists, and release
 /// rule, over addresses only.
 struct Model {
+    start: u32,
     top: u32,
+    /// The end of each block, in the order they were cut.
+    ends: Vec<u32>,
     lists: Vec<Vec<u32>>,
     /// Payload address to class, for the blocks in use.
     live: BTreeMap<u32, u32>,
@@ -494,7 +616,9 @@ struct Model {
 impl Model {
     fn new(start: u32) -> Self {
         Self {
+            start,
             top: start,
+            ends: Vec::new(),
             lists: vec![Vec::new(); 32],
             live: BTreeMap::new(),
         }
@@ -520,6 +644,7 @@ impl Model {
         }
         let address = self.top + 16;
         self.top = end as u32;
+        self.ends.push(self.top);
         self.live.insert(address, class);
         Some((address, true))
     }
@@ -529,7 +654,13 @@ impl Model {
         self.lists[class as usize].push(address);
     }
 
+    /// Whether a release to `mark` is accepted.
+    fn is_boundary(&self, mark: u32) -> bool {
+        mark == self.start || self.ends.binary_search(&mark).is_ok()
+    }
+
     fn release(&mut self, mark: u32) {
+        self.ends.retain(|&end| end <= mark);
         for (class, list) in self.lists.iter_mut().enumerate() {
             list.retain(|&address| u64::from(address) + (1u64 << class) <= u64::from(mark));
         }
@@ -550,6 +681,7 @@ fn random_alloc_free_mark_release_sequences_match_a_reference_heap() {
             let mut model = Model::new(heap_start());
             let mut rng = Lcg(0x5eed + seed);
             let mut marks: Vec<u32> = vec![model.top];
+            let mut refused = 0;
             // The pattern written into each block in use.
             let mut patterns: BTreeMap<u32, (usize, u8)> = BTreeMap::new();
             for step in 0..500 {
@@ -604,17 +736,18 @@ fn random_alloc_free_mark_release_sequences_match_a_reference_heap() {
                         assert_eq!(got, model.top, "step {step} seed {seed} {level:?}: mark");
                         marks.push(got);
                     }
-                    // Release to an earlier mark, or be refused for one above the top.
+                    // Release to any earlier mark, which may be stale: it is
+                    // refused unless it is a boundary of the blocks there now.
                     _ => {
                         let target = marks[(rng.next() % marks.len() as u64) as usize];
                         let result = release(&mut machine, target);
-                        if target > model.top {
-                            assert!(result.is_err(), "a mark above the top is refused");
-                        } else {
+                        if model.is_boundary(target) {
                             result.unwrap();
                             model.release(target);
                             patterns.retain(|&address, _| model.live.contains_key(&address));
-                            marks.retain(|&mark| mark <= model.top);
+                        } else {
+                            assert!(result.is_err(), "step {step}: {target} is no boundary");
+                            refused += 1;
                         }
                     }
                 }
@@ -624,6 +757,10 @@ fn random_alloc_free_mark_release_sequences_match_a_reference_heap() {
             }
             verify(&mut machine, &model, &patterns, seed, level);
             assert_eq!(mark(&mut machine), model.top);
+            assert!(
+                refused > 0,
+                "seed {seed} {level:?}: no stale mark was tried"
+            );
         }
     }
 }
