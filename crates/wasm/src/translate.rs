@@ -246,17 +246,9 @@ fn scan_module(module: &Module) -> Scan {
     let mut arena = false;
     let mut free = false;
     let mut helpers = (false, false, false, false, false, false);
+    let mut called = FxHashSet::default();
     let inst_set = native_inst_set();
     for func_ref in module.funcs() {
-        // The C routines `malloc` and `free` are the allocator of the module.
-        if module.ctx.func_linkage(func_ref) == Linkage::External {
-            let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
-            if matches!(name.as_str(), "malloc" | "free") {
-                runtime = true;
-                arena = true;
-                free |= name == "free";
-            }
-        }
         let is_aggregate = |ty: Type| {
             matches!(
                 repr(&module.ctx, ty),
@@ -286,6 +278,9 @@ fn scan_module(module: &Module) -> Scan {
                     let kind = inst_set.resolve_inst(inst);
                     if kind_needs_runtime(&kind) {
                         runtime = true;
+                    }
+                    if let NativeInstKind::Call(call) = &kind {
+                        called.insert(*call.callee());
                     }
                     if matches!(kind, NativeInstKind::MemAllocDynamic(_)) {
                         arena = true;
@@ -319,6 +314,18 @@ fn scan_module(module: &Module) -> Scan {
                 }
             }
         });
+    }
+    // The C routines `malloc` and `free` are the allocator of the module, which
+    // only a call to one of them needs.
+    for func_ref in called {
+        if module.ctx.func_linkage(func_ref) == Linkage::External {
+            let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
+            if matches!(name.as_str(), "malloc" | "free") {
+                runtime = true;
+                arena = true;
+                free |= name == "free";
+            }
+        }
     }
     Scan {
         runtime,

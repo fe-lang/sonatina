@@ -225,6 +225,20 @@ fn malloc_returns_null_when_it_cannot_meet_a_request_and_dynamic_allocation_trap
 }
 
 #[test]
+fn uncalled_external_malloc_and_free_add_nothing() {
+    let body = "func public %f(v0.i32) -> i32 {
+    block0:
+        return v0;
+}";
+    let declared =
+        format!("declare external %malloc(i32) -> *i8;\ndeclare external %free(*i8);\n{body}");
+    assert_eq!(
+        build_with(&declared, OptLevel::O2, WasmBackend::new()),
+        build_with(body, OptLevel::O2, WasmBackend::new()),
+    );
+}
+
+#[test]
 fn a_module_that_only_frees_has_a_heap() {
     let source = "declare external %free(*i8);
 func public %f(v0.i32) {
