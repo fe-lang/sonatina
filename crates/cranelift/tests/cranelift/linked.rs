@@ -13,6 +13,36 @@ use tempfile::Builder;
 use super::{host_architecture, imports, native_isa};
 
 #[test]
+fn private_functions_leave_external_globals_their_names() {
+    let triple = native_isa(host_architecture()).triple();
+    let source = format!(
+        r#"target = "{triple}"
+global external *i8 $environ;
+func inline(never) private %environ() -> i64 {{
+block0:
+    return 5.i64;
+}}
+func public %run() -> i64 {{
+block0:
+    v0.*i8 = mload $environ *i8;
+    v1.i64 = ptr_to_int v0 i64;
+    v2.i64 = call %environ;
+    v3.i64 = add v1 v2;
+    return v3;
+}}
+"#
+    );
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let artifact = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+        assert!(imports(artifact.as_bytes(), "environ"), "{level:?}");
+    }
+}
+
+#[test]
 fn private_functions_do_not_capture_backend_calls() {
     // The copy and the fill exceed the inline limit, so they call `memcpy`
     // and `memset`, and the allocation calls `malloc`: the C library's, not
