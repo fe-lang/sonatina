@@ -8,6 +8,7 @@ mod i256;
 mod memory;
 mod parts;
 mod phi;
+mod prediction;
 mod scalar;
 mod tail;
 mod values;
@@ -48,6 +49,7 @@ use self::{
     memory::*,
     parts::*,
     phi::Edges,
+    prediction::{BranchPrediction, propagate_cold_blocks},
     scalar::*,
     tail::TailCalls,
     values::*,
@@ -351,8 +353,12 @@ fn translate_function(
     let mut block_map: HashMap<BlockId, clif::Block> = HashMap::new();
     let mut value_map = ValueMap::default();
     let mut i256_storage = I256Storage::default();
+    let prediction = BranchPrediction::new(function, &cfg);
     for &block in &block_order {
         let clif_block = builder.create_block();
+        if prediction.is_cold(block) {
+            builder.set_cold_block(clif_block);
+        }
         block_map.insert(block, clif_block);
     }
 
@@ -1046,9 +1052,18 @@ fn translate_function(
                     let cond = resolve_value(function, *br.cond(), &value_map, &mut builder)?;
                     let nz = edges.target(block, *br.nz_dest(), &value_map, &mut builder)?;
                     let z = edges.target(block, *br.z_dest(), &value_map, &mut builder)?;
-                    builder
-                        .ins()
-                        .brif(cond, nz.block, &nz.args, z.block, &z.args);
+                    // Cranelift's reverse postorder puts a branch's last
+                    // target right after it.
+                    if prediction.prefers_true(block, *br.nz_dest(), *br.z_dest()) {
+                        let inverted = builder.ins().icmp_imm_u(IntCC::Equal, cond, 0);
+                        builder
+                            .ins()
+                            .brif(inverted, z.block, &z.args, nz.block, &nz.args);
+                    } else {
+                        builder
+                            .ins()
+                            .brif(cond, nz.block, &nz.args, z.block, &z.args);
+                    }
                     edges.fill(nz, block, *br.nz_dest(), &value_map, &mut builder)?;
                     edges.fill(z, block, *br.z_dest(), &value_map, &mut builder)?;
                 }
@@ -2324,6 +2339,7 @@ fn translate_function(
 
     builder.seal_all_blocks();
     builder.finalize(clif_module.target_config());
+    propagate_cold_blocks(&mut ctx.func);
 
     if module.ctx.triple == TargetTriple::SP1 {
         // SP1 objects are statically linked within PC-relative relocation range.
