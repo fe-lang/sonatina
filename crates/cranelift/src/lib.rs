@@ -120,7 +120,9 @@ impl CraneliftObjectBackend {
             let name = match triple.architecture {
                 Architecture::X86_64 => "x86_64-apple-macosx",
                 Architecture::Aarch64 => "aarch64-apple-macosx",
-                Architecture::Evm | Architecture::Riscv64im => unreachable!("not a native target"),
+                Architecture::Evm | Architecture::Riscv64im | Architecture::Wasm32 => {
+                    unreachable!("not a native target")
+                }
             };
             let mut builder = clif_isa::lookup_by_name(name)
                 .map_err(|error| CraneliftError::UnsupportedTarget(error.to_string()))?;

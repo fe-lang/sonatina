@@ -1,0 +1,27 @@
+[package]
+name = "sonatina-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors = ["Sonatina Developers"]
+license = "Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/fe-lang/sonatina/tree/main/crates/wasm"
+repository = "https://github.com/fe-lang/sonatina"
+description = "WebAssembly (wasm32) backend for Sonatina"
+categories = ["compilers", "wasm"]
+keywords = ["compiler", "wasm", "webassembly", "smart-contract"]
+
+[dependencies]
+rustc-hash = "2.0.0"
+sonatina-codegen = { path = "../codegen", version = "0.1.0" }
+sonatina-ir = { path = "../ir", version = "0.1.0" }
+sonatina-triple = { path = "../triple", version = "0.1.0" }
+sonatina-verifier = { path = "../verifier", version = "0.1.0" }
+waffle = "0.3.3"
+
+[dev-dependencies]
+sonatina-cranelift = { path = "../cranelift", features = ["jit"] }
+sonatina-parser = { path = "../parser" }
+wasmparser = "0.248.0"
+wasmtime = { version = "44.0.1", default-features = false, features = ["cranelift", "runtime", "std"] }

@@ -7,6 +7,7 @@ use crate::{
 
 pub mod evm;
 pub mod native;
+pub mod wasm32;
 
 pub trait Isa {
     type InstSet: InstSetBase + 'static;

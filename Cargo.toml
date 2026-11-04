@@ -12,6 +12,7 @@ members = [
     "crates/verifier",
     "crates/sp1",
     "crates/cranelift",
+    "crates/wasm",
 ]
 exclude = ["tests/sp1"]
 

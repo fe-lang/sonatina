@@ -22,7 +22,9 @@ static NATIVE_ADDRESS_SPACES: [AddressSpaceDesc; 1] = [AddressSpaceDesc {
     immutable: false,
 }];
 
-struct NativeAddressSpaces;
+pub(super) struct NativeAddressSpaces;
+
+pub(super) static NATIVE_ADDRESS_SPACES_INFO: NativeAddressSpaces = NativeAddressSpaces;
 
 impl AddressSpaceInfo for NativeAddressSpaces {
     fn default_space(&self) -> AddressSpaceId {
@@ -71,8 +73,7 @@ impl Isa for Native {
     }
 
     fn address_spaces(&self) -> &'static dyn AddressSpaceInfo {
-        static SPACES: NativeAddressSpaces = NativeAddressSpaces;
-        &SPACES
+        &NATIVE_ADDRESS_SPACES_INFO
     }
 
     fn inst_set(&self) -> &'static Self::InstSet {
@@ -80,9 +81,22 @@ impl Isa for Native {
     }
 }
 
-struct NativeTypeLayout;
+/// Little-endian layout shared by the 64-bit native targets and `wasm32`.
+/// The targets differ only in the byte width of a pointer or reference.
+pub(super) struct NativeTypeLayout {
+    pointer_bytes: usize,
+    pointer_repl: Type,
+}
 
-const NATIVE_TYPE_LAYOUT: NativeTypeLayout = NativeTypeLayout;
+const NATIVE_TYPE_LAYOUT: NativeTypeLayout = NativeTypeLayout {
+    pointer_bytes: 8,
+    pointer_repl: Type::I64,
+};
+
+pub(super) const WASM32_TYPE_LAYOUT: NativeTypeLayout = NativeTypeLayout {
+    pointer_bytes: 4,
+    pointer_repl: Type::I32,
+};
 
 pub fn inst_set() -> &'static NativeInstSet {
     static INST_SET: LazyLock<NativeInstSet> = LazyLock::new(NativeInstSet::new);
@@ -144,7 +158,9 @@ impl TypeLayout for NativeTypeLayout {
                 }
                 (size.next_multiple_of(struct_align), struct_align)
             }
-            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => (8, 8),
+            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => {
+                (self.pointer_bytes, self.pointer_bytes)
+            }
             CompoundType::Enum(data) => {
                 let layout = enum_layout(self, data, store)?;
                 (layout.size, layout.align)
@@ -156,7 +172,7 @@ impl TypeLayout for NativeTypeLayout {
     }
 
     fn pointer_repl(&self) -> Type {
-        Type::I64
+        self.pointer_repl
     }
 
     fn endian(&self) -> Endian {
