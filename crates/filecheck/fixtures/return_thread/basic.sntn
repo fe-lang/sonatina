@@ -1,0 +1,84 @@
+#! A block that only returns an aggregate phi becomes a `return` in each predecessor that jumps to it.
+
+target = "evm-ethereum-osaka"
+
+type @pair = {i64, i64};
+
+# sameln: func public %jumps(v0.i1, v1.@pair, v2.@pair) -> @pair {
+# check: block1:
+# nextln: return v1;
+# check: block2:
+# nextln: return v2;
+# not: phi
+func public %jumps(v0.i1, v1.@pair, v2.@pair) -> @pair {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v3.@pair = phi (v1 block1) (v2 block2);
+    return v3;
+}
+
+# A predecessor that branches keeps its edge, and the phi with it.
+# sameln: func public %branches(v0.i1, v1.@pair, v2.@pair) -> @pair {
+# check: block1:
+# nextln: return v1;
+# check: block2:
+# nextln: v3.@pair = phi (v2 block0);
+# nextln: return v3;
+func public %branches(v0.i1, v1.@pair, v2.@pair) -> @pair {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block2;
+
+block2:
+    v3.@pair = phi (v1 block1) (v2 block0);
+    return v3;
+}
+
+# A scalar phi costs no copy, and stays.
+# sameln: func public %scalar(v0.i1, v1.i64, v2.i64) -> i64 {
+# check: v3.i64 = phi (v1 block1) (v2 block2);
+# nextln: return v3;
+func public %scalar(v0.i1, v1.i64, v2.i64) -> i64 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v3.i64 = phi (v1 block1) (v2 block2);
+    return v3;
+}
+
+# A phi with another use stays too.
+# sameln: func public %used(v0.i1, v1.@pair, v2.@pair) -> @pair {
+# check: v3.@pair = phi (v1 block1) (v2 block2);
+# nextln: v4.i64 = extract_value v3 0.i256;
+func public %used(v0.i1, v1.@pair, v2.@pair) -> @pair {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v3.@pair = phi (v1 block1) (v2 block2);
+    v4.i64 = extract_value v3 0.i256;
+    return v3;
+}

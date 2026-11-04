@@ -57,6 +57,7 @@ use super::{
     loop_strength_reduce::LoopStrengthReduce,
     multi_result_legalize::legalize_multi_result,
     range_branch_simplify::{RangeBranchSimplify, has_conditional_branch},
+    return_thread::ReturnThread,
     scalar_canonicalize::ScalarCanonicalize,
     sccp::SccpSolver,
     switch_formation::SwitchFormation,
@@ -115,6 +116,10 @@ pub enum Pass {
     /// Fuse an unsigned comparison with the subtractions of its operands it
     /// dominates into `usubo` (native pipelines only).
     CompareSubFusion,
+    /// Move a `return` of an aggregate phi into the predecessors that jump to
+    /// it, which then build the value in the return buffer (native pipelines
+    /// only).
+    ReturnThread,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
     /// Use after passes that can leave stale user entries
@@ -241,6 +246,11 @@ impl Pass {
                 name: "compare_sub_fusion",
                 needs_func_behavior: false,
                 invalidates_func_behavior: false,
+            },
+            Pass::ReturnThread => PassInfo {
+                name: "return_thread",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
             },
             Pass::RebuildUsers => PassInfo {
                 name: "rebuild_users",
@@ -560,9 +570,9 @@ impl Pipeline {
     /// stops that schedule after its second of four inline rounds, for
     /// quicker builds. Both end by simplifying with known bits and ranges
     /// again, so code inlined after the first round has bounded shift counts
-    /// masked too, then folding boolean phis, forming switches from
-    /// comparison trees and fusing comparisons with the subtractions they
-    /// guard.
+    /// masked too, then folding boolean phis, threading returns, forming
+    /// switches from comparison trees and fusing comparisons with the
+    /// subtractions they guard.
     /// Os is the size pipeline.
     pub fn native(level: OptLevel) -> Self {
         let mut pipeline = match level {
@@ -574,6 +584,7 @@ impl Pipeline {
         pipeline.add_step(Step::FuncPasses(vec![
             Pass::KnownBitsSimplify,
             Pass::BoolPhiFold,
+            Pass::ReturnThread,
             Pass::CfgCleanup,
             Pass::SwitchFormation,
             Pass::CompareSubFusion,
@@ -971,6 +982,10 @@ fn run_pass(
         Pass::BoolPhiFold => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.bool_phi_fold").entered();
             BoolPhiFold::new().run(func)
+        }
+        Pass::ReturnThread => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.return_thread").entered();
+            ReturnThread.run(func)
         }
         Pass::SwitchFormation => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.switch_formation").entered();
@@ -2783,12 +2798,14 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 .collect()
         };
         // Both end by simplifying with known bits, folding boolean phis,
-        // forming switches and fusing comparisons with subtractions.
+        // threading returns, forming switches and fusing comparisons with
+        // subtractions.
         let switches = format!(
             "{:?}",
             Step::FuncPasses(vec![
                 Pass::KnownBitsSimplify,
                 Pass::BoolPhiFold,
+                Pass::ReturnThread,
                 Pass::CfgCleanup,
                 Pass::SwitchFormation,
                 Pass::CompareSubFusion,

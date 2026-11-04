@@ -8,6 +8,7 @@ mod i256;
 mod memory;
 mod parts;
 mod phi;
+mod prediction;
 mod scalar;
 mod tail;
 mod values;
@@ -28,7 +29,7 @@ use cranelift_module::{
 
 use sonatina_codegen::analysis::known_bits::KnownBitsQuery;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Type,
+    BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Type, U256,
     Value, ValueId,
     inst::{InstId, control_flow, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
@@ -48,6 +49,7 @@ use self::{
     memory::*,
     parts::*,
     phi::Edges,
+    prediction::{BranchPrediction, propagate_cold_blocks},
     scalar::*,
     tail::TailCalls,
     values::*,
@@ -358,8 +360,12 @@ fn translate_function(
     let mut block_map: HashMap<BlockId, clif::Block> = HashMap::new();
     let mut value_map = ValueMap::default();
     let mut i256_storage = I256Storage::default();
+    let prediction = BranchPrediction::new(function, &cfg);
     for &block in &block_order {
         let clif_block = builder.create_block();
+        if prediction.is_cold(block) {
+            builder.set_cold_block(clif_block);
+        }
         block_map.insert(block, clif_block);
     }
 
@@ -1053,9 +1059,18 @@ fn translate_function(
                     let cond = resolve_value(function, *br.cond(), &value_map, &mut builder)?;
                     let nz = edges.target(block, *br.nz_dest(), &value_map, &mut builder)?;
                     let z = edges.target(block, *br.z_dest(), &value_map, &mut builder)?;
-                    builder
-                        .ins()
-                        .brif(cond, nz.block, &nz.args, z.block, &z.args);
+                    // Cranelift's reverse postorder puts a branch's last
+                    // target right after it.
+                    if prediction.prefers_true(block, *br.nz_dest(), *br.z_dest()) {
+                        let inverted = builder.ins().icmp_imm_u(IntCC::Equal, cond, 0);
+                        builder
+                            .ins()
+                            .brif(inverted, z.block, &z.args, nz.block, &nz.args);
+                    } else {
+                        builder
+                            .ins()
+                            .brif(cond, nz.block, &nz.args, z.block, &z.args);
+                    }
                     edges.fill(nz, block, *br.nz_dest(), &value_map, &mut builder)?;
                     edges.fill(z, block, *br.z_dest(), &value_map, &mut builder)?;
                 }
@@ -1171,6 +1186,36 @@ fn translate_function(
                             &mut builder,
                         )?,
                     };
+                    // Keys that share a destination and fit in a word are a bit
+                    // test, as `c == ' ' || c == '\n' || c == '\t'` forms. A wider
+                    // scrutinee has bits the mask would not see.
+                    let bit_test = (builder.func.dfg.value_type(scrutinee).bits() <= 64
+                        && limbs.is_none())
+                    .then(|| bit_test(&keys))
+                    .flatten();
+                    if let Some(test) = bit_test {
+                        let wide = if builder.func.dfg.value_type(scrutinee) == clif::types::I64 {
+                            scrutinee
+                        } else {
+                            builder.ins().uextend(clif::types::I64, scrutinee)
+                        };
+                        let offset = builder
+                            .ins()
+                            .iadd_imm_s(wide, (test.first as i64).wrapping_neg());
+                        let in_range =
+                            builder
+                                .ins()
+                                .icmp_imm_u(IntCC::UnsignedLessThan, offset, 64);
+                        let test_block = builder.create_block();
+                        builder
+                            .ins()
+                            .brif(in_range, test_block, &[], otherwise, &[]);
+                        builder.switch_to_block(test_block);
+                        let mask = builder.ins().iconst(clif::types::I64, test.mask as i64);
+                        let bit = builder.ins().ushr(mask, offset);
+                        let hit = builder.ins().band_imm_u(bit, 1);
+                        let dest = dest_block(test.dest, &mut builder);
+                        builder.ins().brif(hit, dest, &[], otherwise, &[]);
                     // From four keys up, Cranelift's switch gives each run of
                     // consecutive keys a jump table and searches the runs; a
                     // run's holes take the default while it stays dense
@@ -1178,7 +1223,7 @@ fn translate_function(
                     // start at zero does, saving its lower bound check.
                     // Fewer keys, or i256 keys beyond the low limb, are
                     // compared in turn.
-                    if keys.len() >= 4
+                    } else if keys.len() >= 4
                         && limbs.is_none_or(|_| keys.iter().all(|(key, _)| key.0[1..] == [0; 3]))
                     {
                         if let Some(limbs) = limbs {
@@ -2331,6 +2376,7 @@ fn translate_function(
 
     builder.seal_all_blocks();
     builder.finalize(clif_module.target_config());
+    propagate_cold_blocks(&mut ctx.func);
 
     if module.ctx.triple == TargetTriple::SP1 {
         // SP1 objects are statically linked within PC-relative relocation range.
@@ -2353,6 +2399,36 @@ fn translate_function(
     }
 
     Ok(ctx)
+}
+
+/// A switch with one destination, as a mask of its keys from `first` on.
+struct BitTest {
+    first: u64,
+    mask: u64,
+    dest: BlockId,
+}
+
+/// The bit test for `keys`, if they are at least three, share a destination and
+/// span no more than a word. Fewer are as cheap to compare in turn.
+fn bit_test(keys: &[(U256, BlockId)]) -> Option<BitTest> {
+    let &(_, dest) = keys.first()?;
+    let low = |key: &U256| (key.0[1..] == [0; 3]).then(|| key.low_u64());
+    let mut low_keys = Vec::with_capacity(keys.len());
+    for (key, key_dest) in keys {
+        if *key_dest != dest {
+            return None;
+        }
+        low_keys.push(low(key)?);
+    }
+    let first = *low_keys.iter().min()?;
+    let last = *low_keys.iter().max()?;
+    if keys.len() < 3 || last - first >= 64 {
+        return None;
+    }
+    let mask = low_keys
+        .iter()
+        .fold(0, |mask, key| mask | 1 << (key - first));
+    Some(BitTest { first, mask, dest })
 }
 
 fn heap_allocate(
