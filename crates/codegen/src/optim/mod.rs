@@ -25,6 +25,7 @@ pub mod loop_strength_reduce;
 pub mod multi_result_legalize;
 pub mod pipeline;
 pub mod range_branch_simplify;
+pub mod return_thread;
 pub mod scalar_canonicalize;
 pub mod sccp;
 mod sccp_simplify;
