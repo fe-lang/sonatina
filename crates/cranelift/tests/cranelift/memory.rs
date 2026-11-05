@@ -818,3 +818,155 @@ block2:
         }
     }
 }
+
+#[test]
+fn narrow_enum_fields_fill_the_piece_a_wider_variant_shares() {
+    // `#Flag`, `#Wrapped` and `#Pair`'s i32 fill the word `#Word` holds at 8, so
+    // a word load forwards from their stores. `#Two` has two fields in the word
+    // of `@Split`, which keeps them apart. Each writes over stale bytes, which
+    // the rest of the piece must not keep, and fields next to it must survive.
+    let source = r#"
+type @Wrap = { i1 };
+type @Value = enum { #Flag(i1), #Wrapped(@Wrap), #Word(i64), #Pair(i32, i64) };
+type @Split = enum { #Two(i8, i8), #Word(i64) };
+type @Large = enum { #Flag(i1), #Words([i64; 32]) };
+func private %pass(v0.@Value) -> @Value {
+block0:
+    return v0;
+}
+func public %write_flag(v0.*i8, v1.i1) {
+block0:
+    v2.*@Value = bitcast v0 *@Value;
+    v3.objref<@Value> = obj.from_ptr v2;
+    enum.write_variant v3 #Flag (v1);
+    return;
+}
+func public %write_wrapped(v0.*i8, v1.i1) {
+block0:
+    v2.*@Value = bitcast v0 *@Value;
+    v3.objref<@Value> = obj.from_ptr v2;
+    v4.@Wrap = insert_value undef.@Wrap 0.i256 v1;
+    enum.write_variant v3 #Wrapped (v4);
+    return;
+}
+func public %write_pair(v0.*i8, v1.i32, v2.i64) {
+block0:
+    v3.*@Value = bitcast v0 *@Value;
+    v4.objref<@Value> = obj.from_ptr v3;
+    enum.write_variant v4 #Pair (v1, v2);
+    return;
+}
+func public %write_two(v0.*i8, v1.i8, v2.i8) {
+block0:
+    v3.*@Split = bitcast v0 *@Split;
+    v4.objref<@Split> = obj.from_ptr v3;
+    enum.write_variant v4 #Two (v1, v2);
+    return;
+}
+func public %write_large(v0.*i8, v1.i1) {
+block0:
+    v2.*@Large = bitcast v0 *@Large;
+    v3.objref<@Large> = obj.from_ptr v2;
+    enum.write_variant v3 #Flag (v1);
+    return;
+}
+func public %copy_flag(v0.*i8, v1.i1) -> i1 {
+block0:
+    v2.*@Value = bitcast v0 *@Value;
+    v3.@Value = enum.make @Value #Flag v1;
+    v4.@Value = call %pass v3;
+    mstore v2 v4 @Value;
+    enum.assert_variant v4 #Flag;
+    v5.i1 = enum.extract v4 #Flag 0.i256;
+    return v5;
+}
+func public %read_word(v0.*i8) -> i64 {
+block0:
+    v1.*@Value = bitcast v0 *@Value;
+    v2.@Value = mload v1 @Value;
+    v3.@Value = call %pass v2;
+    enum.assert_variant v3 #Word;
+    v4.i64 = enum.extract v3 #Word 0.i256;
+    return v4;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let address = |name| artifact.function_address(name).unwrap();
+        let write_flag: unsafe extern "C" fn(*mut u8, bool) =
+            unsafe { std::mem::transmute(address("write_flag")) };
+        let write_wrapped: unsafe extern "C" fn(*mut u8, bool) =
+            unsafe { std::mem::transmute(address("write_wrapped")) };
+        let write_pair: unsafe extern "C" fn(*mut u8, i32, i64) =
+            unsafe { std::mem::transmute(address("write_pair")) };
+        let write_two: unsafe extern "C" fn(*mut u8, i8, i8) =
+            unsafe { std::mem::transmute(address("write_two")) };
+        let write_large: unsafe extern "C" fn(*mut u8, bool) =
+            unsafe { std::mem::transmute(address("write_large")) };
+        let copy_flag: unsafe extern "C" fn(*mut u8, bool) -> bool =
+            unsafe { std::mem::transmute(address("copy_flag")) };
+        let read_word: unsafe extern "C" fn(*const u8) -> i64 =
+            unsafe { std::mem::transmute(address("read_word")) };
+
+        // An i8 tag at 0, then payloads from 8. A write leaves the padding,
+        // and every piece no field of its variant lies in.
+        let stale = [0xa5u8; 24];
+        let word =
+            |bytes: &[u8; 24], at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+        let mut value = stale;
+        unsafe { write_flag(value.as_mut_ptr(), true) };
+        assert_eq!(value[0], 0, "{level:?}");
+        assert_eq!(value[1..8], stale[1..8], "{level:?}");
+        assert_eq!(word(&value, 8), 1, "{level:?}");
+        assert_eq!(value[16..], stale[16..], "{level:?}");
+
+        let mut value = stale;
+        unsafe { write_wrapped(value.as_mut_ptr(), true) };
+        assert_eq!(value[0], 1, "{level:?}");
+        assert_eq!(word(&value, 8), 1, "{level:?}");
+        assert_eq!(value[16..], stale[16..], "{level:?}");
+
+        let mut value = stale;
+        unsafe { write_pair(value.as_mut_ptr(), -2, 0x1122_3344_5566_7788) };
+        assert_eq!(value[0], 3, "{level:?}");
+        assert_eq!(word(&value, 8), 0xffff_fffe, "{level:?}");
+        assert_eq!(word(&value, 16), 0x1122_3344_5566_7788, "{level:?}");
+
+        let mut split = [0xa5u8; 16];
+        unsafe { write_two(split.as_mut_ptr(), 7, 9) };
+        assert_eq!(split[8..10], [7, 9], "{level:?}");
+        assert_eq!(split[10..], [0xa5; 6], "{level:?}");
+
+        // A copy of `@Large` calls `memcpy`, so its field stays narrow.
+        let mut large = [0xa5u8; 264];
+        unsafe { write_large(large.as_mut_ptr(), true) };
+        assert_eq!(large[8..10], [1, 0xa5], "{level:?}");
+
+        // Copies keep both widths: the narrow field and the word it fills.
+        for flag in [false, true] {
+            let mut value = stale;
+            assert_eq!(
+                unsafe { copy_flag(value.as_mut_ptr(), flag) },
+                flag,
+                "{level:?}"
+            );
+            assert_eq!(value[0], 0, "{level:?}");
+            assert_eq!(value[1..8], [0; 7], "{level:?}");
+            assert_eq!(word(&value, 8), u64::from(flag), "{level:?}");
+        }
+        let mut wide = [0u8; 24];
+        wide[0] = 2;
+        wide[8..16].copy_from_slice(&0x0102_0304_0506_0708u64.to_le_bytes());
+        assert_eq!(
+            unsafe { read_word(wide.as_ptr()) },
+            0x0102_0304_0506_0708,
+            "{level:?}"
+        );
+    }
+}
