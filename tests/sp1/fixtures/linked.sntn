@@ -25,14 +25,12 @@ block0:
     return v2;
 }
 
-func inline(never) private %choose(v0.i1, v1.objref<i64>) -> objref<i64> {
+func inline(never) private %choose(v0.i1, v1.objref<i64>, v2.objref<i64>) -> objref<i64> {
 block0:
     br v0 block1 block2;
 block1:
     return v1;
 block2:
-    v2.objref<i64> = obj.alloc i64;
-    obj.store v2 77.i64;
     return v2;
 }
 
@@ -64,8 +62,10 @@ block1:
     call %sys_sp1_commit_u64 v12;
     v13.objref<i64> = obj.alloc i64;
     obj.store v13 10.i64;
-    v14.objref<i64> = call %choose 1.i1 v13;
-    v15.objref<i64> = call %choose 0.i1 v13;
+    v19.objref<i64> = obj.alloc i64;
+    obj.store v19 77.i64;
+    v14.objref<i64> = call %choose 1.i1 v13 v19;
+    v15.objref<i64> = call %choose 0.i1 v13 v19;
     obj.store v14 42.i64;
     v16.i64 = obj.load v13;
     v17.i64 = obj.load v15;
