@@ -1,6 +1,8 @@
 //! Differential tests of native i256 operations against `U256`/`U512`
 //! reference arithmetic.
 
+use std::collections::BTreeSet;
+
 use sonatina_codegen::{Compile, compile::OptLevel};
 use sonatina_cranelift::CraneliftJitBackend;
 use sonatina_ir::U256;
@@ -761,6 +763,95 @@ fn i256_modular_arithmetic_matches_reference() {
             |[a, b, m]| (modular(a, b, m, multiply), false),
         );
     }
+}
+
+/// The rare corrections of the four quotient digits that give the remainder
+/// of `a * b` by `m`, as `(digit, largest)`: the largest digit, or else the
+/// divisor added back. `None` unless `m` has four limbs above the product's
+/// top half, as for reduced operands.
+fn remainder_corrections(a: U256, b: U256, m: U256) -> Option<Vec<(usize, bool)>> {
+    let wide = |value: U256| value.full_mul(U256::one());
+    let product = a.full_mul(b);
+    if m.0[3] == 0 || product >> 256 >= wide(m) {
+        return None;
+    }
+    // Knuth's algorithm D on the normalized operands, each digit estimated
+    // from the window's top three limbs and the divisor's top two.
+    let shift = m.leading_zeros() as usize;
+    let divisor = wide(m) << shift;
+    let numerator = product << shift;
+    let limb_mask = wide(U256::from(u64::MAX));
+    let mut remainder = numerator >> 256;
+    let mut corrections = Vec::new();
+    for digit in (0..4).rev() {
+        let window = (remainder << 64) | ((numerator >> (64 * digit)) & limb_mask);
+        let estimate = if window >> 192 == divisor >> 128 {
+            corrections.push((digit, true));
+            limb_mask
+        } else {
+            let estimate = (window >> 128) / (divisor >> 128);
+            if estimate * divisor > window {
+                corrections.push((digit, false));
+                estimate - wide(U256::one())
+            } else {
+                estimate
+            }
+        };
+        remainder = window - estimate * divisor;
+    }
+    Some(corrections)
+}
+
+#[test]
+fn i256_modular_products_reach_every_remainder_correction() {
+    // A reduced product's remainder by a four-limb modulus takes four
+    // quotient digits in registers. Their rare corrections need limbs equal
+    // or close to the modulus's: products of boundary limbs, half of them by
+    // the modulus less a little, reach both at every digit.
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let boundaries = [0, u64::MAX, 1 << 63, (1 << 63) - 1, 1];
+    let mut reached = BTreeSet::new();
+    let mut cases = Vec::new();
+    for _ in 0..100_000 {
+        let mut limb = || {
+            let choice = next();
+            if choice % 5 < 3 {
+                boundaries[(choice >> 3) as usize % boundaries.len()]
+            } else {
+                next()
+            }
+        };
+        let [a, b, m] = [(); 3].map(|()| word([limb(), limb(), limb(), limb()]));
+        let below = next();
+        let b = if below % 2 == 0 {
+            b
+        } else {
+            m.overflowing_sub(U256::from(1 + (below >> 1) % 3)).0
+        };
+        let Some(corrections) = remainder_corrections(a, b, m) else {
+            continue;
+        };
+        let known = reached.len();
+        reached.extend(corrections);
+        if reached.len() > known {
+            cases.push([a, b, m]);
+        }
+        if reached.len() == 8 {
+            break;
+        }
+    }
+    assert_eq!(reached.len(), 8, "{reached:?}");
+    check(
+        "    v7.i256 = evm_mul_mod v4 v5 v6;\n    mstore v3 v7 i256;\n    return 0.i8;",
+        &cases,
+        |[a, b, m]| (modular(a, b, m, true), false),
+    );
 }
 
 #[test]
