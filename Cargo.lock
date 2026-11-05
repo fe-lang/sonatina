@@ -812,7 +812,7 @@ dependencies = [
  "libm",
  "log",
  "pulley-interpreter",
- "regalloc2",
+ "regalloc2 0.15.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-hash",
  "serde",
  "smallvec",
@@ -838,7 +838,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "libm",
  "log",
- "regalloc2",
+ "regalloc2 0.15.2 (git+https://github.com/fe-lang/regalloc2?rev=47832decc6422facec6ac52a387c733ba3f4f9c9)",
  "rustc-hash",
  "serde",
  "smallvec",
@@ -2239,6 +2239,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "928fca9cf2aa042393a8325b9ead81d2f0df4cb12e1e24cef072922ccd99c5af"
 dependencies = [
  "bitflags 2.10.0",
+]
+
+[[package]]
+name = "regalloc2"
+version = "0.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "757712e8e61590d6d4f5d563483755538b5aa13467837a3b41cd9832509a7f85"
+dependencies = [
+ "allocator-api2",
+ "bumpalo",
+ "hashbrown 0.17.1",
+ "log",
+ "rustc-hash",
+ "smallvec",
 ]
 
 [[package]]
