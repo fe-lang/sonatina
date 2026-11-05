@@ -1,0 +1,7 @@
+---
+source: crates/codegen/tests/evm_switch/mod.rs
+expression: measurements
+---
+strategy bytes min_gas mean_gas max_gas unknown_gas
+Linear 1690 93 800.6 1519 1503
+Tree 1867 178 213.4 247 228

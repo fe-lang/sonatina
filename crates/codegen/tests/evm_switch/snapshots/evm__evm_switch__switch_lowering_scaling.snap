@@ -1,0 +1,25 @@
+---
+source: crates/codegen/tests/evm_switch/mod.rs
+expression: measurements
+---
+cases strategy bytes min_gas mean_gas max_gas max_default_gas
+  1 Linear 34 50 50.0 50 48
+  1 Tree 34 50 50.0 50 48
+  2 Linear 53 50 61.0 72 70
+  2 Tree 53 50 61.0 72 70
+  4 Linear 91 50 83.0 116 114
+  4 Tree 91 50 83.0 116 114
+  5 Linear 110 50 94.0 138 136
+  5 Tree 128 72 90.0 116 126
+  6 Linear 129 50 105.0 160 158
+  6 Tree 147 72 94.5 117 127
+  8 Linear 167 50 127.0 204 202
+  8 Tree 185 72 105.5 139 149
+ 16 Linear 326 50 215.0 380 378
+ 16 Tree 377 94 128.0 162 172
+ 32 Linear 655 50 391.0 732 730
+ 32 Tree 762 116 150.5 185 195
+ 64 Linear 1295 50 743.0 1436 1434
+ 64 Tree 1530 138 173.0 208 218
+128 Linear 2575 50 1447.0 2844 2842
+128 Tree 3066 160 195.5 231 241

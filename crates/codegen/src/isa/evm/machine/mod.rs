@@ -9,6 +9,7 @@ pub(crate) mod module;
 pub(crate) mod pipeline;
 pub(crate) mod placement;
 pub(crate) mod prepare;
+mod switch;
 pub(crate) mod verify;
 
 #[cfg(test)]
