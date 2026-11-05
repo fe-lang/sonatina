@@ -10,7 +10,10 @@ use sonatina_ir::{Function, Type, ValueId, module::ModuleCtx, types::EnumVariant
 
 use super::{
     abi::{sonatina_scalar_type_to_clif_or_err, uses_indirect_value_representation},
-    memory::{store_indirect, store_value, value_storage_size},
+    field_part_values,
+    memory::{
+        INLINE_MEMORY_BYTES, Piece, store_indirect, store_value, value_pieces, value_storage_size,
+    },
     values::ValueMap,
 };
 
@@ -66,11 +69,34 @@ pub(super) fn store_variant(
     builder: &mut FunctionBuilder,
 ) -> Result<Vec<(u32, u32)>, String> {
     let ctx = function.ctx();
+    let enum_ty = Type::Compound(variant.enum_ty());
+    let enum_size = value_storage_size(enum_ty, ctx)?;
+    // A larger copy calls `memcpy`, which reads no pieces.
+    let pieces = if enum_size <= INLINE_MEMORY_BYTES {
+        value_pieces(enum_ty, enum_size, ctx)?
+    } else {
+        Vec::new()
+    };
     let mut written = vec![(0, tag_clif_type(ctx, variant)?.bytes())];
     for (field, &value) in values.iter().enumerate() {
         let (offset, ty) = variant_field_offset(ctx, variant, field)?;
-        let size = value_storage_size(ty, ctx)?;
-        if uses_indirect_value_representation(ctx, ty) {
+        let indirect = uses_indirect_value_representation(ctx, ty);
+        let mut size = value_storage_size(ty, ctx)?;
+        // A copy reads a wider variant's piece here whole. This field is all
+        // the variant has in it, and a store covering both widths forwards to
+        // either load, so it fills the piece. Native targets are little-endian.
+        let piece = pieces.iter().find_map(|piece| match *piece {
+            Piece::Field(at, piece_ty) if at == offset && piece_ty.bytes() > size => Some(piece_ty),
+            _ => None,
+        });
+        if let Some(piece_ty) = piece
+            && !indirect
+            && let [scalar] = field_part_values(function, value, value_map, builder)?[..]
+        {
+            let wide = builder.ins().uextend(piece_ty, scalar);
+            builder.ins().store(MemFlagsData::new(), wide, dst, offset);
+            size = piece_ty.bytes();
+        } else if indirect {
             let field_dst = builder.ins().iadd_imm_s(dst, i64::from(offset));
             store_indirect(function, value, field_dst, ty, value_map, config, builder)?;
         } else {

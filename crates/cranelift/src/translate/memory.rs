@@ -157,7 +157,10 @@ pub(super) fn value_pieces(ty: Type, size: u32, ctx: &ModuleCtx) -> Result<Vec<P
 /// Pushes the byte ranges, from `base`, of the scalar fields of a `ty` value.
 /// An array of scalars narrower than a word counts as one field: such arrays
 /// are mostly written whole, and splitting them would multiply the pieces.
-/// Enum variants share payload bytes, so every variant's fields count.
+/// Enum variants share payload bytes. Fields of different variants that overlap
+/// count as one, so a narrow field does not split a wider one, whose reads
+/// would span several stores; `store_variant` stores the narrow field whole.
+/// They stay apart where a variant has several fields, each with its own store.
 fn field_ranges(
     ty: Type,
     base: u32,
@@ -181,12 +184,35 @@ fn field_ranges(
         }
         Some(CompoundType::Enum(data)) => {
             fields.push((base, base + value_storage_size(data.tag_ty(), ctx)?));
+            let mut variants = Vec::new();
             for (variant, variant_data) in data.variants.iter().enumerate() {
+                let mut leaves = Vec::new();
                 for field in 0..variant_data.fields.len() {
                     let (offset, field_ty) = ctx
                         .enum_variant_field_offset(ty, variant, field)
                         .ok_or_else(|| format!("cannot lay out field {field} of {ty:?}"))?;
-                    field_ranges(field_ty, base + offset as u32, ctx, fields)?;
+                    field_ranges(field_ty, base + offset as u32, ctx, &mut leaves)?;
+                }
+                variants.push(leaves);
+            }
+            let mut leaves: Vec<_> = variants.iter().flatten().copied().collect();
+            leaves.sort_unstable();
+            let mut overlaps: Vec<(u32, u32)> = Vec::new();
+            for (start, end) in leaves {
+                match overlaps.last_mut() {
+                    Some(last) if start < last.1 => last.1 = last.1.max(end),
+                    _ => overlaps.push((start, end)),
+                }
+            }
+            for (start, end) in overlaps {
+                let within = |&&(first, last): &&(u32, u32)| start <= first && last <= end;
+                if variants
+                    .iter()
+                    .all(|leaves| leaves.iter().filter(within).count() <= 1)
+                {
+                    fields.push((start, end));
+                } else {
+                    fields.extend(variants.iter().flatten().filter(within));
                 }
             }
         }
@@ -622,20 +648,6 @@ mod tests {
                 Field(8, I64)
             ]
         );
-        // Payloads overlap, so `#Byte`'s field splits `#Word`'s.
-        assert_eq!(
-            pieces("type @T = enum { #Byte(i8), #Word(i64) };"),
-            [
-                Field(0, I8),
-                Padding(1, I8),
-                Padding(2, I16),
-                Padding(4, I32),
-                Field(8, I8),
-                Field(9, I8),
-                Field(10, I16),
-                Field(12, I32)
-            ]
-        );
         assert_eq!(
             pieces("type @T = { i1, i32, i16 };"),
             [
@@ -645,6 +657,58 @@ mod tests {
                 Field(4, I32),
                 Field(8, I16),
                 Padding(10, I16)
+            ]
+        );
+    }
+
+    #[test]
+    fn narrow_variant_fields_do_not_split_wider_ones() {
+        let tag = [
+            Field(0, I8),
+            Padding(1, I8),
+            Padding(2, I16),
+            Padding(4, I32),
+        ];
+        assert_eq!(
+            pieces("type @T = enum { #Byte(i8), #Word(i64) };"),
+            [&tag[..], &[Field(8, I64)]].concat()
+        );
+        // Each word holds one field per variant.
+        assert_eq!(
+            pieces("type @T = enum { #A(i8, i64), #B(i64, i16), #C(i32) };"),
+            [&tag[..], &[Field(8, I64), Field(16, I64)]].concat()
+        );
+        // An i256 spans several pieces, from its own alignment.
+        assert_eq!(
+            pieces("type @T = enum { #Byte(i8), #Big(i256) };"),
+            [
+                &tag[..],
+                &[
+                    Padding(8, I64),
+                    Field(16, I64),
+                    Field(24, I64),
+                    Field(32, I64),
+                    Field(40, I64)
+                ]
+            ]
+            .concat()
+        );
+    }
+
+    #[test]
+    fn variants_with_several_fields_in_a_range_split_it() {
+        // A word load would span the stores of `#Two`'s fields.
+        assert_eq!(
+            pieces("type @T = enum { #Two(i8, i8), #Word(i64) };"),
+            [
+                Field(0, I8),
+                Padding(1, I8),
+                Padding(2, I16),
+                Padding(4, I32),
+                Field(8, I8),
+                Field(9, I8),
+                Field(10, I16),
+                Field(12, I32)
             ]
         );
     }
