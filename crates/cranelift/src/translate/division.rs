@@ -627,10 +627,12 @@ fn reciprocal_3by2(
     builder.ins().isub(v, twice_wide)
 }
 
-/// The base-2^64 quotient digit and two-limb remainder `(r0, r1)` of
+/// The base-2^64 quotient digit and two-limb remainder, as an i128, of
 /// `[u0, u1, u2] / [d0, d1]` for a normalized divisor and `(u2, u1)` below
 /// it, given the divisor's 3-by-2 reciprocal (Möller and Granlund,
-/// algorithm 5).
+/// algorithm 5), up to its unlikely last step: the digit can be one too
+/// small, when the remainder reaches the divisor, as the returned flag
+/// tells.
 fn div3by2(
     [u0, u1, u2]: [clif::Value; 3],
     [d0, d1]: [clif::Value; 2],
@@ -666,16 +668,10 @@ fn div3by2(
     let q1 = builder.ins().select(over, decremented, q1);
     let restored = builder.ins().iadd(r, divisor);
     let r = builder.ins().select(over, restored, r);
-    // Rarely still at least the divisor: subtract it once more.
     let reaches = builder
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, r, divisor);
-    let incremented = builder.ins().iadd_imm_s(q1, 1);
-    let q1 = builder.ins().select(reaches, incremented, q1);
-    let reduced = builder.ins().isub(r, divisor);
-    let r = builder.ins().select(reaches, reduced, r);
-    let (r0, r1) = builder.ins().isplit(r);
-    (q1, r0, r1)
+    (q1, r, reaches)
 }
 
 /// Subtracts `digit` times `divisor` from `window`, limb by limb, and
@@ -1103,6 +1099,19 @@ fn divide_window(
     };
     let (u2, u1, u0) = (window[n], window[n - 1], window[n - 2]);
     let (divisor_top, divisor_next) = (divisor[n - 1], divisor[n - 2]);
+    // The window less `digit` times the divisor, given the two-limb
+    // remainder `top` of the digit's 3-by-2 division, which takes the
+    // borrow of subtracting the digit times the lower limbs; and whether
+    // that is negative.
+    let subtract = |digit, top, builder: &mut FunctionBuilder| {
+        let (mut difference, overflow) =
+            submul(&window[..n - 2], &divisor[..n - 2], digit, builder);
+        let overflow = builder.ins().uextend(I128, overflow);
+        let (top, negative) = builder.ins().usub_overflow(top, overflow);
+        let (r0, r1) = builder.ins().isplit(top);
+        difference.extend([r0, r1]);
+        (difference, negative)
+    };
     // The window's top two limbs never exceed the divisor's; when they are
     // equal the digit is the largest.
     let top_equal = builder.ins().icmp(IntCC::Equal, u2, divisor_top);
@@ -1110,35 +1119,44 @@ fn divide_window(
     let equal = builder.ins().band(top_equal, next_equal);
 
     // Otherwise the digit of the top three limbs by the top two is at most
-    // one too large for the whole divisor; its two-limb remainder takes the
-    // borrow of subtracting the digit times the lower limbs. Estimating
-    // before the rare cases branch off, which only multiplies, adds and
-    // selects, keeps this block dominating the next digit's, so the values
-    // every digit uses are computed once.
-    let (digit, r0, r1) = div3by2(
+    // one too large for the whole divisor. Estimating before the rare cases
+    // branch off, which only multiplies, adds and selects, keeps this block
+    // dominating the next digit's, so the values every digit uses are
+    // computed once.
+    let (estimate, top, reaches) = div3by2(
         [u0, u1, u2],
         [divisor_next, divisor_top],
         reciprocal,
         builder,
     );
-    let (mut difference, overflow) = submul(&window[..n - 2], &divisor[..n - 2], digit, builder);
-    let top = builder.ins().iconcat(r0, r1);
-    let overflow = builder.ins().uextend(I128, overflow);
-    let (top, negative) = builder.ins().usub_overflow(top, overflow);
-    let (r0, r1) = builder.ins().isplit(top);
-    difference.extend([r0, r1]);
+    let (difference, negative) = subtract(estimate, top, builder);
     let rare = builder.ins().bor(equal, negative);
+    let rare = builder.ins().bor(rare, reaches);
     let correct = builder.create_block();
     let largest = builder.create_block();
+    let exact = builder.create_block();
     let add_back = builder.create_block();
-    for block in [correct, largest, add_back] {
+    for block in [correct, largest, exact, add_back] {
         builder.set_cold_block(block);
     }
     builder
         .ins()
-        .brif(rare, correct, &[], join, &args(digit, &difference));
+        .brif(rare, correct, &[], join, &args(estimate, &difference));
     builder.switch_to_block(correct);
-    builder.ins().brif(equal, largest, &[], add_back, &[]);
+    builder.ins().brif(equal, largest, &[], exact, &[]);
+
+    // The 3-by-2 division's last step takes one more divisor off its
+    // remainder.
+    builder.switch_to_block(exact);
+    let divisor_top_two = builder.ins().iconcat(divisor_next, divisor_top);
+    let incremented = builder.ins().iadd_imm_s(estimate, 1);
+    let digit = builder.ins().select(reaches, incremented, estimate);
+    let reduced = builder.ins().isub(top, divisor_top_two);
+    let top = builder.ins().select(reaches, reduced, top);
+    let (difference, negative) = subtract(digit, top, builder);
+    builder
+        .ins()
+        .brif(negative, add_back, &[], join, &args(digit, &difference));
 
     // The digit was one too large: add the divisor back. The carry out
     // wraps the top limb back above zero.

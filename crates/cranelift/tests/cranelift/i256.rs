@@ -765,11 +765,36 @@ fn i256_modular_arithmetic_matches_reference() {
     }
 }
 
+/// A rare correction of a quotient digit: the largest digit, the 3-by-2
+/// division's last step, or the divisor added back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Correction {
+    Largest,
+    LastStep,
+    AddBack,
+}
+
+/// Whether Möller and Granlund's division of `(u2, u1, u0)` by `(d1, d0)`
+/// with 3-by-2 reciprocal `v` takes its last step, the digit one too small.
+fn takes_last_step([u0, u1, u2]: [u64; 3], [d0, d1]: [u64; 2], v: u64) -> bool {
+    let wide = |high: u64, low: u64| (u128::from(high) << 64) | u128::from(low);
+    let q = (u128::from(v) * u128::from(u2)).wrapping_add(wide(u2, u1));
+    let (q1, q0) = ((q >> 64) as u64, q as u64);
+    let r1 = u1.wrapping_sub(q1.wrapping_mul(d1));
+    let divisor = wide(d1, d0);
+    let mut r = wide(r1, u0)
+        .wrapping_sub(u128::from(q1) * u128::from(d0))
+        .wrapping_sub(divisor);
+    if (r >> 64) as u64 >= q0 {
+        r = r.wrapping_add(divisor);
+    }
+    r >= divisor
+}
+
 /// The rare corrections of the four quotient digits that give the remainder
-/// of `a * b` by `m`, as `(digit, largest)`: the largest digit, or else the
-/// divisor added back. `None` unless `m` has four limbs above the product's
-/// top half, as for reduced operands.
-fn remainder_corrections(a: U256, b: U256, m: U256) -> Option<Vec<(usize, bool)>> {
+/// of `a * b` by `m`, with their digits. `None` unless `m` has four limbs
+/// above the product's top half, as for reduced operands.
+fn remainder_corrections(a: U256, b: U256, m: U256) -> Option<Vec<(usize, Correction)>> {
     let wide = |value: U256| value.full_mul(U256::one());
     let product = a.full_mul(b);
     if m.0[3] == 0 || product >> 256 >= wide(m) {
@@ -780,18 +805,25 @@ fn remainder_corrections(a: U256, b: U256, m: U256) -> Option<Vec<(usize, bool)>
     let shift = m.leading_zeros() as usize;
     let divisor = wide(m) << shift;
     let numerator = product << shift;
+    let top_two = (divisor >> 128).low_u128();
+    let reciprocal = (((U256::one() << 192) - 1) / U256::from(top_two)).low_u64();
     let limb_mask = wide(U256::from(u64::MAX));
     let mut remainder = numerator >> 256;
     let mut corrections = Vec::new();
     for digit in (0..4).rev() {
         let window = (remainder << 64) | ((numerator >> (64 * digit)) & limb_mask);
         let estimate = if window >> 192 == divisor >> 128 {
-            corrections.push((digit, true));
+            corrections.push((digit, Correction::Largest));
             limb_mask
         } else {
+            let [_, _, u0, u1, u2, ..] = window.0;
+            let [_, _, d0, d1, ..] = divisor.0;
+            if takes_last_step([u0, u1, u2], [d0, d1], reciprocal) {
+                corrections.push((digit, Correction::LastStep));
+            }
             let estimate = (window >> 128) / (divisor >> 128);
             if estimate * divisor > window {
-                corrections.push((digit, false));
+                corrections.push((digit, Correction::AddBack));
                 estimate - wide(U256::one())
             } else {
                 estimate
@@ -807,7 +839,7 @@ fn i256_modular_products_reach_every_remainder_correction() {
     // A reduced product's remainder by a four-limb modulus takes four
     // quotient digits in registers. Their rare corrections need limbs equal
     // or close to the modulus's: products of boundary limbs, half of them by
-    // the modulus less a little, reach both at every digit.
+    // the modulus less a little, reach each of them at every digit.
     let mut state = 0x9e37_79b9_7f4a_7c15u64;
     let mut next = || {
         state ^= state << 13;
@@ -842,11 +874,11 @@ fn i256_modular_products_reach_every_remainder_correction() {
         if reached.len() > known {
             cases.push([a, b, m]);
         }
-        if reached.len() == 8 {
+        if reached.len() == 12 {
             break;
         }
     }
-    assert_eq!(reached.len(), 8, "{reached:?}");
+    assert_eq!(reached.len(), 12, "{reached:?}");
     check(
         "    v7.i256 = evm_mul_mod v4 v5 v6;\n    mstore v3 v7 i256;\n    return 0.i8;",
         &cases,
