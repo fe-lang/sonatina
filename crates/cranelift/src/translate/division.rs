@@ -684,25 +684,25 @@ fn submul(
     digit: clif::Value,
     builder: &mut FunctionBuilder,
 ) -> (Vec<clif::Value>, clif::Value) {
-    let zero = builder.ins().iconst(I64, 0);
     let digit_wide = builder.ins().uextend(I128, digit);
-    let mut carry = zero;
-    let mut borrow = zero;
+    let mut carry = None;
     let mut difference = Vec::with_capacity(window.len());
     for (&limb, &divisor_limb) in window.iter().zip(divisor) {
+        // The carry, the product's high limb plus the borrow, is below
+        // 2^64, so `digit * divisor_limb + carry` fits in 128 bits.
         let divisor_limb = builder.ins().uextend(I128, divisor_limb);
-        let product = builder.ins().imul(digit_wide, divisor_limb);
-        let carry_wide = builder.ins().uextend(I128, carry);
-        let product = builder.ins().iadd(product, carry_wide);
-        let (product_low, product_high) = builder.ins().isplit(product);
-        let (limb, borrow_low) = builder.ins().usub_overflow(limb, product_low);
-        let (limb, borrow_in) = builder.ins().usub_overflow(limb, borrow);
+        let mut product = builder.ins().imul(digit_wide, divisor_limb);
+        if let Some(carry) = carry {
+            let carry = builder.ins().uextend(I128, carry);
+            product = builder.ins().iadd(product, carry);
+        }
+        let (low, high) = builder.ins().isplit(product);
+        let (limb, borrow) = builder.ins().usub_overflow(limb, low);
         difference.push(limb);
-        let borrow_out = builder.ins().bor(borrow_low, borrow_in);
-        borrow = builder.ins().uextend(I64, borrow_out);
-        carry = product_high;
+        let borrow = builder.ins().uextend(I64, borrow);
+        carry = Some(builder.ins().iadd(high, borrow));
     }
-    let overflow = builder.ins().iadd(carry, borrow);
+    let overflow = carry.unwrap_or_else(|| builder.ins().iconst(I64, 0));
     (difference, overflow)
 }
 
