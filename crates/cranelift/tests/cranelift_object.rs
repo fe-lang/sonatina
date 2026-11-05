@@ -582,7 +582,7 @@ fn wide_division_release_profile() {
     }
 }
 
-#[cfg(feature = "cranelift-jit")]
+#[cfg(feature = "jit")]
 #[test]
 #[ignore = "manual release-profile runtime measurement; run with --release --ignored --nocapture"]
 fn mulmod_release_profile() {
