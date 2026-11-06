@@ -610,8 +610,7 @@ impl GvnSolver {
 
             // We need to recompute value phi for the class to reflect reachability changes and
             // leader changes.
-            value_phi_changed |=
-                self.recompute_value_phi(func, known_bits, &gvn_insn, inst_result, class);
+            value_phi_changed |= self.recompute_value_phi(func, known_bits, inst_result, class);
             class
         } else if let Some(value_phi) =
             ValuePhiFinder::new(self, known_bits, inst_result).compute_value_phi(func, &gvn_insn)
@@ -670,12 +669,16 @@ impl GvnSolver {
         &mut self,
         func: &mut Function,
         known_bits: &KnownBitsQuery,
-        insn_data: &GvnInsn,
         inst_result: ValueId,
         class: Class,
     ) -> bool {
-        let value_phi =
-            ValuePhiFinder::new(self, known_bits, inst_result).compute_value_phi(func, insn_data);
+        // Merging classes can leave multiple expression keys pointing at this class.
+        // Its annotation belongs to the canonical expression, not the member being
+        // revisited. Recomputing from different members can alternate between a
+        // value phi and None forever, preventing the solver from reaching a fixpoint.
+        let canonical_insn = self.classes[class].gvn_insn.clone();
+        let value_phi = ValuePhiFinder::new(self, known_bits, inst_result)
+            .compute_value_phi(func, &canonical_insn);
         self.update_class_value_phi(class, value_phi)
     }
 
@@ -3105,6 +3108,87 @@ func private %entry(v0.i32, v1.i32) -> i32 {
             assert_eq!(solver.value_class(add_result), class);
             assert_eq!(solver.classes[class].value_phi, None);
             assert!(!solver.value_phi_table.contains_key(&stale_phi));
+        });
+    }
+
+    #[test]
+    fn merged_expressions_recompute_the_canonical_value_phi() {
+        let source = r#"
+target = "evm-ethereum-london"
+func private %entry(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+    block1:
+        jump block3;
+    block2:
+        jump block3;
+    block3:
+        v1.i32 = phi (1.i32 block1) (2.i32 block2);
+        v2.i32 = phi (4.i32 block1) (5.i32 block2);
+        v3.i32 = add v1 3.i32;
+        return v3;
+}
+"#;
+        let module = parse_module(source).unwrap().module;
+        module.func_store.modify(module.funcs()[0], |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            let mut solver = GvnSolver::new();
+            solver.classes.push(ClassData {
+                values: BTreeSet::new(),
+                gvn_insn: GvnInsn::Value(ValueId(u32::MAX)),
+                value_phi: None,
+            });
+            for &value in func.dfg.immediates.values() {
+                solver.assign_class_to_imm_value(value);
+            }
+            let phis: Vec<_> = func
+                .layout
+                .iter_all_insts()
+                .filter(|&inst| func.dfg.is_phi(inst))
+                .collect();
+            let phi_key = inst_to_gvn_key(func, phis[0]);
+            let join = func.layout.inst_block(phis[0]);
+            for &(_, pred) in phi_key.phi_args().unwrap() {
+                solver.add_edge_info(pred, join, None, None, None);
+            }
+            for edge in solver.blocks[join].in_edges.clone() {
+                solver.edges[edge].reachable = true;
+            }
+            let input = func.dfg.inst_result(phis[0]).unwrap();
+            let input_class = solver.make_class(GvnInsn::expr(phi_key, 0), None);
+            solver.assign_class(input, input_class);
+            let add = func
+                .layout
+                .iter_all_insts()
+                .find(|&inst| {
+                    matches!(
+                        inst_to_gvn_key(func, inst).kind(),
+                        InstClassKind::Binary(BinaryInstKind::Add)
+                    )
+                })
+                .unwrap();
+            let result = func.dfg.inst_result(add).unwrap();
+            let canonical = GvnInsn::expr(inst_to_gvn_key(func, add), 0);
+            let known_bits = KnownBitsQuery::new(func);
+            let value_phi = ValuePhiFinder::new(&mut solver, &known_bits, result)
+                .compute_value_phi(func, &canonical)
+                .unwrap();
+            let class = solver.make_class(canonical, Some(value_phi.clone()));
+            solver.assign_class(result, class);
+            // The phi and the add both produce 4 or 5. Model their merged class,
+            // whose canonical expression is the add, then revisit the phi member.
+            let alias = func.dfg.inst_result(phis[1]).unwrap();
+            solver.assign_class(alias, class);
+            solver
+                .insn_table
+                .insert(GvnInsn::expr(inst_to_gvn_key(func, phis[1]), 0), class);
+            let changed =
+                solver.reassign_congruence(func, &domtree, &known_bits, None, phis[1], alias);
+            assert!(!changed.changed());
+            assert_eq!(solver.classes[class].value_phi, Some(value_phi));
         });
     }
 
