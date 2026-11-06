@@ -233,7 +233,11 @@ pub(super) fn translate_module(
         clif_module
             .define_function_bytes(
                 func_id,
-                code.buffer.alignment.max(preferred_alignment).into(),
+                function_alignment(
+                    code.code_buffer().len(),
+                    code.buffer.alignment,
+                    preferred_alignment,
+                ),
                 code.code_buffer(),
                 &relocs,
             )
@@ -2427,6 +2431,21 @@ fn translate_function(
     Ok(ctx)
 }
 
+/// The bytes of a cache line on the native hosts' cores.
+const CACHE_LINE: usize = 64;
+
+/// The alignment of a function of `size` bytes: at least `minimum` and the
+/// ISA's `preferred` one, and for a function no longer than a cache line, the
+/// power of two at or above its size, so that it never straddles two lines.
+fn function_alignment(size: usize, minimum: u32, preferred: u32) -> u64 {
+    let line = if size <= CACHE_LINE {
+        size.next_power_of_two() as u64
+    } else {
+        1
+    };
+    u64::from(minimum.max(preferred)).max(line)
+}
+
 /// A switch with one destination, as a mask of its keys from `first` on.
 struct BitTest {
     first: u64,
@@ -2681,7 +2700,26 @@ fn translate_icmp(
 mod tests {
     use sonatina_ir::inst::{arith::Shl, downcast};
 
-    use super::shift_count_in_range;
+    use super::{function_alignment, shift_count_in_range};
+
+    #[test]
+    fn functions_within_a_cache_line_never_straddle_two() {
+        for size in 1..=64 {
+            let alignment = function_alignment(size, 1, 32);
+            assert!(alignment >= 32 && alignment.is_power_of_two(), "{size}");
+            // Any start at a multiple of the alignment keeps the function in
+            // one 64-byte line.
+            for start in (0..256).step_by(alignment as usize) {
+                assert_eq!(
+                    start / 64,
+                    (start + size as u64 - 1) / 64,
+                    "{size} at {start}"
+                );
+            }
+        }
+        assert_eq!(function_alignment(65, 1, 32), 32);
+        assert_eq!(function_alignment(300, 16, 32), 32);
+    }
 
     #[test]
     fn masked_and_scaled_counts_stay_below_the_width() {
