@@ -2,7 +2,7 @@ use cranelift_codegen::ir::{self as clif, InstBuilder, InstructionData, Opcode, 
 use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Immediate, Type, U256};
 
-use super::{ShiftKind, mul_limbs, shift_by_constant};
+use super::{ShiftKind, mul_limbs, resize_int_value, shift_by_constant};
 
 /// Sonatina's one-bit values use an I8 register, but only bit zero is data.
 pub(super) fn normalize_scalar(
@@ -49,6 +49,27 @@ pub(super) fn compare_disjunction(
     };
     let [lhs, rhs] = binary(unmasked(value), Opcode::Bor)?;
     Some([compare(lhs)?, compare(rhs)?])
+}
+
+/// The low `to_ty` bits of an i128 value, from its low word: the `iconcat`
+/// operand that built it, if one did. An `ireduce` would let Cranelift narrow
+/// an i128 product or sum to a separate 64-bit one, duplicating the
+/// arithmetic whose high word is usually needed too.
+pub(super) fn truncate_i128(
+    value: clif::Value,
+    to_ty: clif::Type,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    let dfg = &builder.func.dfg;
+    let concat_low = match dfg.value_def(value).inst().map(|inst| dfg.insts[inst]) {
+        Some(InstructionData::Binary {
+            opcode: Opcode::Iconcat,
+            args: [low, _],
+        }) => Some(low),
+        _ => None,
+    };
+    let low = concat_low.unwrap_or_else(|| builder.ins().isplit(value).0);
+    resize_int_value(low, to_ty, false, builder)
 }
 
 pub(super) fn signed_scalar(
