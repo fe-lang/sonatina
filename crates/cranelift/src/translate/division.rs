@@ -1,12 +1,12 @@
 //! Wide unsigned division. Division sites handle a zero divisor, a smaller
 //! numerator, single-limb operands, power-of-two divisors and one-limb
-//! divisors inline, and modular sites a zero modulus; everything else calls
-//! the module's divider: Knuth's algorithm D on 64-bit limbs. Quotient
-//! digits come from a 128/64-bit division by reciprocal (Möller and
-//! Granlund, "Improved division by invariant integers"), and reciprocals
-//! from the module's table of 9-bit estimates and three Newton steps. The
-//! remainder of a reduced product by a four-limb modulus, the usual modular
-//! case, is computed in registers.
+//! divisors inline, and modular sites a zero modulus and power-of-two moduli
+//! below 2^192; everything else calls the module's divider: Knuth's
+//! algorithm D on 64-bit limbs. Quotient digits come from a 128/64-bit
+//! division by reciprocal (Möller and Granlund, "Improved division by
+//! invariant integers"), and reciprocals from the module's table of 9-bit
+//! estimates and three Newton steps. The remainder of a reduced product by a
+//! four-limb modulus, the usual modular case, is computed in registers.
 
 use cranelift_codegen::{
     Context,
@@ -245,10 +245,7 @@ fn udivrem(
     // zeros, as many as the ones of `divisor - 1`, which masks the
     // remainder.
     builder.switch_to_block(wide);
-    let one = builder.ins().iconst(I64, 1);
-    let mask = sub(divisor, [one, zero, zero, zero], builder);
-    let overlap = std::array::from_fn(|limb| builder.ins().band(divisor[limb], mask[limb]));
-    let power = is_zero(overlap, builder);
+    let (power, mask) = power_of_two(divisor, builder);
     let shifted = builder.create_block();
     let not_power = builder.create_block();
     builder.ins().brif(power, shifted, &[], not_power, &[]);
@@ -287,6 +284,16 @@ fn udivrem(
     builder.switch_to_block(exit);
     let [q0, q1, q2, q3, r0, r1, r2, r3] = results;
     ([q0, q1, q2, q3], [r0, r1, r2, r3])
+}
+
+/// Whether a nonzero `divisor` is a power of two, and `divisor - 1`, which
+/// masks the remainder by it.
+fn power_of_two(divisor: Limbs, builder: &mut FunctionBuilder) -> (clif::Value, Limbs) {
+    let zero = builder.ins().iconst(I64, 0);
+    let one = builder.ins().iconst(I64, 1);
+    let mask = sub(divisor, [one, zero, zero, zero], builder);
+    let overlap = std::array::from_fn(|limb| builder.ins().band(divisor[limb], mask[limb]));
+    (is_zero(overlap, builder), mask)
 }
 
 /// The quotient and remainder of `numerator` by a nonzero one-limb
@@ -404,14 +411,37 @@ fn remainder(
     load_limbs(buffer, DIVISOR_OFFSET, MemFlagsData::trusted(), builder)
 }
 
-/// Branches to a block that returns zero for a zero modulus and switches
-/// to one for a nonzero modulus. Returns the exit block's limbs.
-fn zero_modulus_exit(modulus: Limbs, builder: &mut FunctionBuilder) -> (clif::Block, Limbs) {
+/// Starts a modular operation: returns its exit block and the block's
+/// limbs, jumps there with zero for a zero modulus and with the result
+/// modulo 2^256, which `wrapped` computes, masked for a power of two below
+/// 2^192, and switches to a block for every other modulus. Only a modulus
+/// without a top limb can be either, so a four-limb modulus gets through
+/// with one test.
+fn modular_entry(
+    modulus: Limbs,
+    wrapped: impl FnOnce(&mut FunctionBuilder) -> Limbs,
+    builder: &mut FunctionBuilder,
+) -> (clif::Block, Limbs) {
     let exit = builder.create_block();
     let results = std::array::from_fn(|_| builder.append_block_param(exit, I64));
+    let short = builder.create_block();
     let nonzero = builder.create_block();
-    let modulus_zero = is_zero(modulus, builder);
+    let masked = builder.create_block();
+    let other = builder.create_block();
+    // Out of line, so allocation favours the four-limb moduli of field
+    // arithmetic.
+    for block in [short, nonzero, masked] {
+        builder.set_cold_block(block);
+    }
+    builder
+        .ins()
+        .brif(modulus[LIMBS - 1], other, &[], short, &[]);
+
+    builder.switch_to_block(short);
     let zero = builder.ins().iconst(I64, 0);
+    let [m0, m1, m2, _] = modulus;
+    let low = [m0, m1, m2, zero];
+    let modulus_zero = is_zero(low, builder);
     builder.ins().brif(
         modulus_zero,
         exit,
@@ -419,7 +449,19 @@ fn zero_modulus_exit(modulus: Limbs, builder: &mut FunctionBuilder) -> (clif::Bl
         nonzero,
         &[],
     );
+
     builder.switch_to_block(nonzero);
+    let (power, mask) = power_of_two(low, builder);
+    builder.ins().brif(power, masked, &[], other, &[]);
+
+    builder.switch_to_block(masked);
+    let value = wrapped(builder);
+    let result = std::array::from_fn::<_, LIMBS, _>(|limb| {
+        BlockArg::Value(builder.ins().band(value[limb], mask[limb]))
+    });
+    builder.ins().jump(exit, &result);
+
+    builder.switch_to_block(other);
     (exit, results)
 }
 
@@ -431,7 +473,7 @@ pub(super) fn addmod(
     call: DividerCall,
     builder: &mut FunctionBuilder,
 ) -> Limbs {
-    let (exit, results) = zero_modulus_exit(modulus, builder);
+    let (exit, results) = modular_entry(modulus, |builder| add_carry(lhs, rhs, builder).0, builder);
     let (sum, carry) = add_carry(lhs, rhs, builder);
     // With both operands reduced, the sum is below twice the modulus.
     let lhs_reduced = ult(lhs, modulus, builder);
@@ -466,7 +508,11 @@ pub(super) fn mulmod(
     call: DividerCall,
     builder: &mut FunctionBuilder,
 ) -> Limbs {
-    let (exit, results) = zero_modulus_exit(modulus, builder);
+    let (exit, results) = modular_entry(
+        modulus,
+        |builder| mul_limbs::<LIMBS>(&lhs, &rhs, builder),
+        builder,
+    );
     let product = mul_limbs::<NUMERATOR_LIMBS>(&lhs, &rhs, builder);
     // A product below the modulus, as when an operand is zero, is its own
     // remainder.
