@@ -1575,35 +1575,15 @@ impl GvnSolver {
         }
 
         if let Some(new_value_phi) = &value_phi {
-            if let Some(owner_class) = self.value_phi_table.get(new_value_phi).copied()
-                && owner_class != class
-            {
-                let owner_gvn_insn = self.classes[owner_class].gvn_insn.clone();
-                self.insn_table.insert(owner_gvn_insn, class);
-                self.merge_class_into(class, owner_class);
-            }
-
+            // Value phis describe the current reachable edges and operand classes.
+            // Equal annotations can diverge as those facts change. Keep expression
+            // keys attached to their own classes so later visits can reconsider
+            // equivalence, rather than permanently aliasing their insn_table entries.
             self.value_phi_table.insert(new_value_phi.clone(), class);
         }
 
         self.classes[class].value_phi = value_phi;
         true
-    }
-
-    fn merge_class_into(&mut self, dst: Class, src: Class) {
-        if dst == src {
-            return;
-        }
-
-        let src_values: Vec<_> = self.classes[src]
-            .values
-            .iter()
-            .map(|(_, value)| *value)
-            .collect();
-
-        for value in src_values {
-            self.assign_class(value, dst);
-        }
     }
 
     fn reachable_edge_state(
@@ -2949,40 +2929,41 @@ func private %promo_piece(v0.i1, v1.i256) -> i256 {
     }
 
     #[test]
-    fn update_class_value_phi_merges_existing_owner_class() {
+    fn equal_value_phis_do_not_permanently_alias_expression_classes() {
         let mut solver = GvnSolver::new();
+        solver.classes.push(ClassData {
+            values: BTreeSet::new(),
+            gvn_insn: GvnInsn::Value(ValueId(u32::MAX)),
+            value_phi: None,
+        });
         let value0 = ValueId::from_u32(10);
         let value1 = ValueId::from_u32(11);
-        let class0 = solver.make_class(GvnInsn::Value(value0), None);
-        let class1 = solver.make_class(GvnInsn::Value(value1), None);
+        let key0 = GvnInsn::Value(value0);
+        let key1 = GvnInsn::Value(value1);
+        let class0 = solver.make_class(key0.clone(), None);
+        let class1 = solver.make_class(key1.clone(), None);
         solver.assign_class(value0, class0);
         solver.assign_class(value1, class1);
 
+        // Equal annotations are provisional: newly reachable incoming edges
+        // or changed operand classes can make the expressions differ later.
         let phi = ValuePhi::Value(ValueId::from_u32(12));
         assert!(solver.update_class_value_phi(class1, Some(phi.clone())));
-        assert_eq!(solver.value_phi_table.get(&phi), Some(&class1));
-
         assert!(solver.update_class_value_phi(class0, Some(phi.clone())));
         assert_eq!(solver.value_phi_table.get(&phi), Some(&class0));
         assert_eq!(solver.value_class(value0), class0);
-        assert_eq!(solver.value_class(value1), class0);
-        assert!(solver.classes[class1].values.is_empty());
-        assert_eq!(
-            solver.insn_table.get(&GvnInsn::Value(value1)),
-            Some(&class0)
-        );
-        assert!(
-            solver
-                .insn_table
-                .values()
-                .all(|mapped_class| *mapped_class != class1)
-        );
-        assert!(
-            solver
-                .value_phi_table
-                .values()
-                .all(|mapped_class| *mapped_class != class1)
-        );
+        assert_eq!(solver.value_class(value1), class1);
+        assert_eq!(solver.insn_table.get(&key0), Some(&class0));
+        assert_eq!(solver.insn_table.get(&key1), Some(&class1));
+
+        // When the annotations diverge, each expression must still resolve to
+        // its own class, rather than inherit the other expression's facts.
+        let different_phi = ValuePhi::Value(ValueId::from_u32(13));
+        assert!(solver.update_class_value_phi(class0, Some(different_phi.clone())));
+        assert_eq!(solver.classes[class0].value_phi, Some(different_phi));
+        assert_eq!(solver.classes[class1].value_phi, Some(phi));
+        assert_eq!(solver.insn_table.get(&key1), Some(&class1));
+        assert_eq!(solver.value_class(value1), class1);
     }
 
     #[test]
