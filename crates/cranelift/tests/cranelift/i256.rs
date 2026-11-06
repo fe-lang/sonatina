@@ -715,10 +715,13 @@ fn modular(a: U256, b: U256, m: U256, multiply: bool) -> U256 {
 }
 
 fn moduli() -> Vec<U256> {
-    let mut moduli: Vec<U256> = [0u64, 1, 2, 3, 7, u64::MAX]
+    let mut moduli: Vec<U256> = [0u64, 1, 2, 3, 7, 1 << 63, u64::MAX]
         .into_iter()
         .map(U256::from)
         .collect();
+    // Powers of two below 2^192 mask the sum or product; from 2^192 up they
+    // divide.
+    moduli.extend([127, 128, 191, 192].map(|bits| U256::one() << bits));
     moduli.extend([
         U256::one() << 64,
         (U256::one() << 64) + 1,
