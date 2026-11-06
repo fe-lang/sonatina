@@ -586,6 +586,7 @@ fn translate_function(
                 )?,
                 NativeInstKind::EvmAddMod(op) => translate_modular(
                     addmod,
+                    Numerator::Sum,
                     [*op.lhs(), *op.rhs(), *op.modulus()],
                     inst_id,
                     function,
@@ -596,6 +597,7 @@ fn translate_function(
                 )?,
                 NativeInstKind::EvmMulMod(op) => translate_modular(
                     mulmod,
+                    Numerator::Double,
                     [*op.lhs(), *op.rhs(), *op.modulus()],
                     inst_id,
                     function,
@@ -2538,6 +2540,7 @@ type ModularOp = fn(Limbs, Limbs, Limbs, DividerCall, &mut FunctionBuilder) -> L
 #[allow(clippy::too_many_arguments)]
 fn translate_modular(
     op: ModularOp,
+    numerator: Numerator,
     operands: [ValueId; 3],
     inst_id: InstId,
     function: &Function,
@@ -2563,7 +2566,7 @@ fn translate_modular(
     let lhs = operand(lhs, builder)?;
     let rhs = operand(rhs, builder)?;
     let modulus = operand(modulus, builder)?;
-    let call = divider.call(clif_module, builder, Numerator::Double)?;
+    let call = divider.call(clif_module, builder, numerator)?;
     let limbs = op(lhs, rhs, modulus, call, builder);
     if ty == Type::I256 {
         value_map.insert_limbs(result, limbs);
