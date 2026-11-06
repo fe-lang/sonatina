@@ -1066,6 +1066,18 @@ fn translate_function(
                         builder
                             .ins()
                             .brif(inverted, z.block, &z.args, nz.block, &nz.args);
+                    } else if let Some([first, second]) =
+                        compare_disjunction(cond, &builder.func.dfg)
+                    {
+                        // A branch on each compare, which uses its flags,
+                        // instead of both compares set to registers and
+                        // combined.
+                        let next = builder.create_block();
+                        builder.ins().brif(first, nz.block, &nz.args, next, &[]);
+                        builder.switch_to_block(next);
+                        builder
+                            .ins()
+                            .brif(second, nz.block, &nz.args, z.block, &z.args);
                     } else {
                         builder
                             .ins()

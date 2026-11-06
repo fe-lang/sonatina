@@ -310,6 +310,34 @@ fn i256_comparisons_with_extended_words_match_reference() {
 }
 
 #[test]
+fn i256_branches_on_extended_word_comparisons_match_reference() {
+    let values = operands();
+    let cases = pairs(&values, &values);
+    let compares: [Compare; 4] = [
+        ("lt", |a, b| a < b),
+        ("gt", |a, b| a > b),
+        ("le", |a, b| a <= b),
+        ("ge", |a, b| a >= b),
+    ];
+    // A word that may be `u64::MAX` is below a wide value when a high limb
+    // is set or it is below the low limb: a branch on each.
+    let low_bits = |value: U256| value & U256::from(u64::MAX);
+    for (op, expected) in compares {
+        let body = |lhs: &str, rhs: &str| {
+            format!(
+                "    v8.i64 = trunc v5 i64;\n    v9.i256 = zext v8 i256;\n    v7.i1 = {op} {lhs} {rhs};\n    mstore v3 0.i256 i256;\n    br v7 block1 block2;\nblock1:\n    return 1.i8;\nblock2:\n    return 0.i8;"
+            )
+        };
+        check(&body("v4", "v9"), &cases, |[a, b, _]| {
+            (U256::zero(), expected(a, low_bits(b)))
+        });
+        check(&body("v9", "v4"), &cases, |[a, b, _]| {
+            (U256::zero(), expected(low_bits(b), a))
+        });
+    }
+}
+
+#[test]
 fn i256_comparisons_match_reference() {
     let values = operands();
     let cases = pairs(&values, &values);
