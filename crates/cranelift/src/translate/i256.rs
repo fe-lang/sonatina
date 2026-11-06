@@ -606,15 +606,15 @@ fn shift(
     }
 }
 
-/// Shifts by `amount < 256` known at translation time: limb moves and
-/// constant funnel shifts.
-fn shift_by_constant(
-    value: Limbs,
+/// Shifts `N` limbs by `amount < 64 * N` known at translation time: limb
+/// moves and constant funnel shifts.
+pub(super) fn shift_by_constant<const N: usize>(
+    value: [clif::Value; N],
     amount: u32,
     kind: ShiftKind,
     fill: clif::Value,
     builder: &mut FunctionBuilder,
-) -> Limbs {
+) -> [clif::Value; N] {
     let limb_shift = (amount / LIMB_BITS) as usize;
     let bits = i64::from(amount % LIMB_BITS);
     std::array::from_fn(|limb| match kind {
@@ -638,13 +638,13 @@ fn shift_by_constant(
         }
         ShiftKind::Shr | ShiftKind::Sar => {
             let source = limb + limb_shift;
-            if source >= LIMBS {
+            if source >= N {
                 return fill;
             }
             if bits == 0 {
                 return value[source];
             }
-            if source == LIMBS - 1 {
+            if source == N - 1 {
                 return match kind {
                     ShiftKind::Sar => builder.ins().sshr_imm_s(value[source], bits),
                     _ => builder.ins().ushr_imm_s(value[source], bits),

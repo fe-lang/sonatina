@@ -308,6 +308,61 @@ fn scalar_shifts_preserve_overshift_semantics() {
 }
 
 #[test]
+fn i128_shifts_by_constant_counts_match_ir() {
+    let values = [
+        Immediate::I128(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210),
+        Immediate::I128(-0x0123_4567_89ab_cdef_fedc_ba98_7654_3210),
+        Immediate::signed_min(Type::I128),
+        Immediate::all_one(Type::I128),
+        Immediate::one(Type::I128),
+    ];
+    for op in ["shl", "shr", "sar"] {
+        for count in [0u32, 1, 17, 63, 64, 65, 100, 127, 128, 200] {
+            let source = format!(
+                r#"func public %apply(v0.*i128, v1.*i128) {{
+block0:
+    v2.i128 = mload v0 i128;
+    v3.i128 = {op} {count}.i128 v2;
+    mstore v1 v3 i128;
+    return;
+}}
+"#
+            );
+            for level in [OptLevel::O0, OptLevel::O2] {
+                let artifact = Compile::new(
+                    parse_verified_native_module(&source),
+                    CraneliftJitBackend::new(),
+                )
+                .with_opt_level(level)
+                .compile()
+                .unwrap_or_else(|errors| panic!("{op} {count} {level:?}: {errors:?}"));
+                let apply: unsafe extern "C" fn(*const i128, *mut i128) =
+                    unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+                let rhs = Immediate::I128(count.into());
+                for value in values {
+                    let expected = match op {
+                        "shl" if count >= 128 => Immediate::zero(Type::I128),
+                        "shl" => value << rhs,
+                        "shr" => value.lshr(rhs),
+                        _ => value.ashr(rhs),
+                    };
+                    let Immediate::I128(input) = value else {
+                        unreachable!()
+                    };
+                    let mut result = 0;
+                    unsafe { apply(&input, &mut result) };
+                    assert_eq!(
+                        Immediate::I128(result),
+                        expected,
+                        "{op} {count} {value:?} {level:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn freeze_passes_values_through_and_fixes_undef() {
     let source = r#"func public %frozen(v0.i64, v1.*i256, v2.*i256) -> i64 {
 block0:

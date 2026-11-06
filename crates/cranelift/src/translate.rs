@@ -610,8 +610,9 @@ fn translate_function(
                     let result_val = emit_scalar_shift(
                         val,
                         bits,
+                        function.dfg.value_imm(*shl.bits()),
                         function.dfg.value_ty(*shl.value()),
-                        ScalarShift::Shl,
+                        ShiftKind::Shl,
                         shift_count_in_range(function, *shl.bits(), *shl.value(), &mut known_bits),
                         &mut builder,
                     );
@@ -625,8 +626,9 @@ fn translate_function(
                     let result_val = emit_scalar_shift(
                         val,
                         bits,
+                        function.dfg.value_imm(*shr.bits()),
                         function.dfg.value_ty(*shr.value()),
-                        ScalarShift::Shr,
+                        ShiftKind::Shr,
                         shift_count_in_range(function, *shr.bits(), *shr.value(), &mut known_bits),
                         &mut builder,
                     );
@@ -640,8 +642,9 @@ fn translate_function(
                     let result_val = emit_scalar_shift(
                         val,
                         bits,
+                        function.dfg.value_imm(*sar.bits()),
                         function.dfg.value_ty(*sar.value()),
-                        ScalarShift::Sar,
+                        ShiftKind::Sar,
                         shift_count_in_range(function, *sar.bits(), *sar.value(), &mut known_bits),
                         &mut builder,
                     );
