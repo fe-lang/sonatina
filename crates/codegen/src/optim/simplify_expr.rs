@@ -1478,6 +1478,11 @@ pub(crate) fn canonicalize_cast_chain(
         {
             Some((inner_kind, *inner_arg, ty))
         }
+        // The extension keeps the source's low bits, so truncating below the
+        // source's width truncates the source.
+        (CastInstKind::Trunc, CastInstKind::Zext | CastInstKind::Sext) if dst_bits < src_bits => {
+            Some((kind, *inner_arg, ty))
+        }
         _ => None,
     }
 }
