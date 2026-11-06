@@ -1,4 +1,4 @@
-use cranelift_codegen::ir::{self as clif, InstBuilder, condcodes::IntCC};
+use cranelift_codegen::ir::{self as clif, InstBuilder, InstructionData, Opcode, condcodes::IntCC};
 use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::Type;
 
@@ -15,6 +15,40 @@ pub(super) fn normalize_scalar(
     } else {
         value
     }
+}
+
+/// The two compares whose `bor` a one-bit `value` is, looking through the
+/// masks `normalize_scalar` adds. Each is 0 or 1, so `value` is set exactly
+/// when either is.
+pub(super) fn compare_disjunction(
+    value: clif::Value,
+    dfg: &clif::DataFlowGraph,
+) -> Option<[clif::Value; 2]> {
+    let definition = |value| dfg.value_def(value).inst().map(|inst| &dfg.insts[inst]);
+    let binary = |value, opcode| match *definition(value)? {
+        InstructionData::Binary {
+            opcode: found,
+            args,
+        } if found == opcode => Some(args),
+        _ => None,
+    };
+    let unmasked = |value| match binary(value, Opcode::Band) {
+        Some([bits, mask])
+            if matches!(
+                definition(mask),
+                Some(InstructionData::UnaryImm { opcode: Opcode::Iconst, imm }) if imm.bits() == 1
+            ) =>
+        {
+            bits
+        }
+        _ => value,
+    };
+    let compare = |value| {
+        let value = unmasked(value);
+        (definition(value)?.opcode() == Opcode::Icmp).then_some(value)
+    };
+    let [lhs, rhs] = binary(unmasked(value), Opcode::Bor)?;
+    Some([compare(lhs)?, compare(rhs)?])
 }
 
 pub(super) fn signed_scalar(

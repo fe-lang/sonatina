@@ -879,3 +879,41 @@ block2:
         }
     }
 }
+
+#[test]
+fn branches_on_disjunctions_of_compares() {
+    let source = r#"
+func public %outside(v0.i64, v1.i64, v2.i64) -> i8 {
+block0:
+    v3.i1 = lt v0 v1;
+    v4.i1 = gt v0 v2;
+    v5.i1 = or v3 v4;
+    br v5 block1 block2;
+block1:
+    return 1.i8;
+block2:
+    return 0.i8;
+}
+"#;
+    let values = [0, 1, 2, u64::MAX - 1, u64::MAX, 1 << 63];
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let outside: unsafe extern "C" fn(u64, u64, u64) -> i8 =
+            unsafe { std::mem::transmute(artifact.function_address("outside").unwrap()) };
+        for value in values {
+            for low in values {
+                for high in values {
+                    let expected = i8::from(value < low || value > high);
+                    let result = unsafe { outside(value, low, high) };
+                    assert_eq!(result, expected, "{level:?} {value} {low} {high}");
+                }
+            }
+        }
+    }
+}
