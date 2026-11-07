@@ -1281,3 +1281,271 @@ block0:
         }
     }
 }
+
+#[test]
+fn in_place_loads_keep_snapshots_of_objects_given_away() {
+    // `%consume`, `%consume_read` and `%consume_pair` own their first
+    // argument and overwrite an element of it at the index they are passed,
+    // so a caller that gives one a load of a local object it no longer uses
+    // gives it the object's storage. Other loads of the object keep their
+    // snapshots: in `%around`, loads before and after the given one; in
+    // `%same_call`, one passed to the same call; in `%sub_object`, a load of
+    // the whole object before a row of it is given in another block; and in
+    // `%row`, a load of a row before the whole object is given, which
+    // survives optimization.
+    let source = r#"
+func inline(never) private %fill(v0.i64) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.i64 = add v0 1.i64;
+    v3.[i64; 32] = insert_value v1 31.i64 v2;
+    return v3;
+}
+func inline(never) private %consume(v0.[i64; 32], v1.i64) -> i64 {
+block0:
+    v2.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v2 v0;
+    v3.objref<i64> = obj.index v2 v1;
+    obj.store v3 99.i64;
+    v4.i64 = add v1 31.i64;
+    v5.objref<i64> = obj.index v2 v4;
+    v6.i64 = obj.load v5;
+    return v6;
+}
+func inline(never) private %consume_read(v0.[i64; 32], v1.[i64; 32], v2.i64) -> i64 {
+block0:
+    v3.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v3 v0;
+    v4.objref<i64> = obj.index v3 v2;
+    obj.store v4 99.i64;
+    v5.i64 = extract_value v1 0.i64;
+    return v5;
+}
+func inline(never) private %consume_pair(v0.[[i64; 32]; 2], v1.i64) -> i64 {
+block0:
+    v2.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    obj.store v2 v0;
+    v3.objref<[i64; 32]> = obj.index v2 v1;
+    v4.objref<i64> = obj.index v3 v1;
+    obj.store v4 99.i64;
+    v5.i64 = add v1 31.i64;
+    v6.objref<i64> = obj.index v3 v5;
+    v7.i64 = obj.load v6;
+    return v7;
+}
+func inline(never) private %init(noalias nocapture v0.objref<[[i64; 32]; 2]>, v1.i64) {
+block0:
+    v2.[i64; 32] = call %fill v1;
+    v3.objref<[i64; 32]> = obj.index v0 0.i64;
+    obj.store v3 v2;
+    v4.objref<[i64; 32]> = obj.index v0 1.i64;
+    obj.store v4 v2;
+    return;
+}
+func inline(never) private %reader(noalias nocapture v0.objref<[[i64; 32]; 2]>, v1.i64) -> i64 {
+block0:
+    v2.objref<[i64; 32]> = obj.index v0 v1;
+    v3.objref<i64> = obj.index v2 0.i64;
+    v4.i64 = obj.load v3;
+    return v4;
+}
+func public %around(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v3.[i64; 32] = call %fill v0;
+    obj.store v2 v3;
+    v4.[i64; 32] = obj.load v2;
+    v5.[i64; 32] = obj.load v2;
+    v6.[i64; 32] = obj.load v2;
+    v7.i64 = call %consume v5 v1;
+    v8.i64 = extract_value v4 0.i64;
+    v9.i64 = extract_value v6 0.i64;
+    v10.i64 = mul v8 1000.i64;
+    v11.i64 = mul v9 1000000.i64;
+    v12.i64 = add v7 v10;
+    v13.i64 = add v12 v11;
+    return v13;
+}
+func public %same_call(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v3.[i64; 32] = call %fill v0;
+    obj.store v2 v3;
+    v4.[i64; 32] = obj.load v2;
+    v5.[i64; 32] = obj.load v2;
+    v6.i64 = call %consume_read v5 v4 v1;
+    v7.i64 = extract_value v4 31.i64;
+    v8.i64 = mul v7 1000.i64;
+    v9.i64 = add v6 v8;
+    return v9;
+}
+func public %sub_object(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v3.[i64; 32] = call %fill v0;
+    v4.objref<[i64; 32]> = obj.index v2 0.i64;
+    obj.store v4 v3;
+    v5.objref<[i64; 32]> = obj.index v2 1.i64;
+    obj.store v5 v3;
+    v6.[[i64; 32]; 2] = obj.load v2;
+    v7.i1 = slt v0 100.i64;
+    br v7 block1 block2;
+block1:
+    v8.objref<[i64; 32]> = obj.index v2 0.i64;
+    v9.[i64; 32] = obj.load v8;
+    v10.i64 = call %consume v9 v1;
+    jump block2;
+block2:
+    v11.i64 = phi (0.i64 block0) (v10 block1);
+    v12.[i64; 32] = extract_value v6 0.i64;
+    v13.i64 = extract_value v12 0.i64;
+    v14.i64 = mul v13 1000.i64;
+    v15.i64 = add v11 v14;
+    return v15;
+}
+func public %row(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    call %init v2 v0;
+    v3.objref<[i64; 32]> = obj.index v2 v1;
+    v4.[i64; 32] = obj.load v3;
+    v5.i64 = call %reader v2 v1;
+    v6.[[i64; 32]; 2] = obj.load v2;
+    v7.i64 = call %consume_pair v6 v1;
+    v8.i64 = extract_value v4 0.i64;
+    v9.i64 = mul v8 1000.i64;
+    v10.i64 = mul v5 1000000.i64;
+    v11.i64 = add v7 v9;
+    v12.i64 = add v11 v10;
+    return v12;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let function = |name| -> unsafe extern "C" fn(i64, i64) -> i64 {
+            unsafe { std::mem::transmute(artifact.function_address(name).unwrap()) }
+        };
+        for value in [0, 5, -7, 1000] {
+            // At index 0, each call overwrites element 0 of what it is given
+            // and returns element 31, `value + 1`, but `%consume_read`
+            // returns its second argument's element 0.
+            let given = if value < 100 { value + 1 } else { 0 };
+            unsafe {
+                assert_eq!(
+                    function("around")(value, 0),
+                    value + 1 + value * 1000 + value * 1_000_000,
+                    "{level:?}"
+                );
+                assert_eq!(
+                    function("same_call")(value, 0),
+                    value + (value + 1) * 1000,
+                    "{level:?}"
+                );
+                assert_eq!(
+                    function("sub_object")(value, 0),
+                    given + value * 1000,
+                    "{level:?}"
+                );
+                assert_eq!(
+                    function("row")(value, 0),
+                    value + 1 + value * 1000 + value * 1_000_000,
+                    "{level:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn loads_read_local_objects_in_place_until_written() {
+    // `%keep` loads its object, calls a function that cannot reach it, and
+    // returns the load: it reads the object in place. `%clobbered` writes
+    // its object after the load, so the load keeps its snapshot.
+    let source = r#"
+func inline(never) private %fill(v0.i64) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.[i64; 32] = insert_value v1 31.i64 v0;
+    return v2;
+}
+func inline(never) private %noise(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    return v1;
+}
+func inline(never) private %keep(v0.i64, v1.i1) -> [i64; 32] {
+block0:
+    v2.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v3.[i64; 32] = call %fill v0;
+    obj.store v2 v3;
+    v4.[i64; 32] = obj.load v2;
+    v5.i64 = call %noise v0;
+    br v1 block1 block2;
+block1:
+    v6.[i64; 32] = insert_value v4 1.i64 v5;
+    return v6;
+block2:
+    return v4;
+}
+func inline(never) private %clobbered(v0.i64) -> [i64; 32] {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.[i64; 32] = call %fill v0;
+    obj.store v1 v2;
+    v3.[i64; 32] = obj.load v1;
+    v4.objref<i64> = obj.index v1 0.i64;
+    obj.store v4 77.i64;
+    v5.i64 = obj.load v4;
+    v6.[i64; 32] = insert_value v3 1.i64 v5;
+    return v6;
+}
+func public %sums(v0.i64, v1.i1) -> i64 {
+block0:
+    v2.[i64; 32] = call %keep v0 v1;
+    v3.i64 = extract_value v2 0.i64;
+    v4.i64 = extract_value v2 1.i64;
+    v5.i64 = extract_value v2 31.i64;
+    v6.[i64; 32] = call %clobbered v0;
+    v7.i64 = extract_value v6 0.i64;
+    v8.i64 = extract_value v6 1.i64;
+    v9.i64 = mul v4 1000.i64;
+    v10.i64 = mul v7 1000000.i64;
+    v11.i64 = mul v8 1000000000.i64;
+    v12.i64 = add v3 v5;
+    v13.i64 = add v12 v9;
+    v14.i64 = add v13 v10;
+    v15.i64 = add v14 v11;
+    return v15;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let sums: unsafe extern "C" fn(i64, bool) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("sums").unwrap()) };
+        for value in [0, 5, -7, 1000] {
+            for branch in [false, true] {
+                // `%clobbered`'s snapshot keeps element 0 at `value` and
+                // takes 77 into element 1.
+                let noise = if branch { 3 * value } else { 0 };
+                let expected = 2 * value + noise * 1000 + value * 1_000_000 + 77 * 1_000_000_000;
+                assert_eq!(
+                    unsafe { sums(value, branch) },
+                    expected,
+                    "{level:?} {branch}"
+                );
+            }
+        }
+    }
+}

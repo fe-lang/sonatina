@@ -1929,7 +1929,14 @@ fn translate_function(
                     if frame.forwards(*mstore.value()) {
                         let src =
                             resolve_value(function, *mstore.value(), &value_map, &mut builder)?;
-                        move_value(store_ty, src, addr, &module.ctx, &mut builder)?;
+                        forward_value(
+                            store_ty,
+                            src,
+                            addr,
+                            &module.ctx,
+                            target_config,
+                            &mut builder,
+                        )?;
                     } else if uses_indirect_value_representation(&module.ctx, store_ty) {
                         store_indirect(
                             function,
@@ -2040,7 +2047,7 @@ fn translate_function(
                     if frame.forwards(*obj_store.value()) {
                         let src =
                             resolve_value(function, *obj_store.value(), &value_map, &mut builder)?;
-                        move_value(val_ty, src, dest, &module.ctx, &mut builder)?;
+                        forward_value(val_ty, src, dest, &module.ctx, target_config, &mut builder)?;
                     } else if uses_indirect_value_representation(&module.ctx, val_ty) {
                         store_indirect(
                             function,

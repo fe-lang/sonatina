@@ -9,7 +9,7 @@ use cranelift_frontend::FunctionBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, ValueId,
-    inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
+    inst::{InstId, control_flow::Call, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
     module::FuncRef,
 };
@@ -60,12 +60,17 @@ use super::{
 /// call's indirect result whose only use stores it into such an object
 /// later in its block, with no state change in between, is written there
 /// by the callee, unless an argument reaches the object or an instruction in
-/// between reads it.
+/// between reads it. Any other load of such an object reads it in place
+/// when nothing reachable after the load writes it: no store into it, no
+/// call taking one of its addresses, and no call that may be given its
+/// storage, as below.
 ///
 /// A callee may own a by-reference argument (`Ownership`), building an
 /// object in its storage. The caller then passes storage it does not use
 /// after the call and no other argument shares: a forwarded load of a local
-/// object it no longer uses, or a value whose range ends at the call.
+/// object it no longer uses, or a value whose range ends at the call. The
+/// call writes an object it is given, so no load of the object reads it in
+/// place across the call.
 /// Otherwise it copies the argument into a temporary, a class live only at
 /// the call.
 pub(super) struct FrameSlots {
@@ -374,10 +379,27 @@ impl Plan {
                                 object,
                                 &local,
                                 &is_tail_call,
-                            ) =>
+                            )
+                            .is_some() =>
                     {
                         plan.forwarded.insert(result);
                         passed_from.insert(result, object);
+                        None
+                    }
+                    NativeInstKind::ObjLoad(load)
+                        if let Some(&object) = local.get(load.object())
+                            && !object_written_after(
+                                function,
+                                cfg,
+                                &position,
+                                &local,
+                                object,
+                                inst,
+                                &is_tail_call,
+                                &owns,
+                            ) =>
+                    {
+                        plan.forwarded.insert(result);
                         None
                     }
                     NativeInstKind::Call(_)
@@ -526,6 +548,7 @@ impl Plan {
                             .any(|(other, &value)| other != index && same(value))
                     };
                     let given = if let Some(&object) = passed_from.get(&arg) {
+                        // `object_written_after` counts the call as a write of the object.
                         !shared(&|value| passed_from.get(&value) == Some(&object))
                             && !object_used_after(function, cfg, &position, &local, object, inst)
                     } else {
@@ -566,22 +589,80 @@ fn object_used_after(
     object: ValueId,
     call: InstId,
 ) -> bool {
-    let call_block = function.layout.inst_block(call);
-    let mut reached = FxHashSet::default();
-    let mut pending: Vec<_> = cfg.succs_of(call_block).copied().collect();
-    while let Some(block) = pending.pop() {
-        if reached.insert(block) {
-            pending.extend(cfg.succs_of(block).copied());
+    object_uses(function, local, object).any(runs_after(function, cfg, position, call))
+}
+
+/// Whether anything after `inst` may write the local object `object`: a
+/// store into it, a call taking one of its addresses, or a call its storage
+/// may be given to. That is a call passed a load of the object in place
+/// (`passed_once`) for an argument its callee owns, when the object is not
+/// used after the call; the load itself may come before `inst`.
+#[allow(clippy::too_many_arguments)]
+fn object_written_after(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    position: &SecondaryMap<InstId, u32>,
+    local: &FxHashMap<ValueId, ValueId>,
+    object: ValueId,
+    inst: InstId,
+    is_tail_call: &impl Fn(InstId) -> bool,
+    owns: &impl Fn(FuncRef, usize) -> bool,
+) -> bool {
+    let dfg = &function.dfg;
+    let after = runs_after(function, cfg, position, inst);
+    object_uses(function, local, object).any(|user| {
+        match native_inst_set().resolve_inst(dfg.inst(user)) {
+            NativeInstKind::ObjStore(_) | NativeInstKind::Call(_) => after(user),
+            NativeInstKind::ObjLoad(_) => {
+                dfg.inst_result(user).is_some_and(|loaded| {
+                    passed_once(function, user, loaded, object, local, is_tail_call).is_some_and(
+                        |(call, info)| {
+                            after(call)
+                                && info.args().iter().enumerate().any(|(index, &arg)| {
+                                    arg == loaded && owns(*info.callee(), index)
+                                })
+                                && !object_used_after(function, cfg, position, local, object, call)
+                        },
+                    )
+                })
+            }
+            _ => false,
         }
-    }
+    })
+}
+
+/// The uses of addresses of the local object `object`.
+fn object_uses<'a>(
+    function: &'a Function,
+    local: &'a FxHashMap<ValueId, ValueId>,
+    object: ValueId,
+) -> impl Iterator<Item = InstId> + 'a {
     local
         .iter()
-        .filter(|&(_, &of)| of == object)
-        .flat_map(|(&address, _)| function.dfg.users(address))
-        .any(|&user| {
-            let block = function.layout.inst_block(user);
-            reached.contains(&block) || block == call_block && position[user] > position[call]
-        })
+        .filter(move |&(_, &of)| of == object)
+        .flat_map(move |(&address, _)| function.dfg.users(address).copied())
+}
+
+/// Whether an instruction may run after `inst`: later in its block, or in a
+/// block it reaches, which includes its own block when that is in a loop.
+fn runs_after<'a>(
+    function: &'a Function,
+    cfg: &ControlFlowGraph,
+    position: &'a SecondaryMap<InstId, u32>,
+    inst: InstId,
+) -> impl Fn(InstId) -> bool + 'a {
+    let block = function.layout.inst_block(inst);
+    let mut reached = FxHashSet::default();
+    let mut pending: Vec<_> = cfg.succs_of(block).copied().collect();
+    while let Some(next) = pending.pop() {
+        if reached.insert(next) {
+            pending.extend(cfg.succs_of(next).copied());
+        }
+    }
+    move |other| {
+        let other_block = function.layout.inst_block(other);
+        reached.contains(&other_block) || other_block == block && position[other] > position[inst]
+    }
 }
 
 /// Whether the only use of the load `inst` copies its result later in the
@@ -668,31 +749,32 @@ fn local_objects(function: &Function) -> FxHashMap<ValueId, ValueId> {
     object_of
 }
 
-/// Whether the only use of the load `inst` of the local object `object`
-/// passes it to a call later in its block, not a tail call, with no state
-/// change in between, and no other argument reaching the object.
-fn passed_once(
-    function: &Function,
+/// The call the only use of the load `inst` of the local object `object`
+/// passes it to, if that is later in its block, not a tail call, with no
+/// state change in between, and no other argument reaching the object.
+fn passed_once<'a>(
+    function: &'a Function,
     inst: InstId,
     result: ValueId,
     object: ValueId,
     local: &FxHashMap<ValueId, ValueId>,
     is_tail_call: &impl Fn(InstId) -> bool,
-) -> bool {
+) -> Option<(InstId, &'a Call)> {
     let dfg = &function.dfg;
     let mut users = dfg.users(result);
     let (Some(&call), None) = (users.next(), users.next()) else {
-        return false;
+        return None;
     };
     let NativeInstKind::Call(info) = native_inst_set().resolve_inst(dfg.inst(call)) else {
-        return false;
+        return None;
     };
-    !is_tail_call(call)
+    (!is_tail_call(call)
         && info
             .args()
             .iter()
             .all(|arg| *arg == result || local.get(arg) != Some(&object))
-        && unchanged_between(function, inst, call)
+        && unchanged_between(function, inst, call))
+    .then_some((call, info))
 }
 
 /// For the call `inst`, whose result `result` its only use stores into a
