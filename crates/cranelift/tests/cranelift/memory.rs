@@ -1655,3 +1655,77 @@ block0:
         }
     }
 }
+
+#[test]
+fn readonly_callees_share_object_storage() {
+    // `%glance` reads through a raw pointer, which could write, so only its
+    // `readonly` mark tells that it writes nothing: `%read_only`'s object
+    // lives in its argument's storage, and `%in_place` reads its argument in
+    // place across the call.
+    let source = r#"
+func inline(never) private %fill(v0.i64) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.i64 = add v0 3.i64;
+    v3.[i64; 32] = insert_value v1 3.i64 v2;
+    return v3;
+}
+func inline(never) private %glance(noalias nocapture readonly v0.objref<[i64; 32]>) -> i64 {
+block0:
+    v1.*[i64; 32] = obj.materialize.stack v0;
+    v2.*i64 = gep v1 0.i64 3.i64;
+    v3.i64 = mload v2 i64;
+    return v3;
+}
+func inline(never) private %read_only(v0.[i64; 32]) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v1 v0;
+    v2.i64 = call %glance v1;
+    v3.objref<i64> = obj.index v1 0.i64;
+    v4.i64 = obj.load v3;
+    v5.i64 = add v2 v4;
+    return v5;
+}
+func inline(never) private %in_place(noalias nocapture v0.objref<[i64; 32]>) -> i64 {
+block0:
+    v1.[i64; 32] = obj.load v0;
+    v2.i64 = call %glance v0;
+    v3.i64 = extract_value v1 0.i64;
+    v4.i64 = mul v2 1000.i64;
+    v5.i64 = add v3 v4;
+    return v5;
+}
+func public %run(v0.i64) -> i64 {
+block0:
+    v1.[i64; 32] = call %fill v0;
+    v2.i64 = call %read_only v1;
+    v3.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v3 v1;
+    v4.i64 = call %in_place v3;
+    v5.i64 = mul v4 10.i64;
+    v6.i64 = add v2 v5;
+    return v6;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let run: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        for value in [0, 5, -7, 100] {
+            let read_only = (value + 3) + value;
+            let in_place = value + (value + 3) * 1000;
+            assert_eq!(
+                unsafe { run(value) },
+                read_only + in_place * 10,
+                "{level:?}"
+            );
+        }
+    }
+}

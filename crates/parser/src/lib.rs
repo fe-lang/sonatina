@@ -126,6 +126,9 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
                 if param.nocapture {
                     sig.set_nocapture_arg(idx);
                 }
+                if param.readonly {
+                    sig.set_readonly_arg(idx);
+                }
             }
 
             // Safe to unwrap: function name checked for duplicate above
@@ -156,6 +159,9 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
                 for (idx, param) in params.iter().enumerate() {
                     if param.nocapture {
                         sig.set_nocapture_arg(idx);
+                    }
+                    if param.readonly {
+                        sig.set_readonly_arg(idx);
                     }
                 }
 
@@ -1186,6 +1192,53 @@ func inline(never) private %never(v0.i32) -> i32 {
         assert_eq!(reparsed_hint_for("hint"), ir::InlineHint::Inline);
         assert_eq!(reparsed_hint_for("always"), ir::InlineHint::Always);
         assert_eq!(reparsed_hint_for("never"), ir::InlineHint::Never);
+    }
+
+    #[test]
+    fn test_argument_marks_roundtrip() {
+        let s = r#"
+target = "evm-ethereum-osaka"
+
+declare external %decl(nocapture readonly objref<i256>, readonly objref<i256>, i256);
+
+func private %read(noalias nocapture readonly v0.objref<i256>, readonly v1.objref<i256>, nocapture v2.objref<i256>) -> i256 {
+    block0:
+        v3.i256 = obj.load v0;
+        return v3;
+}
+"#;
+
+        let marks = |source: &str| {
+            let parsed = parse_module(source).unwrap();
+            let marks = ["decl", "read"].map(|name| {
+                let func = parsed
+                    .module
+                    .ctx
+                    .declared_funcs
+                    .iter()
+                    .find_map(|entry| (entry.value().name() == name).then(|| *entry.key()))
+                    .expect("function should be declared");
+                parsed.module.ctx.func_sig(func, |sig| {
+                    (
+                        sig.nocapture_args().collect::<Vec<_>>(),
+                        sig.readonly_args().collect::<Vec<_>>(),
+                    )
+                })
+            });
+            let printed =
+                ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug)
+                    .dump_string();
+            (marks, printed)
+        };
+        let (parsed, printed) = marks(s);
+        assert_eq!(parsed, [(vec![0], vec![0, 1]), (vec![0, 2], vec![0, 1])]);
+        assert!(printed.contains(
+            "declare external %decl(nocapture readonly objref<i256>, readonly objref<i256>, i256);"
+        ));
+        assert!(printed.contains(
+            "func private %read(noalias nocapture readonly v0.objref<i256>, readonly v1.objref<i256>, nocapture v2.objref<i256>) -> i256 {"
+        ));
+        assert_eq!(marks(&printed), (parsed, printed.clone()));
     }
 
     #[test]

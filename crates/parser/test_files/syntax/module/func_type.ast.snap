@@ -29,6 +29,7 @@ Module {
                     FuncParam {
                         noalias: false,
                         nocapture: false,
+                        readonly: false,
                         decl: ValueDeclaration(
                             ValueName {
                                 string: "v0",

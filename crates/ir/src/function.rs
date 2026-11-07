@@ -382,6 +382,10 @@ pub struct Signature {
     /// The sorted indices of the arguments marked `nocapture`; see
     /// [`Self::is_nocapture_arg`].
     nocapture_args: SmallVec<[usize; 4]>,
+
+    /// The sorted indices of the arguments marked `readonly`; see
+    /// [`Self::is_readonly_arg`].
+    readonly_args: SmallVec<[usize; 4]>,
 }
 
 impl Signature {
@@ -392,12 +396,13 @@ impl Signature {
             args: args.into(),
             ret_tys: ret_tys.into(),
             nocapture_args: SmallVec::new(),
+            readonly_args: SmallVec::new(),
         }
     }
 
     /// This signature with argument types `args` and return types `ret_tys`,
     /// for a rewrite that keeps each argument in place, so its `nocapture`
-    /// mark too.
+    /// and `readonly` marks too.
     pub fn with_types(&self, args: &[Type], ret_tys: &[Type]) -> Self {
         debug_assert_eq!(args.len(), self.args.len());
         Self {
@@ -453,6 +458,55 @@ impl Signature {
         }
     }
 
+    /// Whether argument `idx` is a `readonly` object reference: while the
+    /// call runs, nothing writes its object through it or through a reference
+    /// or raw pointer derived from it, whether the callee or a function it
+    /// calls. The object may still change through another alias, such as
+    /// another argument or memory it was published to, and objects reached
+    /// through references held in it are not covered. Like `nocapture`, the
+    /// mark is trusted; it binds the callee, and a transformation that
+    /// rebuilds an argument drops it.
+    pub fn is_readonly_arg(&self, idx: usize) -> bool {
+        self.readonly_args.binary_search(&idx).is_ok()
+    }
+
+    /// The indices of the `readonly` arguments, in order.
+    pub fn readonly_args(&self) -> impl Iterator<Item = usize> + '_ {
+        self.readonly_args.iter().copied()
+    }
+
+    /// Marks argument `idx` `readonly`; see [`Self::is_readonly_arg`].
+    pub fn set_readonly_arg(&mut self, idx: usize) {
+        debug_assert!(idx < self.args.len());
+        if let Err(pos) = self.readonly_args.binary_search(&idx) {
+            self.readonly_args.insert(pos, idx);
+        }
+    }
+
+    /// Marks this signature's arguments as `other`'s are, each mark of
+    /// `other`'s argument `idx` on argument `new_arg(idx)`, for a rewrite
+    /// that passes that argument on unchanged there. A mark of an argument
+    /// it passes on nowhere is dropped.
+    pub fn mark_args_as(&mut self, other: &Signature, new_arg: impl Fn(usize) -> Option<usize>) {
+        for idx in other.nocapture_args().filter_map(&new_arg) {
+            self.set_nocapture_arg(idx);
+        }
+        for idx in other.readonly_args().filter_map(&new_arg) {
+            self.set_readonly_arg(idx);
+        }
+    }
+
+    /// Writes the marks of argument `idx`, each followed by a space.
+    pub(crate) fn write_arg_marks(&self, w: &mut impl io::Write, idx: usize) -> io::Result<()> {
+        if self.is_nocapture_arg(idx) {
+            write!(w, "nocapture ")?;
+        }
+        if self.is_readonly_arg(idx) {
+            write!(w, "readonly ")?;
+        }
+        Ok(())
+    }
+
     pub fn ret_tys(&self) -> &[Type] {
         &self.ret_tys
     }
@@ -499,9 +553,7 @@ where
             if idx > 0 {
                 write!(w, ", ")?;
             }
-            if self.is_nocapture_arg(idx) {
-                write!(w, "nocapture ")?;
-            }
+            self.write_arg_marks(w, idx)?;
             arg.write(w, ctx)?;
         }
         write!(w, ")")?;

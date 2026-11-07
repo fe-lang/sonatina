@@ -524,11 +524,15 @@ block0:
 fn local_objects_move_through_calls_without_copies() {
     // `%fill` writes its result into `v1`, which `%sum` reads itself, and
     // `%peek` too, since it only reads the object it also gets a reference
-    // to; `%poke` writes it, so its load keeps a copy.
+    // to; `%poke` writes it, so its load keeps a copy. `%glance` reads it
+    // through a raw pointer, which could write it, unless `readonly` says
+    // nothing does.
     let cases = [
         ("v4.i64 = call %sum v3;", 0),
         ("v4.i64 = call %peek v3 v1;", 0),
         ("v4.i64 = call %poke v3 v1;", 1),
+        ("v4.i64 = call %glance v3 v1;", 1),
+        ("v4.i64 = call %glance_readonly v3 v1;", 0),
     ];
     let triple = native_isa(host_architecture()).triple();
     for (call, copies) in cases {
@@ -555,6 +559,24 @@ block0:
     obj.store v2 9.i64;
     v3.i64 = extract_value v0 0.i64;
     return v3;
+}}
+func inline(never) private %glance(v0.[i64; 32], noalias nocapture v1.objref<[i64; 32]>) -> i64 {{
+block0:
+    v2.*[i64; 32] = obj.materialize.stack v1;
+    v3.*i64 = gep v2 0.i64 1.i64;
+    v4.i64 = mload v3 i64;
+    v5.i64 = extract_value v0 0.i64;
+    v6.i64 = add v4 v5;
+    return v6;
+}}
+func inline(never) private %glance_readonly(v0.[i64; 32], noalias nocapture readonly v1.objref<[i64; 32]>) -> i64 {{
+block0:
+    v2.*[i64; 32] = obj.materialize.stack v1;
+    v3.*i64 = gep v2 0.i64 1.i64;
+    v4.i64 = mload v3 i64;
+    v5.i64 = extract_value v0 0.i64;
+    v6.i64 = add v4 v5;
+    return v6;
 }}
 func public %f(v0.i64) -> i64 {{
 block0:

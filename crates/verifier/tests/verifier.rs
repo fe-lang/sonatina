@@ -3318,3 +3318,51 @@ block0:
         "{report}"
     );
 }
+
+#[test]
+fn readonly_arguments_are_unwritten_object_references() {
+    let source = |arg: &str, body: &str| {
+        format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @Pair = {{i256, i256}};
+func private %f(noalias nocapture readonly v0.{arg}) {{
+block0:
+{body}
+    return;
+}}
+"#
+        )
+    };
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    let errors = |source: &str, message: &str| {
+        let parsed = parse_module(source).unwrap();
+        let report = verify_module(&parsed.module, &config);
+        report
+            .errors()
+            .filter(|diagnostic| diagnostic.message == message)
+            .count()
+    };
+    let read = "    v1.objref<i256> = obj.proj v0 1.i8;\n    v2.i256 = obj.load v1;";
+    let valid = parse_module(&source("objref<@Pair>", read)).unwrap();
+    assert!(!verify_module(&valid.module, &config).has_errors());
+    // A declaration has no object references, so no valid `readonly` mark.
+    let invalid =
+        source("i256", "").replace("\nfunc", "\ndeclare external %g(i1, readonly i256);\nfunc");
+    assert_eq!(
+        errors(
+            &invalid,
+            "only an object reference argument can be readonly"
+        ),
+        2
+    );
+    // Stores into the object, whole or through a projection, break the mark.
+    let writes = "    v1.@Pair = obj.load v0;\n    obj.store v0 v1;\n    v2.objref<i256> = obj.proj v0 1.i8;\n    obj.store v2 0.i256;";
+    assert_eq!(
+        errors(
+            &source("objref<@Pair>", writes),
+            "a readonly argument's object cannot be written"
+        ),
+        2
+    );
+}

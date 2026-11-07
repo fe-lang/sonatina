@@ -657,12 +657,16 @@ pub(super) fn collect_signature_invariants(
             );
         }
     }
-    for index in sig.nocapture_args() {
+    let marks = sig
+        .nocapture_args()
+        .map(|index| ("nocapture", index))
+        .chain(sig.readonly_args().map(|index| ("readonly", index)));
+    for (mark, index) in marks {
         if !sig.args().get(index).is_some_and(|ty| ty.is_obj_ref(ctx)) {
             report.push(
                 Diagnostic::error(
                     DiagnosticCode::InvalidSignature,
-                    "only an object reference argument can be nocapture",
+                    format!("only an object reference argument can be {mark}"),
                     Location::Function(func_ref),
                 )
                 .with_note(format!("arg index {index}")),

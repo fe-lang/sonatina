@@ -78,9 +78,29 @@ guarantees it; Fe marks every object parameter, since its accesses cannot be sto
 returned or captured by a closure. The mark is part of the signature, so
 callers see it. A call still publishes the argument for its own duration and
 can change its object, but afterwards the object is as private as before the
-call. Only the enum proofs use the mark. Dead argument elimination, argument
-promotion and return rewrites keep the marks of the arguments they pass on;
-other signature rebuilds drop them.
+call. The enum proofs and native frame planning use the mark. Dead argument
+elimination, argument promotion, return rewrites and constref specialization
+keep the marks of the arguments they pass on; other signature rebuilds drop
+them.
+
+## Readonly arguments
+
+`func %f(readonly v0.objref<T>, ..)` promises that while `%f` runs, nothing
+writes the argument's object through `v0` or through a reference or raw
+pointer derived from it: a projection, a copy held in memory, a materialized
+pointer, or an argument of a call `%f` makes. The callee guarantees it, for
+itself and every function it calls; Fe marks its view parameters and
+read-only effects, which its access rules let nothing write. Other aliases
+are not covered: during the call the object may still change through another
+argument that reaches it or through memory it was published to, and a
+reference the call keeps may write it afterwards unless the argument is also
+`nocapture`. Neither are objects reached through references held in the
+object. A call therefore writes a `readonly` argument's object only if it
+reaches the object some other way. The mark is part of the signature and
+signature rewrites carry it as they do `nocapture`; inlining discards it with
+the call. The verifier rejects stores, tag writes and variant writes into the
+object through the argument or its projections. Native code uses the mark
+(`ArgWrites`) to share a caller's object with calls that only read it.
 
 ## Consumers and coordinate-query audit
 

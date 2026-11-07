@@ -204,9 +204,7 @@ fn specialized_sig(module: &Module, key: &SpecializationKey, sig: &Signature) ->
         sig.args(),
         sig.ret_tys(),
     );
-    for arg in sig.nocapture_args() {
-        specialized.set_nocapture_arg(arg);
-    }
+    specialized.mark_args_as(sig, Some);
     specialized
 }
 
