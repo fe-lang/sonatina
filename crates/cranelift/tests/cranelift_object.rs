@@ -522,11 +522,13 @@ block0:
 
 #[test]
 fn local_objects_move_through_calls_without_copies() {
-    // `%fill` writes its result into `v1`, which `%sum` reads itself; each
-    // copy remains once the object also reaches the call as a reference.
+    // `%fill` writes its result into `v1`, which `%sum` reads itself, and
+    // `%peek` too, since it only reads the object it also gets a reference
+    // to; `%poke` writes it, so its load keeps a copy.
     let cases = [
         ("v4.i64 = call %sum v3;", 0),
-        ("v4.i64 = call %peek v3 v1;", 1),
+        ("v4.i64 = call %peek v3 v1;", 0),
+        ("v4.i64 = call %poke v3 v1;", 1),
     ];
     let triple = native_isa(host_architecture()).triple();
     for (call, copies) in cases {
@@ -546,6 +548,13 @@ func inline(never) private %peek(v0.[i64; 32], noalias nocapture v1.objref<[i64;
 block0:
     v2.i64 = extract_value v0 0.i64;
     return v2;
+}}
+func inline(never) private %poke(v0.[i64; 32], noalias nocapture v1.objref<[i64; 32]>) -> i64 {{
+block0:
+    v2.objref<i64> = obj.index v1 0.i64;
+    obj.store v2 9.i64;
+    v3.i64 = extract_value v0 0.i64;
+    return v3;
 }}
 func public %f(v0.i64) -> i64 {{
 block0:

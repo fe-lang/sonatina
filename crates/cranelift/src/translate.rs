@@ -28,7 +28,7 @@ use cranelift_module::{
     DataDescription, DataId, FuncId, Linkage, Module as ClifModule, ModuleReloc,
 };
 
-use sonatina_codegen::analysis::known_bits::KnownBitsQuery;
+use sonatina_codegen::analysis::{arg_writes::ArgWrites, known_bits::KnownBitsQuery};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Type, U256,
     Value, ValueId,
@@ -44,7 +44,7 @@ use self::{
     black_box::BlackBoxBarrier,
     division::{Divider, DividerCall, Numerator, addmod, div_rem, div_rem_i128, mulmod},
     enums::{store_tag, store_variant, tag_clif_type, variant_field_offset},
-    frame::FrameSlots,
+    frame::{CallFacts, FrameSlots},
     globals::*,
     i256::*,
     memory::*,
@@ -129,6 +129,7 @@ pub(super) fn translate_module(
     let mut black_box = BlackBoxBarrier::default();
     let tail_calls = TailCalls::new(module);
     let ownership = Ownership::new(module);
+    let arg_writes = ArgWrites::new(module);
     let mut function_tables = HashMap::new();
 
     for &func_ref in &funcs {
@@ -164,6 +165,7 @@ pub(super) fn translate_module(
                         func_ref,
                         &tail_calls,
                         &ownership,
+                        &arg_writes,
                         &mut function_tables,
                         &func_id_map,
                         &data_ids,
@@ -313,6 +315,26 @@ fn translate_linkage(linkage: SonatinaLinkage) -> Linkage {
     }
 }
 
+/// The module's facts about the calls of the function `func_ref`.
+struct Calls<'a> {
+    func_ref: FuncRef,
+    tail_calls: &'a TailCalls,
+    ownership: &'a Ownership,
+    arg_writes: &'a ArgWrites,
+}
+
+impl CallFacts for Calls<'_> {
+    fn is_tail_call(&self, call: InstId) -> bool {
+        self.tail_calls.is_tail_call(self.func_ref, call)
+    }
+    fn owns(&self, callee: FuncRef, index: usize) -> bool {
+        self.ownership.owns(callee, index)
+    }
+    fn may_write(&self, callee: FuncRef, index: usize) -> bool {
+        self.arg_writes.may_write(callee, index)
+    }
+}
+
 /// The Cranelift signature of `func_ref`, in the `tail` calling convention
 /// when it takes part in a tail call.
 fn clif_signature(
@@ -346,6 +368,7 @@ fn translate_function(
     func_ref: FuncRef,
     tail_calls: &TailCalls,
     ownership: &Ownership,
+    arg_writes: &ArgWrites,
     function_tables: &mut HashMap<Vec<FuncId>, DataId>,
     func_id_map: &HashMap<FuncRef, FuncId>,
     data_ids: &GlobalDataMap,
@@ -437,15 +460,13 @@ fn translate_function(
         }
     }
 
-    let frame = FrameSlots::new(
-        function,
-        &cfg,
-        &block_order,
-        sret_ptr,
-        |call| tail_calls.is_tail_call(func_ref, call),
-        |callee, index| ownership.owns(callee, index),
-        &mut builder,
-    )?;
+    let calls = Calls {
+        func_ref,
+        tail_calls,
+        ownership,
+        arg_writes,
+    };
+    let frame = FrameSlots::new(function, &cfg, &block_order, sret_ptr, &calls, &mut builder)?;
     // Objects this function builds in the storage of arguments it owns.
     let owned_objects: HashMap<ValueId, ValueId> = ownership
         .owned(func_ref)
@@ -2071,7 +2092,10 @@ fn translate_function(
                 }
                 NativeInstKind::ObjAlloc(_)
                     if let Some(result) = function.dfg.inst_result(inst_id)
-                        && let Some(&arg) = owned_objects.get(&result) =>
+                        && let Some(arg) = owned_objects
+                            .get(&result)
+                            .copied()
+                            .or_else(|| frame.aliased(result)) =>
                 {
                     let storage = resolve_value(function, arg, &value_map, &mut builder)?;
                     value_map.insert(result, storage);
