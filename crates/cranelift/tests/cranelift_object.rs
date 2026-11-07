@@ -339,6 +339,81 @@ block0:
 }
 
 #[test]
+fn loads_pass_other_loads_to_their_uses() {
+    // `%mix` sums `a[i] ^ b[i]`. Loading every word of `a`, then every word of
+    // `b`, compiles to no more code than loading each pair together: no load
+    // traps, so each load moves past the later loads to its `xor`, and the
+    // words are not all live at once.
+    let triple = native_isa(host_architecture()).triple();
+    let words = 24;
+    let load = |array: usize, i: usize| {
+        let address = 10 + 6 * i + 2 * array;
+        format!(
+            "    v{address}.*i64 = gep v{array} {i}.i64;\n    v{}.i64 = mload v{address} i64;\n",
+            address + 1
+        )
+    };
+    let mix = |i: usize| {
+        let sum = if i == 0 { 2 } else { 9 + 6 * i };
+        format!(
+            "    v{}.i64 = xor v{} v{};\n    v{}.i64 = add v{sum} v{};\n",
+            14 + 6 * i,
+            11 + 6 * i,
+            13 + 6 * i,
+            15 + 6 * i,
+            14 + 6 * i
+        )
+    };
+    let paired: String = (0..words)
+        .map(|i| load(0, i) + &load(1, i) + &mix(i))
+        .collect();
+    let grouped: String = (0..words)
+        .map(|i| load(0, i))
+        .chain((0..words).map(|i| load(1, i)))
+        .chain((0..words).map(mix))
+        .collect();
+    let sizes = [paired, grouped].map(|body| {
+        let source = format!(
+            "target = \"{triple}\"\nfunc public %mix(v0.*i64, v1.*i64, v2.i64) -> i64 {{\nblock0:\n{body}    return v{};\n}}\n",
+            9 + 6 * words
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        #[cfg(feature = "jit")]
+        {
+            let artifact = Compile::new(
+                module.clone_for_funcs(&module.funcs()),
+                CraneliftJitBackend::new(),
+            )
+            .with_opt_level(OptLevel::O2)
+            .compile()
+            .unwrap();
+            let mix: unsafe extern "C" fn(*const i64, *const i64, i64) -> i64 =
+                unsafe { std::mem::transmute(artifact.function_address("mix").unwrap()) };
+            let a: Vec<i64> = (0..words as i64).map(|i| i * 0x0101_0101 - 3).collect();
+            let b: Vec<i64> = (0..words as i64).map(|i| i.wrapping_mul(-0x7531)).collect();
+            let expected = a
+                .iter()
+                .zip(&b)
+                .fold(5i64, |sum, (a, b)| sum.wrapping_add(a ^ b));
+            assert_eq!(unsafe { mix(a.as_ptr(), b.as_ptr(), 5) }, expected);
+        }
+        let artifact = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(OptLevel::O2)
+            .compile()
+            .unwrap();
+        text_size(artifact.as_bytes())
+    });
+    assert!(
+        sizes[1] <= sizes[0],
+        "loading the words in groups took {} text bytes, in pairs {}",
+        sizes[1],
+        sizes[0]
+    );
+}
+
+#[test]
 fn undef_insert_chains_zero_only_unwritten_bytes() {
     // A chain that writes both halves needs no zero fill, one that writes a
     // half zeroes the other, and padding is zeroed inline.

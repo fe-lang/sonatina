@@ -6,7 +6,7 @@ use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Function, Type, Value, ValueId, module::ModuleCtx, types::CompoundType};
 
 use super::{
-    ValueMap, is_aggregate, load_limbs, load_parts, pointer_clif_type, register_parts,
+    LOAD_FLAGS, ValueMap, is_aggregate, load_limbs, load_parts, pointer_clif_type, register_parts,
     resize_int_value, resolve_i256, resolve_parts, resolve_value, signed_scalar,
     sonatina_type_to_clif_or_err, store_limbs, store_parts, uses_indirect_value_representation,
 };
@@ -33,7 +33,7 @@ pub(super) fn copy_value(
     }
     for piece in value_pieces(ty, size, ctx)? {
         let value = match piece {
-            Piece::Field(offset, ty) => builder.ins().load(ty, MemFlagsData::new(), src, offset),
+            Piece::Field(offset, ty) => builder.ins().load(ty, LOAD_FLAGS, src, offset),
             Piece::Padding(_, ty) => builder.ins().iconst(ty, 0),
         };
         builder
@@ -101,9 +101,7 @@ fn move_pieces(
         .into_iter()
         .map(|piece| {
             let value = match piece {
-                Piece::Field(offset, ty) => {
-                    builder.ins().load(ty, MemFlagsData::new(), src, offset)
-                }
+                Piece::Field(offset, ty) => builder.ins().load(ty, LOAD_FLAGS, src, offset),
                 Piece::Padding(_, ty) => builder.ins().iconst(ty, 0),
             };
             (piece.offset(), value)
@@ -299,16 +297,14 @@ pub(super) fn load_value(
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
     if ty == Type::I256 {
-        let limbs = load_limbs(src, offset, MemFlagsData::new(), builder);
+        let limbs = load_limbs(src, offset, LOAD_FLAGS, builder);
         value_map.insert_limbs(result, limbs);
     } else if let Some(parts) = register_parts(ctx, ty) {
         let values = load_parts(ctx, &parts, src, offset, builder)?;
         value_map.insert_parts(result, values);
     } else {
         let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_clif_type(ctx)?)?;
-        let loaded = builder
-            .ins()
-            .load(clif_ty, MemFlagsData::new(), src, offset);
+        let loaded = builder.ins().load(clif_ty, LOAD_FLAGS, src, offset);
         value_map.insert(result, loaded);
     }
     Ok(())
@@ -414,7 +410,7 @@ pub(super) fn translate_bitcast(
     } else {
         let clif_ty = sonatina_type_to_clif_or_err(to_ty, config.pointer_type())?;
         if from_indirect {
-            Ok(builder.ins().load(clif_ty, MemFlagsData::new(), value, 0))
+            Ok(builder.ins().load(clif_ty, LOAD_FLAGS, value, 0))
         } else if builder.func.dfg.value_type(value) == clif_ty {
             Ok(value)
         } else {

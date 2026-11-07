@@ -18,7 +18,7 @@ use sonatina_ir::{
     isa::native::inst_set as native_inst_set,
 };
 
-use super::{ValueMap, resolve_i256};
+use super::{LOAD_FLAGS, ValueMap, resolve_i256};
 
 pub(super) const LIMBS: usize = 4;
 pub(super) type Limbs = [clif::Value; LIMBS];
@@ -46,7 +46,7 @@ impl I256Storage {
         builder: &mut FunctionBuilder,
     ) -> Limbs {
         self.incoming.insert(value, address);
-        load_limbs(address, 0, MemFlagsData::new().with_notrap(), builder)
+        load_limbs(address, 0, LOAD_FLAGS, builder)
     }
 
     /// The address of storage holding `value` for the `index`th i256

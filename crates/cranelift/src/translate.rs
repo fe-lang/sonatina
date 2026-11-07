@@ -60,6 +60,11 @@ use self::{
 /// The host allocator, which dynamic allocations call.
 const HOST_ALLOCATOR: &str = "malloc";
 
+/// The flags of a load that Sonatina IR performs. Sonatina IR defines no
+/// trapping memory access and nothing handles memory faults, so no load traps.
+/// Saying so lets Cranelift move a load past other loads to its use.
+const LOAD_FLAGS: MemFlagsData = MemFlagsData::new().with_notrap();
+
 /// The object symbols of a module's functions and globals.
 ///
 /// An object has one namespace, and resolves a call the backend makes on its
@@ -1072,7 +1077,7 @@ fn translate_function(
                             target_config,
                             &mut builder,
                         )?;
-                        let limbs = load_limbs(source, 0, MemFlagsData::new(), &mut builder);
+                        let limbs = load_limbs(source, 0, LOAD_FLAGS, &mut builder);
                         value_map.insert_limbs(result, limbs);
                     } else {
                         let val = resolve_operand(
@@ -2345,7 +2350,7 @@ fn translate_function(
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let variant = *test.variant();
                         let tag_ty = tag_clif_type(&module.ctx, variant)?;
-                        let tag = builder.ins().load(tag_ty, MemFlagsData::new(), addr, 0);
+                        let tag = builder.ins().load(tag_ty, LOAD_FLAGS, addr, 0);
                         let is_variant =
                             builder
                                 .ins()
@@ -2730,7 +2735,7 @@ fn resolve_scalar_value(
             ty.resolve_compound(&module.ctx)
         && let Some(clif_ty) = sonatina_type_to_clif(elem, pointer_type)
     {
-        return Ok(builder.ins().load(clif_ty, MemFlagsData::new(), val, 0));
+        return Ok(builder.ins().load(clif_ty, LOAD_FLAGS, val, 0));
     }
     Ok(val)
 }
