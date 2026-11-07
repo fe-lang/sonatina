@@ -35,3 +35,19 @@ pub struct Xor {
 pub struct Bswap {
     arg: ValueId,
 }
+
+/// The number of zero bits above the highest set bit of an integer, as an
+/// integer of the same type: the width of the type for zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(unary(Clz)))]
+pub struct Clz {
+    arg: ValueId,
+}
+
+/// The number of zero bits below the lowest set bit of an integer, as an
+/// integer of the same type: the width of the type for zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(unary(Ctz)))]
+pub struct Ctz {
+    arg: ValueId,
+}

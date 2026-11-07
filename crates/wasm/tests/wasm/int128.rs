@@ -38,7 +38,7 @@ type OverflowReference = fn(Immediate, Immediate) -> (Immediate, bool);
 
 /// Instructions with one 128-bit result, using v4 and v5 and defining v6. A
 /// shift takes its count, v5, first.
-const VALUES: [(&str, Reference); 23] = [
+const VALUES: [(&str, Reference); 24] = [
     ("v6.i128 = add v4 v5;", |a, b| a + b),
     ("v6.i128 = sub v4 v5;", |a, b| a - b),
     ("v6.i128 = mul v4 v5;", |a, b| a * b),
@@ -61,8 +61,11 @@ const VALUES: [(&str, Reference); 23] = [
     ("v6.i128 = neg v4;", |a, _| -a),
     ("v6.i128 = not v4;", |a, _| !a),
     ("v6.i128 = bswap v4;", |a, _| a.bswap()),
-    ("v6.i128 = evm_clz v4;", |a, _| {
+    ("v6.i128 = clz v4;", |a, _| {
         Immediate::I128(bits(a).leading_zeros().into())
+    }),
+    ("v6.i128 = ctz v4;", |a, _| {
+        Immediate::I128(bits(a).trailing_zeros().into())
     }),
 ];
 

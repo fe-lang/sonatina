@@ -65,6 +65,7 @@ impl EvmMachineFunctionLowering<'_> {
             EvmMachineInstKind::And(_) => basic_op(ctx, &[OpCode::AND]),
             EvmMachineInstKind::Or(_) => basic_op(ctx, &[OpCode::OR]),
             EvmMachineInstKind::Xor(_) => basic_op(ctx, &[OpCode::XOR]),
+            EvmMachineInstKind::Clz(_) => basic_op(ctx, &[OpCode::CLZ]),
             EvmMachineInstKind::Jump(jump) => {
                 let dest = self.canonical_block_target(*jump.dest());
                 emit_pre_actions(ctx, alloc.pre_inst(insn));
@@ -277,7 +278,6 @@ impl EvmMachineFunctionLowering<'_> {
             EvmMachineInstKind::EvmExp(_) => basic_op(ctx, &[OpCode::EXP]),
             EvmMachineInstKind::EvmSignExtend(_) => basic_op(ctx, &[OpCode::SIGNEXTEND]),
             EvmMachineInstKind::EvmByte(_) => basic_op(ctx, &[OpCode::BYTE]),
-            EvmMachineInstKind::EvmClz(_) => basic_op(ctx, &[OpCode::CLZ]),
             EvmMachineInstKind::EvmKeccak256(_) => basic_op(ctx, &[OpCode::KECCAK256]),
             EvmMachineInstKind::EvmAddress(_) => basic_op(ctx, &[OpCode::ADDRESS]),
             EvmMachineInstKind::EvmBalance(_) => basic_op(ctx, &[OpCode::BALANCE]),

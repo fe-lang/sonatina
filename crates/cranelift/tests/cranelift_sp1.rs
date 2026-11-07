@@ -129,19 +129,22 @@ block0:
 }
 
 #[test]
-fn leading_zero_counts_compile_without_a_count_instruction() {
+fn bit_counts_compile_without_a_count_instruction() {
     let source = r#"
 func public %count(v0.*i256, v1.*i64, v2.*i8) {
 block0:
     v3.i256 = mload v0 i256;
-    v4.i256 = evm_clz v3;
-    mstore v0 v4 i256;
-    v5.i64 = mload v1 i64;
-    v6.i64 = evm_clz v5;
-    mstore v1 v6 i64;
-    v7.i8 = mload v2 i8;
-    v8.i8 = evm_clz v7;
-    mstore v2 v8 i8;
+    v4.i256 = clz v3;
+    v5.i256 = ctz v4;
+    mstore v0 v5 i256;
+    v6.i64 = mload v1 i64;
+    v7.i64 = clz v6;
+    v8.i64 = ctz v7;
+    mstore v1 v8 i64;
+    v9.i8 = mload v2 i8;
+    v10.i8 = clz v9;
+    v11.i8 = ctz v10;
+    mstore v2 v11 i8;
     return;
 }
 "#;

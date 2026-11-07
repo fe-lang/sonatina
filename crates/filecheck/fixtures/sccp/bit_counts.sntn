@@ -1,0 +1,98 @@
+target = "evm-ethereum-osaka"
+
+# Zero counts to the width, all ones to no zeros.
+# sameln: func public %counts_i1() -> (i1, i1, i1, i1) {
+# nextln:     block0:
+# nextln:         return (1.i1, 1.i1, 0.i1, 0.i1);
+func public %counts_i1() -> (i1, i1, i1, i1) {
+    block0:
+        v0.i1 = clz 0.i1;
+        v1.i1 = ctz 0.i1;
+        v2.i1 = clz 1.i1;
+        v3.i1 = ctz 1.i1;
+        return (v0, v1, v2, v3);
+}
+
+# sameln: func public %counts_i8() -> (i8, i8, i8, i8, i8, i8) {
+# nextln:     block0:
+# nextln:         return (8.i8, 8.i8, 0.i8, 0.i8, 3.i8, 4.i8);
+func public %counts_i8() -> (i8, i8, i8, i8, i8, i8) {
+    block0:
+        v0.i8 = clz 0.i8;
+        v1.i8 = ctz 0.i8;
+        v2.i8 = clz -1.i8;
+        v3.i8 = ctz -1.i8;
+        v4.i8 = clz 16.i8;
+        v5.i8 = ctz 16.i8;
+        return (v0, v1, v2, v3, v4, v5);
+}
+
+# sameln: func public %counts_i16() -> (i16, i16, i16, i16, i16, i16) {
+# nextln:     block0:
+# nextln:         return (16.i16, 16.i16, 0.i16, 0.i16, 4.i16, 8.i16);
+func public %counts_i16() -> (i16, i16, i16, i16, i16, i16) {
+    block0:
+        v0.i16 = clz 0.i16;
+        v1.i16 = ctz 0.i16;
+        v2.i16 = clz -1.i16;
+        v3.i16 = ctz -1.i16;
+        v4.i16 = clz 3840.i16;
+        v5.i16 = ctz 3840.i16;
+        return (v0, v1, v2, v3, v4, v5);
+}
+
+# sameln: func public %counts_i32() -> (i32, i32, i32, i32, i32, i32) {
+# nextln:     block0:
+# nextln:         return (32.i32, 32.i32, 0.i32, 0.i32, 8.i32, 16.i32);
+func public %counts_i32() -> (i32, i32, i32, i32, i32, i32) {
+    block0:
+        v0.i32 = clz 0.i32;
+        v1.i32 = ctz 0.i32;
+        v2.i32 = clz -1.i32;
+        v3.i32 = ctz -1.i32;
+        v4.i32 = clz 16711680.i32;
+        v5.i32 = ctz 16711680.i32;
+        return (v0, v1, v2, v3, v4, v5);
+}
+
+# sameln: func public %counts_i64() -> (i64, i64, i64, i64, i64, i64) {
+# nextln:     block0:
+# nextln:         return (64.i64, 64.i64, 0.i64, 0.i64, 23.i64, 40.i64);
+func public %counts_i64() -> (i64, i64, i64, i64, i64, i64) {
+    block0:
+        v0.i64 = clz 0.i64;
+        v1.i64 = ctz 0.i64;
+        v2.i64 = clz -1.i64;
+        v3.i64 = ctz -1.i64;
+        v4.i64 = clz 1099511627776.i64;
+        v5.i64 = ctz 1099511627776.i64;
+        return (v0, v1, v2, v3, v4, v5);
+}
+
+# sameln: func public %counts_i128() -> (i128, i128, i128, i128, i128, i128) {
+# nextln:     block0:
+# nextln:         return (128.i128, 128.i128, 0.i128, 0.i128, 26.i128, 100.i128);
+func public %counts_i128() -> (i128, i128, i128, i128, i128, i128) {
+    block0:
+        v0.i128 = clz 0.i128;
+        v1.i128 = ctz 0.i128;
+        v2.i128 = clz -1.i128;
+        v3.i128 = ctz -1.i128;
+        v4.i128 = clz 3802951800684688204490109616128.i128;
+        v5.i128 = ctz 3802951800684688204490109616128.i128;
+        return (v0, v1, v2, v3, v4, v5);
+}
+
+# sameln: func public %counts_i256() -> (i256, i256, i256, i256, i256, i256) {
+# nextln:     block0:
+# nextln:         return (256.i256, 256.i256, 0.i256, 0.i256, 53.i256, 200.i256);
+func public %counts_i256() -> (i256, i256, i256, i256, i256, i256) {
+    block0:
+        v0.i256 = clz 0.i256;
+        v1.i256 = ctz 0.i256;
+        v2.i256 = clz -1.i256;
+        v3.i256 = ctz -1.i256;
+        v4.i256 = clz 8034690221294951377709810461705813012611014968913964176506880.i256;
+        v5.i256 = ctz 8034690221294951377709810461705813012611014968913964176506880.i256;
+        return (v0, v1, v2, v3, v4, v5);
+}

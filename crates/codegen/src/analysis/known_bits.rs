@@ -362,7 +362,7 @@ impl KnownBitsQuery {
                     bswap_bits(ty, arg_known.known_one),
                 )
             }
-            UnaryInstKind::Neg | UnaryInstKind::Snego | UnaryInstKind::EvmClz => {
+            UnaryInstKind::Neg | UnaryInstKind::Snego | UnaryInstKind::Clz | UnaryInstKind::Ctz => {
                 KnownBits::unknown(ty)
             }
         }

@@ -20,8 +20,9 @@ pub enum UnaryInstKind {
     Snego,
     Not,
     Bswap,
+    Clz,
+    Ctz,
     IsZero,
-    EvmClz,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

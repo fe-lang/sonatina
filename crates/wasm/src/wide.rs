@@ -20,7 +20,7 @@
 //! `and`, `or`, `xor`, the ten comparisons, `is_zero`, the checked forms
 //! (`uaddo`, `usubo`, `umulo`, `saddo`, `ssubo`, `smulo`, `snego`), the
 //! saturating forms (`uaddsat`, `usubsat`, `umulsat`, `saddsat`, `ssubsat`,
-//! `smulsat`), `bswap`, `evm_clz`, multiplication, division and shifts.
+//! `smulsat`), `bswap`, `clz`, `ctz`, multiplication, division and shifts.
 
 use waffle::{Operator, Type as WType};
 
@@ -244,6 +244,28 @@ impl Emit<'_> {
         }
         let mut result = [zero; LIMBS];
         result[0] = leading;
+        result
+    }
+
+    /// Trailing zero bits of a value of `wide`. The limbs above the value are
+    /// zero, so zero counts to the width. The count is in the lowest limb.
+    pub(super) fn wide_ctz(&mut self, wide: Wide, value: Limbs) -> Limbs {
+        let count = wide.limbs();
+        let zero = self.c64(0);
+        let top = self.op(Operator::I64Ctz, &[value[count - 1]], WType::I64);
+        let base = self.c64(64 * (count - 1) as u64);
+        let mut trailing = self.op(Operator::I64Add, &[top, base], WType::I64);
+        for (index, &limb) in value.iter().enumerate().take(count - 1).rev() {
+            let mut here = self.op(Operator::I64Ctz, &[limb], WType::I64);
+            if index != 0 {
+                let bits = self.c64(64 * index as u64);
+                here = self.op(Operator::I64Add, &[here, bits], WType::I64);
+            }
+            let nonzero = self.op(Operator::I64Ne, &[limb, zero], WType::I32);
+            trailing = self.op(Operator::Select, &[here, trailing, nonzero], WType::I64);
+        }
+        let mut result = [zero; LIMBS];
+        result[0] = trailing;
         result
     }
 

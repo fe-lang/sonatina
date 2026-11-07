@@ -175,6 +175,38 @@ impl Immediate {
         }
     }
 
+    /// The number of zero bits above the highest set bit, as a value of the
+    /// same type: the width of the type for zero.
+    pub fn clz(self) -> Self {
+        let count = match self {
+            Self::I1(val) => u32::from(!val),
+            Self::I8(val) => val.leading_zeros(),
+            Self::I16(val) => val.leading_zeros(),
+            Self::I32(val) => val.leading_zeros(),
+            Self::I64(val) => val.leading_zeros(),
+            Self::I128(val) => val.leading_zeros(),
+            Self::I256(val) => val.to_u256().leading_zeros(),
+            Self::EnumTag { .. } => panic!("enum tags have no bit count"),
+        };
+        Self::from_i256(count.into(), self.ty())
+    }
+
+    /// The number of zero bits below the lowest set bit, as a value of the
+    /// same type: the width of the type for zero.
+    pub fn ctz(self) -> Self {
+        let count = match self {
+            Self::I1(val) => u32::from(!val),
+            Self::I8(val) => val.trailing_zeros(),
+            Self::I16(val) => val.trailing_zeros(),
+            Self::I32(val) => val.trailing_zeros(),
+            Self::I64(val) => val.trailing_zeros(),
+            Self::I128(val) => val.trailing_zeros(),
+            Self::I256(val) => val.to_u256().trailing_zeros(),
+            Self::EnumTag { .. } => panic!("enum tags have no bit count"),
+        };
+        Self::from_i256(count.into(), self.ty())
+    }
+
     pub fn zext(self, ty: Type) -> Self {
         debug_assert!(self.ty() <= ty);
         let i256: I256 = match self {

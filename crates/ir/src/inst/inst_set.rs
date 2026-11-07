@@ -55,6 +55,8 @@ define_inst_set_base! {
         logic::Or,
         logic::Xor,
         logic::Bswap,
+        logic::Clz,
+        logic::Ctz,
         cast::Sext,
         cast::Zext,
         cast::Trunc,
@@ -125,7 +127,6 @@ define_inst_set_base! {
         evm::EvmExp,
         evm::EvmSignExtend,
         evm::EvmByte,
-        evm::EvmClz,
         evm::EvmKeccak256,
         evm::EvmKeccak256Words,
         evm::EvmAddress,
@@ -247,7 +248,7 @@ mod tests {
         BlockId, InstArity, InstDowncast, InstDowncastMut, Type, ValueId,
         inst::{
             BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind,
-            evm::{EvmClz, EvmSdiv, inst_set::EvmInstSet},
+            evm::{EvmSdiv, inst_set::EvmInstSet},
         },
     };
 
@@ -397,8 +398,12 @@ mod tests {
             InstClassKind::Binary(BinaryInstKind::EvmSdiv)
         );
         assert_eq!(
-            EvmClz::new(&evm_inst_set, v).kind(),
-            InstClassKind::Unary(UnaryInstKind::EvmClz)
+            Clz::new(&evm_inst_set, v).kind(),
+            InstClassKind::Unary(UnaryInstKind::Clz)
+        );
+        assert_eq!(
+            Ctz::new(&evm_inst_set, v).kind(),
+            InstClassKind::Unary(UnaryInstKind::Ctz)
         );
     }
 }

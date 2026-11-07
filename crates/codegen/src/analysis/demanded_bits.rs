@@ -145,7 +145,8 @@ impl<'a> DemandedBitsQuery<'a> {
             UnaryInstKind::IsZero
             | UnaryInstKind::Neg
             | UnaryInstKind::Snego
-            | UnaryInstKind::EvmClz => {
+            | UnaryInstKind::Clz
+            | UnaryInstKind::Ctz => {
                 self.add_demand(*arg, type_mask_or_zero(self.func, *arg), worklist, queued);
             }
         }
