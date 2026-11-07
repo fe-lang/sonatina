@@ -520,6 +520,60 @@ block0:
     }
 }
 
+#[test]
+fn local_objects_move_through_calls_without_copies() {
+    // `%fill` writes its result into `v1`, which `%sum` reads itself; each
+    // copy remains once the object also reaches the call as a reference.
+    let cases = [
+        ("v4.i64 = call %sum v3;", 0),
+        ("v4.i64 = call %peek v3 v1;", 1),
+    ];
+    let triple = native_isa(host_architecture()).triple();
+    for (call, copies) in cases {
+        let source = format!(
+            "target = \"{triple}\"
+func inline(never) private %fill(v0.i64) -> [i64; 32] {{
+block0:
+    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    return v1;
+}}
+func inline(never) private %sum(v0.[i64; 32]) -> i64 {{
+block0:
+    v1.i64 = extract_value v0 0.i64;
+    return v1;
+}}
+func inline(never) private %peek(v0.[i64; 32], noalias nocapture v1.objref<[i64; 32]>) -> i64 {{
+block0:
+    v2.i64 = extract_value v0 0.i64;
+    return v2;
+}}
+func public %f(v0.i64) -> i64 {{
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.[i64; 32] = call %fill v0;
+    obj.store v1 v2;
+    v3.[i64; 32] = obj.load v1;
+    {call}
+    return v4;
+}}
+"
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let artifact = CraneliftObjectBackend::new()
+                .compile_module(&module, &BackendOptions { opt_level: level })
+                .unwrap();
+            assert_eq!(
+                references(artifact.as_bytes(), "memcpy"),
+                copies,
+                "{level:?}\n{call}"
+            );
+        }
+    }
+}
+
 #[cfg(feature = "jit")]
 #[test]
 #[ignore = "manual release-profile compile/runtime measurement; run with --release --ignored --nocapture"]

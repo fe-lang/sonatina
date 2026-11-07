@@ -432,7 +432,14 @@ fn translate_function(
         }
     }
 
-    let frame = FrameSlots::new(function, &cfg, &block_order, sret_ptr, &mut builder)?;
+    let frame = FrameSlots::new(
+        function,
+        &cfg,
+        &block_order,
+        sret_ptr,
+        |call| tail_calls.is_tail_call(func_ref, call),
+        &mut builder,
+    )?;
     let mut known_bits = None;
     // A jump table's entries per key: at least 10% of a run's entries are
     // keys when optimizing for speed and 40% for size, as in LLVM.
@@ -1402,6 +1409,8 @@ fn translate_function(
                             i256_storage.result(&mut builder)
                         } else if register_parts(&module.ctx, result_ty).is_some() {
                             create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?
+                        } else if let Some(object) = frame.destination(inst_id) {
+                            resolve_value(function, object, &value_map, &mut builder)?
                         } else {
                             frame.address(ir_results[0], &mut builder)?
                         };
@@ -1984,6 +1993,7 @@ fn translate_function(
                         }
                     }
                 }
+                NativeInstKind::ObjStore(_) if frame.stored_in_place(inst_id) => {}
                 NativeInstKind::ObjStore(obj_store) => {
                     let dest =
                         resolve_value(function, *obj_store.object(), &value_map, &mut builder)?;

@@ -49,6 +49,17 @@ use super::{
 /// from every argument, and holds classes with disjoint ranges. A `return`
 /// of another value still copies into it, which is safe because no value is
 /// live after a `return`.
+///
+/// Objects (`obj.alloc`) have slots of their own. A local object whose
+/// address does not escape is reached by a callee only through the call's
+/// arguments, which lets values move between it and calls without copies.
+/// A load of a whole such object whose only use passes it to a call later
+/// in its block, with no state change in between, owns no storage: the
+/// call reads the object, which nothing else can change while it runs. A
+/// call's indirect result whose only use stores it into such an object
+/// later in its block, with no state change in between, is written there
+/// by the callee, unless an argument reaches the object or an instruction in
+/// between reads it.
 pub(super) struct FrameSlots {
     slot_of: FxHashMap<ValueId, clif::StackSlot>,
     return_buffer: Option<clif::Value>,
@@ -58,6 +69,10 @@ pub(super) struct FrameSlots {
     /// The `insert_value` continuing each continued source's storage.
     continuation: FxHashMap<ValueId, InstId>,
     forwarded: FxHashSet<ValueId>,
+    /// The object each call writes its result into, and the stores that
+    /// therefore copy nothing.
+    destination: FxHashMap<InstId, ValueId>,
+    stored_in_place: FxHashSet<InstId>,
 }
 
 impl FrameSlots {
@@ -66,9 +81,10 @@ impl FrameSlots {
         cfg: &ControlFlowGraph,
         block_order: &[BlockId],
         return_buffer: Option<clif::Value>,
+        is_tail_call: impl Fn(InstId) -> bool,
         builder: &mut FunctionBuilder,
     ) -> Result<Self, String> {
-        let plan = Plan::new(function, cfg, block_order)?;
+        let plan = Plan::new(function, cfg, block_order, is_tail_call)?;
         let mut in_buffer = vec![false; plan.classes.len()];
         if return_buffer.is_some() {
             // Keep the most returned classes that are never live together.
@@ -161,7 +177,25 @@ impl FrameSlots {
                 .collect(),
             continuation: plan.continuation,
             forwarded: plan.forwarded,
+            stored_in_place: plan.destination.values().map(|&(_, store)| store).collect(),
+            destination: plan
+                .destination
+                .into_iter()
+                .map(|(call, (object, _))| (call, object))
+                .collect(),
         })
+    }
+
+    /// The object the call `inst` writes its indirect result into, if not
+    /// the result's own storage.
+    pub fn destination(&self, inst: InstId) -> Option<ValueId> {
+        self.destination.get(&inst).copied()
+    }
+
+    /// Whether the store `inst` stores a value its call already wrote in
+    /// place.
+    pub fn stored_in_place(&self, inst: InstId) -> bool {
+        self.stored_in_place.contains(&inst)
     }
 
     /// Whether a load leaves its result in memory for its consumer.
@@ -242,6 +276,9 @@ struct Plan {
     roots: Vec<(ValueId, usize)>,
     continuation: FxHashMap<ValueId, InstId>,
     forwarded: FxHashSet<ValueId>,
+    /// Calls writing their result into an object, with the object and the
+    /// store.
+    destination: FxHashMap<InstId, (ValueId, InstId)>,
 }
 
 impl Plan {
@@ -249,6 +286,7 @@ impl Plan {
         function: &Function,
         cfg: &ControlFlowGraph,
         block_order: &[BlockId],
+        is_tail_call: impl Fn(InstId) -> bool,
     ) -> Result<Self, String> {
         let dfg = &function.dfg;
         let ctx = function.ctx();
@@ -270,7 +308,11 @@ impl Plan {
             roots: Vec::new(),
             continuation: FxHashMap::default(),
             forwarded: FxHashSet::default(),
+            destination: FxHashMap::default(),
         };
+        let local = local_objects(function);
+        // The local object each call argument passed in place reads.
+        let mut passed_from = FxHashMap::<ValueId, ValueId>::default();
         let mut class_of = FxHashMap::<ValueId, usize>::default();
         for &block in block_order {
             let (block_start, _) = bounds[block].unwrap();
@@ -288,6 +330,35 @@ impl Plan {
                         if copied_once(function, inst, result)? =>
                     {
                         plan.forwarded.insert(result);
+                        None
+                    }
+                    NativeInstKind::ObjLoad(load)
+                        if let Some(&object) = local.get(load.object())
+                            && passed_once(
+                                function,
+                                inst,
+                                result,
+                                object,
+                                &local,
+                                &is_tail_call,
+                            ) =>
+                    {
+                        plan.forwarded.insert(result);
+                        passed_from.insert(result, object);
+                        None
+                    }
+                    NativeInstKind::Call(_)
+                        if !is_tail_call(inst)
+                            && let Some(target) = result_destination(
+                                function,
+                                &position,
+                                inst,
+                                result,
+                                &local,
+                                &passed_from,
+                            ) =>
+                    {
+                        plan.destination.insert(inst, target);
                         None
                     }
                     NativeInstKind::Mload(_)
@@ -428,6 +499,156 @@ fn copied_once(function: &Function, inst: InstId, result: ValueId) -> Result<boo
         .all(|next| !dfg.may_mutate_state(next)))
 }
 
+/// Each address of a local object whose address does not escape, with the
+/// object (its `obj.alloc`): one only projected, indexed, loaded, stored
+/// into, and passed to `nocapture` parameters, so that a callee reaches it
+/// only through its call's arguments.
+fn local_objects(function: &Function) -> FxHashMap<ValueId, ValueId> {
+    let dfg = &function.dfg;
+    let ctx = function.ctx();
+    let mut object_of = FxHashMap::default();
+    let mut escaped = FxHashSet::default();
+    let mut pending: Vec<_> = function
+        .layout
+        .iter_block()
+        .flat_map(|block| function.layout.iter_inst(block))
+        .filter(|&inst| {
+            matches!(
+                native_inst_set().resolve_inst(dfg.inst(inst)),
+                NativeInstKind::ObjAlloc(_)
+            )
+        })
+        .filter_map(|inst| dfg.inst_result(inst))
+        .map(|object| (object, object))
+        .collect();
+    while let Some((address, object)) = pending.pop() {
+        object_of.insert(address, object);
+        for &user in dfg.users(address) {
+            let derived = match native_inst_set().resolve_inst(dfg.inst(user)) {
+                NativeInstKind::ObjProj(proj)
+                    if proj.values()[1..].iter().all(|&v| v != address) =>
+                {
+                    dfg.inst_result(user)
+                }
+                NativeInstKind::ObjIndex(index) if *index.index() != address => {
+                    dfg.inst_result(user)
+                }
+                NativeInstKind::ObjLoad(_) => None,
+                NativeInstKind::ObjStore(store) if *store.value() != address => None,
+                NativeInstKind::Call(call)
+                    if call.args().iter().enumerate().all(|(index, &arg)| {
+                        arg != address
+                            || ctx.func_sig(*call.callee(), |sig| sig.is_nocapture_arg(index))
+                    }) =>
+                {
+                    None
+                }
+                _ => {
+                    escaped.insert(object);
+                    None
+                }
+            };
+            if let Some(derived) = derived {
+                pending.push((derived, object));
+            }
+        }
+    }
+    object_of.retain(|_, object| !escaped.contains(object));
+    object_of
+}
+
+/// Whether the only use of the load `inst` of the local object `object`
+/// passes it to a call later in its block, not a tail call, with no state
+/// change in between, and no other argument reaching the object.
+fn passed_once(
+    function: &Function,
+    inst: InstId,
+    result: ValueId,
+    object: ValueId,
+    local: &FxHashMap<ValueId, ValueId>,
+    is_tail_call: &impl Fn(InstId) -> bool,
+) -> bool {
+    let dfg = &function.dfg;
+    let mut users = dfg.users(result);
+    let (Some(&call), None) = (users.next(), users.next()) else {
+        return false;
+    };
+    let NativeInstKind::Call(info) = native_inst_set().resolve_inst(dfg.inst(call)) else {
+        return false;
+    };
+    !is_tail_call(call)
+        && info
+            .args()
+            .iter()
+            .all(|arg| *arg == result || local.get(arg) != Some(&object))
+        && unchanged_between(function, inst, call)
+}
+
+/// For the call `inst`, whose result `result` its only use stores into a
+/// local object later in its block with no state change in between: that
+/// object's address, defined before the call, and the store, unless an
+/// argument reaches the object or an instruction in between reads it, which
+/// would see the result early.
+fn result_destination(
+    function: &Function,
+    position: &SecondaryMap<InstId, u32>,
+    inst: InstId,
+    result: ValueId,
+    local: &FxHashMap<ValueId, ValueId>,
+    passed_from: &FxHashMap<ValueId, ValueId>,
+) -> Option<(ValueId, InstId)> {
+    let dfg = &function.dfg;
+    let mut users = dfg.users(result);
+    let (Some(&store), None) = (users.next(), users.next()) else {
+        return None;
+    };
+    let NativeInstKind::ObjStore(info) = native_inst_set().resolve_inst(dfg.inst(store)) else {
+        return None;
+    };
+    let address = *info.object();
+    let object = *local.get(&address)?;
+    let NativeInstKind::Call(call) = native_inst_set().resolve_inst(dfg.inst(inst)) else {
+        return None;
+    };
+    let defined_before = dfg.value_inst(address).is_none_or(|def| {
+        function.layout.inst_block(def) != function.layout.inst_block(inst)
+            || position[def] < position[inst]
+    });
+    (*info.value() == result
+        && defined_before
+        && call
+            .args()
+            .iter()
+            .all(|arg| local.get(arg) != Some(&object) && passed_from.get(arg) != Some(&object))
+        && unchanged_between(function, inst, store)
+        && std::iter::successors(function.layout.next_inst_of(inst), |&next| {
+            function.layout.next_inst_of(next)
+        })
+        .take_while(|&next| next != store)
+        .all(|next| {
+            !dfg.inst(next)
+                .collect_values()
+                .iter()
+                .any(|value| local.get(value) == Some(&object))
+        }))
+    .then_some((address, store))
+}
+
+/// Whether `last` follows `first` in its block with no instruction in
+/// between that may change state.
+fn unchanged_between(function: &Function, first: InstId, last: InstId) -> bool {
+    function.layout.inst_block(first) == function.layout.inst_block(last)
+        && std::iter::successors(function.layout.next_inst_of(first), |&next| {
+            function.layout.next_inst_of(next)
+        })
+        .take_while(|&next| next != last)
+        .all(|next| !function.dfg.may_mutate_state(next))
+        && std::iter::successors(function.layout.next_inst_of(first), |&next| {
+            function.layout.next_inst_of(next)
+        })
+        .any(|next| next == last)
+}
+
 /// Live range construction over the translation's block order.
 struct Ranges {
     /// The first and last position of each translated block.
@@ -480,7 +701,7 @@ mod tests {
             let mut clif_function = clif::Function::new();
             let mut context = FunctionBuilderContext::new();
             let mut builder = FunctionBuilder::new(&mut clif_function, &mut context);
-            FrameSlots::new(function, &cfg, &block_order, None, &mut builder).unwrap();
+            FrameSlots::new(function, &cfg, &block_order, None, |_| false, &mut builder).unwrap();
             clif_function
                 .sized_stack_slots
                 .values()

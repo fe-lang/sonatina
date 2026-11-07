@@ -970,3 +970,110 @@ block0:
         );
     }
 }
+
+#[test]
+fn objects_move_into_and_out_of_calls_without_copies() {
+    // `%fill`'s result goes straight into `v1` and `%sum` reads `v1` itself;
+    // `%clobber` writes the object it is also passed a copy of, `%swap`
+    // reads the object its result is stored into, and `%replaced` reads the
+    // old object between a call and the store of its result, as
+    // `mem::replace` does, so all three keep copies.
+    let source = r#"
+func inline(never) private %fill(v0.i64) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.i64 = add v0 1.i64;
+    v3.[i64; 32] = insert_value v1 31.i64 v2;
+    return v3;
+}
+func inline(never) private %sum(v0.[i64; 32]) -> i64 {
+block0:
+    v1.i64 = extract_value v0 0.i64;
+    v2.i64 = extract_value v0 31.i64;
+    v3.i64 = add v1 v2;
+    return v3;
+}
+func inline(never) private %clobber(v0.[i64; 32], noalias nocapture v1.objref<[i64; 32]>) -> i64 {
+block0:
+    v2.objref<i64> = obj.index v1 0.i64;
+    obj.store v2 99.i64;
+    v3.i64 = extract_value v0 0.i64;
+    return v3;
+}
+func inline(never) private %swap(noalias nocapture v0.objref<[i64; 32]>) -> [i64; 32] {
+block0:
+    v1.objref<i64> = obj.index v0 0.i64;
+    v2.i64 = obj.load v1;
+    v3.objref<i64> = obj.index v0 31.i64;
+    v4.i64 = obj.load v3;
+    v5.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v4;
+    v6.[i64; 32] = insert_value v5 31.i64 v2;
+    return v6;
+}
+func public %roundtrip(v0.i64) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.[i64; 32] = call %fill v0;
+    obj.store v1 v2;
+    v3.[i64; 32] = obj.load v1;
+    v4.i64 = call %sum v3;
+    return v4;
+}
+func public %replaced(v0.i64) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.[i64; 32] = call %fill v0;
+    obj.store v1 v2;
+    v3.[i64; 32] = call %fill 1000.i64;
+    v4.[i64; 32] = obj.load v1;
+    obj.store v1 v3;
+    v5.i64 = extract_value v4 0.i64;
+    v6.objref<i64> = obj.index v1 0.i64;
+    v7.i64 = obj.load v6;
+    v8.i64 = mul v7 1000.i64;
+    v9.i64 = add v5 v8;
+    return v9;
+}
+func public %aliased(v0.i64) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.[i64; 32] = call %fill v0;
+    obj.store v1 v2;
+    v3.[i64; 32] = obj.load v1;
+    v4.i64 = call %clobber v3 v1;
+    v5.[i64; 32] = call %swap v1;
+    obj.store v1 v5;
+    v6.[i64; 32] = obj.load v1;
+    v7.i64 = extract_value v6 0.i64;
+    v8.i64 = extract_value v6 31.i64;
+    v9.i64 = mul v8 1000.i64;
+    v10.i64 = add v4 v9;
+    v11.i64 = mul v7 1000000.i64;
+    v12.i64 = add v10 v11;
+    return v12;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let roundtrip: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("roundtrip").unwrap()) };
+        let aliased: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("aliased").unwrap()) };
+        let replaced: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("replaced").unwrap()) };
+        for value in [0, 5, -7, 1 << 40] {
+            assert_eq!(unsafe { roundtrip(value) }, 2 * value + 1, "{level:?}");
+            // `%clobber` sees the value before its own write; `%swap` reads
+            // the old elements, 99 and value + 1, before its result lands.
+            let expected = value + (99 * 1000) + (value + 1) * 1_000_000;
+            assert_eq!(unsafe { aliased(value) }, expected, "{level:?}");
+            assert_eq!(unsafe { replaced(value) }, value + 1000 * 1000, "{level:?}");
+        }
+    }
+}
