@@ -521,12 +521,12 @@ func public %entry(v0.i256) -> i256 {
     }
 
     #[test]
-    fn keeps_nocapture_marks_of_the_remaining_args() {
+    fn keeps_marks_of_the_remaining_args() {
         let parsed = parse_module(
             r#"
 target = "evm-ethereum-osaka"
 
-func private %read(v0.i256, nocapture v1.objref<i256>, v2.i256, nocapture v3.objref<i256>) -> i256 {
+func private %read(v0.i256, nocapture readonly v1.objref<i256>, v2.i256, nocapture v3.objref<i256>) -> i256 {
     block0:
         v4.i256 = obj.load v1;
         return v4;
@@ -547,7 +547,7 @@ func private %entry() -> i256 {
         assert_eq!(stats.removed_args, 3);
         assert!(
             dump_function(&parsed.module, "read")
-                .contains("func private %read(nocapture v1.objref<i256>) -> i256")
+                .contains("func private %read(nocapture readonly v1.objref<i256>) -> i256")
         );
         assert_verified(&parsed.module);
     }

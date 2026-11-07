@@ -169,6 +169,7 @@ pub struct FuncDeclaration {
 #[derive(Debug)]
 pub struct FuncParamType {
     pub nocapture: bool,
+    pub readonly: bool,
     pub ty: Type,
 }
 
@@ -176,6 +177,7 @@ impl FromSyntax<Error> for FuncParamType {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         FuncParamType {
             nocapture: node.get_opt(Rule::nocapture).is_some(),
+            readonly: node.get_opt(Rule::readonly).is_some(),
             ty: node.single(Rule::type_name),
         }
     }
@@ -389,6 +391,7 @@ pub struct FuncSignature {
 pub struct FuncParam {
     pub noalias: bool,
     pub nocapture: bool,
+    pub readonly: bool,
     pub decl: ValueDeclaration,
 }
 
@@ -397,6 +400,7 @@ impl FromSyntax<Error> for FuncParam {
         FuncParam {
             noalias: node.get_opt(Rule::noalias).is_some(),
             nocapture: node.get_opt(Rule::nocapture).is_some(),
+            readonly: node.get_opt(Rule::readonly).is_some(),
             decl: node.single(Rule::value_declaration),
         }
     }

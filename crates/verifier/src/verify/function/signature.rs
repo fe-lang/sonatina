@@ -1,4 +1,7 @@
-use sonatina_ir::Value;
+use sonatina_ir::{
+    Value,
+    inst::{data, downcast},
+};
 
 use crate::{
     diagnostic::{Diagnostic, DiagnosticCode, Location},
@@ -284,6 +287,61 @@ impl FunctionVerifier<'_> {
                     }
                 }
             }
+        }
+    }
+
+    /// Rejects a store, tag write or variant write into the object of a
+    /// `readonly` argument, made through the argument or its projections.
+    /// Writes through other derived references, such as pointers, go
+    /// unchecked.
+    pub(super) fn check_readonly_args(&mut self) {
+        let Some(sig) = &self.sig else {
+            return;
+        };
+        let readonly: Vec<_> = sig
+            .readonly_args()
+            .filter_map(|idx| self.func.arg_values.get(idx).copied())
+            .collect();
+        if readonly.is_empty() {
+            return;
+        }
+        let is = self.ctx.inst_set;
+        let dfg = &self.func.dfg;
+        let written: Vec<_> = self
+            .block_order
+            .iter()
+            .flat_map(|block| &self.block_to_insts[block])
+            .filter_map(|&inst| {
+                let data = dfg.inst(inst);
+                let mut object = downcast::<&data::ObjStore>(is, data)
+                    .map(|store| *store.object())
+                    .or_else(|| downcast::<&data::EnumSetTag>(is, data).map(|tag| *tag.object()))
+                    .or_else(|| {
+                        downcast::<&data::EnumWriteVariant>(is, data).map(|write| *write.object())
+                    })?;
+                // Dominance holds, so projection chains end.
+                while let Some(base) = dfg.value_inst(object).and_then(|def| {
+                    let data = dfg.inst(def);
+                    downcast::<&data::ObjProj>(is, data)
+                        .map(|proj| proj.values()[0])
+                        .or_else(|| {
+                            downcast::<&data::ObjIndex>(is, data).map(|index| *index.object())
+                        })
+                        .or_else(|| {
+                            downcast::<&data::EnumProj>(is, data).map(|proj| *proj.object())
+                        })
+                }) {
+                    object = base;
+                }
+                readonly.contains(&object).then_some(inst)
+            })
+            .collect();
+        for inst in written {
+            self.emit(Diagnostic::error(
+                DiagnosticCode::InvalidSignature,
+                "a readonly argument's object cannot be written",
+                self.inst_location(inst),
+            ));
         }
     }
 }

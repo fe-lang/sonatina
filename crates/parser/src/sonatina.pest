@@ -23,7 +23,7 @@ triple_component = _{ (ASCII_ALPHANUMERIC | "_")+ }
 declaration              = _{ function_declaration | struct_declaration | enum_declaration | gv_declaration }
 function_declaration     =  { "declare" ~ inline_hint? ~ linkage ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
 function_param_type_list =  { "(" ~ (function_param_type ~ ",")* ~ function_param_type? ~ ")" }
-function_param_type      =  { nocapture? ~ type_name }
+function_param_type      =  { nocapture? ~ readonly? ~ type_name }
 struct_declaration       =  { "type" ~ struct_identifier ~ "=" ~ struct_fields ~ ";" }
 enum_declaration         =  { "type" ~ struct_identifier ~ "=" ~ "enum" ~ "{" ~ NEWLINE* ~ enum_variant_list ~ NEWLINE* ~ "}" ~ ";" }
 enum_variant_list        = ${ (NEWLINE* ~ enum_variant_line ~ "," )* ~ NEWLINE* ~ enum_variant_line? }
@@ -50,9 +50,10 @@ linkage             =  { "public" | "private" | "external" }
 function_identifier = ${ "%" ~ function_name }
 function_name       = @{ ident_start_char ~ ident_body_char* }
 function_params     =  { "(" ~ (function_param ~ ",")* ~ function_param? ~ ")" }
-function_param      =  { noalias? ~ nocapture? ~ value_declaration }
+function_param      =  { noalias? ~ nocapture? ~ readonly? ~ value_declaration }
 noalias             =  { "noalias" }
 nocapture           =  { "nocapture" }
+readonly            =  { "readonly" }
 function_body       = _{ "{" ~ (NEWLINE+ ~ block?)* ~ "}" }
 block               =  { block_ident ~ ":" ~ (NEWLINE+ ~ stmt)* }
 _stmts              = _{ (stmt ~ NEWLINE+)* }

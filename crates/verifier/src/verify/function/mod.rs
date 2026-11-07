@@ -177,6 +177,7 @@ impl<'a> FunctionVerifier<'a> {
         self.run_pass::<DominancePass>();
         self.run_pass::<MetadataPass>();
         if self.cfg.should_check_types() && !self.has_errors {
+            self.check_readonly_args();
             enum_proofs::verify(self);
         }
     }

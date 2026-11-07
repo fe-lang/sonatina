@@ -14,8 +14,8 @@ pub(crate) trait SignatureRewritePlan {
     fn new_ret_tys(&self) -> &[Type];
 
     /// The new position of old argument `old`, if the plan passes it on
-    /// unchanged, keeping its `nocapture` mark. A plan that passes none on
-    /// drops every mark.
+    /// unchanged, keeping its `nocapture` and `readonly` marks. A plan that
+    /// passes none on drops every mark.
     fn new_arg(&self, _old: usize) -> Option<usize> {
         None
     }
@@ -85,9 +85,7 @@ pub(crate) fn rewrite_declared_signatures<P: SignatureRewritePlan>(
             plan.new_arg_tys(),
             plan.new_ret_tys(),
         );
-        for arg in sig.nocapture_args().filter_map(|old| plan.new_arg(old)) {
-            new_sig.set_nocapture_arg(arg);
-        }
+        new_sig.mark_args_as(&sig, |old| plan.new_arg(old));
         module
             .ctx
             .declared_funcs
