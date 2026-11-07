@@ -128,7 +128,7 @@ pub(super) fn translate_module(
     let mut divider = Divider::default();
     let mut black_box = BlackBoxBarrier::default();
     let tail_calls = TailCalls::new(module);
-    let ownership = Ownership::new(module);
+    let ownership = Ownership::new(module, &tail_calls);
     let arg_writes = ArgWrites::new(module);
     let mut function_tables = HashMap::new();
 

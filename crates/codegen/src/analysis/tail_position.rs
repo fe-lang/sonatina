@@ -156,11 +156,19 @@ fn tail_call(func_ref: FuncRef, function: &Function, block: BlockId) -> Option<(
     let same_returns = ctx.func_sig(func_ref, |caller| {
         ctx.func_sig(callee, |callee| caller.ret_tys() == callee.ret_tys())
     });
-    let args_outside_frame = call.args().iter().all(|&arg| outside_frame(function, arg));
+    let args = call.args();
+    let args_outside_frame = args.iter().all(|&arg| outside_frame(function, arg));
+    // An aggregate passed twice would reach the callee as two references to
+    // one storage, which it may own and overwrite through either.
+    let aggregates_distinct = args
+        .iter()
+        .enumerate()
+        .all(|(index, arg)| !is_aggregate(function, *arg) || !args[..index].contains(arg));
     (ctx.func_linkage(callee).is_private()
         && returns_at_once(function, block, last, function.dfg.inst_results(call_inst))
         && same_returns
-        && args_outside_frame)
+        && args_outside_frame
+        && aggregates_distinct)
         .then_some((call_inst, callee))
 }
 
@@ -217,16 +225,23 @@ fn tail_switch(
     })
 }
 
-/// Whether `arg` neither lives in the caller's frame nor refers to it. i256
-/// and aggregate arguments pass as the address of caller storage; a constref
-/// is the address of a constant.
+/// Whether `arg` lives outside this function's frame: a scalar, or an
+/// aggregate argument of this function, which its own caller's storage
+/// holds. Other aggregates, and every i256, which a call passes through the
+/// frame's outgoing storage, live in the frame.
 fn outside_frame(function: &Function, arg: ValueId) -> bool {
-    let ty = function.dfg.value_ty(arg);
-    !(ty == Type::I256
-        || matches!(
-            ty.resolve_compound(function.ctx()),
-            Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_))
-        ))
+    function.dfg.value_ty(arg) != Type::I256
+        && (!is_aggregate(function, arg) || function.arg_values.contains(&arg))
+}
+
+fn is_aggregate(function: &Function, value: ValueId) -> bool {
+    matches!(
+        function
+            .dfg
+            .value_ty(value)
+            .resolve_compound(function.ctx()),
+        Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_))
+    )
 }
 
 /// Whether a callee could reach storage in this function's frame: an

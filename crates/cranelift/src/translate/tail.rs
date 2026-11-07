@@ -46,6 +46,11 @@ impl TailCalls {
         calls
     }
 
+    /// Each function's tail calls.
+    pub(super) fn sites(&self) -> impl Iterator<Item = (FuncRef, &HashSet<InstId>)> {
+        self.sites.iter().map(|(&func, sites)| (func, sites))
+    }
+
     pub(super) fn tail_switch(&self, func: FuncRef, br_table: InstId) -> Option<&TailSwitch> {
         self.switches.get(&(func, br_table))
     }
@@ -219,6 +224,57 @@ func private %narrows(v0.i64) -> i32 {
         for name in ["adds", "wide", "narrows"] {
             assert_eq!(tail_call_count(&module, &tail_calls, name), 0, "{name}");
         }
+    }
+
+    #[test]
+    fn aggregate_arguments_pass_on() {
+        // A caller's own aggregate argument lives outside its frame; one
+        // passed twice, or one loaded into the frame, does not pass on.
+        let (module, tail_calls) = tail_calls(
+            r#"
+func private %forwards(v0.[i64; 32], v1.i64) -> i64 {
+    block0:
+        v2.i1 = eq v1 0.i64;
+        br v2 block1 block2;
+    block1:
+        v3.i64 = extract_value v0 0.i64;
+        return v3;
+    block2:
+        v4.i64 = sub v1 1.i64;
+        v5.i64 = call %forwards v0 v4;
+        return v5;
+}
+
+func private %twice(v0.[i64; 32], v1.i64) -> i64 {
+    block0:
+        v2.i64 = call %pair v0 v0 v1;
+        return v2;
+}
+
+func private %pair(v0.[i64; 32], v1.[i64; 32], v2.i64) -> i64 {
+    block0:
+        v3.i64 = call %twice v1 v2;
+        return v3;
+}
+
+func private %loads(v0.*[i64; 32], v1.i64) -> i64 {
+    block0:
+        v2.[i64; 32] = mload v0 [i64; 32];
+        v3.i64 = call %takes v2 v1 v0;
+        return v3;
+}
+
+func private %takes(v0.[i64; 32], v1.i64, v2.*[i64; 32]) -> i64 {
+    block0:
+        v3.i64 = call %loads v2 v1;
+        return v3;
+}
+"#,
+        );
+        assert_eq!(tail_call_count(&module, &tail_calls, "forwards"), 1);
+        assert_eq!(tail_call_count(&module, &tail_calls, "pair"), 1);
+        assert_eq!(tail_call_count(&module, &tail_calls, "twice"), 0);
+        assert_eq!(tail_call_count(&module, &tail_calls, "loads"), 0);
     }
 
     #[test]
