@@ -12,7 +12,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{Function, Type, Value, ValueId, module::ModuleCtx, types::CompoundType};
 
 use super::{
-    ValueMap, create_stack_slot_for_type, normalize_scalar, resolve_value,
+    LOAD_FLAGS, ValueMap, create_stack_slot_for_type, normalize_scalar, resolve_value,
     sonatina_scalar_type_to_clif_or_err, sonatina_type_to_clif_or_err, value_pieces,
     value_storage_size,
 };
@@ -171,10 +171,9 @@ pub(super) fn load_parts(
         .iter()
         .map(|part| {
             let ty = sonatina_type_to_clif_or_err(part.ty, pointer_type)?;
-            let value =
-                builder
-                    .ins()
-                    .load(ty, MemFlagsData::new(), src, offset + part.offset as i32);
+            let value = builder
+                .ins()
+                .load(ty, LOAD_FLAGS, src, offset + part.offset as i32);
             Ok(normalize_scalar(value, part.ty, builder))
         })
         .collect()
