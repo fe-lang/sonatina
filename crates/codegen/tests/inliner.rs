@@ -981,6 +981,74 @@ func public %caller(v0.i1) -> i32 {
 }
 
 #[test]
+fn full_inliner_forced_inlines_leave_growth_budget_for_other_calls() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func inline(always) private %forced(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i32 = add v1 1.i32;
+        v3.i32 = mul v2 3.i32;
+        v4.i32 = xor v3 5.i32;
+        return v4;
+
+    block2:
+        v5.i32 = sub v1 1.i32;
+        v6.i32 = mul v5 7.i32;
+        v7.i32 = xor v6 9.i32;
+        return v7;
+}
+
+func private %multi(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %forced v0 v1;
+        v3.i32 = call %multi v0;
+        v4.i32 = add v2 v3;
+        return v4;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    // Enough for `%multi`'s growth, not for `%forced`'s too.
+    let cfg = InlinerConfig {
+        enable_full_inliner: true,
+        max_single_use_caller_insts: 0,
+        max_total_growth: 6,
+        max_inlinee_blocks: 64,
+        max_inlinee_insts: 256,
+        inline_threshold: 1000,
+        inline_threshold_cold: 1000,
+        ..Default::default()
+    };
+    let stats = Inliner::new(cfg).run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %forced") && !dumped.contains("call %multi"),
+        "the forced inline should leave the budget for %multi:\n{dumped}"
+    );
+    assert_eq!(stats.skipped_budget, 0);
+}
+
+#[test]
 fn full_inliner_skips_recursive_scc_when_disabled() {
     let source = r#"
 target = "evm-ethereum-london"
