@@ -218,11 +218,18 @@ fn cases() -> Vec<Case> {
             },
         },
         Case {
-            name: "evm_clz",
-            instruction: "v10.i256 = evm_clz v8;",
+            name: "clz",
+            instruction: "v10.i256 = clz v8;",
             shape: Shape::Value,
             skip: never,
             reference: |a, _| (U256::from(a.leading_zeros()), false),
+        },
+        Case {
+            name: "ctz",
+            instruction: "v10.i256 = ctz v8;",
+            shape: Shape::Value,
+            skip: never,
+            reference: |a, _| (U256::from(a.trailing_zeros()), false),
         },
         Case {
             name: "freeze",

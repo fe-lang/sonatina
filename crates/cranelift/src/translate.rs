@@ -773,13 +773,25 @@ fn translate_function(
                         value_map.insert(result, result_val);
                     }
                 }
-                NativeInstKind::EvmClz(clz) => {
-                    let val = resolve_value(function, *clz.word(), &value_map, &mut builder)?;
+                NativeInstKind::Clz(op) => {
+                    let val = resolve_value(function, *op.arg(), &value_map, &mut builder)?;
                     // A one-bit value has a leading zero only when it is zero.
-                    let result_val = if function.dfg.value_ty(*clz.word()) == Type::I1 {
+                    let result_val = if function.dfg.value_ty(*op.arg()) == Type::I1 {
                         builder.ins().bxor_imm_s(val, 1)
                     } else {
                         builder.ins().clz(val)
+                    };
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        value_map.insert(result, result_val);
+                    }
+                }
+                NativeInstKind::Ctz(op) => {
+                    let val = resolve_value(function, *op.arg(), &value_map, &mut builder)?;
+                    // A one-bit value has a trailing zero only when it is zero.
+                    let result_val = if function.dfg.value_ty(*op.arg()) == Type::I1 {
+                        builder.ins().bxor_imm_s(val, 1)
+                    } else {
+                        builder.ins().ctz(val)
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);

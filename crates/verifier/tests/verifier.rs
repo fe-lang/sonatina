@@ -1081,6 +1081,60 @@ func public %widths(v0.i8, v1.i16, v2.i32, v3.i64, v4.i128, v5.i256) -> unit {
 }
 
 #[test]
+fn bit_counts_accept_every_integer_width() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %widths(v0.i1, v1.i8, v2.i16, v3.i32, v4.i64, v5.i128, v6.i256) -> unit {
+    block0:
+        v7.i1 = clz v0;
+        v8.i8 = ctz v1;
+        v9.i16 = clz v2;
+        v10.i32 = ctz v3;
+        v11.i64 = clz v4;
+        v12.i128 = ctz v5;
+        v13.i256 = clz v6;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(!report.has_errors(), "unexpected errors: {report}");
+}
+
+#[test]
+fn bit_counts_reject_pointers_and_mismatched_results() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_result(v0.i32) -> unit {
+    block0:
+        v1.i64 = clz v0;
+        return;
+}
+
+func public %bad_operand(v0.*i32) -> unit {
+    block0:
+        v1.*i32 = ctz v0;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(&report, "ctz operand must be integral"),
+        "expected the pointer rejection, got {report}"
+    );
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
 fn evm_checked_divmod_result_types_are_checked() {
     let src = r#"
 target = "evm-ethereum-london"

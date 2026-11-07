@@ -209,8 +209,11 @@ fn i256_arithmetic_matches_reference() {
     check(&unary("bswap"), &cases, |[a, _, _]| {
         (U256::from_big_endian(&a.to_little_endian()), false)
     });
-    check(&unary("evm_clz"), &cases, |[a, _, _]| {
+    check(&unary("clz"), &cases, |[a, _, _]| {
         (U256::from(a.leading_zeros()), false)
+    });
+    check(&unary("ctz"), &cases, |[a, _, _]| {
+        (U256::from(a.trailing_zeros()), false)
     });
 }
 

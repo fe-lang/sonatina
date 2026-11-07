@@ -690,7 +690,7 @@ func public %entry(v0.i256, v1.i256) -> i256 {
         v4.i256 = evm_exp v0 0.i256;
         v5.i256 = evm_exp 1.i256 v1;
         v6.i256 = evm_byte v0 0.i256;
-        v7.i256 = evm_clz 0.i256;
+        v7.i256 = clz 0.i256;
         v8.i256 = add v2 v3;
         v9.i256 = add v8 v4;
         v10.i256 = add v9 v5;
@@ -711,13 +711,7 @@ func public %entry(v0.i256, v1.i256) -> i256 {
         dumped.contains("return 258.i256;"),
         "unexpected SCCP output:\n{dumped}"
     );
-    for needle in [
-        "evm_add_mod",
-        "evm_mul_mod",
-        "evm_exp",
-        "evm_byte",
-        "evm_clz",
-    ] {
+    for needle in ["evm_add_mod", "evm_mul_mod", "evm_exp", "evm_byte", "clz"] {
         assert!(
             !dumped.contains(needle),
             "expected {needle} to fold away:\n{dumped}"
@@ -1753,7 +1747,7 @@ func public %entry(v0.i256, v1.i256) -> i256 {
         v4.i256 = evm_exp v0 0.i256;
         v5.i256 = evm_exp 1.i256 v1;
         v6.i256 = evm_byte v0 0.i256;
-        v7.i256 = evm_clz 0.i256;
+        v7.i256 = clz 0.i256;
         v8.i256 = add v2 v3;
         v9.i256 = add v8 v4;
         v10.i256 = add v9 v5;
@@ -1775,13 +1769,7 @@ func public %entry(v0.i256, v1.i256) -> i256 {
         dumped.contains("return 258.i256;"),
         "unexpected GVN output:\n{dumped}"
     );
-    for needle in [
-        "evm_add_mod",
-        "evm_mul_mod",
-        "evm_exp",
-        "evm_byte",
-        "evm_clz",
-    ] {
+    for needle in ["evm_add_mod", "evm_mul_mod", "evm_exp", "evm_byte", "clz"] {
         assert!(
             !dumped.contains(needle),
             "expected {needle} to fold away:\n{dumped}"

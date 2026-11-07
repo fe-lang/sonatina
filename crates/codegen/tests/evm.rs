@@ -6,8 +6,10 @@ use dir_test::{Fixture, dir_test};
 
 use hex::ToHex;
 use revm::{
-    Context, EvmContext, Handler, inspector_handle_register,
-    interpreter::Interpreter,
+    Context, EvmContext, Handler,
+    handler::register::EvmHandler,
+    inspector_handle_register,
+    interpreter::{Host, InstructionResult, Interpreter},
     primitives::{
         AccountInfo, Address, Bytecode, Bytes, Env, ExecutionResult, HaltReason, OsakaSpec, Output,
         TransactTo, U256, keccak256,
@@ -1890,6 +1892,107 @@ object @Contract {{
     }
 }
 
+#[test]
+fn bit_counts_count_zeros_at_each_width() {
+    let counting = IrU256::from_big_endian(&std::array::from_fn::<u8, 32, _>(|i| i as u8 + 1));
+    for bits in [1, 8, 16, 32, 64, 128, 256] {
+        let operation = if bits == 256 {
+            "v3.i256 = clz v0;
+             v5.i256 = ctz v0;"
+                .to_string()
+        } else {
+            format!(
+                "v1.i{bits} = trunc v0 i{bits};
+                 v2.i{bits} = clz v1;
+                 v3.i256 = zext v2 i256;
+                 v4.i{bits} = ctz v1;
+                 v5.i256 = zext v4 i256;"
+            )
+        };
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {{
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        {operation}
+        mstore 0.i256 v3 i256;
+        mstore 32.i256 v5 i256;
+        evm_return 0.i256 64.i256;
+}}
+
+object @Contract {{
+    section runtime {{
+        entry %entry;
+    }}
+}}
+"#
+        );
+        let mask = IrU256::MAX >> (256 - bits);
+        let inputs = [
+            IrU256::zero(),
+            IrU256::one(),
+            0x80.into(),
+            0x100.into(),
+            counting,
+            IrU256::one() << (bits - 1),
+            IrU256::one() << 100,
+            IrU256::one() << 255,
+            mask,
+            IrU256::MAX,
+        ];
+        for optimized in [false, true] {
+            let mut parsed = parse_sona(&source);
+            if optimized {
+                Pipeline::speed().run(&mut parsed.module);
+            }
+            let backend = EvmBackend::new(Evm::new(parsed.module.ctx.triple))
+                .with_late_cleanup_profile(if optimized {
+                    LateCleanupProfile::Speed
+                } else {
+                    LateCleanupProfile::Off
+                });
+            let artifact = compile_object(
+                &parsed.module,
+                &backend,
+                "Contract",
+                &CompileOptions::default(),
+            )
+            .expect("bit counts should compile");
+            let runtime = artifact
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .expect("missing runtime section");
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for input in inputs {
+                let value = input & mask;
+                let leading = value.leading_zeros() - (256 - bits);
+                let trailing = value.trailing_zeros().min(bits);
+                let expected = [
+                    IrU256::from(leading).to_big_endian(),
+                    IrU256::from(trailing).to_big_endian(),
+                ]
+                .concat();
+                let result = harness.call(&input.to_big_endian());
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("i{bits}, optimized={optimized}: {result:?}");
+                };
+                assert_eq!(
+                    actual.as_ref(),
+                    expected,
+                    "i{bits}, optimized={optimized}, input={input:#x}"
+                );
+            }
+        }
+    }
+}
+
 fn run_opt_pipeline(module: &mut Module, opt_pipeline: EvmOptPipeline) {
     match opt_pipeline {
         EvmOptPipeline::O0 => {}
@@ -2480,12 +2583,38 @@ impl EvmHarness {
         }
     }
 
+    /// Osaka's handler, with the `CLZ` opcode (EIP-7939), which revm 18
+    /// predates.
+    fn osaka_handler<'a, EXT, DB: revm::Database>() -> EvmHandler<'a, EXT, DB> {
+        fn clz<H: Host + ?Sized>(interpreter: &mut Interpreter, _: &mut H) {
+            if !interpreter.gas.record_cost(5) {
+                interpreter.instruction_result = InstructionResult::OutOfGas;
+                return;
+            }
+            match interpreter.stack.pop() {
+                Ok(word) => {
+                    let _ = interpreter.stack.push(U256::from(word.leading_zeros()));
+                }
+                Err(result) => interpreter.instruction_result = result,
+            }
+        }
+        fn register<EXT, DB: revm::Database>(handler: &mut EvmHandler<'_, EXT, DB>) {
+            handler
+                .instruction_table
+                .insert(OpCode::CLZ as u8, clz::<Context<EXT, DB>>);
+        }
+
+        let mut handler = Handler::mainnet::<OsakaSpec>();
+        handler.append_handler_register_plain(register);
+        handler
+    }
+
     fn run_tx(mut db: revm::InMemoryDB, env: Env) -> (ExecutionResult, revm::InMemoryDB) {
         struct NoopInspector;
         impl<DB: revm::Database> revm::Inspector<DB> for NoopInspector {}
 
         let context = Context::new(EvmContext::new_with_env(db, Box::new(env)), NoopInspector);
-        let mut evm = revm::Evm::new(context, Handler::mainnet::<OsakaSpec>());
+        let mut evm = revm::Evm::new(context, Self::osaka_handler());
 
         let res = evm.transact_commit();
         db = std::mem::take(&mut evm.context.evm.inner.db);
@@ -2505,7 +2634,7 @@ impl EvmHarness {
             TestInspector::new(vec![]),
         );
 
-        let mut evm = revm::Evm::new(context, Handler::mainnet::<OsakaSpec>());
+        let mut evm = revm::Evm::new(context, Self::osaka_handler());
         evm = evm
             .modify()
             .append_handler_register(inspector_handle_register)

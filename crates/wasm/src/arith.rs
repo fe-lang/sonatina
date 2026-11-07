@@ -259,6 +259,24 @@ impl Emit<'_> {
         }
     }
 
+    /// Trailing zero bits at the width of `int`. A narrow value gets a set
+    /// bit just above its width, which ends the 32-bit count of zero there.
+    pub(super) fn ctz(&mut self, int: Int, value: V) -> V {
+        match int {
+            Int::I1 => {
+                let one = self.c32(1);
+                self.op(Operator::I32Xor, &[value, one], WType::I32)
+            }
+            Int::I8 | Int::I16 => {
+                let stop = self.c32(1 << int.bits());
+                let bounded = self.op(Operator::I32Or, &[value, stop], WType::I32);
+                self.op(Operator::I32Ctz, &[bounded], WType::I32)
+            }
+            Int::I32 => self.op(Operator::I32Ctz, &[value], WType::I32),
+            Int::I64 => self.op(Operator::I64Ctz, &[value], WType::I64),
+        }
+    }
+
     fn bswap32(&mut self, value: V) -> V {
         // [a b c d] -> rotate -> [c d a b] -> swap adjacent bytes -> [d c b a]
         let sixteen = self.c32(16);

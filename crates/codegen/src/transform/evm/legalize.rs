@@ -601,6 +601,14 @@ impl<'a> FunctionLegalizer<'a> {
             downcast::<&logic::Bswap>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
         {
             self.rewrite_bswap(inst, arg);
+        } else if let Some(arg) =
+            downcast::<&logic::Clz>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
+        {
+            self.rewrite_clz(inst, arg);
+        } else if let Some(arg) =
+            downcast::<&logic::Ctz>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
+        {
+            self.rewrite_ctz(inst, arg);
         } else if downcast::<&Freeze>(is, self.func.dfg.inst(inst)).is_some() {
             lower_freeze(self.func, inst);
         } else if let Some((lhs, rhs)) =
@@ -2236,6 +2244,104 @@ impl<'a> FunctionLegalizer<'a> {
             );
         }
         self.replace_with_aliases(inst, &[word]);
+    }
+
+    /// `CLZ` counts the zeros of the whole word, and a canonical narrow value
+    /// is zero above its width, so its count is `CLZ` less the bits above the
+    /// width. A bool has a leading zero when it is zero.
+    fn rewrite_clz(&mut self, inst: InstId, arg: ValueId) {
+        let width = self
+            .single_result_width(inst)
+            .expect("missing clz result width");
+        let result = match width {
+            ScalarWidth::Full256 => return,
+            ScalarWidth::Bool => self.insert_before_one(
+                inst,
+                IsZero::new(self.evm_inst_set(), arg),
+                Type::I1,
+                Some(width),
+            ),
+            ScalarWidth::Narrow(bits) => {
+                let count = self.insert_before_one(
+                    inst,
+                    logic::Clz::new(self.evm_inst_set(), arg),
+                    Type::I256,
+                    Some(ScalarWidth::Full256),
+                );
+                let above = self.imm_i256(U256::from(256 - bits));
+                self.insert_before_one(
+                    inst,
+                    Sub::new(self.evm_inst_set(), count, above),
+                    Type::I256,
+                    Some(width),
+                )
+            }
+        };
+        self.replace_with_aliases(inst, &[result]);
+    }
+
+    /// The EVM has no trailing-zero count. The bits below the lowest set bit
+    /// of `x`, `(x - 1) & !x` within the width, are as many as its trailing
+    /// zeros, and `CLZ` counts the rest of the word; zero gives all of the
+    /// width's bits. A bool has a trailing zero when it is zero.
+    fn rewrite_ctz(&mut self, inst: InstId, arg: ValueId) {
+        let width = self
+            .single_result_width(inst)
+            .expect("missing ctz result width");
+        let flipped = match width {
+            ScalarWidth::Bool => {
+                let result = self.insert_before_one(
+                    inst,
+                    IsZero::new(self.evm_inst_set(), arg),
+                    Type::I1,
+                    Some(width),
+                );
+                self.replace_with_aliases(inst, &[result]);
+                return;
+            }
+            ScalarWidth::Narrow(bits) => {
+                let mask = self.mask_value(bits);
+                self.insert_before_one(
+                    inst,
+                    Xor::new(self.evm_inst_set(), arg, mask),
+                    Type::I256,
+                    Some(width),
+                )
+            }
+            ScalarWidth::Full256 => self.insert_before_one(
+                inst,
+                logic::Not::new(self.evm_inst_set(), arg),
+                Type::I256,
+                Some(width),
+            ),
+        };
+        let one = self.one_i256();
+        let below = self.insert_before_one(
+            inst,
+            Sub::new(self.evm_inst_set(), arg, one),
+            Type::I256,
+            Some(ScalarWidth::Full256),
+        );
+        let low = self.insert_before_one(
+            inst,
+            And::new(self.evm_inst_set(), below, flipped),
+            Type::I256,
+            Some(width),
+        );
+        let leading = self.insert_before_one(
+            inst,
+            logic::Clz::new(self.evm_inst_set(), low),
+            Type::I256,
+            Some(ScalarWidth::Full256),
+        );
+        let word_bits = self.imm_i256(U256::from(256));
+        let result = self.insert_before_one(
+            inst,
+            Sub::new(self.evm_inst_set(), word_bits, leading),
+            Type::I256,
+            Some(width),
+        );
+        self.replace_with_aliases(inst, &[result]);
     }
 
     fn rewrite_signed_cmp(

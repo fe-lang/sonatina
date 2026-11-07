@@ -158,12 +158,6 @@ pub struct EvmByte {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(kind(unary(EvmClz)))]
-pub struct EvmClz {
-    word: ValueId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Read))]
 pub struct EvmKeccak256 {
     addr: ValueId,

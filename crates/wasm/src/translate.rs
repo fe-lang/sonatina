@@ -1988,12 +1988,19 @@ impl<'a> FunctionTranslator<'a> {
                 |e, _, v| e.wide_not(v),
                 |e, int, v| e.not(int, v),
             )?,
-            NativeInstKind::EvmClz(i) => self.unary_any(
+            NativeInstKind::Clz(i) => self.unary_any(
                 *wb,
                 inst_id,
-                *i.word(),
+                *i.arg(),
                 |e, wide, v| e.wide_clz(wide, v),
                 |e, int, v| e.clz(int, v),
+            )?,
+            NativeInstKind::Ctz(i) => self.unary_any(
+                *wb,
+                inst_id,
+                *i.arg(),
+                |e, wide, v| e.wide_ctz(wide, v),
+                |e, int, v| e.ctz(int, v),
             )?,
             NativeInstKind::Bswap(i) => {
                 if function.dfg.value_ty(*i.arg()) == Type::I1 {

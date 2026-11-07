@@ -266,8 +266,8 @@ comparisons, `is_zero`, `zext`, `sext` and `trunc` between them and to and from
 the narrower types, the checked forms `uaddo`, `usubo`, `umulo`, `saddo`,
 `ssubo`, `smulo` and `snego`, the saturating forms `uaddsat`, `usubsat`,
 `umulsat`, `saddsat`, `ssubsat` and `smulsat`, loads and stores, `bswap`,
-`evm_clz`, `ptr_to_int`, `int_to_ptr` and `br_table`. `int_to_ptr` traps if the
-value does not fit in 32 bits.
+`clz`, `ctz`, `ptr_to_int`, `int_to_ptr` and `br_table`. `int_to_ptr` traps if
+the value does not fit in 32 bits.
 
 An `i128` is computed with the 256-bit code: its operands are extended to 256
 bits, with the sign for a signed operation, and the result is the low 128 bits.

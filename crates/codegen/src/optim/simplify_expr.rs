@@ -384,17 +384,6 @@ pub(crate) fn simplify_evm_signextend_known(
     fold_evm_signextend(byte.imm?, value.imm?)
 }
 
-pub(crate) fn fold_evm_clz(word: Immediate) -> Option<Immediate> {
-    let ty = word.ty();
-    let bit_width = integral_bit_width(ty)?;
-    let value = imm_to_u256(word);
-    let clz = (0..bit_width)
-        .rev()
-        .find(|&bit| ((value >> bit) & U256::one()) == U256::one())
-        .map_or(bit_width, |bit| bit_width - 1 - bit);
-    Some(Immediate::from_i256(I256::from(clz), ty))
-}
-
 pub(crate) fn simplify_inst_with_facts(
     func: &Function,
     inst_id: InstId,
@@ -503,11 +492,12 @@ fn fold_unary_with_facts(
         }
         UnaryInstKind::Not => SimplifiedInst::one(SimplifiedResult::Const(!arg)),
         UnaryInstKind::Bswap => SimplifiedInst::one(SimplifiedResult::Const(arg.bswap())),
+        UnaryInstKind::Clz => SimplifiedInst::one(SimplifiedResult::Const(arg.clz())),
+        UnaryInstKind::Ctz => SimplifiedInst::one(SimplifiedResult::Const(arg.ctz())),
         UnaryInstKind::IsZero => SimplifiedInst::one(SimplifiedResult::Const(fold_result_imm(
             arg.is_zero().into(),
             result_ty,
         )?)),
-        UnaryInstKind::EvmClz => SimplifiedInst::one(SimplifiedResult::Const(fold_evm_clz(arg)?)),
     };
     Some(result)
 }
@@ -1082,7 +1072,7 @@ pub(crate) fn simplify_unary_with_same_inner(
         UnaryInstKind::Not | UnaryInstKind::Neg | UnaryInstKind::Bswap => same_inner_arg(arg, kind)
             .map(SimplifiedResult::Copy)
             .unwrap_or(SimplifiedResult::NoChange),
-        UnaryInstKind::Snego | UnaryInstKind::IsZero | UnaryInstKind::EvmClz => {
+        UnaryInstKind::Snego | UnaryInstKind::IsZero | UnaryInstKind::Clz | UnaryInstKind::Ctz => {
             SimplifiedResult::NoChange
         }
     }

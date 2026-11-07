@@ -24,7 +24,6 @@ super::impl_inst_build! {EvmMulMod, (lhs: ValueId, rhs: ValueId, modulus: ValueI
 super::impl_inst_build! {EvmExp, (base: ValueId, exponent: ValueId)}
 super::impl_inst_build! {EvmSignExtend, (byte: ValueId, value: ValueId)}
 super::impl_inst_build! {EvmByte, (pos: ValueId, value: ValueId)}
-super::impl_inst_build! {EvmClz, (word: ValueId)}
 super::impl_inst_build! {EvmKeccak256, (addr: ValueId, len: ValueId)}
 super::impl_inst_build_common! {EvmKeccak256Words, build_evm_keccak256_words}
 super::impl_inst_build! {EvmAddress, ()}

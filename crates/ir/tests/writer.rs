@@ -85,3 +85,33 @@ fn noncolliding_names_and_numeric_defaults_are_preserved() {
     assert_eq!(text, ModuleWriter::new(&parsed.module).dump_string());
     assert_eq!(text, assert_roundtrip(&parsed.module, &Names([None; 6])));
 }
+
+#[test]
+fn bit_counts_roundtrip_at_every_width() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %counts(v0.i1, v1.i8, v2.i64, v3.i128, v4.i256) -> (i1, i8, i64, i128, i256) {
+    block0:
+        v5.i1 = clz v0;
+        v6.i8 = ctz v1;
+        v7.i64 = clz v2;
+        v8.i128 = ctz v3;
+        v9.i256 = clz v4;
+        return (v5, v6, v7, v8, v9);
+}
+"#,
+    )
+    .unwrap();
+    let text = assert_roundtrip(&parsed.module, &parsed.debug);
+    for inst in [
+        "v5.i1 = clz v0;",
+        "v6.i8 = ctz v1;",
+        "v7.i64 = clz v2;",
+        "v8.i128 = ctz v3;",
+        "v9.i256 = clz v4;",
+    ] {
+        assert!(text.contains(inst), "{inst} missing from\n{text}");
+    }
+}

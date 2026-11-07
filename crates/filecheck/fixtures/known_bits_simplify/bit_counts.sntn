@@ -1,0 +1,36 @@
+target = "evm-ethereum-osaka"
+
+# A count is at most the width, so a mask of the bits that hold the width
+# keeps everything.
+# sameln: func public %count_fits_its_low_bits(v0.i64) -> i64 {
+# not:         and
+# check:       v1.i64 = clz v0;
+# check:       return v1;
+func public %count_fits_its_low_bits(v0.i64) -> i64 {
+block0:
+    v1.i64 = clz v0;
+    v2.i64 = and v1 127.i64;
+    return v2;
+}
+
+# sameln: func public %wide_count_fits_its_low_bits(v0.i256) -> i256 {
+# not:         and
+# check:       v1.i256 = ctz v0;
+# check:       return v1;
+func public %wide_count_fits_its_low_bits(v0.i256) -> i256 {
+block0:
+    v1.i256 = ctz v0;
+    v2.i256 = and v1 511.i256;
+    return v2;
+}
+
+# 256 needs nine bits, so a mask of eight does not.
+# sameln: func public %count_needs_its_top_bit(v0.i256) -> i256 {
+# check:       v1.i256 = clz v0;
+# check:       v2.i256 = and v1 255.i256;
+func public %count_needs_its_top_bit(v0.i256) -> i256 {
+block0:
+    v1.i256 = clz v0;
+    v2.i256 = and v1 255.i256;
+    return v2;
+}

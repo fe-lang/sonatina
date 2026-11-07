@@ -856,8 +856,8 @@ pub(super) fn translate_i256_op(
         // The leading zeros of the most significant nonzero limb, plus 64 for
         // each limb above it; zero gives the low limb's 64 plus 192. One `clz`
         // keeps targets without a count instruction, like SP1's, to one loop.
-        NativeInstKind::EvmClz(op) if wide(op.word()) => {
-            let [low, rest @ ..] = resolve_i256(function, *op.word(), value_map, builder)?;
+        NativeInstKind::Clz(op) if wide(op.arg()) => {
+            let [low, rest @ ..] = resolve_i256(function, *op.arg(), value_map, builder)?;
             let start = (low, builder.ins().iconst(I64, 192));
             let (top, above) =
                 rest.into_iter()
@@ -871,6 +871,26 @@ pub(super) fn translate_i256_op(
                     });
             let zeros = builder.ins().clz(top);
             let count = builder.ins().iadd(above, zeros);
+            let zero = builder.ins().iconst(I64, 0);
+            Output::Limbs([count, zero, zero, zero])
+        }
+        // The trailing zeros of the least significant nonzero limb, plus 64
+        // for each limb below it; zero gives the high limb's 64 plus 192.
+        NativeInstKind::Ctz(op) if wide(op.arg()) => {
+            let [rest @ .., high] = resolve_i256(function, *op.arg(), value_map, builder)?;
+            let start = (high, builder.ins().iconst(I64, 192));
+            let (bottom, below) = rest.into_iter().zip([0, 64, 128]).rev().fold(
+                start,
+                |(bottom, below), (limb, bits)| {
+                    let bits = builder.ins().iconst(I64, bits);
+                    (
+                        builder.ins().select(limb, limb, bottom),
+                        builder.ins().select(limb, bits, below),
+                    )
+                },
+            );
+            let zeros = builder.ins().ctz(bottom);
+            let count = builder.ins().iadd(below, zeros);
             let zero = builder.ins().iconst(I64, 0);
             Output::Limbs([count, zero, zero, zero])
         }

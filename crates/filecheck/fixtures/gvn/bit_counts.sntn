@@ -1,0 +1,20 @@
+target = "evm-ethereum-osaka"
+
+# check: block1:
+# nextln:  v1.i64 = clz v0;
+# nextln:  v3.i64 = ctz v0;
+# nextln:  v5.i64 = add v1 v1;
+# nextln:  v6.i64 = add v5 v3;
+# nextln:  v7.i64 = add v6 v3;
+# nextln:  return v7;
+func public %bit_count_cse(v0.i64) -> i64 {
+    block1:
+        v1.i64 = clz v0;
+        v2.i64 = clz v0;
+        v3.i64 = ctz v0;
+        v4.i64 = ctz v0;
+        v5.i64 = add v1 v2;
+        v6.i64 = add v5 v3;
+        v7.i64 = add v6 v4;
+        return v7;
+}

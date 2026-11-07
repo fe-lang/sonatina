@@ -590,35 +590,42 @@ func public %bswap8(v0.i8) -> i8 {
 }
 
 #[test]
-fn evm_clz_counts_leading_zeros_at_each_width() {
+fn bit_counts_count_zeros_at_each_width() {
     let widths = [1u32, 8, 16, 32, 64];
     let mut source = String::new();
     for width in widths {
         let t = ir_type(width);
-        source += &format!(
-            "func public %clz{width}(v0.{t}) -> {t} {{
+        for op in ["clz", "ctz"] {
+            source += &format!(
+                "func public %{op}{width}(v0.{t}) -> {t} {{
     block0:
-        v1.{t} = evm_clz v0;
+        v1.{t} = {op} v0;
         return v1;
 }}
 "
-        );
+            );
+        }
     }
     let mut machine = Machine::new(&compile_valid(&parse(&source)));
     for width in widths {
-        let func = machine.func(&format!("clz{width}"));
         for a in operands(width) {
-            let expected = if a == 0 {
-                u64::from(width)
+            let (leading, trailing) = if a == 0 {
+                (u64::from(width), u64::from(width))
             } else {
-                u64::from(a.leading_zeros() - (64 - width))
+                (
+                    u64::from(a.leading_zeros() - (64 - width)),
+                    u64::from(a.trailing_zeros()),
+                )
             };
-            let results = machine.call(&func, &[val(width, a)]);
-            assert_eq!(
-                bits_from(width, &results[0]),
-                expected,
-                "clz{width}: {a:#x}"
-            );
+            for (op, expected) in [("clz", leading), ("ctz", trailing)] {
+                let func = machine.func(&format!("{op}{width}"));
+                let results = machine.call(&func, &[val(width, a)]);
+                assert_eq!(
+                    bits_from(width, &results[0]),
+                    expected,
+                    "{op}{width}: {a:#x}"
+                );
+            }
         }
     }
 }

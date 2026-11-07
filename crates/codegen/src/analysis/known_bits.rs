@@ -362,9 +362,18 @@ impl KnownBitsQuery {
                     bswap_bits(ty, arg_known.known_one),
                 )
             }
-            UnaryInstKind::Neg | UnaryInstKind::Snego | UnaryInstKind::EvmClz => {
-                KnownBits::unknown(ty)
+            // A count is at most the width, so only the bits that hold the
+            // width can be set.
+            UnaryInstKind::Clz | UnaryInstKind::Ctz => {
+                if !supports_known_bits(ty) {
+                    return KnownBits::unknown(ty);
+                }
+
+                let bits = type_bits(ty);
+                let count_bits = (u16::BITS - bits.leading_zeros()) as u16;
+                KnownBits::normalized(ty, !low_mask(count_bits), U256::zero())
             }
+            UnaryInstKind::Neg | UnaryInstKind::Snego => KnownBits::unknown(ty),
         }
     }
 

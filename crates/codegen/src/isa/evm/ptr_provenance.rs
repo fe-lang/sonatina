@@ -1034,7 +1034,7 @@ pub(crate) fn compute_provenance(
                     | EvmInstKind::EvmExp(_)
                     | EvmInstKind::EvmSignExtend(_)
                     | EvmInstKind::EvmByte(_)
-                    | EvmInstKind::EvmClz(_) => {
+                    | EvmInstKind::Clz(_) => {
                         // Arithmetic on a pointer stays within its object, so
                         // the result is raw only where every operand may be.
                         let mut raw = true;

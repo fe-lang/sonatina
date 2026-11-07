@@ -43,6 +43,8 @@ macro_rules! impl_unary_integral_same_rule {
 impl_unary_integral_same_rule!(
     arith::Neg => "neg",
     logic::Not => "not",
+    logic::Clz => "clz",
+    logic::Ctz => "ctz",
     data::BlackBox => "black_box",
 );
 
@@ -2239,7 +2241,6 @@ impl_evm_arithmetic_rule!(
     evm::EvmByte,
     evm::EvmAddMod,
     evm::EvmMulMod,
-    evm::EvmClz,
     evm::EvmSignExtend,
 );
 

@@ -48,3 +48,21 @@ impl Interpret for Bswap {
         single_result(arg.with_imm(Immediate::bswap))
     }
 }
+
+impl Interpret for Clz {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        let arg = state.lookup_val(*self.arg());
+        state.set_action(Action::Continue);
+
+        single_result(arg.with_imm(Immediate::clz))
+    }
+}
+
+impl Interpret for Ctz {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        let arg = state.lookup_val(*self.arg());
+        state.set_action(Action::Continue);
+
+        single_result(arg.with_imm(Immediate::ctz))
+    }
+}
