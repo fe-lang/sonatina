@@ -1969,7 +1969,15 @@ fn translate_function(
                             &mut builder,
                         )?;
                     } else {
-                        store_value(function, *mstore.value(), addr, 0, &value_map, &mut builder)?;
+                        let (base, offset) = split_displacement(addr, &builder.func.dfg);
+                        store_value(
+                            function,
+                            *mstore.value(),
+                            base,
+                            offset,
+                            &value_map,
+                            &mut builder,
+                        )?;
                     }
                 }
                 NativeInstKind::Memzero(memzero) => {
@@ -2047,11 +2055,12 @@ fn translate_function(
                             )?;
                             value_map.insert(result, result_addr);
                         } else {
+                            let (base, offset) = split_displacement(addr, &builder.func.dfg);
                             load_value(
                                 result,
                                 result_ty,
-                                addr,
-                                0,
+                                base,
+                                offset,
                                 &mut value_map,
                                 &module.ctx,
                                 &mut builder,
