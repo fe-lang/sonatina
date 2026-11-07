@@ -1,8 +1,8 @@
 use cranelift_codegen::ir::{self as clif, InstBuilder, InstructionData, Opcode, condcodes::IntCC};
 use cranelift_frontend::FunctionBuilder;
-use sonatina_ir::Type;
+use sonatina_ir::{Immediate, Type, U256};
 
-use super::mul_limbs;
+use super::{ShiftKind, mul_limbs, resize_int_value, shift_by_constant};
 
 /// Sonatina's one-bit values use an I8 register, but only bit zero is data.
 pub(super) fn normalize_scalar(
@@ -49,6 +49,27 @@ pub(super) fn compare_disjunction(
     };
     let [lhs, rhs] = binary(unmasked(value), Opcode::Bor)?;
     Some([compare(lhs)?, compare(rhs)?])
+}
+
+/// The low `to_ty` bits of an i128 value, from its low word: the `iconcat`
+/// operand that built it, if one did. An `ireduce` would let Cranelift narrow
+/// an i128 product or sum to a separate 64-bit one, duplicating the
+/// arithmetic whose high word is usually needed too.
+pub(super) fn truncate_i128(
+    value: clif::Value,
+    to_ty: clif::Type,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    let dfg = &builder.func.dfg;
+    let concat_low = match dfg.value_def(value).inst().map(|inst| dfg.insts[inst]) {
+        Some(InstructionData::Binary {
+            opcode: Opcode::Iconcat,
+            args: [low, _],
+        }) => Some(low),
+        _ => None,
+    };
+    let low = concat_low.unwrap_or_else(|| builder.ins().isplit(value).0);
+    resize_int_value(low, to_ty, false, builder)
 }
 
 pub(super) fn signed_scalar(
@@ -126,12 +147,6 @@ pub(super) fn scalar_constant(
     }
 }
 
-pub(super) enum ScalarShift {
-    Shl,
-    Shr,
-    Sar,
-}
-
 pub(super) enum DivRemKind {
     Udiv,
     Sdiv,
@@ -154,12 +169,31 @@ pub(super) fn signed_max_value(ty: clif::Type, builder: &mut FunctionBuilder) ->
 pub(super) fn emit_scalar_shift(
     value: clif::Value,
     count: clif::Value,
+    constant_count: Option<Immediate>,
     ty: Type,
-    kind: ScalarShift,
+    kind: ShiftKind,
     count_in_range: bool,
     builder: &mut FunctionBuilder,
 ) -> clif::Value {
     let clif_ty = builder.func.dfg.value_type(value);
+    // Cranelift shifts an i128 by a count in a register even when the count
+    // is constant, so shift its two words here instead.
+    if clif_ty == clif::types::I128
+        && let Some(count) = constant_count
+    {
+        let count = count.zext(Type::I256).as_i256().to_u256();
+        let (low, high) = builder.ins().isplit(value);
+        let fill = match kind {
+            ShiftKind::Sar => builder.ins().sshr_imm_s(high, 63),
+            ShiftKind::Shl | ShiftKind::Shr => builder.ins().iconst(clif::types::I64, 0),
+        };
+        let [low, high] = if count < U256::from(128) {
+            shift_by_constant([low, high], count.low_u32(), kind, fill, builder)
+        } else {
+            [fill; 2]
+        };
+        return builder.ins().iconcat(low, high);
+    }
     let width = if ty == Type::I1 { 1 } else { clif_ty.bits() };
     // Cranelift masks shift counts; Sonatina saturates oversized shifts, so
     // a count that may reach the width needs a fallback. Compare at the
@@ -180,18 +214,18 @@ pub(super) fn emit_scalar_shift(
         count
     };
     let shifted = match kind {
-        ScalarShift::Shl => builder.ins().ishl(value, count),
-        ScalarShift::Shr => builder.ins().ushr(value, count),
-        ScalarShift::Sar if ty == Type::I1 => value,
-        ScalarShift::Sar => builder.ins().sshr(value, count),
+        ShiftKind::Shl => builder.ins().ishl(value, count),
+        ShiftKind::Shr => builder.ins().ushr(value, count),
+        ShiftKind::Sar if ty == Type::I1 => value,
+        ShiftKind::Sar => builder.ins().sshr(value, count),
     };
     let Some(oversized) = oversized else {
         return shifted;
     };
     let fill = match kind {
-        ScalarShift::Shl | ScalarShift::Shr => scalar_constant(clif_ty, 0, builder),
-        ScalarShift::Sar if ty == Type::I1 => value,
-        ScalarShift::Sar => builder.ins().sshr_imm_s(value, i64::from(width - 1)),
+        ShiftKind::Shl | ShiftKind::Shr => scalar_constant(clif_ty, 0, builder),
+        ShiftKind::Sar if ty == Type::I1 => value,
+        ShiftKind::Sar => builder.ins().sshr_imm_s(value, i64::from(width - 1)),
     };
     builder.ins().select(oversized, fill, shifted)
 }

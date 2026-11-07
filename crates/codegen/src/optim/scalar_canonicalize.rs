@@ -550,6 +550,34 @@ block0:
     }
 
     #[test]
+    fn truncates_the_source_of_a_wider_extension() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i128, v1.i128) -> i64 {
+block0:
+    v2.i256 = zext v0 i256;
+    v3.i64 = trunc v2 i64;
+    v4.i256 = sext v1 i256;
+    v5.i64 = trunc v4 i64;
+    v6.i64 = add v3 v5;
+    return v6;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(ScalarCanonicalize::new().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains("v3.i64 = trunc v0 i64;"), "{dumped}");
+        assert!(dumped.contains("v5.i64 = trunc v1 i64;"), "{dumped}");
+        assert!(!dumped.contains(" i256;"), "{dumped}");
+    }
+
+    #[test]
     fn rewrites_zext_i1_eq_zero_to_is_zero_source() {
         let (module, func_ref) = parse_test_module(
             r#"

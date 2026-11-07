@@ -308,6 +308,138 @@ fn scalar_shifts_preserve_overshift_semantics() {
 }
 
 #[test]
+fn i128_shifts_by_constant_counts_match_ir() {
+    let values = [
+        Immediate::I128(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210),
+        Immediate::I128(-0x0123_4567_89ab_cdef_fedc_ba98_7654_3210),
+        Immediate::signed_min(Type::I128),
+        Immediate::all_one(Type::I128),
+        Immediate::one(Type::I128),
+    ];
+    for op in ["shl", "shr", "sar"] {
+        for count in [0u32, 1, 17, 63, 64, 65, 100, 127, 128, 200] {
+            let source = format!(
+                r#"func public %apply(v0.*i128, v1.*i128) {{
+block0:
+    v2.i128 = mload v0 i128;
+    v3.i128 = {op} {count}.i128 v2;
+    mstore v1 v3 i128;
+    return;
+}}
+"#
+            );
+            for level in [OptLevel::O0, OptLevel::O2] {
+                let artifact = Compile::new(
+                    parse_verified_native_module(&source),
+                    CraneliftJitBackend::new(),
+                )
+                .with_opt_level(level)
+                .compile()
+                .unwrap_or_else(|errors| panic!("{op} {count} {level:?}: {errors:?}"));
+                let apply: unsafe extern "C" fn(*const i128, *mut i128) =
+                    unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+                let rhs = Immediate::I128(count.into());
+                for value in values {
+                    let expected = match op {
+                        "shl" if count >= 128 => Immediate::zero(Type::I128),
+                        "shl" => value << rhs,
+                        "shr" => value.lshr(rhs),
+                        _ => value.ashr(rhs),
+                    };
+                    let Immediate::I128(input) = value else {
+                        unreachable!()
+                    };
+                    let mut result = 0;
+                    unsafe { apply(&input, &mut result) };
+                    assert_eq!(
+                        Immediate::I128(result),
+                        expected,
+                        "{op} {count} {value:?} {level:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn i128_truncations_take_the_low_bits() {
+    let source = r#"func public %apply(v0.*i64, v1.*i64, v2.*i128, v3.*[i64; 9]) {
+block0:
+    v4.i64 = mload v0 i64;
+    v5.i64 = mload v1 i64;
+    v6.i128 = mload v2 i128;
+    v7.i128 = zext v4 i128;
+    v8.i128 = zext v5 i128;
+    v9.i128 = mul v7 v8;
+    v10.i64 = trunc v9 i64;
+    v11.i128 = shr 64.i128 v9;
+    v12.i64 = trunc v11 i64;
+    v13.i64 = trunc v6 i64;
+    v14.i32 = trunc v6 i32;
+    v15.i64 = zext v14 i64;
+    v16.i8 = trunc v6 i8;
+    v17.i64 = zext v16 i64;
+    v18.i128 = shr 70.i128 v6;
+    v19.i64 = trunc v18 i64;
+    v20.i128 = sar 64.i128 v6;
+    v21.i64 = trunc v20 i64;
+    v22.i128 = shl 3.i128 v6;
+    v23.i64 = trunc v22 i64;
+    v24.i128 = add v6 v9;
+    v25.i64 = trunc v24 i64;
+    v26.[i64; 9] = insert_value undef.[i64; 9] 0.i256 v10;
+    v27.[i64; 9] = insert_value v26 1.i256 v12;
+    v28.[i64; 9] = insert_value v27 2.i256 v13;
+    v29.[i64; 9] = insert_value v28 3.i256 v15;
+    v30.[i64; 9] = insert_value v29 4.i256 v17;
+    v31.[i64; 9] = insert_value v30 5.i256 v19;
+    v32.[i64; 9] = insert_value v31 6.i256 v21;
+    v33.[i64; 9] = insert_value v32 7.i256 v23;
+    v34.[i64; 9] = insert_value v33 8.i256 v25;
+    mstore v3 v34 [i64; 9];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let apply: unsafe extern "C" fn(*const u64, *const u64, *const i128, *mut [u64; 9]) =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        for (a, b, wide) in [
+            (u64::MAX, u64::MAX, -1i128),
+            (
+                0xfedc_ba98_7654_3210,
+                0x0123_4567_89ab_cdef,
+                -0x0123_4567_89ab_cdef_fedc_ba98_7654_3211,
+            ),
+            (3, 5, 0x7fff_0000_0000_0000_8000_0000_0000_00ff),
+        ] {
+            let product = u128::from(a) * u128::from(b);
+            let expected = [
+                product as u64,
+                (product >> 64) as u64,
+                wide as u64,
+                u64::from(wide as u32),
+                u64::from(wide as u8),
+                ((wide as u128) >> 70) as u64,
+                (wide >> 64) as u64,
+                (wide << 3) as u64,
+                wide.wrapping_add(product as i128) as u64,
+            ];
+            let mut result = [0; 9];
+            unsafe { apply(&a, &b, &wide, &mut result) };
+            assert_eq!(result, expected, "{a:#x} {b:#x} {wide:#x} {level:?}");
+        }
+    }
+}
+
+#[test]
 fn freeze_passes_values_through_and_fixes_undef() {
     let source = r#"func public %frozen(v0.i64, v1.*i256, v2.*i256) -> i64 {
 block0:

@@ -34,22 +34,25 @@ const NUMERATOR_LIMBS: usize = 2 * LIMBS;
 const DIVISOR_OFFSET: i32 = 8 * NUMERATOR_LIMBS as i32;
 const BUFFER_BYTES: u32 = 8 * (NUMERATOR_LIMBS + LIMBS) as u32;
 
-/// The numerators a divider takes: a word for division, and two words for
-/// modular sums and products, which need only the remainder. A word
-/// divider loads and normalizes half as many limbs.
+/// The numerators a divider takes: a word for division, two words for
+/// modular products and a word and a carry for modular sums, which need only
+/// the remainder. A word divider loads and normalizes half as many limbs.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Numerator {
     Word,
     Double,
+    /// A sum of two words: four limbs and a carry.
+    Sum,
 }
 
 impl Numerator {
-    const ALL: [Self; 2] = [Self::Word, Self::Double];
+    const ALL: [Self; 3] = [Self::Word, Self::Double, Self::Sum];
 
     fn limbs(self) -> usize {
         match self {
             Self::Word => LIMBS,
             Self::Double => NUMERATOR_LIMBS,
+            Self::Sum => LIMBS + 1,
         }
     }
 }
@@ -59,8 +62,8 @@ impl Numerator {
 /// references to them.
 #[derive(Default)]
 pub(super) struct Divider {
-    ids: [Option<FuncId>; 2],
-    calls: [Option<DividerCall>; 2],
+    ids: [Option<FuncId>; 3],
+    calls: [Option<DividerCall>; 3],
     table: Option<DataId>,
 }
 
@@ -78,7 +81,7 @@ pub(super) struct DividerCall {
 impl Divider {
     /// Forgets the previous function's references to the dividers.
     pub fn start_function(&mut self) {
-        self.calls = [None; 2];
+        self.calls = [None; 3];
     }
 
     /// The call of the divider for `numerator` in the function being built.
@@ -852,8 +855,9 @@ fn build_divider(kind: Numerator, table: clif::GlobalValue, builder: &mut Functi
     let divisor = load_limbs(buffer, DIVISOR_OFFSET, flags, builder);
     let quotient = kind == Numerator::Word;
     if !quotient {
-        // A reduced product's top half is below a four-limb modulus. A
-        // narrower modulus goes straight to the general path.
+        // A reduced product's top half is below a four-limb modulus, and so
+        // is a sum's top three limbs and a zero above them, which leaves two
+        // digits. A narrower modulus goes straight to the general path.
         let compare = builder.create_block();
         let registers = builder.create_block();
         let general = builder.create_block();
@@ -861,11 +865,15 @@ fn build_divider(kind: Numerator, table: clif::GlobalValue, builder: &mut Functi
             .ins()
             .brif(divisor[LIMBS - 1], compare, &[], general, &[]);
         builder.switch_to_block(compare);
-        let high = std::array::from_fn(|limb| numerator[LIMBS + limb]);
+        let mut padded = numerator.clone();
+        if kind == Numerator::Sum {
+            padded.push(builder.ins().iconst(I64, 0));
+        }
+        let high = std::array::from_fn(|limb| padded[padded.len() - LIMBS + limb]);
         let below = ult(high, divisor, builder);
         builder.ins().brif(below, registers, &[], general, &[]);
         builder.switch_to_block(registers);
-        let remainder = remainder_below_divisor(&numerator, divisor, table, builder);
+        let remainder = remainder_below_divisor(&padded, divisor, table, builder);
         store_limbs(remainder, buffer, DIVISOR_OFFSET, flags, builder);
         builder.ins().return_(&[]);
         builder.switch_to_block(general);
@@ -1002,9 +1010,9 @@ fn denormalize(
     })
 }
 
-/// The remainder of eight numerator limbs by a four-limb divisor above
-/// their top four: Knuth's algorithm D's four quotient digits, unrolled in
-/// registers, without the quotient.
+/// The remainder of numerator limbs by a four-limb divisor above their top
+/// four: Knuth's algorithm D's quotient digits for the limbs below, unrolled
+/// in registers, without the quotient.
 fn remainder_below_divisor(
     numerator: &[clif::Value],
     divisor: Limbs,
@@ -1025,7 +1033,7 @@ fn remainder_below_divisor(
         reciprocal,
         builder,
     );
-    let (low, high) = numerator.split_at(LIMBS);
+    let (low, high) = numerator.split_at(numerator.len() - LIMBS);
     let remainder = low.iter().rev().fold(high.to_vec(), |remainder, &limb| {
         let window: Vec<_> = std::iter::once(limb).chain(remainder).collect();
         divide_window(&window, &divisor, reciprocal, false, builder).1

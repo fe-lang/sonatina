@@ -126,9 +126,11 @@ pub struct InlinerConfig {
     pub max_inlinee_blocks: usize,
     pub max_inlinee_insts: usize,
     /// Net instructions one inliner run may add to a caller; zero is no limit.
+    /// `inline(always)` callees neither count against nor spend it.
     pub max_growth_per_caller: usize,
     /// Net instructions one inliner run may add to the module; zero is no
     /// limit. A pipeline that runs the inliner repeatedly allows this per run.
+    /// `inline(always)` callees neither count against nor spend it.
     pub max_total_growth: usize,
     pub max_inline_depth: usize,
     pub allow_inline_recursive: bool,
@@ -588,7 +590,13 @@ impl Inliner {
                             stats.full_insts_cloned += result.insts_cloned;
                             stats.full_phi_fixups += result.phi_fixups;
 
-                            let growth = result.net_growth.saturating_sub(plan.removed_insts);
+                            // Forced inlines bypass the budgets, and do not spend
+                            // them either: that would starve unrelated callers.
+                            let growth = if always_inline {
+                                0
+                            } else {
+                                result.net_growth.saturating_sub(plan.removed_insts)
+                            };
                             *growth_by_caller.entry(caller_ref).or_insert(0) += growth;
                             total_growth += growth;
 

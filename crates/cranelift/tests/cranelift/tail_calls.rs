@@ -335,3 +335,64 @@ block0:
         assert_eq!(unsafe { run(invalid.as_ptr()) }, -1, "{level:?}");
     }
 }
+
+#[test]
+fn tail_calls_pass_aggregate_arguments_on() {
+    // `%count` passes its argument on to itself, then to `%consume`, which
+    // owns it and overwrites it, so `%count` owns it too and `%run`, which
+    // reads its value afterwards, gives it a copy.
+    let source = r#"
+func inline(never) private %fill(v0.i64) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    return v1;
+}
+
+func inline(never) private %consume(v0.[i64; 32]) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v1 v0;
+    v2.objref<i64> = obj.index v1 0.i64;
+    v3.i64 = obj.load v2;
+    v4.i64 = add v3 1.i64;
+    obj.store v2 v4;
+    v5.i64 = obj.load v2;
+    return v5;
+}
+
+func private %count(v0.[i64; 32], v1.i64) -> i64 {
+block0:
+    v2.i1 = eq v1 0.i64;
+    br v2 block1 block2;
+block1:
+    v3.i64 = call %consume v0;
+    return v3;
+block2:
+    v4.i64 = sub v1 1.i64;
+    v5.i64 = call %count v0 v4;
+    return v5;
+}
+
+func public %run(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.[i64; 32] = call %fill v0;
+    v3.i64 = call %count v2 v1;
+    v4.i64 = extract_value v2 0.i64;
+    v5.i64 = mul v4 1000.i64;
+    v6.i64 = add v3 v5;
+    return v6;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let run: unsafe extern "C" fn(i64, i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        assert_eq!(unsafe { run(7, DEPTH) }, 8 + 7 * 1000, "{level:?}");
+    }
+}

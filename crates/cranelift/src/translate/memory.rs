@@ -58,6 +58,25 @@ pub(super) fn move_value(
     Ok(())
 }
 
+/// Stores a forwarded load's value, read from its source `src`, at `dst`. A
+/// load forwarded to its one copy, which may overlap its source, is small
+/// enough to move inline; a larger one reads a local object that nothing
+/// writes after the load, which no other storage overlaps.
+pub(super) fn forward_value(
+    ty: Type,
+    src: clif::Value,
+    dst: clif::Value,
+    ctx: &ModuleCtx,
+    config: TargetFrontendConfig,
+    builder: &mut FunctionBuilder,
+) -> Result<(), String> {
+    if value_storage_size(ty, ctx)? <= INLINE_MEMORY_BYTES {
+        move_value(ty, src, dst, ctx, builder)
+    } else {
+        copy_value(ty, src, dst, ctx, config, builder)
+    }
+}
+
 /// Copies at most `INLINE_MEMORY_BYTES` between storage that may overlap.
 pub(super) fn move_bytes(
     src: clif::Value,

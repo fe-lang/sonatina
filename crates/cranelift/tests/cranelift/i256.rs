@@ -822,26 +822,36 @@ fn takes_last_step([u0, u1, u2]: [u64; 3], [d0, d1]: [u64; 2], v: u64) -> bool {
     r >= divisor
 }
 
-/// The rare corrections of the four quotient digits that give the remainder
-/// of `a * b` by `m`, with their digits. `None` unless `m` has four limbs
-/// above the product's top half, as for reduced operands.
-fn remainder_corrections(a: U256, b: U256, m: U256) -> Option<Vec<(usize, Correction)>> {
+/// The rare corrections of the quotient digits that give the remainder of
+/// `a * b` or `a + b` by `m`, with their digits: four for a product and two
+/// for a sum. `None` unless `m` has four limbs above the numerator's limbs
+/// from those digits up, as for a reduced product or any sum.
+fn remainder_corrections(
+    a: U256,
+    b: U256,
+    m: U256,
+    multiply: bool,
+) -> Option<Vec<(usize, Correction)>> {
     let wide = |value: U256| value.full_mul(U256::one());
-    let product = a.full_mul(b);
-    if m.0[3] == 0 || product >> 256 >= wide(m) {
+    let (numerator, digits) = if multiply {
+        (a.full_mul(b), 4)
+    } else {
+        (wide(a) + wide(b), 2)
+    };
+    if m.0[3] == 0 || numerator >> (64 * digits) >= wide(m) {
         return None;
     }
     // Knuth's algorithm D on the normalized operands, each digit estimated
     // from the window's top three limbs and the divisor's top two.
     let shift = m.leading_zeros() as usize;
     let divisor = wide(m) << shift;
-    let numerator = product << shift;
+    let numerator = numerator << shift;
     let top_two = (divisor >> 128).low_u128();
     let reciprocal = (((U256::one() << 192) - 1) / U256::from(top_two)).low_u64();
     let limb_mask = wide(U256::from(u64::MAX));
-    let mut remainder = numerator >> 256;
+    let mut remainder = numerator >> (64 * digits);
     let mut corrections = Vec::new();
-    for digit in (0..4).rev() {
+    for digit in (0..digits).rev() {
         let window = (remainder << 64) | ((numerator >> (64 * digit)) & limb_mask);
         let estimate = if window >> 192 == divisor >> 128 {
             corrections.push((digit, Correction::Largest));
@@ -897,7 +907,7 @@ fn i256_modular_products_reach_every_remainder_correction() {
         } else {
             m.overflowing_sub(U256::from(1 + (below >> 1) % 3)).0
         };
-        let Some(corrections) = remainder_corrections(a, b, m) else {
+        let Some(corrections) = remainder_corrections(a, b, m, true) else {
             continue;
         };
         let known = reached.len();
@@ -914,6 +924,67 @@ fn i256_modular_products_reach_every_remainder_correction() {
         "    v7.i256 = evm_mul_mod v4 v5 v6;\n    mstore v3 v7 i256;\n    return 0.i8;",
         &cases,
         |[a, b, m]| (modular(a, b, m, true), false),
+    );
+}
+
+#[test]
+fn i256_modular_sums_reach_every_remainder_correction() {
+    // An unreduced sum's remainder by a four-limb modulus takes two quotient
+    // digits in registers. Sums of boundary limbs, half of them with a
+    // multiple of the modulus less a little, reach each correction of the low
+    // digit. The sum is below 2^257 and the modulus at least 2^192, so the top
+    // digit is at most one: it is never the largest digit nor takes the last
+    // step, but can be added back.
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let boundaries = [0, u64::MAX, 1 << 63, (1 << 63) - 1, 1];
+    let mut reached = BTreeSet::new();
+    let mut cases = Vec::new();
+    for _ in 0..200_000 {
+        let mut limb = || {
+            let choice = next();
+            if choice % 5 < 3 {
+                boundaries[(choice >> 3) as usize % boundaries.len()]
+            } else {
+                next()
+            }
+        };
+        let [a, b, m] = [(); 3].map(|()| word([limb(), limb(), limb(), limb()]));
+        let below = next();
+        let b = if below % 2 == 0 {
+            b
+        } else {
+            let multiple = m.overflowing_mul(U256::from(1 + (below >> 1) % 7)).0;
+            multiple.overflowing_sub(U256::from(1 + (below >> 4) % 3)).0
+        };
+        let Some(corrections) = remainder_corrections(a, b, m, false) else {
+            continue;
+        };
+        let known = reached.len();
+        reached.extend(corrections);
+        if reached.len() > known {
+            cases.push([a, b, m]);
+        }
+        if reached.len() == 4 {
+            break;
+        }
+    }
+    let expected = BTreeSet::from([
+        (0, Correction::Largest),
+        (0, Correction::LastStep),
+        (0, Correction::AddBack),
+        (1, Correction::AddBack),
+    ]);
+    assert_eq!(reached, expected);
+    check(
+        "    v7.i256 = evm_add_mod v4 v5 v6;\n    mstore v3 v7 i256;\n    return 0.i8;",
+        &cases,
+        |[a, b, m]| (modular(a, b, m, false), false),
     );
 }
 

@@ -6,6 +6,7 @@ mod frame;
 mod globals;
 mod i256;
 mod memory;
+mod ownership;
 mod parts;
 mod phi;
 mod prediction;
@@ -27,7 +28,7 @@ use cranelift_module::{
     DataDescription, DataId, FuncId, Linkage, Module as ClifModule, ModuleReloc,
 };
 
-use sonatina_codegen::analysis::known_bits::KnownBitsQuery;
+use sonatina_codegen::analysis::{arg_writes::ArgWrites, known_bits::KnownBitsQuery};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Type, U256,
     Value, ValueId,
@@ -43,10 +44,11 @@ use self::{
     black_box::BlackBoxBarrier,
     division::{Divider, DividerCall, Numerator, addmod, div_rem, div_rem_i128, mulmod},
     enums::{store_tag, store_variant, tag_clif_type, variant_field_offset},
-    frame::FrameSlots,
+    frame::{CallFacts, FrameSlots},
     globals::*,
     i256::*,
     memory::*,
+    ownership::Ownership,
     parts::*,
     phi::Edges,
     prediction::{BranchPrediction, propagate_cold_blocks},
@@ -126,6 +128,8 @@ pub(super) fn translate_module(
     let mut divider = Divider::default();
     let mut black_box = BlackBoxBarrier::default();
     let tail_calls = TailCalls::new(module);
+    let ownership = Ownership::new(module, &tail_calls);
+    let arg_writes = ArgWrites::new(module);
     let mut function_tables = HashMap::new();
 
     for &func_ref in &funcs {
@@ -160,6 +164,8 @@ pub(super) fn translate_module(
                         function,
                         func_ref,
                         &tail_calls,
+                        &ownership,
+                        &arg_writes,
                         &mut function_tables,
                         &func_id_map,
                         &data_ids,
@@ -233,7 +239,11 @@ pub(super) fn translate_module(
         clif_module
             .define_function_bytes(
                 func_id,
-                code.buffer.alignment.max(preferred_alignment).into(),
+                function_alignment(
+                    code.code_buffer().len(),
+                    code.buffer.alignment,
+                    preferred_alignment,
+                ),
                 code.code_buffer(),
                 &relocs,
             )
@@ -305,6 +315,26 @@ fn translate_linkage(linkage: SonatinaLinkage) -> Linkage {
     }
 }
 
+/// The module's facts about the calls of the function `func_ref`.
+struct Calls<'a> {
+    func_ref: FuncRef,
+    tail_calls: &'a TailCalls,
+    ownership: &'a Ownership,
+    arg_writes: &'a ArgWrites,
+}
+
+impl CallFacts for Calls<'_> {
+    fn is_tail_call(&self, call: InstId) -> bool {
+        self.tail_calls.is_tail_call(self.func_ref, call)
+    }
+    fn owns(&self, callee: FuncRef, index: usize) -> bool {
+        self.ownership.owns(callee, index)
+    }
+    fn may_write(&self, callee: FuncRef, index: usize) -> bool {
+        self.arg_writes.may_write(callee, index)
+    }
+}
+
 /// The Cranelift signature of `func_ref`, in the `tail` calling convention
 /// when it takes part in a tail call.
 fn clif_signature(
@@ -337,6 +367,8 @@ fn translate_function(
     function: &Function,
     func_ref: FuncRef,
     tail_calls: &TailCalls,
+    ownership: &Ownership,
+    arg_writes: &ArgWrites,
     function_tables: &mut HashMap<Vec<FuncId>, DataId>,
     func_id_map: &HashMap<FuncRef, FuncId>,
     data_ids: &GlobalDataMap,
@@ -428,7 +460,24 @@ fn translate_function(
         }
     }
 
-    let frame = FrameSlots::new(function, &cfg, &block_order, sret_ptr, &mut builder)?;
+    let calls = Calls {
+        func_ref,
+        tail_calls,
+        ownership,
+        arg_writes,
+    };
+    let frame = FrameSlots::new(function, &cfg, &block_order, sret_ptr, &calls, &mut builder)?;
+    // Objects this function builds in the storage of arguments it owns.
+    let owned_objects: HashMap<ValueId, ValueId> = ownership
+        .owned(func_ref)
+        .iter()
+        .map(|arg| (arg.object, function.arg_values[arg.index]))
+        .collect();
+    let owned_stores: HashSet<InstId> = ownership
+        .owned(func_ref)
+        .iter()
+        .map(|arg| arg.store)
+        .collect();
     let mut known_bits = None;
     // A jump table's entries per key: at least 10% of a run's entries are
     // keys when optimizing for speed and 40% for size, as in LLVM.
@@ -586,6 +635,7 @@ fn translate_function(
                 )?,
                 NativeInstKind::EvmAddMod(op) => translate_modular(
                     addmod,
+                    Numerator::Sum,
                     [*op.lhs(), *op.rhs(), *op.modulus()],
                     inst_id,
                     function,
@@ -596,6 +646,7 @@ fn translate_function(
                 )?,
                 NativeInstKind::EvmMulMod(op) => translate_modular(
                     mulmod,
+                    Numerator::Double,
                     [*op.lhs(), *op.rhs(), *op.modulus()],
                     inst_id,
                     function,
@@ -610,8 +661,9 @@ fn translate_function(
                     let result_val = emit_scalar_shift(
                         val,
                         bits,
+                        function.dfg.value_imm(*shl.bits()),
                         function.dfg.value_ty(*shl.value()),
-                        ScalarShift::Shl,
+                        ShiftKind::Shl,
                         shift_count_in_range(function, *shl.bits(), *shl.value(), &mut known_bits),
                         &mut builder,
                     );
@@ -625,8 +677,9 @@ fn translate_function(
                     let result_val = emit_scalar_shift(
                         val,
                         bits,
+                        function.dfg.value_imm(*shr.bits()),
                         function.dfg.value_ty(*shr.value()),
-                        ScalarShift::Shr,
+                        ShiftKind::Shr,
                         shift_count_in_range(function, *shr.bits(), *shr.value(), &mut known_bits),
                         &mut builder,
                     );
@@ -640,8 +693,9 @@ fn translate_function(
                     let result_val = emit_scalar_shift(
                         val,
                         bits,
+                        function.dfg.value_imm(*sar.bits()),
                         function.dfg.value_ty(*sar.value()),
-                        ScalarShift::Sar,
+                        ShiftKind::Sar,
                         shift_count_in_range(function, *sar.bits(), *sar.value(), &mut known_bits),
                         &mut builder,
                     );
@@ -889,13 +943,22 @@ fn translate_function(
                 )?,
                 NativeInstKind::Trunc(trunc) => {
                     let to_ty = sonatina_type_to_clif_or_err(*trunc.ty(), pointer_type)?;
-                    let result_val = if function.dfg.value_ty(*trunc.from()) == Type::I256 {
-                        let limbs =
-                            resolve_i256(function, *trunc.from(), &value_map, &mut builder)?;
-                        truncate_limbs(limbs, to_ty, &mut builder)
-                    } else {
-                        let val = resolve_value(function, *trunc.from(), &value_map, &mut builder)?;
-                        resize_int_value(val, to_ty, false, &mut builder)
+                    let result_val = match function.dfg.value_ty(*trunc.from()) {
+                        Type::I256 => {
+                            let limbs =
+                                resolve_i256(function, *trunc.from(), &value_map, &mut builder)?;
+                            truncate_limbs(limbs, to_ty, &mut builder)
+                        }
+                        Type::I128 => {
+                            let val =
+                                resolve_value(function, *trunc.from(), &value_map, &mut builder)?;
+                            truncate_i128(val, to_ty, &mut builder)
+                        }
+                        _ => {
+                            let val =
+                                resolve_value(function, *trunc.from(), &value_map, &mut builder)?;
+                            resize_int_value(val, to_ty, false, &mut builder)
+                        }
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -1384,6 +1447,8 @@ fn translate_function(
                             i256_storage.result(&mut builder)
                         } else if register_parts(&module.ctx, result_ty).is_some() {
                             create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?
+                        } else if let Some(object) = frame.destination(inst_id) {
+                            resolve_value(function, object, &value_map, &mut builder)?
                         } else {
                             frame.address(ir_results[0], &mut builder)?
                         };
@@ -1394,7 +1459,7 @@ fn translate_function(
                     };
 
                     let mut i256_args = 0;
-                    for &arg in call.args() {
+                    for (index, &arg) in call.args().iter().enumerate() {
                         let arg_ty = function.dfg.value_ty(arg);
                         let value = if arg_ty == Type::I256 {
                             i256_args += 1;
@@ -1416,7 +1481,28 @@ fn translate_function(
                             }
                             materialize_parts(&module.ctx, arg_ty, &parts, &values, &mut builder)?
                         } else {
-                            resolve_operand(function, arg, &value_map, target_config, &mut builder)?
+                            let value = resolve_operand(
+                                function,
+                                arg,
+                                &value_map,
+                                target_config,
+                                &mut builder,
+                            )?;
+                            // The callee owns this argument; give it a copy.
+                            match frame.temporary(inst_id, index, &mut builder) {
+                                Some(temporary) => {
+                                    copy_value(
+                                        arg_ty,
+                                        value,
+                                        temporary,
+                                        &module.ctx,
+                                        target_config,
+                                        &mut builder,
+                                    )?;
+                                    temporary
+                                }
+                                None => value,
+                            }
                         };
                         call_args.push(value);
                     }
@@ -1864,7 +1950,14 @@ fn translate_function(
                     if frame.forwards(*mstore.value()) {
                         let src =
                             resolve_value(function, *mstore.value(), &value_map, &mut builder)?;
-                        move_value(store_ty, src, addr, &module.ctx, &mut builder)?;
+                        forward_value(
+                            store_ty,
+                            src,
+                            addr,
+                            &module.ctx,
+                            target_config,
+                            &mut builder,
+                        )?;
                     } else if uses_indirect_value_representation(&module.ctx, store_ty) {
                         store_indirect(
                             function,
@@ -1966,6 +2059,8 @@ fn translate_function(
                         }
                     }
                 }
+                NativeInstKind::ObjStore(_)
+                    if frame.stored_in_place(inst_id) || owned_stores.contains(&inst_id) => {}
                 NativeInstKind::ObjStore(obj_store) => {
                     let dest =
                         resolve_value(function, *obj_store.object(), &value_map, &mut builder)?;
@@ -1973,7 +2068,7 @@ fn translate_function(
                     if frame.forwards(*obj_store.value()) {
                         let src =
                             resolve_value(function, *obj_store.value(), &value_map, &mut builder)?;
-                        move_value(val_ty, src, dest, &module.ctx, &mut builder)?;
+                        forward_value(val_ty, src, dest, &module.ctx, target_config, &mut builder)?;
                     } else if uses_indirect_value_representation(&module.ctx, val_ty) {
                         store_indirect(
                             function,
@@ -1994,6 +2089,16 @@ fn translate_function(
                             &mut builder,
                         )?;
                     }
+                }
+                NativeInstKind::ObjAlloc(_)
+                    if let Some(result) = function.dfg.inst_result(inst_id)
+                        && let Some(arg) = owned_objects
+                            .get(&result)
+                            .copied()
+                            .or_else(|| frame.aliased(result)) =>
+                {
+                    let storage = resolve_value(function, arg, &value_map, &mut builder)?;
+                    value_map.insert(result, storage);
                 }
                 NativeInstKind::ObjAlloc(obj_alloc) => {
                     if let Some(result) = function.dfg.inst_result(inst_id) {
@@ -2413,6 +2518,21 @@ fn translate_function(
     Ok(ctx)
 }
 
+/// The bytes of a cache line on the native hosts' cores.
+const CACHE_LINE: usize = 64;
+
+/// The alignment of a function of `size` bytes: at least `minimum` and the
+/// ISA's `preferred` one, and for a function no longer than a cache line, the
+/// power of two at or above its size, so that it never straddles two lines.
+fn function_alignment(size: usize, minimum: u32, preferred: u32) -> u64 {
+    let line = if size <= CACHE_LINE {
+        size.next_power_of_two() as u64
+    } else {
+        1
+    };
+    u64::from(minimum.max(preferred)).max(line)
+}
+
 /// A switch with one destination, as a mask of its keys from `first` on.
 struct BitTest {
     first: u64,
@@ -2526,6 +2646,7 @@ type ModularOp = fn(Limbs, Limbs, Limbs, DividerCall, &mut FunctionBuilder) -> L
 #[allow(clippy::too_many_arguments)]
 fn translate_modular(
     op: ModularOp,
+    numerator: Numerator,
     operands: [ValueId; 3],
     inst_id: InstId,
     function: &Function,
@@ -2551,7 +2672,7 @@ fn translate_modular(
     let lhs = operand(lhs, builder)?;
     let rhs = operand(rhs, builder)?;
     let modulus = operand(modulus, builder)?;
-    let call = divider.call(clif_module, builder, Numerator::Double)?;
+    let call = divider.call(clif_module, builder, numerator)?;
     let limbs = op(lhs, rhs, modulus, call, builder);
     if ty == Type::I256 {
         value_map.insert_limbs(result, limbs);
@@ -2666,7 +2787,26 @@ fn translate_icmp(
 mod tests {
     use sonatina_ir::inst::{arith::Shl, downcast};
 
-    use super::shift_count_in_range;
+    use super::{function_alignment, shift_count_in_range};
+
+    #[test]
+    fn functions_within_a_cache_line_never_straddle_two() {
+        for size in 1..=64 {
+            let alignment = function_alignment(size, 1, 32);
+            assert!(alignment >= 32 && alignment.is_power_of_two(), "{size}");
+            // Any start at a multiple of the alignment keeps the function in
+            // one 64-byte line.
+            for start in (0..256).step_by(alignment as usize) {
+                assert_eq!(
+                    start / 64,
+                    (start + size as u64 - 1) / 64,
+                    "{size} at {start}"
+                );
+            }
+        }
+        assert_eq!(function_alignment(65, 1, 32), 32);
+        assert_eq!(function_alignment(300, 16, 32), 32);
+    }
 
     #[test]
     fn masked_and_scaled_counts_stay_below_the_width() {

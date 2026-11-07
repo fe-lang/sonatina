@@ -115,8 +115,9 @@ Public and external signatures must not expose `objref` or `constref`,
 including references nested inside other types. Private object returns may
 borrow caller arguments or their projections.
 
-Each `obj.alloc` is one stack slot of its function's frame. An instance lives
-until the function returns or the allocation runs again, and the frontend
+Each `obj.alloc` is one stack slot of its function's frame, or the storage of
+a by-reference argument that initializes it. An instance lives until the
+function returns or the allocation runs again, and the frontend
 guarantees that no reference derived from it, including an
 `obj.materialize.stack` pointer, is used after that (see
 [frame lifetimes](https://github.com/fe-lang/sonatina/blob/main/docs/object-aliasing.md#frame-lifetimes)).
