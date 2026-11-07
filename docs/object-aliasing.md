@@ -184,7 +184,8 @@ An `obj.alloc` instance lives until its function returns or that allocation
 runs again. References derived from it, including projections,
 `obj.materialize.stack` pointers and copies held in other objects or memory,
 may be used only while it lives. Frontends guarantee this, so placement needs
-no escape proof: native code gives each allocation one stack slot. Native
+no escape proof: native code gives each allocation one stack slot, or the
+storage of a by-reference argument that initializes it. Native
 compilation rejects only IR that certainly breaks the rule: a returned
 reference into a local allocation, or a reference to an earlier instance that
 is live when its allocation runs again. EVM placement still moves objects it

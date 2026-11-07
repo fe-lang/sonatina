@@ -574,6 +574,59 @@ block0:
     }
 }
 
+#[test]
+fn owned_arguments_skip_the_callee_copy() {
+    // `%consume` builds its object in its argument's storage: a caller that
+    // gives up its value copies nothing, one that reads it afterwards copies
+    // it once into a temporary.
+    let cases = [
+        ("v3.i64 = add v2 0.i64;", 0),
+        ("v3.i64 = extract_value v1 0.i64;", 1),
+    ];
+    let triple = native_isa(host_architecture()).triple();
+    for (after, copies) in cases {
+        let source = format!(
+            "target = \"{triple}\"
+func inline(never) private %fill(v0.i64) -> [i64; 32] {{
+block0:
+    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    return v1;
+}}
+func inline(never) private %consume(v0.[i64; 32]) -> i64 {{
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v1 v0;
+    v2.objref<i64> = obj.index v1 0.i64;
+    obj.store v2 1.i64;
+    v3.i64 = obj.load v2;
+    return v3;
+}}
+func public %f(v0.i64) -> i64 {{
+block0:
+    v1.[i64; 32] = call %fill v0;
+    v2.i64 = call %consume v1;
+    {after}
+    v4.i64 = add v2 v3;
+    return v4;
+}}
+"
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let artifact = CraneliftObjectBackend::new()
+                .compile_module(&module, &BackendOptions { opt_level: level })
+                .unwrap();
+            assert_eq!(
+                references(artifact.as_bytes(), "memcpy"),
+                copies,
+                "{level:?}\n{after}"
+            );
+        }
+    }
+}
+
 #[cfg(feature = "jit")]
 #[test]
 #[ignore = "manual release-profile compile/runtime measurement; run with --release --ignored --nocapture"]

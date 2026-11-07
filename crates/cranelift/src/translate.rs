@@ -6,6 +6,7 @@ mod frame;
 mod globals;
 mod i256;
 mod memory;
+mod ownership;
 mod parts;
 mod phi;
 mod prediction;
@@ -47,6 +48,7 @@ use self::{
     globals::*,
     i256::*,
     memory::*,
+    ownership::Ownership,
     parts::*,
     phi::Edges,
     prediction::{BranchPrediction, propagate_cold_blocks},
@@ -126,6 +128,7 @@ pub(super) fn translate_module(
     let mut divider = Divider::default();
     let mut black_box = BlackBoxBarrier::default();
     let tail_calls = TailCalls::new(module);
+    let ownership = Ownership::new(module);
     let mut function_tables = HashMap::new();
 
     for &func_ref in &funcs {
@@ -160,6 +163,7 @@ pub(super) fn translate_module(
                         function,
                         func_ref,
                         &tail_calls,
+                        &ownership,
                         &mut function_tables,
                         &func_id_map,
                         &data_ids,
@@ -341,6 +345,7 @@ fn translate_function(
     function: &Function,
     func_ref: FuncRef,
     tail_calls: &TailCalls,
+    ownership: &Ownership,
     function_tables: &mut HashMap<Vec<FuncId>, DataId>,
     func_id_map: &HashMap<FuncRef, FuncId>,
     data_ids: &GlobalDataMap,
@@ -438,8 +443,20 @@ fn translate_function(
         &block_order,
         sret_ptr,
         |call| tail_calls.is_tail_call(func_ref, call),
+        |callee, index| ownership.owns(callee, index),
         &mut builder,
     )?;
+    // Objects this function builds in the storage of arguments it owns.
+    let owned_objects: HashMap<ValueId, ValueId> = ownership
+        .owned(func_ref)
+        .iter()
+        .map(|arg| (arg.object, function.arg_values[arg.index]))
+        .collect();
+    let owned_stores: HashSet<InstId> = ownership
+        .owned(func_ref)
+        .iter()
+        .map(|arg| arg.store)
+        .collect();
     let mut known_bits = None;
     // A jump table's entries per key: at least 10% of a run's entries are
     // keys when optimizing for speed and 40% for size, as in LLVM.
@@ -1421,7 +1438,7 @@ fn translate_function(
                     };
 
                     let mut i256_args = 0;
-                    for &arg in call.args() {
+                    for (index, &arg) in call.args().iter().enumerate() {
                         let arg_ty = function.dfg.value_ty(arg);
                         let value = if arg_ty == Type::I256 {
                             i256_args += 1;
@@ -1443,7 +1460,28 @@ fn translate_function(
                             }
                             materialize_parts(&module.ctx, arg_ty, &parts, &values, &mut builder)?
                         } else {
-                            resolve_operand(function, arg, &value_map, target_config, &mut builder)?
+                            let value = resolve_operand(
+                                function,
+                                arg,
+                                &value_map,
+                                target_config,
+                                &mut builder,
+                            )?;
+                            // The callee owns this argument; give it a copy.
+                            match frame.temporary(inst_id, index, &mut builder) {
+                                Some(temporary) => {
+                                    copy_value(
+                                        arg_ty,
+                                        value,
+                                        temporary,
+                                        &module.ctx,
+                                        target_config,
+                                        &mut builder,
+                                    )?;
+                                    temporary
+                                }
+                                None => value,
+                            }
                         };
                         call_args.push(value);
                     }
@@ -1993,7 +2031,8 @@ fn translate_function(
                         }
                     }
                 }
-                NativeInstKind::ObjStore(_) if frame.stored_in_place(inst_id) => {}
+                NativeInstKind::ObjStore(_)
+                    if frame.stored_in_place(inst_id) || owned_stores.contains(&inst_id) => {}
                 NativeInstKind::ObjStore(obj_store) => {
                     let dest =
                         resolve_value(function, *obj_store.object(), &value_map, &mut builder)?;
@@ -2022,6 +2061,13 @@ fn translate_function(
                             &mut builder,
                         )?;
                     }
+                }
+                NativeInstKind::ObjAlloc(_)
+                    if let Some(result) = function.dfg.inst_result(inst_id)
+                        && let Some(&arg) = owned_objects.get(&result) =>
+                {
+                    let storage = resolve_value(function, arg, &value_map, &mut builder)?;
+                    value_map.insert(result, storage);
                 }
                 NativeInstKind::ObjAlloc(obj_alloc) => {
                     if let Some(result) = function.dfg.inst_result(inst_id) {

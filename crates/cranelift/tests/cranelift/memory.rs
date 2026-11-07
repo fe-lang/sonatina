@@ -1077,3 +1077,207 @@ block0:
         }
     }
 }
+
+#[test]
+fn callees_rebuild_objects_in_entry_blocks_that_loop() {
+    // `%passes` initializes an object from its argument at the top of its
+    // entry block, which it branches back to, and reads an element of the
+    // argument before that. Each pass starts from the argument's value, so it
+    // cannot build the object in the argument's storage.
+    let source = r#"
+func inline(never) private %fill(v0.i64) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.[i64; 32] = insert_value v1 31.i64 v0;
+    return v2;
+}
+func inline(never) private %passes(v0.[i64; 32], noalias nocapture v1.objref<[i64; 2]>) -> i64 {
+block0:
+    v2.i64 = extract_value v0 0.i64;
+    v3.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v3 v0;
+    v4.objref<i64> = obj.index v3 0.i64;
+    v5.i64 = obj.load v4;
+    v6.i64 = add v5 1.i64;
+    obj.store v4 v6;
+    v7.objref<i64> = obj.index v1 1.i64;
+    v8.i64 = obj.load v7;
+    v9.i64 = add v8 v2;
+    obj.store v7 v9;
+    v10.objref<i64> = obj.index v1 0.i64;
+    v11.i64 = obj.load v10;
+    v12.i64 = sub v11 1.i64;
+    obj.store v10 v12;
+    v13.i1 = eq v12 0.i64;
+    br v13 block1 block0;
+block1:
+    v14.i64 = obj.load v4;
+    v15.i64 = mul v9 1000.i64;
+    v16.i64 = add v14 v15;
+    return v16;
+}
+func public %looped(v0.i64) -> i64 {
+block0:
+    v1.[i64; 32] = call %fill v0;
+    v2.objref<[i64; 2]> = obj.alloc [i64; 2];
+    v3.objref<i64> = obj.index v2 0.i64;
+    obj.store v3 3.i64;
+    v4.objref<i64> = obj.index v2 1.i64;
+    obj.store v4 0.i64;
+    v5.i64 = call %passes v1 v2;
+    return v5;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let looped: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("looped").unwrap()) };
+        for value in [0, 5, -7, 1000] {
+            // Three passes each read element 0 as `value` and leave the
+            // object's element 0 at `value + 1`.
+            assert_eq!(
+                unsafe { looped(value) },
+                value + 1 + 3 * value * 1000,
+                "{level:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn callees_build_objects_in_arguments_they_own() {
+    // `%consume` and `%consume2` build their objects in their arguments'
+    // storage and overwrite them. Callers give up a value or object they do
+    // not use afterwards and copy the rest: `%kept` reads its value after
+    // the call, `%reused` its object, and `%twice` passes one value twice.
+    let source = r#"
+func inline(never) private %fill(v0.i64) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.[i64; 32] = insert_value v1 31.i64 v0;
+    return v2;
+}
+func inline(never) private %consume(v0.[i64; 32]) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v1 v0;
+    v2.objref<i64> = obj.index v1 0.i64;
+    v3.i64 = obj.load v2;
+    v4.i64 = add v3 100.i64;
+    obj.store v2 v4;
+    v5.objref<i64> = obj.index v1 31.i64;
+    obj.store v5 0.i64;
+    v6.i64 = obj.load v2;
+    return v6;
+}
+func inline(never) private %consume2(v0.[i64; 32], v1.[i64; 32]) -> i64 {
+block0:
+    v2.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v2 v0;
+    v3.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v3 v1;
+    v4.objref<i64> = obj.index v2 0.i64;
+    obj.store v4 7.i64;
+    v5.objref<i64> = obj.index v3 0.i64;
+    v6.i64 = obj.load v5;
+    return v6;
+}
+func inline(never) private %peek_first(v0.[i64; 32]) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v1 v0;
+    v2.i64 = extract_value v0 31.i64;
+    v3.objref<i64> = obj.index v1 31.i64;
+    obj.store v3 0.i64;
+    v4.i64 = obj.load v3;
+    v5.i64 = add v2 v4;
+    return v5;
+}
+func inline(never) private %peek_late(v0.[i64; 32]) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v1 v0;
+    v2.objref<i64> = obj.index v1 31.i64;
+    obj.store v2 0.i64;
+    v3.i64 = extract_value v0 31.i64;
+    return v3;
+}
+func public %peeks(v0.i64) -> i64 {
+block0:
+    v1.[i64; 32] = call %fill v0;
+    v2.i64 = call %peek_first v1;
+    v3.[i64; 32] = call %fill v0;
+    v4.i64 = call %peek_late v3;
+    v5.i64 = mul v4 1000.i64;
+    v6.i64 = add v2 v5;
+    return v6;
+}
+func public %given(v0.i64) -> i64 {
+block0:
+    v1.[i64; 32] = call %fill v0;
+    v2.i64 = call %consume v1;
+    return v2;
+}
+func public %kept(v0.i64) -> i64 {
+block0:
+    v1.[i64; 32] = call %fill v0;
+    v2.i64 = call %consume v1;
+    v3.i64 = extract_value v1 0.i64;
+    v4.i64 = extract_value v1 31.i64;
+    v5.i64 = add v2 v3;
+    v6.i64 = add v5 v4;
+    return v6;
+}
+func public %reused(v0.i64) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.[i64; 32] = call %fill v0;
+    obj.store v1 v2;
+    v3.[i64; 32] = obj.load v1;
+    v4.i64 = call %consume v3;
+    v5.objref<i64> = obj.index v1 31.i64;
+    v6.i64 = obj.load v5;
+    v7.i64 = add v4 v6;
+    return v7;
+}
+func public %twice(v0.i64) -> i64 {
+block0:
+    v1.[i64; 32] = call %fill v0;
+    v2.i64 = call %consume2 v1 v1;
+    return v2;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let function = |name| -> unsafe extern "C" fn(i64) -> i64 {
+            unsafe { std::mem::transmute(artifact.function_address(name).unwrap()) }
+        };
+        for value in [0, 5, -7, 1 << 40] {
+            unsafe {
+                assert_eq!(function("given")(value), value + 100, "{level:?}");
+                assert_eq!(
+                    function("kept")(value),
+                    value + 100 + 2 * value,
+                    "{level:?}"
+                );
+                assert_eq!(function("reused")(value), value + 100 + value, "{level:?}");
+                assert_eq!(function("twice")(value), value, "{level:?}");
+                // Each reads its argument's field 31, `value`, before or
+                // after zeroing its object's.
+                assert_eq!(function("peeks")(value), value + value * 1000, "{level:?}");
+            }
+        }
+    }
+}

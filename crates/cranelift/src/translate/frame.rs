@@ -11,6 +11,7 @@ use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, ValueId,
     inst::{InstId, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
+    module::FuncRef,
 };
 
 use super::{
@@ -60,6 +61,13 @@ use super::{
 /// later in its block, with no state change in between, is written there
 /// by the callee, unless an argument reaches the object or an instruction in
 /// between reads it.
+///
+/// A callee may own a by-reference argument (`Ownership`), building an
+/// object in its storage. The caller then passes storage it does not use
+/// after the call and no other argument shares: a forwarded load of a local
+/// object it no longer uses, or a value whose range ends at the call.
+/// Otherwise it copies the argument into a temporary, a class live only at
+/// the call.
 pub(super) struct FrameSlots {
     slot_of: FxHashMap<ValueId, clif::StackSlot>,
     return_buffer: Option<clif::Value>,
@@ -73,6 +81,9 @@ pub(super) struct FrameSlots {
     /// therefore copy nothing.
     destination: FxHashMap<InstId, ValueId>,
     stored_in_place: FxHashSet<InstId>,
+    /// The temporary each owned argument a call cannot give away is copied
+    /// into.
+    temporary: FxHashMap<(InstId, usize), clif::StackSlot>,
 }
 
 impl FrameSlots {
@@ -82,9 +93,10 @@ impl FrameSlots {
         block_order: &[BlockId],
         return_buffer: Option<clif::Value>,
         is_tail_call: impl Fn(InstId) -> bool,
+        owns: impl Fn(FuncRef, usize) -> bool,
         builder: &mut FunctionBuilder,
     ) -> Result<Self, String> {
-        let plan = Plan::new(function, cfg, block_order, is_tail_call)?;
+        let plan = Plan::new(function, cfg, block_order, is_tail_call, owns)?;
         let mut in_buffer = vec![false; plan.classes.len()];
         if return_buffer.is_some() {
             // Keep the most returned classes that are never live together.
@@ -161,6 +173,11 @@ impl FrameSlots {
                 .iter()
                 .filter_map(|&(root, class)| Some((root, slots[slot_of_class[class]?])))
                 .collect(),
+            temporary: plan
+                .temporaries
+                .iter()
+                .filter_map(|&(site, class)| Some((site, slots[slot_of_class[class]?])))
+                .collect(),
             return_buffer,
             in_return_buffer: plan
                 .members
@@ -190,6 +207,18 @@ impl FrameSlots {
     /// the result's own storage.
     pub fn destination(&self, inst: InstId) -> Option<ValueId> {
         self.destination.get(&inst).copied()
+    }
+
+    /// The temporary the call `inst` copies its argument `index` into, which
+    /// the callee owns, if it cannot pass the argument's own storage.
+    pub fn temporary(
+        &self,
+        inst: InstId,
+        index: usize,
+        builder: &mut FunctionBuilder,
+    ) -> Option<clif::Value> {
+        let slot = self.temporary.get(&(inst, index))?;
+        Some(builder.ins().stack_addr(clif::types::I64, *slot, 0))
     }
 
     /// Whether the store `inst` stores a value its call already wrote in
@@ -279,6 +308,8 @@ struct Plan {
     /// Calls writing their result into an object, with the object and the
     /// store.
     destination: FxHashMap<InstId, (ValueId, InstId)>,
+    /// The class of each owned argument copied into a temporary.
+    temporaries: Vec<((InstId, usize), usize)>,
 }
 
 impl Plan {
@@ -287,6 +318,7 @@ impl Plan {
         cfg: &ControlFlowGraph,
         block_order: &[BlockId],
         is_tail_call: impl Fn(InstId) -> bool,
+        owns: impl Fn(FuncRef, usize) -> bool,
     ) -> Result<Self, String> {
         let dfg = &function.dfg;
         let ctx = function.ctx();
@@ -309,6 +341,7 @@ impl Plan {
             continuation: FxHashMap::default(),
             forwarded: FxHashSet::default(),
             destination: FxHashMap::default(),
+            temporaries: Vec::new(),
         };
         let local = local_objects(function);
         // The local object each call argument passed in place reads.
@@ -469,8 +502,86 @@ impl Plan {
                 }
             }
         }
+
+        // Owned arguments the caller cannot give away go through temporaries.
+        for &block in block_order {
+            for inst in function.layout.iter_inst(block) {
+                let NativeInstKind::Call(call) = native_inst_set().resolve_inst(dfg.inst(inst))
+                else {
+                    continue;
+                };
+                if is_tail_call(inst) {
+                    continue;
+                }
+                let args = call.args();
+                for (index, &arg) in args.iter().enumerate() {
+                    let ty = dfg.value_ty(arg);
+                    if !owns(*call.callee(), index) || !uses_indirect_value_representation(ctx, ty)
+                    {
+                        continue;
+                    }
+                    let shared = |same: &dyn Fn(ValueId) -> bool| {
+                        args.iter()
+                            .enumerate()
+                            .any(|(other, &value)| other != index && same(value))
+                    };
+                    let given = if let Some(&object) = passed_from.get(&arg) {
+                        !shared(&|value| passed_from.get(&value) == Some(&object))
+                            && !object_used_after(function, cfg, &position, &local, object, inst)
+                    } else {
+                        class_of.get(&arg).is_some_and(|&class| {
+                            plan.members[class][0] == arg
+                                && plan.classes[class].end == position[inst]
+                                && !shared(&|value| class_of.get(&value) == Some(&class))
+                        })
+                    };
+                    if !given {
+                        let class = plan.classes.len();
+                        plan.classes.push(Class {
+                            def_block: block,
+                            start: position[inst],
+                            end: position[inst],
+                            size: value_storage_size(ty, ctx)?,
+                            align: value_storage_alignment(ty, ctx)?,
+                            returned: false,
+                        });
+                        plan.members.push(Vec::new());
+                        plan.temporaries.push(((inst, index), class));
+                    }
+                }
+            }
+        }
         Ok(plan)
     }
+}
+
+/// Whether the local object `object` may be used after the call `call`: an
+/// address of it is used later in the call's block, or in a block the call
+/// reaches, which includes the call's own block when it is in a loop.
+fn object_used_after(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    position: &SecondaryMap<InstId, u32>,
+    local: &FxHashMap<ValueId, ValueId>,
+    object: ValueId,
+    call: InstId,
+) -> bool {
+    let call_block = function.layout.inst_block(call);
+    let mut reached = FxHashSet::default();
+    let mut pending: Vec<_> = cfg.succs_of(call_block).copied().collect();
+    while let Some(block) = pending.pop() {
+        if reached.insert(block) {
+            pending.extend(cfg.succs_of(block).copied());
+        }
+    }
+    local
+        .iter()
+        .filter(|&(_, &of)| of == object)
+        .flat_map(|(&address, _)| function.dfg.users(address))
+        .any(|&user| {
+            let block = function.layout.inst_block(user);
+            reached.contains(&block) || block == call_block && position[user] > position[call]
+        })
 }
 
 /// Whether the only use of the load `inst` copies its result later in the
@@ -701,7 +812,16 @@ mod tests {
             let mut clif_function = clif::Function::new();
             let mut context = FunctionBuilderContext::new();
             let mut builder = FunctionBuilder::new(&mut clif_function, &mut context);
-            FrameSlots::new(function, &cfg, &block_order, None, |_| false, &mut builder).unwrap();
+            FrameSlots::new(
+                function,
+                &cfg,
+                &block_order,
+                None,
+                |_| false,
+                |_, _| false,
+                &mut builder,
+            )
+            .unwrap();
             clif_function
                 .sized_stack_slots
                 .values()
