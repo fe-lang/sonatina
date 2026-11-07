@@ -99,7 +99,8 @@ object. A call therefore writes a `readonly` argument's object only if it
 reaches the object some other way. The mark is part of the signature and
 signature rewrites carry it as they do `nocapture`; inlining discards it with
 the call. The verifier rejects stores, tag writes and variant writes into the
-object through the argument or its projections.
+object through the argument or its projections. Native code uses the mark
+(`ArgWrites`) to share a caller's object with calls that only read it.
 
 ## Consumers and coordinate-query audit
 
