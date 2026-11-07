@@ -108,7 +108,7 @@ fn integral_byte_width(ty: Type) -> Option<usize> {
     }
 }
 
-fn imm_to_u256(imm: Immediate) -> U256 {
+pub(crate) fn imm_to_u256(imm: Immediate) -> U256 {
     imm.as_i256().to_u256() & type_mask(imm.ty())
 }
 
