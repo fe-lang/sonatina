@@ -1,0 +1,58 @@
+#! An `and`, `or` or `xor` is its other operand when one operand changes only
+#! bits no use reads, whether that operand is a constant or not.
+
+target = "x86_64-unknown-native"
+
+# The high word of `hi << 64 | lo` reads no bit of `zext lo`.
+# sameln: func public %drops_or_operand_outside_demanded_bits(v0.i64, v1.i64) -> i64 {
+# check: v3.i128 = shl 64.i128 v2;
+# not: or
+# check: v6.i128 = shr 64.i128 v3;
+func public %drops_or_operand_outside_demanded_bits(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i128 = zext v1 i128;
+    v3.i128 = shl 64.i128 v2;
+    v4.i128 = zext v0 i128;
+    v5.i128 = or v3 v4;
+    v6.i128 = shr 64.i128 v5;
+    v7.i64 = trunc v6 i64;
+    return v7;
+}
+
+# The low word reads both operands.
+# sameln: func public %keeps_or_operand_inside_demanded_bits(v0.i64, v1.i64) -> i64 {
+# check: v5.i128 = or v3 v4;
+func public %keeps_or_operand_inside_demanded_bits(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i128 = zext v1 i128;
+    v3.i128 = shl 8.i128 v2;
+    v4.i128 = zext v0 i128;
+    v5.i128 = or v3 v4;
+    v6.i64 = trunc v5 i64;
+    return v6;
+}
+
+# sameln: func public %drops_xor_operand_outside_demanded_bits(v0.i32, v1.i8) -> i8 {
+# not: xor
+# check: v4.i8 = trunc v0 i8;
+func public %drops_xor_operand_outside_demanded_bits(v0.i32, v1.i8) -> i8 {
+block0:
+    v2.i32 = zext v1 i32;
+    v3.i32 = shl 8.i32 v2;
+    v5.i32 = xor v0 v3;
+    v4.i8 = trunc v5 i8;
+    return v4;
+}
+
+# `zext` leaves the high bits one in no case, so `and` with it keeps the low byte.
+# sameln: func public %drops_and_operand_one_in_demanded_bits(v0.i32, v1.i8) -> i8 {
+# not: and
+# check: v4.i8 = trunc v0 i8;
+func public %drops_and_operand_one_in_demanded_bits(v0.i32, v1.i8) -> i8 {
+block0:
+    v2.i32 = zext v1 i32;
+    v3.i32 = or v2 255.i32;
+    v5.i32 = and v0 v3;
+    v4.i8 = trunc v5 i8;
+    return v4;
+}

@@ -2363,3 +2363,56 @@ func private %f(noalias v0.objref<i64>) {
     assert!(text.contains("obj.store v0 8.i64"), "{text}");
     assert!(!text.contains("obj.store v0 7.i64"), "{text}");
 }
+
+#[test]
+fn pipelines_read_words_of_assembled_pairs() {
+    // `(hi << 64 | lo) >> 64` is `hi`, and the high word of that pair shifted
+    // right by 13 is `hi >> 13`.
+    for target in ["x86_64-unknown-native", "evm-ethereum-osaka"] {
+        let source = format!(
+            r#"
+target = "{target}"
+
+func public %high(v0.i64, v1.i64) -> i64 {{
+    block0:
+        v2.i128 = zext v1 i128;
+        v3.i128 = shl 64.i128 v2;
+        v4.i128 = zext v0 i128;
+        v5.i128 = or v3 v4;
+        v6.i128 = shr 64.i128 v5;
+        v7.i64 = trunc v6 i64;
+        return v7;
+}}
+
+func public %shifted_high(v0.i64, v1.i64) -> i64 {{
+    block0:
+        v2.i128 = zext v1 i128;
+        v3.i128 = shl 64.i128 v2;
+        v4.i128 = zext v0 i128;
+        v5.i128 = or v3 v4;
+        v6.i128 = shr 13.i128 v5;
+        v7.i128 = shr 64.i128 v6;
+        v8.i64 = trunc v7 i64;
+        return v8;
+}}
+"#
+        );
+        let pipeline = if target.starts_with("evm") {
+            Pipeline::speed()
+        } else {
+            Pipeline::native(OptLevel::O2)
+        };
+        let mut parsed = parse_module(&source).unwrap();
+        pipeline.run(&mut parsed.module);
+        verify_module_or_panic(
+            &parsed.module,
+            &VerifierConfig::for_level(VerificationLevel::Full),
+        );
+        let optimized = ModuleWriter::new(&parsed.module).dump_string();
+        let high = optimized.split("func public %shifted_high").next().unwrap();
+        assert!(high.contains("return v1;"), "{target}\n{optimized}");
+        let shifted = optimized.split("func public %shifted_high").nth(1).unwrap();
+        assert!(!shifted.contains(" or "), "{target}\n{optimized}");
+        assert!(!shifted.contains("13."), "{target}\n{optimized}");
+    }
+}

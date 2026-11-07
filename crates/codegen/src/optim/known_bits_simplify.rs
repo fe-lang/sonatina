@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    ControlFlowGraph, Function, I256, Immediate, InstId, U256, Value, ValueId,
+    ControlFlowGraph, Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
     inst::{BinaryInstKind, InstClassKind, logic::And},
 };
 
@@ -399,66 +399,35 @@ fn simplify_binary_with_demanded_bits(
     result: ValueId,
     facts: &LocalExprFacts<'_, '_>,
 ) -> SimplifiedResult {
-    match kind {
-        BinaryInstKind::And => simplify_copy_when_only_undemanded_bits_change(
-            func,
-            lhs,
-            rhs,
-            result,
-            facts,
-            |ty, imm| type_mask(ty) & !KnownBits::from_imm(imm).known_one,
-        )
+    // The bits of the result an operand can change, from its known bits.
+    let changed: fn(Type, KnownBits) -> U256 = match kind {
+        BinaryInstKind::And => |ty, bits| type_mask(ty) & !bits.known_one,
+        BinaryInstKind::Or | BinaryInstKind::Xor => |ty, bits| type_mask(ty) & !bits.known_zero,
+        _ => return SimplifiedResult::NoChange,
+    };
+    simplify_copy_when_only_undemanded_bits_change(func, lhs, rhs, result, facts, changed)
         .or_else(|| {
-            simplify_copy_when_only_undemanded_bits_change(
-                func,
-                rhs,
-                lhs,
-                result,
-                facts,
-                |ty, imm| type_mask(ty) & !KnownBits::from_imm(imm).known_one,
-            )
+            simplify_copy_when_only_undemanded_bits_change(func, rhs, lhs, result, facts, changed)
         })
-        .map_or(SimplifiedResult::NoChange, SimplifiedResult::Copy),
-        BinaryInstKind::Or | BinaryInstKind::Xor => simplify_copy_when_only_undemanded_bits_change(
-            func,
-            lhs,
-            rhs,
-            result,
-            facts,
-            |ty, imm| KnownBits::from_imm(imm).known_one & type_mask(ty),
-        )
-        .or_else(|| {
-            simplify_copy_when_only_undemanded_bits_change(
-                func,
-                rhs,
-                lhs,
-                result,
-                facts,
-                |ty, imm| KnownBits::from_imm(imm).known_one & type_mask(ty),
-            )
-        })
-        .map_or(SimplifiedResult::NoChange, SimplifiedResult::Copy),
-        _ => SimplifiedResult::NoChange,
-    }
+        .map_or(SimplifiedResult::NoChange, SimplifiedResult::Copy)
 }
 
+/// `value` when `other` changes only bits of the result that no use reads,
+/// as in `or (shl 64 (zext a)) (zext b)` read only above bit 64.
 fn simplify_copy_when_only_undemanded_bits_change(
     func: &Function,
     value: ValueId,
-    const_arg: ValueId,
+    other: ValueId,
     result: ValueId,
     facts: &LocalExprFacts<'_, '_>,
-    affected_bits: impl Fn(sonatina_ir::Type, Immediate) -> sonatina_ir::U256,
+    changed: fn(Type, KnownBits) -> U256,
 ) -> Option<ValueId> {
-    if facts.may_be_undef(value) {
+    if facts.may_be_undef(value) || facts.may_be_undef(other) {
         return None;
     }
 
-    let ty = func.dfg.value_ty(value);
-    let imm = facts.known_imm(const_arg)?;
-    let changed = affected_bits(ty, imm);
-    (facts.scalar_facts.demanded_bits(result) & changed == sonatina_ir::U256::zero())
-        .then_some(value)
+    let changed = changed(func.dfg.value_ty(value), facts.known_bits(func, other));
+    (facts.scalar_facts.demanded_bits(result) & changed == U256::zero()).then_some(value)
 }
 
 fn resolve_replacements(plans: &[RewritePlan]) -> FxHashMap<ValueId, ResolvedReplacement> {
