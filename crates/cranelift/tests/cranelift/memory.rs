@@ -282,6 +282,53 @@ block0:
 }
 
 #[test]
+fn constant_gep_offsets_address_loads_and_stores() {
+    // A stack machine's binary op: the two words below `top`, through
+    // chained constant geps, combine into the lower one, and the top moves
+    // down a word.
+    let source = r#"
+func public %pop_add(v0.*i8) -> *i8 {
+block0:
+    v1.*i8 = gep v0 -64.i64;
+    v2.*i8 = gep v1 32.i64;
+    v3.*i256 = bitcast v1 *i256;
+    v4.*i256 = bitcast v2 *i256;
+    v5.i256 = mload v4 i256;
+    v6.i256 = mload v3 i256;
+    v7.i256 = add v5 v6;
+    mstore v3 v7 i256;
+    v8.*i8 = gep v0 -32.i64;
+    v9.*i64 = bitcast v8 *i64;
+    v10.*i64 = gep v9 3.i64;
+    v11.i64 = mload v10 i64;
+    v12.i8 = trunc v11 i8;
+    v13.*i8 = gep v0 -1.i64;
+    mstore v13 v12 i8;
+    return v8;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let pop_add: unsafe extern "C" fn(*mut u64) -> *mut u64 =
+            unsafe { std::mem::transmute(artifact.function_address("pop_add").unwrap()) };
+        let mut words = [u64::MAX, 1, 0, 7, 1, 2, 3, 0x1122];
+        let top = unsafe { words.as_mut_ptr().add(8) };
+        let below = unsafe { pop_add(top) };
+        assert_eq!(below, unsafe { top.sub(4) }, "{level:?}");
+        // The sum carries out of the low limb, and the top word's last byte
+        // takes the low byte of its high limb.
+        assert_eq!(words[..4], [0, 4, 3, 0x1122 + 7], "{level:?}");
+        assert_eq!(words[4..], [1, 2, 3, 0x2200_0000_0000_1122], "{level:?}");
+    }
+}
+
+#[test]
 fn gep_treats_true_as_signed_negative_one() {
     let source = r#"
 func public %read(v0.*i64, v1.*i1) -> i64 {

@@ -1,5 +1,8 @@
 use cranelift_codegen::{
-    ir::{self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind},
+    ir::{
+        self as clif, InstBuilder, InstructionData, MemFlagsData, Opcode, StackSlotData,
+        StackSlotKind,
+    },
     isa::TargetFrontendConfig,
 };
 use cranelift_frontend::FunctionBuilder;
@@ -496,11 +499,19 @@ pub(super) fn translate_gep(
         match compound {
             CompoundType::Ptr(elem) | CompoundType::Array { elem, .. } => {
                 let index = resolve_index(function, idx_value, true, value_map, builder)?;
-                let elem_size = builder
-                    .ins()
-                    .iconst(clif::types::I64, i64::from(value_storage_size(elem, ctx)?));
-                let offset = builder.ins().imul(index, elem_size);
-                addr = builder.ins().iadd(addr, offset);
+                let elem_size = i64::from(value_storage_size(elem, ctx)?);
+                // A constant index adds a constant, which a load or store
+                // can take as its displacement.
+                addr = match iconst_value(index, &builder.func.dfg) {
+                    Some(index) => builder
+                        .ins()
+                        .iadd_imm_s(addr, index.wrapping_mul(elem_size)),
+                    None => {
+                        let elem_size = builder.ins().iconst(clif::types::I64, elem_size);
+                        let offset = builder.ins().imul(index, elem_size);
+                        builder.ins().iadd(addr, offset)
+                    }
+                };
                 current_ty = elem;
             }
             CompoundType::Struct(_) => {
@@ -519,6 +530,48 @@ pub(super) fn translate_gep(
     }
 
     Ok(addr)
+}
+
+/// `address` as a base and a constant displacement, through the adds of
+/// constants that address arithmetic builds. A load or store that takes the
+/// displacement itself leaves the add to the address's other uses. Cranelift
+/// computes a value before its first use, so a stack top that a tail call
+/// passes on after loading the words below it would otherwise be computed at
+/// the first load and held in a register of its own until the call.
+/// Displacements stay within half of `i32`'s range, which leaves room for the
+/// offsets of a value's pieces.
+pub(super) fn split_displacement(
+    address: clif::Value,
+    dfg: &clif::DataFlowGraph,
+) -> (clif::Value, i32) {
+    let addend = |value| i32::try_from(iconst_value(value, dfg)?).ok();
+    let (mut base, mut displacement) = (address, 0i32);
+    while let Some(InstructionData::Binary {
+        opcode: Opcode::Iadd,
+        args: [lhs, rhs],
+    }) = dfg.value_def(base).inst().map(|inst| dfg.insts[inst])
+        && let Some((next, addend)) = addend(rhs)
+            .map(|addend| (lhs, addend))
+            .or_else(|| addend(lhs).map(|addend| (rhs, addend)))
+        && let Some(sum) = displacement
+            .checked_add(addend)
+            .filter(|sum| sum.unsigned_abs() <= i32::MAX as u32 / 2)
+    {
+        base = next;
+        displacement = sum;
+    }
+    (base, displacement)
+}
+
+/// The value of an `iconst`.
+fn iconst_value(value: clif::Value, dfg: &clif::DataFlowGraph) -> Option<i64> {
+    match dfg.insts[dfg.value_def(value).inst()?] {
+        InstructionData::UnaryImm {
+            opcode: Opcode::Iconst,
+            imm,
+        } => Some(imm.bits()),
+        _ => None,
+    }
 }
 
 pub(super) fn resolve_index(
@@ -631,12 +684,16 @@ pub(super) fn compute_element_size(obj_ty: Type, ctx: &ModuleCtx) -> Result<usiz
 
 #[cfg(test)]
 mod tests {
-    use cranelift_codegen::ir::types::{I8, I16, I32, I64};
+    use cranelift_codegen::ir::{
+        self as clif, InstBuilder,
+        types::{I8, I16, I32, I64},
+    };
+    use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
     use sonatina_ir::types::CompoundType;
 
     use super::{
         Piece::{self, Field, Padding},
-        value_pieces, value_storage_size,
+        split_displacement, value_pieces, value_storage_size,
     };
 
     /// The pieces of a copy of `@T`, declared by `types`.
@@ -652,6 +709,34 @@ mod tests {
         };
         let size = value_storage_size(ty, &module.ctx).unwrap();
         value_pieces(ty, size, &module.ctx).unwrap()
+    }
+
+    #[test]
+    fn displacements_split_off_adds_of_constants() {
+        let mut func = clif::Function::new();
+        func.signature.params.push(clif::AbiParam::new(I64));
+        let mut context = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut func, &mut context);
+        let block = builder.create_block();
+        builder.append_block_params_for_function_params(block);
+        builder.switch_to_block(block);
+        let base = builder.block_params(block)[0];
+        let below = builder.ins().iadd_imm_s(base, -64);
+        let above = builder.ins().iadd_imm_s(below, 32);
+        let eight = builder.ins().iconst(I64, 8);
+        let swapped = builder.ins().iadd(eight, above);
+        let index = builder.ins().imul(base, eight);
+        let indexed = builder.ins().iadd(base, index);
+        let past = builder.ins().iadd_imm_s(indexed, 16);
+        let far = builder.ins().iadd_imm_s(base, i64::from(i32::MAX));
+        let dfg = &builder.func.dfg;
+        assert_eq!(split_displacement(above, dfg), (base, -32));
+        assert_eq!(split_displacement(swapped, dfg), (base, -24));
+        // A variable addend stops the walk, as does a displacement too wide
+        // for a value's pieces to add their offsets to.
+        assert_eq!(split_displacement(past, dfg), (indexed, 16));
+        assert_eq!(split_displacement(far, dfg), (far, 0));
+        assert_eq!(split_displacement(base, dfg), (base, 0));
     }
 
     #[test]
