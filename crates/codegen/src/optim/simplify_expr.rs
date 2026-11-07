@@ -1283,6 +1283,14 @@ pub(crate) fn simplify_binary_with_facts(
             if lhs_defined && lhs_imm.is_some_and(Immediate::is_zero) {
                 return SimplifiedResult::Copy(rhs);
             }
+            if kind != BinaryInstKind::Sar
+                && lhs_defined
+                && rhs_defined
+                && let Some(width) = integral_bit_width(value_ty)
+                && lhs_imm.is_some_and(|count| imm_to_u256(count) >= U256::from(width))
+            {
+                return SimplifiedResult::Const(value_zero);
+            }
         }
         BinaryInstKind::EvmSignExtend => {
             if let Some(result) = simplify_evm_signextend_known(
