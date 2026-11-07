@@ -530,6 +530,14 @@ fn transfer_inst(
         InstClassKind::Unary(UnaryInstKind::Not | UnaryInstKind::IsZero) => {
             transfer_bool_unary_inst(func, env, inst, kind)
         }
+        // A count lies between zero and the width.
+        InstClassKind::Unary(UnaryInstKind::Clz | UnaryInstKind::Ctz)
+            if let Some(result) = func.dfg.inst_result(inst) =>
+        {
+            let ty = func.dfg.value_ty(result);
+            let fact = unsigned_fact(U256::zero(), type_bits(ty).into(), ty);
+            set_env_fact(func, env, result, fact);
+        }
         InstClassKind::Binary(kind) => transfer_binary_inst(
             func,
             env,
