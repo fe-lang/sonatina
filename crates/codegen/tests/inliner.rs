@@ -1675,6 +1675,84 @@ func public %caller(v0.i32, v1.i32) -> i32 {
     assert!(stats.full_calls_inlined >= 2);
 }
 
+/// A small bounds-checked read, called twice from `%caller`'s `BODY`.
+const BOUNDED_READ: &str = r#"
+target = "evm-ethereum-london"
+
+func private %at(v0.i256, v1.i256, v2.i256) -> i8 {
+    block0:
+        v3.i1 = lt v2 v1;
+        br v3 block1 block2;
+
+    block1:
+        v4.i256 = add v0 v2;
+        v5.i256 = mload v4 i256;
+        v6.i256 = shr 248.i256 v5;
+        v7.i8 = trunc v6 i8;
+        return v7;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+}
+
+func public %caller(v0.i256, v1.i256, v2.i256) -> i256 {
+BODY
+}
+"#;
+
+const LOOP_BODY: &str = "    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = phi (0.i256 block0) (v8 block1);
+        v4.i8 = call %at v0 v1 v3;
+        v5.i256 = add v3 1.i256;
+        v6.i8 = call %at v0 v1 v5;
+        v7.i8 = add v4 v6;
+        v8.i256 = add v3 2.i256;
+        v9.i1 = lt v8 v2;
+        br v9 block1 block2;
+
+    block2:
+        v10.i256 = zext v7 i256;
+        return v10;";
+
+const STRAIGHT_BODY: &str = "    block0:
+        v3.i8 = call %at v0 v1 v2;
+        v4.i256 = add v2 1.i256;
+        v5.i8 = call %at v0 v1 v4;
+        v6.i8 = add v3 v5;
+        v7.i256 = zext v6 i256;
+        return v7;";
+
+#[test]
+fn full_inliner_credits_call_overhead_per_loop_iteration() {
+    for (body, scale, inlined) in [
+        (LOOP_BODY, 0, false),
+        (LOOP_BODY, 1, true),
+        (STRAIGHT_BODY, 1, false),
+    ] {
+        let source = BOUNDED_READ.replace("BODY", body);
+        let mut parsed = sonatina_parser::parse_module(&source)
+            .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+        let module = &mut parsed.module;
+
+        let mut cfg = full_only_inliner_test_config();
+        cfg.inline_threshold = 8;
+        cfg.inline_threshold_cold = 4;
+        cfg.loop_call_overhead_scale = scale;
+        Inliner::new(cfg).run(module);
+        assert_module_verified(module);
+
+        let dumped = dump_module(module);
+        assert_eq!(
+            !dumped.contains("call %at"),
+            inlined,
+            "scale {scale}:\n{dumped}"
+        );
+    }
+}
+
 #[test]
 fn full_inliner_multi_use_object_helper_can_inline_by_cost() {
     let source = r#"

@@ -10,6 +10,8 @@ use sonatina_ir::{
 
 use crate::{
     analysis::{definedness::UndefTaint, func_behavior::blocks_that_may_reach_commit},
+    domtree::DomTree,
+    loop_analysis::LoopTree,
     module_analysis,
     transform::aggregate::scalarize::AggregateScalarize,
 };
@@ -33,6 +35,7 @@ struct CallSite {
     returns_to_caller: bool,
     callee_may_commit: bool,
     continuation_may_commit: bool,
+    in_loop: bool,
 }
 
 #[derive(Default)]
@@ -152,6 +155,9 @@ pub struct InlinerConfig {
     pub call_return_overhead_bonus: i32,
     pub call_arg_shuffle_bonus: i32,
     pub call_result_shuffle_bonus: i32,
+    /// Extra multiples of the call overhead bonuses credited to a call inside
+    /// a loop of its caller, which pays that overhead on every iteration.
+    pub loop_call_overhead_scale: i32,
     pub duplicated_block_penalty: i32,
     pub multi_use_inst_free_allowance: usize,
     pub multi_use_excess_inst_penalty: i32,
@@ -195,6 +201,7 @@ impl Default for InlinerConfig {
             call_return_overhead_bonus: 0,
             call_arg_shuffle_bonus: 0,
             call_result_shuffle_bonus: 0,
+            loop_call_overhead_scale: 0,
             duplicated_block_penalty: 1,
             multi_use_inst_free_allowance: 5,
             multi_use_excess_inst_penalty: 1,
@@ -512,6 +519,7 @@ impl Inliner {
                             call_returns_to_caller: site.returns_to_caller,
                             call_callee_may_commit: site.callee_may_commit,
                             call_continuation_may_commit: site.continuation_may_commit,
+                            call_in_loop: site.in_loop,
                             known_arg_mask,
                         },
                         &self.config,
@@ -671,6 +679,10 @@ fn collect_call_sites(func: &Function) -> Vec<CallSite> {
     cfg.compute(func);
     let committing_blocks =
         blocks_that_may_reach_commit(func, &cfg, |func_ref| func.ctx().func_effects(func_ref));
+    let mut domtree = DomTree::new();
+    domtree.compute(&cfg);
+    let mut loops = LoopTree::new();
+    loops.compute(&cfg, &domtree);
     let mut sites = Vec::new();
 
     for block in func.layout.iter_block() {
@@ -689,6 +701,7 @@ fn collect_call_sites(func: &Function) -> Vec<CallSite> {
                 returns_to_caller: effects.may_return_to_caller(),
                 callee_may_commit: effects.may_commit_visible_writes,
                 continuation_may_commit: committing_blocks.contains(&block),
+                in_loop: loops.loop_of_block(block).is_some(),
             });
         }
     }

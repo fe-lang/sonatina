@@ -464,6 +464,8 @@ fn speed_inliner_config() -> InlinerConfig {
         call_return_overhead_bonus: 6,
         call_arg_shuffle_bonus: 2,
         call_result_shuffle_bonus: 2,
+        // A call in a loop pays its overhead on every iteration.
+        loop_call_overhead_scale: 1,
         duplicated_block_penalty: 1,
         multi_use_inst_free_allowance: 5,
         multi_use_excess_inst_penalty: 1,
