@@ -3,7 +3,7 @@ use sonatina_ir::{
     Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
     inst::{
         BinaryInstKind, CastInstKind, InstClassKind, InstKeyExt, OwnedInstKey, UnaryInstKind, cast,
-        evm::EvmKeccak256Words,
+        evm::EvmKeccak256Words, logic::Select,
     },
 };
 
@@ -455,6 +455,18 @@ fn simplify_key_identities(
             let (arg, ty) = key.cast_arg_ty()?;
             let simplified = simplify_cast(func, kind, arg, ty);
             (!simplified.is_no_change()).then(|| SimplifiedInst::one(simplified))
+        }
+        InstClassKind::Opaque if key.opcode_text() == Select::inst_name() => {
+            let &[cond, then, otherwise] = key.values() else {
+                return None;
+            };
+            let chosen = match defined_imm(facts, cond) {
+                Some(cond) if cond.is_zero() => otherwise,
+                Some(_) => then,
+                None if then == otherwise || facts.same_non_undef(then, otherwise) => then,
+                None => return None,
+            };
+            Some(SimplifiedInst::one(SimplifiedResult::Copy(chosen)))
         }
         InstClassKind::Phi | InstClassKind::Opaque => None,
     }

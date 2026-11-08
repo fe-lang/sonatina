@@ -8,7 +8,7 @@ use std::{
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     Function, Immediate, Type, U256, Value, ValueId,
-    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, data, downcast},
+    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, data, downcast, logic},
 };
 
 use crate::optim::const_eval::{
@@ -283,6 +283,12 @@ impl KnownBitsQuery {
         // A frozen value is one of its argument's.
         if let Some(freeze) = downcast::<&data::Freeze>(func.inst_set(), inst_data) {
             return self.known_of(func, *freeze.arg());
+        }
+        // A selected value is one of its two.
+        if let Some(select) = downcast::<&logic::Select>(func.inst_set(), inst_data) {
+            return self
+                .known_of(func, *select.then_value())
+                .meet(self.known_of(func, *select.else_value()), ty);
         }
 
         let args = inst_data.collect_values();
@@ -725,7 +731,7 @@ mod tests {
             cast::{Sext, Trunc, Zext},
             control_flow::{Br, Jump, Phi, Return},
             evm::EvmSignExtend,
-            logic::{And, Not, Or, Xor},
+            logic::{And, Not, Or, Select, Xor},
         },
         isa::Isa,
     };
@@ -755,6 +761,29 @@ mod tests {
             bits.exact_imm(Type::I8),
             Some(Immediate::from_i256(I256::from(-1i8), Type::I8))
         );
+    }
+
+    #[test]
+    fn select_knows_the_bits_its_values_share() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1, Type::I64], Type::I64);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let [cond, arg] = [builder.args()[0], builder.args()[1]];
+        let sixteen = builder.make_imm_value(Immediate::from_i256(I256::from(16u8), Type::I64));
+        let forty_eight = builder.make_imm_value(Immediate::from_i256(I256::from(48u8), Type::I64));
+        let with_bit = builder.insert_inst_with(|| Or::new(is, arg, sixteen), Type::I64);
+        let chosen =
+            builder.insert_inst_with(|| Select::new(is, cond, with_bit, forty_eight), Type::I64);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, chosen));
+        builder.seal_all();
+        builder.finish();
+
+        let func = only_func(&mb);
+        let known = KnownBitsQuery::new(&func).for_value(&func, chosen);
+        assert!(known.all_one_in(U256::from(16u8)));
+        assert!(!known.all_one_in(U256::from(32u8)));
     }
 
     #[test]
