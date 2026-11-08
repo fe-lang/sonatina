@@ -94,6 +94,7 @@ pub struct NativeInstSet(
     logic::And,
     logic::Or,
     logic::Xor,
+    logic::Select,
     logic::Bswap,
     logic::Clz,
     logic::Ctz,

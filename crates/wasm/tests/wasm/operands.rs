@@ -337,3 +337,36 @@ func public %mul64(v0.i64, v1.i64, v2.i64) -> i64 {
         }
     }
 }
+
+#[test]
+fn selects_choose_narrow_and_wide_values() {
+    let source = "func public %narrow(v0.i32, v1.i32, v2.i32) -> i32 {
+    block0:
+        v3.i1 = ne v0 0.i32;
+        v4.i32 = select v3 v1 v2;
+        return v4;
+}
+func public %wide(v0.i32, v1.i64, v2.i64) -> i64 {
+    block0:
+        v3.i1 = ne v0 0.i32;
+        v4.i256 = sext v1 i256;
+        v5.i256 = zext v2 i256;
+        v6.i256 = select v3 v4 v5;
+        v7.i256 = shr 192.i256 v6;
+        v8.i64 = trunc v7 i64;
+        return v8;
+}";
+    for level in LEVELS {
+        let bytes = build_at(source, level);
+        let mut machine = Machine::new(&bytes);
+        let narrow = machine.func("narrow");
+        let wide = machine.func("wide");
+        for cond in [0, 1, -1] {
+            let chosen = machine.call(&narrow, &[Val::I32(cond), Val::I32(7), Val::I32(-9)]);
+            assert_eq!(chosen[0].unwrap_i32(), if cond != 0 { 7 } else { -9 });
+            // The top limb: all ones from the sign-extended -5, zero from 5.
+            let top = machine.call(&wide, &[Val::I32(cond), Val::I64(-5), Val::I64(5)]);
+            assert_eq!(top[0].unwrap_i64(), if cond != 0 { -1 } else { 0 });
+        }
+    }
+}

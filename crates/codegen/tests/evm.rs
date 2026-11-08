@@ -1893,6 +1893,99 @@ object @Contract {{
 }
 
 #[test]
+fn selects_choose_at_each_width() {
+    for bits in [1, 8, 64, 128, 256] {
+        let operation = if bits == 256 {
+            "v6.i256 = select v3 v1 v2;".to_string()
+        } else {
+            format!(
+                "v4.i{bits} = trunc v1 i{bits};
+                 v5.i{bits} = trunc v2 i{bits};
+                 v7.i{bits} = select v3 v4 v5;
+                 v6.i256 = zext v7 i256;"
+            )
+        };
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {{
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i256 = evm_calldata_load 64.i256;
+        v3.i1 = trunc v0 i1;
+        {operation}
+        mstore 0.i256 v6 i256;
+        evm_return 0.i256 32.i256;
+}}
+
+object @Contract {{
+    section runtime {{
+        entry %entry;
+    }}
+}}
+"#
+        );
+        let mask = IrU256::MAX >> (256 - bits);
+        let pairs = [
+            (IrU256::zero(), IrU256::MAX),
+            (IrU256::MAX, IrU256::one()),
+            (IrU256::from(0x1234_5678u64) << 120, IrU256::from(77u64)),
+        ];
+        for optimized in [false, true] {
+            let mut parsed = parse_sona(&source);
+            if optimized {
+                Pipeline::speed().run(&mut parsed.module);
+            }
+            let backend = EvmBackend::new(Evm::new(parsed.module.ctx.triple))
+                .with_late_cleanup_profile(if optimized {
+                    LateCleanupProfile::Speed
+                } else {
+                    LateCleanupProfile::Off
+                });
+            let artifact = compile_object(
+                &parsed.module,
+                &backend,
+                "Contract",
+                &CompileOptions::default(),
+            )
+            .expect("selects should compile");
+            let runtime = artifact
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .expect("missing runtime section");
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for (a, b) in pairs {
+                for cond in [0u64, 1, 2, 3] {
+                    let input = [
+                        IrU256::from(cond).to_big_endian(),
+                        a.to_big_endian(),
+                        b.to_big_endian(),
+                    ]
+                    .concat();
+                    let chosen = if cond & 1 == 1 { a } else { b };
+                    let result = harness.call(&input);
+                    let ExecutionResult::Success {
+                        output: Output::Call(actual),
+                        ..
+                    } = result
+                    else {
+                        panic!("i{bits}, optimized={optimized}: {result:?}");
+                    };
+                    assert_eq!(
+                        actual.as_ref(),
+                        (chosen & mask).to_big_endian(),
+                        "i{bits}, optimized={optimized}, cond={cond}, a={a:#x}, b={b:#x}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn bit_counts_count_zeros_at_each_width() {
     let counting = IrU256::from_big_endian(&std::array::from_fn::<u8, 32, _>(|i| i as u8 + 1));
     for bits in [1, 8, 16, 32, 64, 128, 256] {

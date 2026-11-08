@@ -18,7 +18,7 @@ use sonatina_ir::{
     isa::native::inst_set as native_inst_set,
 };
 
-use super::{LOAD_FLAGS, ValueMap, resolve_i256};
+use super::{LOAD_FLAGS, ValueMap, resolve_i256, resolve_value};
 
 pub(super) const LIMBS: usize = 4;
 pub(super) type Limbs = [clif::Value; LIMBS];
@@ -841,6 +841,13 @@ pub(super) fn translate_i256_op(
             value_map,
             builder,
         )?,
+        NativeInstKind::Select(op) if wide(op.then_value()) => {
+            let cond = resolve_value(function, *op.cond(), value_map, builder)?;
+            let (then, otherwise) = binary(op.then_value(), op.else_value(), value_map, builder)?;
+            Output::Limbs(std::array::from_fn(|limb| {
+                builder.ins().select(cond, then[limb], otherwise[limb])
+            }))
+        }
         NativeInstKind::Not(op) if wide(op.arg()) => {
             let value = resolve_i256(function, *op.arg(), value_map, builder)?;
             Output::Limbs(value.map(|limb| builder.ins().bnot(limb)))

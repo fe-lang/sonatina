@@ -66,3 +66,19 @@ impl Interpret for Ctz {
         single_result(arg.with_imm(Immediate::ctz))
     }
 }
+
+impl Interpret for Select {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        let cond = state.lookup_val(*self.cond());
+        state.set_action(Action::Continue);
+        let Some(cond) = cond.as_imm() else {
+            return single_result(EvalValue::Undef);
+        };
+        let chosen = if cond.is_zero() {
+            *self.else_value()
+        } else {
+            *self.then_value()
+        };
+        single_result(state.lookup_val(chosen))
+    }
+}

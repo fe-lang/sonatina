@@ -29,6 +29,15 @@ pub struct Xor {
     rhs: ValueId,
 }
 
+/// `then_value` when `cond`, an `i1`, is true, else `else_value`: a choice
+/// between two values of one integral or pointer type, without a branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct Select {
+    cond: ValueId,
+    then_value: ValueId,
+    else_value: ValueId,
+}
+
 /// Reverses the order of the bytes of an integer; an `i8` is unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(unary(Bswap)))]

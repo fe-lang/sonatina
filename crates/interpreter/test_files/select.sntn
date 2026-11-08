@@ -1,0 +1,42 @@
+target = "evm-ethereum-osaka"
+
+#[(1.i1, 3.i8, 5.i8) -> 3.i8]
+#[(0.i1, 3.i8, 5.i8) -> 5.i8]
+func private %select_i8(v0.i1, v1.i8, v2.i8) -> i8 {
+    block0:
+        v3.i8 = select v0 v1 v2;
+        return v3;
+}
+
+#[(1.i1, 0.i1, 1.i1) -> 0.i1]
+#[(0.i1, 0.i1, 1.i1) -> 1.i1]
+func private %select_i1(v0.i1, v1.i1, v2.i1) -> i1 {
+    block0:
+        v3.i1 = select v0 v1 v2;
+        return v3;
+}
+
+#[(1.i1, -7.i64, 9.i64) -> -7.i64]
+#[(0.i1, -7.i64, 9.i64) -> 9.i64]
+func private %select_i64(v0.i1, v1.i64, v2.i64) -> i64 {
+    block0:
+        v3.i64 = select v0 v1 v2;
+        return v3;
+}
+
+#[(1.i1, -1.i256, 2.i256) -> -1.i256]
+#[(0.i1, -1.i256, 2.i256) -> 2.i256]
+func private %select_i256(v0.i1, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.i256 = select v0 v1 v2;
+        return v3;
+}
+
+#[(4.i64) -> 4.i64]
+#[(20.i64) -> 10.i64]
+func private %select_min_of_compare(v0.i64) -> i64 {
+    block0:
+        v1.i1 = lt v0 10.i64;
+        v2.i64 = select v1 v0 10.i64;
+        return v2;
+}
