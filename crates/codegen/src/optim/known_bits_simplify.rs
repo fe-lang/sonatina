@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    ControlFlowGraph, Function, I256, Immediate, InstId, U256, Value, ValueId,
+    ControlFlowGraph, Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
     inst::{BinaryInstKind, InstClassKind, logic::And},
 };
 
@@ -25,6 +25,10 @@ use super::simplify_expr::{
 
 pub struct KnownBitsSimplify {
     plans: Vec<RewritePlan>,
+    /// Rewrites that hold only for the bits uses read. A rewrite from
+    /// `plans` can give a value uses that read more of it, as
+    /// `shl 8 (shr 8 x)` -> `x` does, so these wait for a round without one.
+    demand_plans: Vec<RewritePlan>,
 }
 
 #[derive(Clone, Copy)]
@@ -83,11 +87,29 @@ impl ExprFactProvider for LocalExprFacts<'_, '_> {
 
 impl KnownBitsSimplify {
     pub fn new() -> Self {
-        Self { plans: Vec::new() }
+        Self {
+            plans: Vec::new(),
+            demand_plans: Vec::new(),
+        }
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
+        let mut changed = false;
+        loop {
+            let (round_changed, deferred) = self.run_round(func);
+            changed |= round_changed;
+            if !deferred {
+                return changed;
+            }
+        }
+    }
+
+    /// One round of rewrites from the same facts. Returns whether it changed
+    /// `func`, and whether it left rewrites from demanded bits for a round
+    /// with fresh facts.
+    fn run_round(&mut self, func: &mut Function) -> (bool, bool) {
         self.plans.clear();
+        self.demand_plans.clear();
 
         let scalar_facts = ScalarFacts::new(func);
         let mut range_analysis = None;
@@ -122,8 +144,10 @@ impl KnownBitsSimplify {
                     range_env: range_env.as_ref(),
                     may_be_undef: &may_be_undef,
                 };
-                if let Some(plan) = self.plan_inst(func, &facts, inst) {
-                    self.plans.push(plan);
+                match self.plan_inst(func, &facts, inst) {
+                    Some((plan, false)) => self.plans.push(plan),
+                    Some((plan, true)) => self.demand_plans.push(plan),
+                    None => {}
                 }
                 if let Some(range_env) = range_env.as_ref()
                     && let Some(count) = bounded_shift_count(func, range_env, inst)
@@ -145,8 +169,12 @@ impl KnownBitsSimplify {
             mask_shift_count(func, inst, count, mask);
         }
 
+        let deferred = !self.plans.is_empty() && !self.demand_plans.is_empty();
         if self.plans.is_empty() {
-            return masked;
+            std::mem::swap(&mut self.plans, &mut self.demand_plans);
+        }
+        if self.plans.is_empty() {
+            return (masked, false);
         }
 
         let resolved = resolve_replacements(&self.plans);
@@ -158,7 +186,7 @@ impl KnownBitsSimplify {
             remove_rewritten_inst(func, plan);
         }
 
-        true
+        (true, deferred)
     }
 
     fn plan_inst(
@@ -166,11 +194,12 @@ impl KnownBitsSimplify {
         func: &Function,
         facts: &LocalExprFacts<'_, '_>,
         inst: InstId,
-    ) -> Option<RewritePlan> {
+    ) -> Option<(RewritePlan, bool)> {
         let [result] = func.dfg.inst_results(inst) else {
             return None;
         };
         let inst_data = func.dfg.inst(inst);
+        let mut from_demand = false;
         let simplified = match inst_data.kind() {
             InstClassKind::Unary(kind) => {
                 let args = inst_data.collect_values();
@@ -208,6 +237,7 @@ impl KnownBitsSimplify {
                 if !shared.is_no_change() {
                     shared
                 } else {
+                    from_demand = true;
                     simplify_binary_with_demanded_bits(
                         func,
                         kind,
@@ -222,26 +252,27 @@ impl KnownBitsSimplify {
             InstClassKind::Phi | InstClassKind::Opaque => SimplifiedResult::NoChange,
         };
 
-        match simplified {
+        let plan = match simplified {
             SimplifiedResult::Const(imm) if imm.ty() == func.dfg.value_ty(*result) => {
-                Some(RewritePlan::Const {
+                RewritePlan::Const {
                     inst,
                     result: *result,
                     imm,
-                })
+                }
             }
             SimplifiedResult::Copy(replacement)
                 if func.dfg.value_ty(replacement) == func.dfg.value_ty(*result) =>
             {
-                Some(RewritePlan::Copy {
+                RewritePlan::Copy {
                     inst,
                     result: *result,
                     replacement,
-                })
+                }
             }
-            SimplifiedResult::Const(_) | SimplifiedResult::Copy(_) => None,
-            SimplifiedResult::NoChange => None,
-        }
+            SimplifiedResult::Const(_) | SimplifiedResult::Copy(_) => return None,
+            SimplifiedResult::NoChange => return None,
+        };
+        Some((plan, from_demand))
     }
 }
 
@@ -368,66 +399,35 @@ fn simplify_binary_with_demanded_bits(
     result: ValueId,
     facts: &LocalExprFacts<'_, '_>,
 ) -> SimplifiedResult {
-    match kind {
-        BinaryInstKind::And => simplify_copy_when_only_undemanded_bits_change(
-            func,
-            lhs,
-            rhs,
-            result,
-            facts,
-            |ty, imm| type_mask(ty) & !KnownBits::from_imm(imm).known_one,
-        )
+    // The bits of the result an operand can change, from its known bits.
+    let changed: fn(Type, KnownBits) -> U256 = match kind {
+        BinaryInstKind::And => |ty, bits| type_mask(ty) & !bits.known_one,
+        BinaryInstKind::Or | BinaryInstKind::Xor => |ty, bits| type_mask(ty) & !bits.known_zero,
+        _ => return SimplifiedResult::NoChange,
+    };
+    simplify_copy_when_only_undemanded_bits_change(func, lhs, rhs, result, facts, changed)
         .or_else(|| {
-            simplify_copy_when_only_undemanded_bits_change(
-                func,
-                rhs,
-                lhs,
-                result,
-                facts,
-                |ty, imm| type_mask(ty) & !KnownBits::from_imm(imm).known_one,
-            )
+            simplify_copy_when_only_undemanded_bits_change(func, rhs, lhs, result, facts, changed)
         })
-        .map_or(SimplifiedResult::NoChange, SimplifiedResult::Copy),
-        BinaryInstKind::Or | BinaryInstKind::Xor => simplify_copy_when_only_undemanded_bits_change(
-            func,
-            lhs,
-            rhs,
-            result,
-            facts,
-            |ty, imm| KnownBits::from_imm(imm).known_one & type_mask(ty),
-        )
-        .or_else(|| {
-            simplify_copy_when_only_undemanded_bits_change(
-                func,
-                rhs,
-                lhs,
-                result,
-                facts,
-                |ty, imm| KnownBits::from_imm(imm).known_one & type_mask(ty),
-            )
-        })
-        .map_or(SimplifiedResult::NoChange, SimplifiedResult::Copy),
-        _ => SimplifiedResult::NoChange,
-    }
+        .map_or(SimplifiedResult::NoChange, SimplifiedResult::Copy)
 }
 
+/// `value` when `other` changes only bits of the result that no use reads,
+/// as in `or (shl 64 (zext a)) (zext b)` read only above bit 64.
 fn simplify_copy_when_only_undemanded_bits_change(
     func: &Function,
     value: ValueId,
-    const_arg: ValueId,
+    other: ValueId,
     result: ValueId,
     facts: &LocalExprFacts<'_, '_>,
-    affected_bits: impl Fn(sonatina_ir::Type, Immediate) -> sonatina_ir::U256,
+    changed: fn(Type, KnownBits) -> U256,
 ) -> Option<ValueId> {
-    if facts.may_be_undef(value) {
+    if facts.may_be_undef(value) || facts.may_be_undef(other) {
         return None;
     }
 
-    let ty = func.dfg.value_ty(value);
-    let imm = facts.known_imm(const_arg)?;
-    let changed = affected_bits(ty, imm);
-    (facts.scalar_facts.demanded_bits(result) & changed == sonatina_ir::U256::zero())
-        .then_some(value)
+    let changed = changed(func.dfg.value_ty(value), facts.known_bits(func, other));
+    (facts.scalar_facts.demanded_bits(result) & changed == U256::zero()).then_some(value)
 }
 
 fn resolve_replacements(plans: &[RewritePlan]) -> FxHashMap<ValueId, ResolvedReplacement> {

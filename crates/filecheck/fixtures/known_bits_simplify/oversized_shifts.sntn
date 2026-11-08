@@ -1,0 +1,31 @@
+#! A `shl` or `shr` count of at least the width gives zero; `sar` keeps the
+#! sign.
+
+target = "x86_64-unknown-native"
+
+# sameln: func public %folds_shl_by_the_width(v0.i64) -> i64 {
+# not: shl
+# check: return 0.i64;
+func public %folds_shl_by_the_width(v0.i64) -> i64 {
+block0:
+    v1.i64 = shl 64.i64 v0;
+    return v1;
+}
+
+# sameln: func public %folds_shr_past_the_width(v0.i64) -> i64 {
+# not: shr
+# check: return 0.i64;
+func public %folds_shr_past_the_width(v0.i64) -> i64 {
+block0:
+    v1.i64 = shr 70.i64 v0;
+    return v1;
+}
+
+# sameln: func public %keeps_sar_by_the_width(v0.i64) -> i64 {
+# check: v1.i64 = sar 64.i64 v0;
+# check: return v1;
+func public %keeps_sar_by_the_width(v0.i64) -> i64 {
+block0:
+    v1.i64 = sar 64.i64 v0;
+    return v1;
+}

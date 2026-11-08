@@ -8,7 +8,9 @@ use sonatina_ir::{
 };
 
 use crate::{
-    analysis::known_bits::{KnownBits, has_conflicting_known_bits, supports_known_bits, type_mask},
+    analysis::known_bits::{
+        KnownBits, has_conflicting_known_bits, low_mask, supports_known_bits, type_mask,
+    },
     range_analysis::RangeFact,
 };
 
@@ -108,7 +110,7 @@ fn integral_byte_width(ty: Type) -> Option<usize> {
     }
 }
 
-fn imm_to_u256(imm: Immediate) -> U256 {
+pub(crate) fn imm_to_u256(imm: Immediate) -> U256 {
     imm.as_i256().to_u256() & type_mask(imm.ty())
 }
 
@@ -1283,6 +1285,20 @@ pub(crate) fn simplify_binary_with_facts(
             if lhs_defined && lhs_imm.is_some_and(Immediate::is_zero) {
                 return SimplifiedResult::Copy(rhs);
             }
+            if let Some(count) = lhs_imm.map(imm_to_u256)
+                && let Some(width) = integral_bit_width(value_ty)
+            {
+                if kind != BinaryInstKind::Sar
+                    && count >= U256::from(width)
+                    && lhs_defined
+                    && rhs_defined
+                {
+                    return SimplifiedResult::Const(value_zero);
+                }
+                if let Some(value) = undo_inverse_shift(func, kind, count, rhs, facts) {
+                    return SimplifiedResult::Copy(value);
+                }
+            }
         }
         BinaryInstKind::EvmSignExtend => {
             if let Some(result) = simplify_evm_signextend_known(
@@ -1351,6 +1367,44 @@ pub(crate) fn simplify_binary_with_facts(
     }
 
     SimplifiedResult::NoChange
+}
+
+/// `shr c (shl c x)` is `x` when the shift left drops only zero bits of `x`,
+/// and `shl c (shr c x)` is `x` when the shift right does.
+fn undo_inverse_shift(
+    func: &Function,
+    kind: BinaryInstKind,
+    count: U256,
+    value: ValueId,
+    facts: &impl ExprFactProvider,
+) -> Option<ValueId> {
+    let inverse = match kind {
+        BinaryInstKind::Shl => BinaryInstKind::Shr,
+        BinaryInstKind::Shr => BinaryInstKind::Shl,
+        _ => return None,
+    };
+    let inner = func.dfg.value_inst(value)?;
+    if func.dfg.inst(inner).kind() != InstClassKind::Binary(inverse) {
+        return None;
+    }
+    let [inner_count, x] = func.dfg.inst(inner).collect_values()[..] else {
+        return None;
+    };
+    let ty = func.dfg.value_ty(x);
+    let width = integral_bit_width(ty)?;
+    if count >= U256::from(width)
+        || facts.known_imm(inner_count).map(imm_to_u256) != Some(count)
+        || facts.may_be_undef(x)
+    {
+        return None;
+    }
+
+    let count = count.as_usize();
+    let dropped = match kind {
+        BinaryInstKind::Shr => type_mask(ty) & !(type_mask(ty) >> count),
+        _ => low_mask(count as u16),
+    };
+    facts.known_bits(func, x).all_zero_in(dropped).then_some(x)
 }
 
 #[allow(dead_code)]

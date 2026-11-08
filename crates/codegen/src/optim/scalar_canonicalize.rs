@@ -1,12 +1,12 @@
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    Function, I256, Immediate, Inst, InstId, Type, Value, ValueId,
+    Function, I256, Immediate, Inst, InstId, Type, U256, Value, ValueId,
     inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, arith, cast, cmp, logic},
 };
 
 use super::simplify_expr::{
-    ZextI1CompareRewrite, canonicalize_cast_chain, nontrivial_pow2_shift, simplify_cast,
-    simplify_zext_i1_compare,
+    ZextI1CompareRewrite, canonicalize_cast_chain, imm_to_u256, integral_bit_width,
+    nontrivial_pow2_shift, simplify_cast, simplify_zext_i1_compare,
 };
 
 pub struct ScalarCanonicalize {
@@ -210,6 +210,9 @@ fn canonicalize_binary_inst(
             rhs: Operand::Value(arg),
         }),
         BinaryInstKind::Mul => mul_pow2_rewrite(func, lhs, rhs),
+        BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar => {
+            merge_shifts(func, kind, lhs, rhs)
+        }
         BinaryInstKind::Udiv
         | BinaryInstKind::EvmUdiv
         | BinaryInstKind::Umod
@@ -234,6 +237,39 @@ fn canonicalize_binary_inst(
         }
         _ => None,
     }
+}
+
+/// `shr a (shr b x)` is `shr (a + b) x`, and likewise for `shl` and `sar`. A
+/// total past the width becomes the width, or `width - 1` for `sar`, which
+/// shifts the same way: every bit out, or the sign into every bit.
+fn merge_shifts(
+    func: &Function,
+    kind: BinaryInstKind,
+    count: ValueId,
+    value: ValueId,
+) -> Option<InstSpec> {
+    let outer = imm_to_u256(func.dfg.value_imm(count)?);
+    let inner = func.dfg.value_inst(value)?;
+    if func.dfg.inst(inner).kind() != InstClassKind::Binary(kind) {
+        return None;
+    }
+    let [inner_count, x] = func.dfg.inst(inner).collect_values()[..] else {
+        return None;
+    };
+    let inner = imm_to_u256(func.dfg.value_imm(inner_count)?);
+    let ty = func.dfg.value_ty(count);
+    let width = U256::from(integral_bit_width(ty)?);
+    let limit = if kind == BinaryInstKind::Sar {
+        width - U256::one()
+    } else {
+        width
+    };
+    let total = (outer.min(width) + inner.min(width)).min(limit);
+    Some(InstSpec::Binary {
+        kind,
+        lhs: Operand::Imm(Immediate::from_i256(I256::from(total.as_usize()), ty)),
+        rhs: Operand::Value(x),
+    })
 }
 
 fn neg_source(func: &Function, value: ValueId) -> Option<ValueId> {
@@ -352,6 +388,7 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
                 BinaryInstKind::Sub => Some(Box::new(arith::Sub::new(is.has_sub()?, lhs, rhs))),
                 BinaryInstKind::Shl => Some(Box::new(arith::Shl::new(is.has_shl()?, lhs, rhs))),
                 BinaryInstKind::Shr => Some(Box::new(arith::Shr::new(is.has_shr()?, lhs, rhs))),
+                BinaryInstKind::Sar => Some(Box::new(arith::Sar::new(is.has_sar()?, lhs, rhs))),
                 BinaryInstKind::And => Some(Box::new(logic::And::new(is.has_and()?, lhs, rhs))),
                 _ => None,
             }
@@ -415,6 +452,7 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             BinaryInstKind::Sub => is.has_sub().is_some(),
             BinaryInstKind::Shl => is.has_shl().is_some(),
             BinaryInstKind::Shr => is.has_shr().is_some(),
+            BinaryInstKind::Sar => is.has_sar().is_some(),
             BinaryInstKind::And => is.has_and().is_some(),
             _ => false,
         },
@@ -711,6 +749,89 @@ block0:
                 .func_store
                 .modify(f, |func| assert!(!ScalarCanonicalize::new().run(func)));
         }
+    }
+
+    #[test]
+    fn merges_constant_shifts_of_one_kind() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "x86_64-unknown-native"
+
+func public %f(v0.i128, v1.i64) -> i128 {
+block0:
+    v2.i128 = shr 13.i128 v0;
+    v3.i128 = shr 64.i128 v2;
+    v4.i64 = shl 5.i64 v1;
+    v5.i64 = shl 3.i64 v4;
+    v6.i128 = zext v5 i128;
+    v7.i128 = shl 64.i128 v3;
+    v8.i128 = or v7 v6;
+    return v8;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(ScalarCanonicalize::new().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains(" = shr 77.i128 v0;"), "{dumped}");
+        assert!(dumped.contains(" = shl 8.i64 v1;"), "{dumped}");
+        assert!(!dumped.contains("shr 13."), "{dumped}");
+        assert!(!dumped.contains("shl 5."), "{dumped}");
+    }
+
+    #[test]
+    fn clamps_merged_shift_counts_to_the_width() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "x86_64-unknown-native"
+
+func public %f(v0.i64, v1.i8) -> i64 {
+block0:
+    v2.i64 = shr 40.i64 v0;
+    v3.i64 = shr 40.i64 v2;
+    v4.i64 = sar 40.i64 v0;
+    v5.i64 = sar 40.i64 v4;
+    v6.i8 = shl -56.i8 v1;
+    v7.i8 = shl 100.i8 v6;
+    v8.i64 = zext v7 i64;
+    v9.i64 = or v3 v5;
+    v10.i64 = or v9 v8;
+    return v10;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(ScalarCanonicalize::new().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains(" = shr 64.i64 v0;"), "{dumped}");
+        assert!(dumped.contains(" = sar 63.i64 v0;"), "{dumped}");
+        assert!(dumped.contains(" = shl 8.i8 v1;"), "{dumped}");
+    }
+
+    #[test]
+    fn keeps_shifts_of_different_kinds() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "x86_64-unknown-native"
+
+func public %f(v0.i64) -> i64 {
+block0:
+    v1.i64 = shl 3.i64 v0;
+    v2.i64 = shr 3.i64 v1;
+    return v2;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(!ScalarCanonicalize::new().run(func));
+        });
     }
 
     fn parse_test_module(src: &str) -> (Module, FuncRef) {
