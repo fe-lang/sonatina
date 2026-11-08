@@ -48,6 +48,7 @@ use super::{
     dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     gvn::GvnSolver,
+    if_convert::IfConvert,
     inliner::{Inliner, InlinerConfig},
     jump_thread::JumpThread,
     known_bits_simplify::KnownBitsSimplify,
@@ -124,6 +125,7 @@ pub enum Pass {
     /// Load only the fields that `extract_value`s read of a loaded struct or
     /// array (native pipelines only).
     NarrowObjectLoads,
+    IfConvert,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
     /// Use after passes that can leave stale user entries
@@ -258,6 +260,11 @@ impl Pass {
             },
             Pass::NarrowObjectLoads => PassInfo {
                 name: "narrow_object_loads",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
+            },
+            Pass::IfConvert => PassInfo {
+                name: "if_convert",
                 needs_func_behavior: false,
                 invalidates_func_behavior: false,
             },
@@ -590,9 +597,9 @@ impl Pipeline {
     /// quicker builds. Both end by simplifying with known bits and ranges
     /// again, so code inlined after the first round has bounded shift counts
     /// masked too, then narrowing aggregate loads to the fields read, folding
-    /// boolean phis, threading returns, forming
-    /// switches from comparison trees and fusing comparisons with the
-    /// subtractions they guard.
+    /// boolean phis, threading returns, forming switches from comparison
+    /// trees, fusing comparisons with the subtractions they guard and
+    /// converting branches whose paths meet at once to selects.
     /// Os is the size pipeline.
     pub fn native(level: OptLevel) -> Self {
         let mut pipeline = match level {
@@ -609,6 +616,8 @@ impl Pipeline {
             Pass::CfgCleanup,
             Pass::SwitchFormation,
             Pass::CompareSubFusion,
+            Pass::IfConvert,
+            Pass::CfgCleanup,
         ]));
         pipeline.keep_tail_callee_args = true;
         pipeline
@@ -1011,6 +1020,10 @@ fn run_pass(
         Pass::NarrowObjectLoads => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.narrow_object_loads").entered();
             NarrowObjectLoads.run(func)
+        }
+        Pass::IfConvert => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.if_convert").entered();
+            IfConvert.run(func)
         }
         Pass::SwitchFormation => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.switch_formation").entered();
@@ -2824,8 +2837,8 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 .collect()
         };
         // Both end by narrowing aggregate loads, simplifying with known bits,
-        // folding boolean phis, threading returns, forming switches and
-        // fusing comparisons with subtractions.
+        // folding boolean phis, threading returns, forming switches, fusing
+        // comparisons with subtractions and converting branches to selects.
         let switches = format!(
             "{:?}",
             Step::FuncPasses(vec![
@@ -2836,6 +2849,8 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 Pass::CfgCleanup,
                 Pass::SwitchFormation,
                 Pass::CompareSubFusion,
+                Pass::IfConvert,
+                Pass::CfgCleanup,
             ])
         );
         let mut o1 = steps(&Pipeline::native(OptLevel::O1));

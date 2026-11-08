@@ -921,9 +921,9 @@ block2:
 #[test]
 fn branches_between_values_select_the_chosen_ones() {
     // Two joins entered only from a branch's paths, through a triangle and
-    // through a diamond, select their phi inputs instead of branching: an
-    // i64 and an i256 (four limbs), then the signed minimum of two i128s,
-    // which Cranelift folds to `smin`.
+    // through a diamond, choose the same with branches (O0) and with the
+    // selects of if-conversion (O2): an i64 and an i256 (four limbs), then
+    // the signed minimum of two i128s, which Cranelift folds to `smin`.
     let source = r#"
 func public %choose(v0.i64, v1.i64, v2.*i256, v3.*i256, v4.*i128, v5.*i128, v6.*[i64; 5]) {
 block0:
