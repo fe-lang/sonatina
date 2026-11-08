@@ -107,6 +107,7 @@ pub(super) struct InlineRequest {
     pub call_returns_to_caller: bool,
     pub call_callee_may_commit: bool,
     pub call_continuation_may_commit: bool,
+    pub call_in_loop: bool,
     pub known_arg_mask: u128,
 }
 
@@ -259,7 +260,11 @@ pub(super) fn decide_inline(
     if config.small_function_bonus > 0 && is_small_leaf_helper(summary, config) {
         score -= config.small_function_bonus;
     }
-    score -= compute_call_overhead_bonus(request, config);
+    let call_overhead = compute_call_overhead_bonus(request, config);
+    score -= call_overhead;
+    if request.call_in_loop {
+        score -= call_overhead * config.loop_call_overhead_scale;
+    }
     // Known actual arguments can expose constant branches, allocation sizes, and
     // return fields once the callee body is in the caller.
     score -= compute_callsite_known_arg_bonus(module, callee, request, config);
