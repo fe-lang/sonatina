@@ -193,22 +193,11 @@ fn from_halves(low: clif::Value, high: clif::Value, builder: &mut FunctionBuilde
     [limb0, limb1, limb2, limb3]
 }
 
-fn carry_to_i128(carry: clif::Value, builder: &mut FunctionBuilder) -> clif::Value {
-    let carry = builder.ins().uextend(I64, carry);
-    builder.ins().uextend(I128, carry)
-}
-
-// Cranelift has no carry-in additions for i64, so a 256-bit addition is two
-// i128 additions (add/adc pairs) and an addition of the low half's carry.
+// Each 256-bit addition or subtraction is two i128 halves, the high half
+// taking the low half's carry or borrow.
 
 fn add(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> Limbs {
-    let (lhs_low, lhs_high) = halves(lhs, builder);
-    let (rhs_low, rhs_high) = halves(rhs, builder);
-    let (low, carry) = builder.ins().uadd_overflow(lhs_low, rhs_low);
-    let high = builder.ins().iadd(lhs_high, rhs_high);
-    let carry = carry_to_i128(carry, builder);
-    let high = builder.ins().iadd(high, carry);
-    from_halves(low, high, builder)
+    add_carry(lhs, rhs, builder).0
 }
 
 /// The sum and its carry out.
@@ -220,21 +209,12 @@ pub(super) fn add_carry(
     let (lhs_low, lhs_high) = halves(lhs, builder);
     let (rhs_low, rhs_high) = halves(rhs, builder);
     let (low, carry) = builder.ins().uadd_overflow(lhs_low, rhs_low);
-    let (high, high_carry) = builder.ins().uadd_overflow(lhs_high, rhs_high);
-    let carry = carry_to_i128(carry, builder);
-    let (high, carry) = builder.ins().uadd_overflow(high, carry);
-    let carry = builder.ins().bor(high_carry, carry);
+    let (high, carry) = builder.ins().uadd_overflow_cin(lhs_high, rhs_high, carry);
     (from_halves(low, high, builder), carry)
 }
 
 pub(super) fn sub(lhs: Limbs, rhs: Limbs, builder: &mut FunctionBuilder) -> Limbs {
-    let (lhs_low, lhs_high) = halves(lhs, builder);
-    let (rhs_low, rhs_high) = halves(rhs, builder);
-    let (low, borrow) = builder.ins().usub_overflow(lhs_low, rhs_low);
-    let high = builder.ins().isub(lhs_high, rhs_high);
-    let borrow = carry_to_i128(borrow, builder);
-    let high = builder.ins().isub(high, borrow);
-    from_halves(low, high, builder)
+    sub_borrow(lhs, rhs, builder).0
 }
 
 /// The difference and its borrow out.
@@ -246,10 +226,7 @@ pub(super) fn sub_borrow(
     let (lhs_low, lhs_high) = halves(lhs, builder);
     let (rhs_low, rhs_high) = halves(rhs, builder);
     let (low, borrow) = builder.ins().usub_overflow(lhs_low, rhs_low);
-    let (high, high_borrow) = builder.ins().usub_overflow(lhs_high, rhs_high);
-    let borrow = carry_to_i128(borrow, builder);
-    let (high, borrow) = builder.ins().usub_overflow(high, borrow);
-    let borrow = builder.ins().bor(high_borrow, borrow);
+    let (high, borrow) = builder.ins().usub_overflow_bin(lhs_high, rhs_high, borrow);
     (from_halves(low, high, builder), borrow)
 }
 
