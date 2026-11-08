@@ -1,4 +1,4 @@
-//! Pass private object arguments as a bounded set of scalars read at callee entry.
+//! Pass private object arguments as a bounded set of scalars loaded at each call.
 
 use std::{
     cmp::{Ordering, Reverse},
@@ -9,7 +9,7 @@ use std::{
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, InstId, Module, Type, Value, ValueId,
+    Function, InstId, Module, Signature, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{control_flow, data},
     module::FuncRef,
@@ -117,9 +117,9 @@ impl ObjectArgPromotion {
                     continue;
                 }
                 module.func_store.modify(func_ref, Function::rebuild_users);
-                let ret_tys = module.ctx.func_sig(func_ref, |sig| sig.ret_tys().to_vec());
+                let sig = module.ctx.func_sig(func_ref, Signature::clone);
                 let plan = module.func_store.view(func_ref, |func| {
-                    self.plan(func, &ret_tys, synthetic_outputs.contains_key(&func_ref))
+                    self.plan(func, &sig, synthetic_outputs.contains_key(&func_ref))
                 });
                 if let Some(plan) = plan {
                     plans.insert(func_ref, plan);
@@ -146,10 +146,10 @@ impl ObjectArgPromotion {
         stats
     }
 
-    fn plan(&mut self, func: &Function, ret_tys: &[Type], synthetic_output: bool) -> Option<Plan> {
+    fn plan(&mut self, func: &Function, sig: &Signature, synthetic_output: bool) -> Option<Plan> {
         let limits = ObjectAggregateAbiConfig::default();
         let hidden_returns = ObjectAggregateAbi::new(limits)
-            .hidden_return_arg_count(func.ctx(), ret_tys)?
+            .hidden_return_arg_count(func.ctx(), sig.ret_tys())?
             + usize::from(synthetic_output);
         for (arg_index, &argument) in func.arg_values.iter().enumerate() {
             let Some(root_ty) = objref_element_ty(func.ctx(), func.dfg.value_ty(argument)) else {
@@ -171,15 +171,26 @@ impl ObjectArgPromotion {
                 continue;
             };
             let loads: FxHashSet<_> = reads.loads.iter().map(|load| load.inst).collect();
-            // All reads of this argument must execute in the unchanged entry
-            // prefix. Other memory accesses, calls, allocations and branches are
-            // barriers, so this needs no no-alias or all-callers initialization assumption.
+            // The loads moved to each call must see what every read sees. A
+            // `noalias` argument's object is defined at entry, and these reads
+            // are the only accesses through it, so nothing writes it while the
+            // function runs, wherever the reads are. Moving reads that are
+            // not at entry pays off when the callers hold the fields as
+            // values, as they usually do for a `readonly` view. Callers
+            // usually keep a writable argument's object in memory, so its
+            // loads would only move to each call and lengthen live ranges.
+            // Any other argument's reads must all execute in the unchanged
+            // entry prefix: other memory accesses, calls, allocations and
+            // branches are barriers.
             if reads.fields.is_empty()
-                || unconditional_read_prefix(func, ReadPrefixRequirement::SingleExecution, |inst| {
-                    loads.contains(&inst)
-                })
-                .len()
-                    != loads.len()
+                || !(func.is_noalias_arg(argument) && sig.is_readonly_arg(arg_index))
+                    && unconditional_read_prefix(
+                        func,
+                        ReadPrefixRequirement::SingleExecution,
+                        |inst| loads.contains(&inst),
+                    )
+                    .len()
+                        != loads.len()
             {
                 continue;
             }
@@ -205,7 +216,7 @@ impl ObjectArgPromotion {
                 root_ty,
                 reads,
                 new_arg_tys,
-                ret_tys: SmallVec::from_slice(ret_tys),
+                ret_tys: SmallVec::from_slice(sig.ret_tys()),
             });
         }
         None

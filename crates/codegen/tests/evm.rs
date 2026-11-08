@@ -2881,6 +2881,96 @@ object @Contract { section runtime { entry %entry; } }
 }
 
 #[test]
+fn promoted_view_fields_read_after_branches_and_other_writes() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+func inline(never) private %pick(noalias readonly v0.objref<@Pair>, v1.objref<i256>, v2.i256) -> i256 {
+block0:
+    obj.store v1 22.i256;
+    v3.i1 = eq v2 0.i256;
+    br v3 block1 block2;
+block1:
+    v4.objref<i256> = obj.proj v0 0.i8;
+    v5.i256 = obj.load v4;
+    return v5;
+block2:
+    v6.objref<i256> = obj.proj v0 1.i8;
+    v7.i256 = obj.load v6;
+    v8.i256 = obj.load v1;
+    v9.i256 = add v7 v8;
+    return v9;
+}
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    v2.i256 = evm_calldata_load 64.i256;
+    v3.objref<@Pair> = obj.alloc @Pair;
+    v4.objref<i256> = obj.proj v3 0.i8;
+    obj.store v4 v0;
+    v5.objref<i256> = obj.proj v3 1.i8;
+    obj.store v5 v1;
+    v6.objref<i256> = obj.alloc i256;
+    obj.store v6 11.i256;
+    v7.i256 = call %pick v3 v6 v2;
+    v8.i256 = obj.load v6;
+    evm_mstore 0.i256 v7;
+    evm_mstore 32.i256 v8;
+    evm_return 0.i256 64.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(source).module;
+        verify_module_or_panic(&module, &config);
+        assert_eq!(ObjectArgPromotion::default().run(&module).promoted_args, 1);
+        verify_module_or_panic(&module, &config);
+        let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        verify_module_or_panic(compiler.optimize(), &config);
+        let artifacts = compiler.compile().expect("view fields should compile");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for (first, second, selector) in [
+            (IrU256::from(5), IrU256::from(7), IrU256::zero()),
+            (IrU256::from(5), IrU256::from(7), IrU256::one()),
+            (IrU256::MAX, IrU256::one() << 255, IrU256::MAX),
+        ] {
+            let result = harness.call(
+                &[
+                    first.to_big_endian(),
+                    second.to_big_endian(),
+                    selector.to_big_endian(),
+                ]
+                .concat(),
+            );
+            let ExecutionResult::Success {
+                output: Output::Call(output),
+                ..
+            } = result
+            else {
+                panic!("{level:?}, selector={selector}: {result:?}");
+            };
+            let picked = if selector.is_zero() {
+                first
+            } else {
+                second.overflowing_add(IrU256::from(22)).0
+            };
+            let expected = [picked, IrU256::from(22)]
+                .into_iter()
+                .flat_map(|word| word.to_big_endian())
+                .collect::<Vec<_>>();
+            assert_eq!(output.as_ref(), expected, "{level:?}, selector={selector}");
+        }
+    }
+}
+
+#[test]
 fn entry_backedges_preserve_first_invocation_branch() {
     let source = r#"
 target = "evm-ethereum-osaka"

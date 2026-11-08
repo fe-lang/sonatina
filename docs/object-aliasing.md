@@ -64,10 +64,15 @@ it; Fe marks its `mut` and view parameters, which its access rules make
 exclusive or unwritten for the call. A `noalias` root overlaps no other
 root and, until the function publishes it, no external or unknown access,
 so opaque calls and raw stores leave it alone. Object memory analysis tracks
-it like a borrowed local argument, with its contents defined at entry. It is
-still the caller's object: its stores stay live at return. The mark belongs
-to the argument value; a transformation that rebuilds an argument drops it,
-and inlining discards the callee's marks.
+it like a borrowed local argument, with its contents defined at entry. When
+a private function only reads such an argument, nothing writes its object
+during the call, so loads at each call see what its reads would. Argument
+promotion relies on this for `noalias` `readonly` arguments, whose callers
+usually hold the fields as values, and loads their demanded fields at each
+call wherever the function reads them. It is still the caller's object: its
+stores stay live at return. The mark belongs to the argument value; a
+transformation that rebuilds an argument drops it, and inlining discards the
+callee's marks.
 
 ## Nocapture arguments
 
