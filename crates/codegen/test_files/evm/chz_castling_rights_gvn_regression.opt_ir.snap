@@ -81,9 +81,7 @@ func private %main_root() {
         v226.objref<i1> = obj.proj v217 6.i256;
         obj.store v226 0.i1;
         v227.@layout_1 = obj.load v217;
-        v228.@layout_2 = enum.make @layout_2 #Ok v227;
         enum.set_tag v8 #Ok;
-        enum.assert_variant v228 #Ok;
         v229.objref<@layout_1> = enum.proj v8 #Ok 0.i256;
         v231.objref<i256> = obj.proj v229 0.i256;
         v232.i256 = extract_value v227 0.i256;

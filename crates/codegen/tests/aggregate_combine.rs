@@ -121,3 +121,46 @@ fn insertion_chain_scaling() {
         }
     }
 }
+
+#[test]
+fn assertions_that_certify_made_payloads_stay() {
+    // `v3` copies an object whose second field nothing wrote, so only the
+    // assertion makes the payload readable for the extract after the join.
+    let module = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+type @E = enum { #None, #Some(@Pair) };
+func private %f(v0.i1, v9.@E) -> i256 {
+block0:
+    v1.objref<@Pair> = obj.alloc @Pair;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    obj.store v2 1.i256;
+    v3.@Pair = obj.load v1;
+    v4.@E = enum.make @E #Some v3;
+    enum.assert_variant v4 #Some;
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    enum.assert_variant v9 #Some;
+    jump block3;
+block3:
+    v5.@E = phi (v4 block1) (v9 block2);
+    v6.@Pair = enum.extract v5 #Some 0.i8;
+    v7.i256 = extract_value v6 0.i8;
+    return v7;
+}
+"#,
+    )
+    .expect("valid IR")
+    .module;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    verify_module_or_panic(&module, &config);
+    for func_ref in module.funcs() {
+        module.func_store.modify(func_ref, |func| {
+            AggregateCombine::default().run(func);
+        });
+    }
+    verify_module_or_panic(&module, &config);
+}
