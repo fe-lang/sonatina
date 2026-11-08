@@ -56,6 +56,7 @@ use super::{
     loop_rotate::LoopRotate,
     loop_strength_reduce::LoopStrengthReduce,
     multi_result_legalize::legalize_multi_result,
+    narrow_object_loads::NarrowObjectLoads,
     range_branch_simplify::{RangeBranchSimplify, has_conditional_branch},
     return_thread::ReturnThread,
     scalar_canonicalize::ScalarCanonicalize,
@@ -120,6 +121,9 @@ pub enum Pass {
     /// it, which then build the value in the return buffer (native pipelines
     /// only).
     ReturnThread,
+    /// Load only the fields that `extract_value`s read of a loaded struct or
+    /// array (native pipelines only).
+    NarrowObjectLoads,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
     /// Use after passes that can leave stale user entries
@@ -251,6 +255,11 @@ impl Pass {
                 name: "return_thread",
                 needs_func_behavior: false,
                 invalidates_func_behavior: true,
+            },
+            Pass::NarrowObjectLoads => PassInfo {
+                name: "narrow_object_loads",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
             },
             Pass::RebuildUsers => PassInfo {
                 name: "rebuild_users",
@@ -580,7 +589,8 @@ impl Pipeline {
     /// stops that schedule after its second of four inline rounds, for
     /// quicker builds. Both end by simplifying with known bits and ranges
     /// again, so code inlined after the first round has bounded shift counts
-    /// masked too, then folding boolean phis, threading returns, forming
+    /// masked too, then narrowing aggregate loads to the fields read, folding
+    /// boolean phis, threading returns, forming
     /// switches from comparison trees and fusing comparisons with the
     /// subtractions they guard.
     /// Os is the size pipeline.
@@ -592,6 +602,7 @@ impl Pipeline {
             OptLevel::O2 => Self::optimized(native_inliner_config(), true, true),
         };
         pipeline.add_step(Step::FuncPasses(vec![
+            Pass::NarrowObjectLoads,
             Pass::KnownBitsSimplify,
             Pass::BoolPhiFold,
             Pass::ReturnThread,
@@ -996,6 +1007,10 @@ fn run_pass(
         Pass::ReturnThread => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.return_thread").entered();
             ReturnThread.run(func)
+        }
+        Pass::NarrowObjectLoads => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.narrow_object_loads").entered();
+            NarrowObjectLoads.run(func)
         }
         Pass::SwitchFormation => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.switch_formation").entered();
@@ -2808,12 +2823,13 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 .map(|step| format!("{step:?}"))
                 .collect()
         };
-        // Both end by simplifying with known bits, folding boolean phis,
-        // threading returns, forming switches and fusing comparisons with
-        // subtractions.
+        // Both end by narrowing aggregate loads, simplifying with known bits,
+        // folding boolean phis, threading returns, forming switches and
+        // fusing comparisons with subtractions.
         let switches = format!(
             "{:?}",
             Step::FuncPasses(vec![
+                Pass::NarrowObjectLoads,
                 Pass::KnownBitsSimplify,
                 Pass::BoolPhiFold,
                 Pass::ReturnThread,
