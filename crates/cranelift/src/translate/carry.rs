@@ -56,7 +56,9 @@ pub(super) struct CarryChains {
 
 impl CarryChains {
     /// The limb an i128 `add` computes: two zero-extended i64s and, at most,
-    /// one more that is 0 or 1.
+    /// one more that is 0 or 1. Of two terms, the flag of a translated limb
+    /// is a carry in with a zero addend, so the chain it comes out of goes
+    /// on.
     pub fn add_limb(
         &mut self,
         function: &Function,
@@ -80,7 +82,16 @@ impl CarryChains {
             .map(|term| widened_word(function, term))
             .collect::<Option<SmallVec<[_; 4]>>>()?;
         match terms[..] {
-            [a, b] => Some(Limb { a, b, carry: None }),
+            [a, b] => Some(
+                [(a, b), (b, a)]
+                    .into_iter()
+                    .find(|&(_, carry)| self.is_flag(function, carry))
+                    .map_or(Limb { a, b, carry: None }, |(a, carry)| Limb {
+                        a,
+                        b: Word::Const(0),
+                        carry: Some(carry),
+                    }),
+            ),
             // The carry is a term that is 0 or 1, the last one first.
             [x, y, z] => [(x, y, z), (x, z, y), (y, z, x)]
                 .into_iter()
@@ -95,7 +106,8 @@ impl CarryChains {
     }
 
     /// The limb an i128 `sub` computes: a zero-extended i64 less another and,
-    /// at most, a third that is 0 or 1.
+    /// at most, a third that is 0 or 1. A subtrahend alone that is the flag
+    /// of a translated limb is a borrow in, as in `add_limb`.
     pub fn sub_limb(
         &mut self,
         function: &Function,
@@ -120,10 +132,19 @@ impl CarryChains {
                     carry: Some(subtrahend),
                 });
         }
-        Some(Limb {
-            a: widened_word(function, minuend)?,
-            b: subtrahend,
-            carry: None,
+        let a = widened_word(function, minuend)?;
+        Some(if self.is_flag(function, subtrahend) {
+            Limb {
+                a,
+                b: Word::Const(0),
+                carry: Some(subtrahend),
+            }
+        } else {
+            Limb {
+                a,
+                b: subtrahend,
+                carry: None,
+            }
         })
     }
 
@@ -212,6 +233,13 @@ impl CarryChains {
                 .fits_in_low_bits(function, value, 1);
         self.bits.insert(value, bit);
         bit
+    }
+
+    /// Whether `word` is the carry or borrow of a translated limb, which a
+    /// limb can take as its flag.
+    fn is_flag(&self, function: &Function, word: Word) -> bool {
+        matches!(word, Word::Value(value) if truncated_shift(function, value)
+            .is_some_and(|(limb, count)| self.flag_out(limb, count).is_some()))
     }
 
     /// Whether `value` is the carry out of an addition limb: its i128 high

@@ -654,6 +654,74 @@ block0:
 }
 
 #[test]
+fn lone_limb_carries_match_ir() {
+    // A limb that adds only the previous limb's carry, or subtracts only its
+    // borrow, takes it as a flag with a zero addend.
+    let source = r#"func public %apply(v0.*[i64; 3], v1.*[i64; 4]) {
+block0:
+    v2.[i64; 3] = mload v0 [i64; 3];
+    v3.i64 = extract_value v2 0.i256;
+    v4.i64 = extract_value v2 1.i256;
+    v5.i64 = extract_value v2 2.i256;
+    v6.i128 = zext v3 i128;
+    v7.i128 = zext v4 i128;
+    v8.i128 = zext v5 i128;
+    v9.i128 = add v6 v7;
+    v10.i128 = shr 64.i128 v9;
+    v11.i64 = trunc v10 i64;
+    v12.i128 = zext v11 i128;
+    v13.i128 = add v8 v12;
+    v14.i64 = trunc v13 i64;
+    v15.i128 = shr 64.i128 v13;
+    v16.i64 = trunc v15 i64;
+    v17.i128 = sub v6 v7;
+    v18.i128 = shr 127.i128 v17;
+    v19.i64 = trunc v18 i64;
+    v20.i128 = zext v19 i128;
+    v21.i128 = sub v8 v20;
+    v22.i64 = trunc v21 i64;
+    v23.i128 = shr 127.i128 v21;
+    v24.i64 = trunc v23 i64;
+    v25.[i64; 4] = insert_value undef.[i64; 4] 0.i256 v14;
+    v26.[i64; 4] = insert_value v25 1.i256 v16;
+    v27.[i64; 4] = insert_value v26 2.i256 v22;
+    v28.[i64; 4] = insert_value v27 3.i256 v24;
+    mstore v1 v28 [i64; 4];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let apply: unsafe extern "C" fn(*const [u64; 3], *mut [u64; 4]) =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        for words in [
+            [u64::MAX, 1, u64::MAX],
+            [u64::MAX, 1, 5],
+            [0, 1, 0],
+            [0, 1, 9],
+            [3, 2, u64::MAX],
+            [2, 3, u64::MAX],
+        ] {
+            let [a, b, c] = words;
+            let (_, carry) = a.overflowing_add(b);
+            let (sum, carry_out) = c.overflowing_add(u64::from(carry));
+            let (_, borrow) = a.overflowing_sub(b);
+            let (difference, borrow_out) = c.overflowing_sub(u64::from(borrow));
+            let expected = [sum, u64::from(carry_out), difference, u64::from(borrow_out)];
+            let mut result = [0; 4];
+            unsafe { apply(&words, &mut result) };
+            assert_eq!(result, expected, "{words:?} {level:?}");
+        }
+    }
+}
+
+#[test]
 fn freeze_passes_values_through_and_fixes_undef() {
     let source = r#"func public %frozen(v0.i64, v1.*i256, v2.*i256) -> i64 {
 block0:
