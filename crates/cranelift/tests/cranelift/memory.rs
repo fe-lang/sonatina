@@ -287,6 +287,63 @@ block0:
 }
 
 #[test]
+fn aggregates_built_at_their_stores_keep_earlier_reads() {
+    // `v4`'s chain is only stored into `v1`, so it is built there. `%fill`'s
+    // chain reads its object's old first field between its start and its
+    // store, so it is built elsewhere and copied.
+    let source = r#"
+func private %fill(v0.objref<[i64; 4]>, v1.i64) {
+block0:
+    v2.[i64; 4] = insert_value undef.[i64; 4] 0.i64 v1;
+    v3.objref<i64> = obj.index v0 0.i64;
+    v4.i64 = obj.load v3;
+    v5.[i64; 4] = insert_value v2 1.i64 v4;
+    obj.store v0 v5;
+    return;
+}
+func public %apply(v0.i64, v20.*[i64; 8]) {
+block0:
+    v1.objref<[i64; 4]> = obj.alloc [i64; 4];
+    v2.[i64; 4] = insert_value undef.[i64; 4] 0.i64 v0;
+    v3.i64 = add v0 1.i64;
+    v4.[i64; 4] = insert_value v2 3.i64 v3;
+    obj.store v1 v4;
+    v6.objref<[i64; 4]> = obj.alloc [i64; 4];
+    v7.objref<i64> = obj.index v6 0.i64;
+    obj.store v7 5.i64;
+    call %fill v6 v0;
+    v11.[i64; 4] = obj.load v1;
+    v12.[i64; 4] = obj.load v6;
+    v13.[[i64; 4]; 2] = insert_value undef.[[i64; 4]; 2] 0.i64 v11;
+    v14.[[i64; 4]; 2] = insert_value v13 1.i64 v12;
+    v15.[i64; 8] = bitcast v14 [i64; 8];
+    mstore v20 v15 [i64; 8];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let apply: unsafe extern "C" fn(i64, *mut [i64; 8]) =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        for x in [3, -1, i64::MAX] {
+            let mut result = [-7; 8];
+            unsafe { apply(x, &mut result) };
+            assert_eq!(
+                result,
+                [x, 0, 0, x.wrapping_add(1), x, 5, 0, 0],
+                "{x} {level:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn object_and_constant_indices_zero_extend_narrow_integers() {
     let values = (0..256)
         .map(|i| (1000 + i).to_string())

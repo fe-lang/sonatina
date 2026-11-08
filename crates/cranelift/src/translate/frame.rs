@@ -52,6 +52,11 @@ use super::{
 /// chain's storage stays live while the class is. A phi does so only when it
 /// is its block's one aggregate phi, so its edge copies need no ordering.
 ///
+/// An `insert_value` chain with an undef source whose last value is only
+/// stored into an object is built at the store's destination instead, when
+/// nothing between the chain's start and the store touches memory and the
+/// destination's address is defined before the chain starts.
+///
 /// A returned class can live in the function's return buffer instead, so
 /// that its `return` copies nothing. The buffer is caller storage distinct
 /// from every argument, and holds classes with disjoint ranges. A `return`
@@ -108,6 +113,9 @@ pub(super) struct FrameSlots {
     embedded: FxHashMap<ValueId, (ValueId, u32)>,
     /// Inserts whose aggregate value is already in their field.
     in_place: FxHashSet<InstId>,
+    /// Roots of classes built at the destination of the store of their last
+    /// value, with that destination.
+    stored_at: FxHashMap<ValueId, ValueId>,
 }
 
 impl FrameSlots {
@@ -143,7 +151,11 @@ impl FrameSlots {
         let mut free: BTreeSet<(u32, usize)> = BTreeSet::new();
         let mut active: BinaryHeap<Reverse<(u32, usize)>> = BinaryHeap::new();
         let mut order: Vec<_> = (0..plan.classes.len())
-            .filter(|&class| !in_buffer[class] && !plan.embedded.contains_key(&class))
+            .filter(|&class| {
+                !in_buffer[class]
+                    && !plan.embedded.contains_key(&class)
+                    && !plan.stored.contains_key(&class)
+            })
             .collect();
         order.sort_by_key(|&class| plan.classes[class].start);
         for class in order {
@@ -224,6 +236,7 @@ impl FrameSlots {
                 .values()
                 .map(|&(_, store)| store)
                 .chain(plan.aliased.values().map(|&(_, store)| store))
+                .chain(plan.stored.values().map(|&(_, store)| store))
                 .collect(),
             aliased: plan
                 .aliased
@@ -243,7 +256,18 @@ impl FrameSlots {
                 })
                 .collect(),
             in_place: plan.in_place,
+            stored_at: plan
+                .stored
+                .iter()
+                .map(|(&class, &(object, _))| (plan.members[class][0], object))
+                .collect(),
         })
+    }
+
+    /// The object whose storage the class of root `value` is built in, if
+    /// it is built at its store's destination.
+    pub fn stored_at(&self, value: ValueId) -> Option<ValueId> {
+        self.stored_at.get(&value).copied()
     }
 
     /// The object the call `inst` writes its indirect result into, if not
@@ -386,6 +410,9 @@ struct Plan {
     embedded: FxHashMap<usize, (usize, u32)>,
     /// Inserts whose aggregate value is already in their field.
     in_place: FxHashSet<InstId>,
+    /// Classes built at the destination of the store of their last value,
+    /// with the destination and the store.
+    stored: FxHashMap<usize, (ValueId, InstId)>,
 }
 
 impl Plan {
@@ -420,6 +447,7 @@ impl Plan {
             aliased: FxHashMap::default(),
             embedded: FxHashMap::default(),
             in_place: FxHashSet::default(),
+            stored: FxHashMap::default(),
         };
         let local = local_objects(function);
         // Objects initialized from a by-reference argument at the top of the
@@ -617,6 +645,7 @@ impl Plan {
         }
 
         plan.embed(function, &class_of)?;
+        plan.store_in_place(function, &position);
 
         // Owned arguments the caller cannot give away go through temporaries.
         for &block in block_order {
@@ -672,6 +701,84 @@ impl Plan {
             }
         }
         Ok(plan)
+    }
+
+    /// Builds each `insert_value` chain on undef whose last value is only
+    /// stored into an object at that object, when the object's address is
+    /// defined before the chain and everything in between is free of
+    /// effects and uses no forwarded load, which reads memory where it is
+    /// used. No other class lives inside such a chain, and none of the
+    /// values it inserts is a forwarded load.
+    fn store_in_place(&mut self, function: &Function, position: &SecondaryMap<InstId, u32>) {
+        let dfg = &function.dfg;
+        let parents: FxHashSet<usize> = self.embedded.values().map(|&(parent, _)| parent).collect();
+        for class in 0..self.classes.len() {
+            if self.embedded.contains_key(&class) || parents.contains(&class) {
+                continue;
+            }
+            let Some(&root) = self.members[class].first() else {
+                continue;
+            };
+            let Some(head) = dfg.value_inst(root) else {
+                continue;
+            };
+            let chain: Vec<InstId> = std::iter::successors(Some(head), |&inst| {
+                self.continuation.get(&dfg.inst_result(inst)?).copied()
+            })
+            .collect();
+            let inserts: Option<Vec<_>> = chain
+                .iter()
+                .map(
+                    |&inst| match native_inst_set().resolve_inst(dfg.inst(inst)) {
+                        NativeInstKind::InsertValue(insert) => Some(insert),
+                        _ => None,
+                    },
+                )
+                .collect();
+            let Some(inserts) = inserts else {
+                continue;
+            };
+            let Some(tail) = chain.last().and_then(|&inst| dfg.inst_result(inst)) else {
+                continue;
+            };
+            let mut users = dfg.users(tail).copied();
+            let (Some(store), None) = (users.next(), users.next()) else {
+                continue;
+            };
+            let NativeInstKind::ObjStore(info) = native_inst_set().resolve_inst(dfg.inst(store))
+            else {
+                continue;
+            };
+            let object = *info.object();
+            let block = function.layout.inst_block(head);
+            let defined_before = dfg.value_inst(object).is_none_or(|def| {
+                function.layout.inst_block(def) != block || position[def] < position[head]
+            });
+            let untouched = std::iter::successors(function.layout.next_inst_of(head), |&next| {
+                function.layout.next_inst_of(next)
+            })
+            .take_while(|&next| next != store)
+            .all(|next| {
+                chain.contains(&next)
+                    || (dfg.has_value_semantics(next)
+                        && !dfg
+                            .inst(next)
+                            .collect_values()
+                            .iter()
+                            .any(|value| self.forwarded.contains(value)))
+            });
+            if *info.value() == tail
+                && is_undef(function, *inserts[0].dest())
+                && function.layout.inst_block(store) == block
+                && defined_before
+                && untouched
+                && inserts
+                    .iter()
+                    .all(|insert| !self.forwarded.contains(insert.value()))
+            {
+                self.stored.insert(class, (object, store));
+            }
+        }
     }
 
     /// Places each class whose last value only fills a field of an
@@ -1246,6 +1353,48 @@ block0:
 "#,
         );
         assert_eq!(sizes, [256, 256, 512]);
+    }
+
+    #[test]
+    fn stored_chains_are_built_at_their_destination() {
+        // `v2`'s chain is only stored into `v1`; `v5`'s store follows a load
+        // of memory, so it is built in a slot and copied.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v4.*i64) {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v3.[i64; 32] = insert_value v2 1.i64 v0;
+    obj.store v1 v3;
+    v5.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v6.i64 = mload v4 i64;
+    obj.store v1 v5;
+    mstore v4 v6 i64;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [256]);
+    }
+
+    #[test]
+    fn chains_stored_after_object_reads_keep_their_storage() {
+        // `v4` reads `v0`'s first field after `v2` would have written it.
+        let sizes = slot_sizes(
+            r#"
+func private %f(v0.objref<[i64; 32]>, v1.i64) {
+block0:
+    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v1;
+    v3.objref<i64> = obj.index v0 0.i64;
+    v4.i64 = obj.load v3;
+    v5.[i64; 32] = insert_value v2 1.i64 v4;
+    obj.store v0 v5;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [256]);
     }
 
     #[test]

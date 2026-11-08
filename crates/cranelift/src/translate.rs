@@ -1965,7 +1965,12 @@ fn translate_function(
                     let result_addr = if frame.continues_source(inst_id, source_value) {
                         resolve_value(function, source_value, &value_map, &mut builder)?
                     } else {
-                        let address = frame.address(result, &mut builder)?;
+                        let address = match frame.stored_at(result) {
+                            Some(object) => {
+                                resolve_value(function, object, &value_map, &mut builder)?
+                            }
+                            None => frame.address(result, &mut builder)?,
+                        };
                         if is_undef(function, source_value) {
                             // An undef source is zero, but only the bytes no
                             // insert of the chain writes need zeroing.
