@@ -180,14 +180,25 @@ impl CarryChains {
         value_map: &mut ValueMap,
         builder: &mut FunctionBuilder,
     ) -> Result<(), String> {
-        let a = word(function, limb.a, value_map, builder)?;
-        let b = word(function, limb.b, value_map, builder)?;
-        let (difference, borrow) = match limb.carry {
-            Some(borrow) => {
+        let (difference, borrow) = match (limb.a, limb.b, limb.carry) {
+            // `0 - 0 - borrow` borrows exactly when `borrow` is set, and is
+            // its negation: the borrow passes through unchanged.
+            (Word::Const(0), Word::Const(0), Some(borrow)) => {
+                let borrow = self.flag(function, borrow, value_map, builder)?;
+                let borrow_word = builder.ins().uextend(I64, borrow);
+                (builder.ins().ineg(borrow_word), borrow)
+            }
+            (a, b, Some(borrow)) => {
+                let a = word(function, a, value_map, builder)?;
+                let b = word(function, b, value_map, builder)?;
                 let borrow = self.flag(function, borrow, value_map, builder)?;
                 builder.ins().usub_overflow_bin(a, b, borrow)
             }
-            None => builder.ins().usub_overflow(a, b),
+            (a, b, None) => {
+                let a = word(function, a, value_map, builder)?;
+                let b = word(function, b, value_map, builder)?;
+                builder.ins().usub_overflow(a, b)
+            }
         };
         // The 128-bit difference's high word is all ones exactly on a borrow.
         let borrow_word = builder.ins().uextend(I64, borrow);
