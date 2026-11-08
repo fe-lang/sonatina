@@ -402,6 +402,39 @@ block0:
 }
 
 #[test]
+fn zero_constants_store_as_zeros_and_others_copy() {
+    // `$zeros` stores as zeros over the old contents; `$values` copies.
+    let source = r#"
+global private const [i64; 4] $zeros = [0, 0, 0, 0];
+global private const [i64; 4] $values = [3, 0, 9, -1];
+func public %apply(v0.*[i64; 4], v1.*[i64; 4]) {
+block0:
+    v2.constref<[i64; 4]> = const.ref $zeros;
+    v3.[i64; 4] = const.load v2;
+    mstore v0 v3 [i64; 4];
+    v4.constref<[i64; 4]> = const.ref $values;
+    v5.[i64; 4] = const.load v4;
+    mstore v1 v5 [i64; 4];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let apply: unsafe extern "C" fn(*mut [i64; 4], *mut [i64; 4]) =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        let (mut zeros, mut values) = ([7; 4], [7; 4]);
+        unsafe { apply(&mut zeros, &mut values) };
+        assert_eq!((zeros, values), ([0; 4], [3, 0, 9, -1]), "{level:?}");
+    }
+}
+
+#[test]
 fn object_and_constant_indices_zero_extend_narrow_integers() {
     let values = (0..256)
         .map(|i| (1000 + i).to_string())

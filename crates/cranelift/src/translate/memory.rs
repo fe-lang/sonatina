@@ -6,7 +6,13 @@ use cranelift_codegen::{
     isa::TargetFrontendConfig,
 };
 use cranelift_frontend::FunctionBuilder;
-use sonatina_ir::{Function, Type, Value, ValueId, module::ModuleCtx, types::CompoundType};
+use sonatina_ir::{
+    Function, Immediate, Type, Value, ValueId,
+    global_variable::GvInitializer,
+    inst::data::{ConstLoad, ConstRef},
+    module::ModuleCtx,
+    types::CompoundType,
+};
 
 use super::{
     LOAD_FLAGS, ValueMap, is_aggregate, load_limbs, load_parts, pointer_clif_type, register_parts,
@@ -249,6 +255,39 @@ fn zero_range(dst: clif::Value, start: u32, end: u32, builder: &mut FunctionBuil
     }
 }
 
+/// Whether `value` is a whole constant global whose initializer is all zero
+/// bits, such as the `[0; N]` an array starts as: storing it writes zeros,
+/// with no loads.
+fn is_zero_constant(function: &Function, value: ValueId) -> bool {
+    let Some(global) = function
+        .dfg
+        .value_inst(value)
+        .and_then(|inst| function.dfg.downcast::<&ConstLoad>(inst))
+        .and_then(|load| function.dfg.value_inst(*load.object()))
+        .and_then(|inst| function.dfg.downcast::<&ConstRef>(inst))
+        .map(|const_ref| const_ref.global().gv())
+    else {
+        return false;
+    };
+    function.ctx().with_gv_store(|globals| {
+        globals
+            .gv_data(global)
+            .initializer
+            .as_ref()
+            .is_none_or(is_zero_initializer)
+    })
+}
+
+fn is_zero_initializer(init: &GvInitializer) -> bool {
+    match init {
+        GvInitializer::Immediate(Immediate::EnumTag { .. }) => false,
+        GvInitializer::Immediate(imm) => imm.as_i256().is_zero(),
+        GvInitializer::Array(elements) | GvInitializer::Struct(elements) => {
+            elements.iter().all(is_zero_initializer)
+        }
+    }
+}
+
 pub(super) fn is_undef(function: &Function, value: ValueId) -> bool {
     matches!(function.dfg.value(value), Value::Undef { .. })
 }
@@ -361,7 +400,7 @@ pub(super) fn store_indirect(
     config: TargetFrontendConfig,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
-    if is_undef(function, value) {
+    if is_undef(function, value) || is_zero_constant(function, value) {
         zero_bytes(
             dst,
             value_storage_size(ty, function.ctx())?,
