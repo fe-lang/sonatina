@@ -203,6 +203,30 @@ fn imports(bytes: &[u8], name: &str) -> bool {
 }
 
 #[test]
+fn unread_i256_argument_limbs_are_not_loaded() {
+    // An i256 argument arrives as a pointer to the caller's storage. Reading
+    // one limb of it costs what one load through a pointer does.
+    let triple = native_isa(host_architecture()).triple();
+    let text_size_of = |func: &str| {
+        let module = sonatina_parser::parse_module(&format!("target = \"{triple}\"\n{func}"))
+            .unwrap()
+            .module;
+        let artifact = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(OptLevel::O2)
+            .compile()
+            .unwrap();
+        text_size(artifact.as_bytes())
+    };
+    let low_limb = text_size_of(
+        "func public %low(v0.i256) -> i64 {\nblock0:\n    v1.i64 = trunc v0 i64;\n    return v1;\n}\n",
+    );
+    let word = text_size_of(
+        "func public %word(v0.*i64) -> i64 {\nblock0:\n    v1.i64 = mload v0 i64;\n    return v1;\n}\n",
+    );
+    assert_eq!(low_limb, word);
+}
+
+#[test]
 fn large_aggregate_copies_have_constant_code_size() {
     // Snapshot loads, chain-head copies, return buffers, stores and undef
     // zero fills of every length share one bounded code size.

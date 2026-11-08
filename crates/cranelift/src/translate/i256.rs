@@ -39,6 +39,10 @@ pub(super) struct I256Storage {
 
 impl I256Storage {
     /// Records the caller's storage of argument `value` and loads its limbs.
+    /// That storage stays valid and unchanged while the function runs, so
+    /// the loads are `readonly` and `can_move`: Cranelift's egraph treats them
+    /// as pure, dropping those of limbs the function never reads, as when it
+    /// narrows an i256 argument to an index.
     pub fn incoming(
         &mut self,
         value: ValueId,
@@ -46,7 +50,12 @@ impl I256Storage {
         builder: &mut FunctionBuilder,
     ) -> Limbs {
         self.incoming.insert(value, address);
-        load_limbs(address, 0, LOAD_FLAGS, builder)
+        load_limbs(
+            address,
+            0,
+            LOAD_FLAGS.with_readonly().with_can_move(),
+            builder,
+        )
     }
 
     /// The address of storage holding `value` for the `index`th i256
