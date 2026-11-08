@@ -2,7 +2,7 @@ use sonatina_codegen::{Compile, compile::OptLevel};
 use sonatina_cranelift::CraneliftJitBackend;
 use sonatina_ir::{I256, Immediate, Type, U256};
 
-use super::{parse_native_module, parse_verified_native_module};
+use super::{assert_fields_eq, parse_native_module, parse_verified_native_module};
 
 #[test]
 fn bitcasts_preserve_contents_across_native_representations() {
@@ -61,17 +61,16 @@ block0:
                     if from == "i1" || to == "i1" {
                         expected[0] &= 1;
                     }
-                    // Padding is not part of a value: copying a `@Padded`
-                    // writes zeros there.
-                    if from == "@Padded" || to == "@Padded" {
-                        expected[1..16].fill(0);
-                    }
+                    // Padding is not part of a value, so a `@Padded` loses
+                    // the bytes there.
+                    let padding = (from == "@Padded" || to == "@Padded").then_some(1..16);
                     let mut output = [0xa5; 64];
                     unsafe { apply(input.as_ptr(), output.as_mut_ptr()) };
-                    assert_eq!(
+                    assert_fields_eq(
                         &output[..size],
                         &expected[..size],
-                        "{from} -> {to} {level:?} {seed}"
+                        padding,
+                        format!("{from} -> {to} {level:?} {seed}"),
                     );
                     assert!(output[size..].iter().all(|&byte| byte == 0xa5));
                 }

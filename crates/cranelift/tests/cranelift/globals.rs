@@ -1,7 +1,7 @@
 use sonatina_codegen::{Compile, compile::OptLevel};
 use sonatina_cranelift::CraneliftJitBackend;
 
-use super::parse_verified_native_module;
+use super::{assert_fields_eq, parse_verified_native_module};
 
 #[test]
 fn mutable_globals_are_shared_between_functions_and_calls() {
@@ -135,10 +135,17 @@ block0:
                     unsafe { std::mem::transmute(artifact.function_address(name).unwrap()) };
                 let mut output = [0xa5; 96];
                 unsafe { read(output.as_mut_ptr()) };
-                assert_eq!(
+                // A copy of a value writes its fields, not its padding.
+                let padding = if ty == "@Record" {
+                    vec![1..16, 38..48]
+                } else {
+                    Vec::new()
+                };
+                assert_fields_eq(
                     &output[..expected.len()],
                     &expected,
-                    "{name} {ty} {level:?}"
+                    padding,
+                    format!("{name} {ty} {level:?}"),
                 );
                 assert!(output[expected.len()..].iter().all(|&byte| byte == 0xa5));
             }
@@ -188,9 +195,12 @@ block0:
                 unsafe { std::mem::transmute(artifact.function_address("write").unwrap()) };
             let mut output = [0xa5; 48];
             unsafe { write(output.as_mut_ptr()) };
-            assert!(
-                output[..size].iter().all(|&byte| byte == 0),
-                "{ty} {level:?}"
+            let padding = (ty == "@Padded").then_some(1..16);
+            assert_fields_eq(
+                &output[..size],
+                &vec![0; size],
+                padding,
+                format!("{ty} {level:?}"),
             );
             assert!(output[size..].iter().all(|&byte| byte == 0xa5));
         }
@@ -198,7 +208,7 @@ block0:
 }
 
 #[test]
-fn partial_aggregate_insert_keeps_undef_fields_and_padding_zero() {
+fn partial_aggregate_insert_keeps_undef_fields_zero() {
     let source = r#"
 type @Padded = {i8, i128};
 func public %write(v0.*@Padded) {
@@ -220,8 +230,10 @@ block0:
             unsafe { std::mem::transmute(artifact.function_address("write").unwrap()) };
         let mut output = [0xa5; 32];
         unsafe { write(output.as_mut_ptr()) };
+        // The i8 at 0 and the undef i128 at 16; the padding between is
+        // not part of the value.
         assert_eq!(output[0], 7);
-        assert!(output[1..].iter().all(|&byte| byte == 0), "{level:?}");
+        assert!(output[16..].iter().all(|&byte| byte == 0), "{level:?}");
     }
 }
 

@@ -195,7 +195,9 @@ full precision, zero for a zero modulus, with narrower operands
 zero-extended. `black_box` returns its integer operand, passing it through
 memory that an opaque call could change, so Cranelift cannot see the value.
 Enum operations are translated against the enum layout above;
-`enum.make` zeroes the bytes outside its variant's tag and fields.
+`enum.make` writes its variant's tag and fields. Padding and other variants'
+payloads are not part of a value: copies and `enum.make` leave them as they
+are.
 `get_function_ptr`, `sym_addr` and `sym_size` are unsupported. Dynamic
 allocation and object materialization use the allocation and lifetime rules
 above.

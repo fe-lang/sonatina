@@ -68,6 +68,23 @@ fn parse_verified_native_module(source: &str) -> sonatina_ir::Module {
     module
 }
 
+/// Asserts `actual` holds `expected`'s bytes outside `padding`: bytes no
+/// field covers, which copies and `enum.make` leave as they are.
+#[track_caller]
+fn assert_fields_eq(
+    actual: &[u8],
+    expected: &[u8],
+    padding: impl IntoIterator<Item = std::ops::Range<usize>>,
+    message: impl std::fmt::Display,
+) {
+    let (mut actual, mut expected) = (actual.to_vec(), expected.to_vec());
+    for range in padding {
+        actual[range.clone()].fill(0);
+        expected[range].fill(0);
+    }
+    assert_eq!(actual, expected, "{message}");
+}
+
 fn compile_add() -> CraneliftJitArtifact {
     let isa = native_isa();
     let instructions = isa.inst_set();
@@ -598,9 +615,10 @@ block4:
 }
 
 #[test]
-fn enum_values_zero_bytes_outside_their_variant() {
+fn enum_values_write_their_tag_and_fields() {
     // `Some`'s value dies before `Pair`'s and `None`'s are made, so the frame
-    // slot they share still holds its ones.
+    // slot they share still holds its ones. Bytes outside the variant's tag
+    // and fields are not part of the value.
     let source = r#"
 type @Choice = enum { #None, #Some(i256), #Pair(i8, i64) };
 func public %make(v10.*i8, v11.*i8, v12.*i8, v1.i64) {
@@ -631,16 +649,16 @@ block0:
             unsafe { std::mem::transmute(artifact.function_address("make").unwrap()) };
         let [mut some, mut pair, mut none] = [0, 1, 2].map(|_| Choice([0xaa; 48]));
         unsafe { make(&mut some, &mut pair, &mut none, 0x1122_3344_5566_7788) };
-        let mut expected = [0; 48];
-        expected[0] = 1;
-        expected[16..48].fill(0xff);
-        assert_eq!(some.0, expected, "{level:?}");
-        expected = [0; 48];
-        expected[0] = 2;
-        expected[16] = 3;
-        expected[24..32].copy_from_slice(&0x1122_3344_5566_7788i64.to_le_bytes());
-        assert_eq!(pair.0, expected, "{level:?}");
-        assert_eq!(none.0, [0; 48], "{level:?}");
+        assert_eq!(some.0[0], 1, "{level:?}");
+        assert_eq!(some.0[16..48], [0xff; 32], "{level:?}");
+        assert_eq!(pair.0[0], 2, "{level:?}");
+        assert_eq!(pair.0[16], 3, "{level:?}");
+        assert_eq!(
+            pair.0[24..32],
+            0x1122_3344_5566_7788i64.to_le_bytes(),
+            "{level:?}"
+        );
+        assert_eq!(none.0[0], 0, "{level:?}");
     }
 }
 

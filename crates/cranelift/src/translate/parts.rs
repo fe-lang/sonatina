@@ -16,8 +16,7 @@ use sonatina_ir::{Function, Type, Value, ValueId, module::ModuleCtx};
 
 use super::{
     LOAD_FLAGS, ValueMap, create_stack_slot_for_type, normalize_scalar, resolve_value,
-    sonatina_scalar_type_to_clif_or_err, sonatina_type_to_clif_or_err, value_pieces,
-    value_storage_size,
+    sonatina_scalar_type_to_clif_or_err, sonatina_type_to_clif_or_err,
 };
 
 pub(super) type PartValues = SmallVec<[clif::Value; MAX_PARTS]>;
@@ -97,32 +96,20 @@ pub(super) fn load_parts(
         .collect()
 }
 
-/// Stores a `ty` value's parts to storage at `dst + offset`, and zeros to
-/// its padding, as copies of values in storage write.
+/// Stores a value's parts to storage at `dst + offset`. Padding is not part
+/// of the value, so it keeps whatever it holds.
 pub(super) fn store_parts(
-    ctx: &ModuleCtx,
-    ty: Type,
     parts: &Parts,
     values: &[clif::Value],
     dst: clif::Value,
     offset: i32,
     builder: &mut FunctionBuilder,
-) -> Result<(), String> {
+) {
     for (part, &value) in parts.iter().zip(values) {
         builder
             .ins()
             .store(MemFlagsData::new(), value, dst, offset + part.offset as i32);
     }
-    for (padding, piece_ty) in value_pieces(ty, value_storage_size(ty, ctx)?, ctx)?
-        .into_iter()
-        .filter_map(|piece| piece.padding())
-    {
-        let zero = builder.ins().iconst(piece_ty, 0);
-        builder
-            .ins()
-            .store(MemFlagsData::new(), zero, dst, offset + padding);
-    }
-    Ok(())
 }
 
 /// The address of a fresh stack slot holding a `ty` value's parts.
@@ -134,7 +121,7 @@ pub(super) fn materialize_parts(
     builder: &mut FunctionBuilder,
 ) -> Result<clif::Value, String> {
     let address = create_stack_slot_for_type(ty, ctx, builder)?;
-    store_parts(ctx, ty, parts, values, address, 0, builder)?;
+    store_parts(parts, values, address, 0, builder);
     Ok(address)
 }
 
