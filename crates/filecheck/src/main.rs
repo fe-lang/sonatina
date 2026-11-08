@@ -4,9 +4,9 @@ use sonatina_filecheck::{
     branch_canonicalize::BranchCanonicalizeTransform, cfg_cleanup::CfgCleanupTransform,
     checked_arith_elim::CheckedArithElimTransform, code_sink::CodeSinkTransform,
     compare_sub_fusion::CompareSubFusionTransform, gvn::GvnTransform,
-    if_convert::IfConvertTransform, jump_thread::JumpThreadTransform,
-    known_bits_simplify::KnownBitsSimplifyTransform, licm::LicmTransformer,
-    load_store::LoadStoreTransform, loop_rotate::LoopRotateTransform,
+    hoist_insert_chains::HoistInsertChainsTransform, if_convert::IfConvertTransform,
+    jump_thread::JumpThreadTransform, known_bits_simplify::KnownBitsSimplifyTransform,
+    licm::LicmTransformer, load_store::LoadStoreTransform, loop_rotate::LoopRotateTransform,
     loop_strength_reduce::LoopStrengthReduceTransform, loop_unroll::LoopUnrollTransform,
     narrow_object_loads::NarrowObjectLoadsTransform,
     range_branch_simplify::RangeBranchSimplifyTransform, return_thread::ReturnThreadTransform,
@@ -57,6 +57,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(NarrowObjectLoadsTransform);
+    runner.run();
+
+    runner.attach_transformer(HoistInsertChainsTransform::default());
     runner.run();
 
     runner.attach_transformer(SwitchFormationTransform);
