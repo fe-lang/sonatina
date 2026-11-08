@@ -211,6 +211,82 @@ block0:
 }
 
 #[test]
+fn aggregates_built_in_their_fields_keep_their_values() {
+    // `v3` (a call result), `v6` (the block's one aggregate phi) and `v12`
+    // (an insert chain) each only fill a field of `v13`'s chain, so they are
+    // built in its storage; `%nest` builds its whole result in the return
+    // buffer. `v20` fills a field written twice, and `v24` a chain over a
+    // defined source, so both keep storage of their own.
+    let source = r#"
+func private %make(v0.i64) -> [i64; 6] {
+block0:
+    v1.[i64; 6] = insert_value undef.[i64; 6] 0.i64 v0;
+    v2.i64 = add v0 1.i64;
+    v3.[i64; 6] = insert_value v1 5.i64 v2;
+    return v3;
+}
+func private %nest(v0.i64, v1.i1) -> [[i64; 6]; 3] {
+block0:
+    v3.[i64; 6] = call %make v0;
+    br v1 block1 block2;
+block1:
+    v4.[i64; 6] = call %make 7.i64;
+    jump block3;
+block2:
+    v5.[i64; 6] = insert_value undef.[i64; 6] 3.i64 9.i64;
+    jump block3;
+block3:
+    v6.[i64; 6] = phi (v4 block1) (v5 block2);
+    v10.[i64; 6] = insert_value undef.[i64; 6] 1.i64 v0;
+    v11.i64 = mul v0 3.i64;
+    v12.[i64; 6] = insert_value v10 4.i64 v11;
+    v13.[[i64; 6]; 3] = insert_value undef.[[i64; 6]; 3] 2.i64 v12;
+    v14.[[i64; 6]; 3] = insert_value v13 0.i64 v3;
+    v15.[[i64; 6]; 3] = insert_value v14 1.i64 v6;
+    return v15;
+}
+func public %apply(v0.i64, v1.i1, v2.*[[i64; 6]; 3], v3.*[[i64; 6]; 2]) {
+block0:
+    v4.[[i64; 6]; 3] = call %nest v0 v1;
+    mstore v2 v4 [[i64; 6]; 3];
+    v20.[i64; 6] = call %make v0;
+    v21.[[i64; 6]; 2] = insert_value undef.[[i64; 6]; 2] 0.i64 v20;
+    v22.[i64; 6] = call %make 40.i64;
+    v23.[[i64; 6]; 2] = insert_value v21 0.i64 v22;
+    v24.[i64; 6] = call %make 50.i64;
+    v25.[[i64; 6]; 2] = insert_value v23 1.i64 v24;
+    v26.[[i64; 6]; 2] = mload v3 [[i64; 6]; 2];
+    v27.[[i64; 6]; 2] = insert_value v26 1.i64 v24;
+    v28.[i64; 6] = extract_value v27 0.i64;
+    v29.[[i64; 6]; 2] = insert_value v25 1.i64 v28;
+    mstore v3 v29 [[i64; 6]; 2];
+    return;
+}
+"#;
+    let make = |x: i64| [x, 0, 0, 0, 0, x + 1];
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let apply: unsafe extern "C" fn(i64, bool, *mut [[i64; 6]; 3], *mut [[i64; 6]; 2]) =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        for (x, flag) in [(5, true), (5, false), (-2, true), (i64::MAX - 1, false)] {
+            let mut nested = [[-1; 6]; 3];
+            let mut pair = [[61; 6], [62; 6]];
+            unsafe { apply(x, flag, &mut nested, &mut pair) };
+            let phi = if flag { make(7) } else { [0, 0, 0, 9, 0, 0] };
+            let chain = [0, x, 0, 0, x.wrapping_mul(3), 0];
+            assert_eq!(nested, [make(x), phi, chain], "{x} {flag} {level:?}");
+            assert_eq!(pair, [make(40), [61; 6]], "{x} {flag} {level:?}");
+        }
+    }
+}
+
+#[test]
 fn object_and_constant_indices_zero_extend_narrow_integers() {
     let values = (0..256)
         .map(|i| (1000 + i).to_string())

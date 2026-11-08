@@ -2020,7 +2020,9 @@ fn translate_function(
                         ));
                     }
 
-                    if uses_indirect_value_representation(&module.ctx, value_ty) {
+                    if frame.inserts_in_place(inst_id) {
+                        // The value was built in this field.
+                    } else if uses_indirect_value_representation(&module.ctx, value_ty) {
                         let field_addr = builder.ins().iadd_imm_s(result_addr, i64::from(offset));
                         store_indirect(
                             function,
