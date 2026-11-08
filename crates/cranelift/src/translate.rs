@@ -19,7 +19,10 @@ use std::collections::{HashMap, HashSet};
 use cranelift_codegen::{
     Context,
     control::ControlPlane,
-    ir::{self as clif, ArgumentPurpose, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC},
+    ir::{
+        self as clif, ArgumentPurpose, InstBuilder, MemFlagsData, TrapCode, condcodes::IntCC,
+        instructions::BlockArg,
+    },
     isa::CallConv,
     settings,
 };
@@ -532,6 +535,7 @@ fn translate_function(
     }
     let edges = Edges {
         function,
+        cfg: &cfg,
         block_map: &block_map,
         frame: &frame,
         config: target_config,
@@ -1145,34 +1149,52 @@ fn translate_function(
                 }
                 NativeInstKind::Br(br) => {
                     let cond = resolve_value(function, *br.cond(), &value_map, &mut builder)?;
-                    let nz = edges.target(block, *br.nz_dest(), &value_map, &mut builder)?;
-                    let z = edges.target(block, *br.z_dest(), &value_map, &mut builder)?;
-                    // Cranelift's reverse postorder puts a branch's last
-                    // target right after it.
-                    if prediction.prefers_true(block, *br.nz_dest(), *br.z_dest()) {
-                        let inverted = builder.ins().icmp_imm_u(IntCC::Equal, cond, 0);
-                        builder
-                            .ins()
-                            .brif(inverted, z.block, &z.args, nz.block, &nz.args);
-                    } else if let Some([first, second]) =
-                        compare_disjunction(cond, &builder.func.dfg)
+                    if let Some((join, nz_pred, z_pred)) =
+                        edges.select_join(block, *br.nz_dest(), *br.z_dest())
                     {
-                        // A branch on each compare, which uses its flags,
-                        // instead of both compares set to registers and
-                        // combined.
-                        let next = builder.create_block();
-                        builder.ins().brif(first, nz.block, &nz.args, next, &[]);
-                        builder.switch_to_block(next);
-                        builder
-                            .ins()
-                            .brif(second, nz.block, &nz.args, z.block, &z.args);
+                        let nz = edges.scalar_args(nz_pred, join, &value_map, &mut builder)?;
+                        let z = edges.scalar_args(z_pred, join, &value_map, &mut builder)?;
+                        let args: Vec<_> = nz
+                            .into_iter()
+                            .zip(z)
+                            .map(|args| match args {
+                                (BlockArg::Value(nz), BlockArg::Value(z)) => {
+                                    Ok(BlockArg::Value(builder.ins().select(cond, nz, z)))
+                                }
+                                _ => Err("a phi input is not a value".to_string()),
+                            })
+                            .collect::<Result<_, String>>()?;
+                        builder.ins().jump(block_map[&join], &args);
                     } else {
-                        builder
-                            .ins()
-                            .brif(cond, nz.block, &nz.args, z.block, &z.args);
+                        let nz = edges.target(block, *br.nz_dest(), &value_map, &mut builder)?;
+                        let z = edges.target(block, *br.z_dest(), &value_map, &mut builder)?;
+                        // Cranelift's reverse postorder puts a branch's last
+                        // target right after it.
+                        if prediction.prefers_true(block, *br.nz_dest(), *br.z_dest()) {
+                            let inverted = builder.ins().icmp_imm_u(IntCC::Equal, cond, 0);
+                            builder
+                                .ins()
+                                .brif(inverted, z.block, &z.args, nz.block, &nz.args);
+                        } else if let Some([first, second]) =
+                            compare_disjunction(cond, &builder.func.dfg)
+                        {
+                            // A branch on each compare, which uses its flags,
+                            // instead of both compares set to registers and
+                            // combined.
+                            let next = builder.create_block();
+                            builder.ins().brif(first, nz.block, &nz.args, next, &[]);
+                            builder.switch_to_block(next);
+                            builder
+                                .ins()
+                                .brif(second, nz.block, &nz.args, z.block, &z.args);
+                        } else {
+                            builder
+                                .ins()
+                                .brif(cond, nz.block, &nz.args, z.block, &z.args);
+                        }
+                        edges.fill(nz, block, *br.nz_dest(), &value_map, &mut builder)?;
+                        edges.fill(z, block, *br.z_dest(), &value_map, &mut builder)?;
                     }
-                    edges.fill(nz, block, *br.nz_dest(), &value_map, &mut builder)?;
-                    edges.fill(z, block, *br.z_dest(), &value_map, &mut builder)?;
                 }
                 NativeInstKind::BrTable(br_table) => {
                     if let Some(switch) = tail_calls.tail_switch(func_ref, inst_id) {

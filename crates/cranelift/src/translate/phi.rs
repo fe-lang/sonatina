@@ -6,8 +6,8 @@ use cranelift_codegen::{
 };
 use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{
-    BlockId, Function, Type, ValueId,
-    inst::{inst_set::InstSetExt, native::inst_set::NativeInstKind},
+    BlockId, ControlFlowGraph, Function, Type, ValueId,
+    inst::{control_flow::Jump, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
 };
 
@@ -23,6 +23,7 @@ use super::{
 /// a phi costs one copy per edge rather than one block parameter per word.
 pub(super) struct Edges<'a> {
     pub function: &'a Function,
+    pub cfg: &'a ControlFlowGraph,
     pub block_map: &'a HashMap<BlockId, clif::Block>,
     pub frame: &'a FrameSlots,
     pub config: TargetFrontendConfig,
@@ -70,6 +71,65 @@ impl Edges<'_> {
             args: self.scalar_args(pred, succ, value_map, builder)?,
             copies: false,
         })
+    }
+
+    /// The join that a branch from `block` to `nz` and `z` can jump to
+    /// instead, selecting its phis' inputs: both paths meet there at once,
+    /// each target being the join or an empty block entered only from
+    /// `block` that jumps to it. Only those paths may enter the join, and
+    /// its phis must pass at most `MAX_SELECTS` values in registers. Returns
+    /// the join and its predecessor on the `nz` and `z` paths.
+    ///
+    /// A choice between computed values, like a modular reduction keeping a
+    /// sum or its difference from the modulus, is then a `cmov` per value
+    /// instead of a branch mispredicted half the time.
+    pub fn select_join(
+        &self,
+        block: BlockId,
+        nz: BlockId,
+        z: BlockId,
+    ) -> Option<(BlockId, BlockId, BlockId)> {
+        const MAX_SELECTS: usize = 8;
+        let path = |target| match self.forwarded(block, target) {
+            Some(join) => (target, join),
+            None => (block, target),
+        };
+        let ((nz_pred, join), (z_pred, z_join)) = (path(nz), path(z));
+        if join != z_join
+            || join == block
+            || nz_pred == z_pred
+            || self.cfg.pred_num_of(join) != 2
+            || !self
+                .cfg
+                .preds_of(join)
+                .all(|&pred| pred == nz_pred || pred == z_pred)
+            || self.aggregate_phis(nz_pred, join).next().is_some()
+        {
+            return None;
+        }
+        let values: usize = self
+            .phi_inputs(nz_pred, join)
+            .map(|(phi, _)| {
+                let ty = self.function.dfg.value_ty(phi);
+                if ty == Type::I256 {
+                    4
+                } else {
+                    register_parts(self.function.ctx(), ty).map_or(1, |parts| parts.len())
+                }
+            })
+            .sum();
+        (values <= MAX_SELECTS).then_some((join, nz_pred, z_pred))
+    }
+
+    /// The block `target` jumps to, when that jump is all it holds and only
+    /// `block` enters it.
+    fn forwarded(&self, block: BlockId, target: BlockId) -> Option<BlockId> {
+        let layout = &self.function.layout;
+        let jump = layout.first_inst_of(target)?;
+        (layout.last_inst_of(target) == Some(jump) && self.cfg.preds_of(target).eq([&block]))
+            .then(|| self.function.dfg.downcast::<&Jump>(jump))
+            .flatten()
+            .map(|jump| *jump.dest())
     }
 
     /// Whether the edge from `pred` to `succ` passes phi inputs.
@@ -128,7 +188,7 @@ impl Edges<'_> {
     /// The block arguments of the edge's phis not in storage: four limbs
     /// for an i256 phi, the parts of an aggregate held in registers,
     /// otherwise one value.
-    fn scalar_args(
+    pub fn scalar_args(
         &self,
         pred: BlockId,
         succ: BlockId,
