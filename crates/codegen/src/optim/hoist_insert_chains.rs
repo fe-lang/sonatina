@@ -1,6 +1,8 @@
-//! Insert chain hoisting: an `insert_value` chain that builds an aggregate
+//! Insert chain placement: an `insert_value` chain that builds an aggregate
 //! from undef moves up to just after the last of the values it inserts,
-//! when its result only fills a field of another chain or is returned.
+//! when its result only fills a field of another chain or is returned, and
+//! down to just before the store, when its result is only stored into an
+//! object later in its block with no call between.
 //!
 //! A native backend builds such a chain in memory: in the field of the chain
 //! it fills, or in the return buffer. Its scalar inputs would otherwise stay
@@ -9,11 +11,19 @@
 //! values are the same wherever it runs, so it may run as soon as its inputs
 //! exist, though not inside a loop it was outside of, nor outside one it was
 //! inside.
+//!
+//! A stored chain is built at the store's destination when that object's
+//! address exists before the chain starts. A struct literal pushed onto a
+//! vector, `v.push(S { .. })`, comes before the address of its slot, so it
+//! moves down to the store instead of being built aside and copied.
 
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     BlockId, Function, InstId, Value,
-    inst::{control_flow::Return, data::InsertValue},
+    inst::{
+        control_flow::Return,
+        data::{InsertValue, ObjStore},
+    },
 };
 
 use crate::{domtree::DomTree, loop_analysis::LoopTree};
@@ -44,6 +54,13 @@ impl HoistInsertChains {
                     previous = inst;
                 }
                 number(func, func.layout.inst_block(after), &mut order);
+                changed = true;
+            } else if let Some(store) = sunk_position(func, &chain) {
+                for &inst in &chain {
+                    func.layout.remove_inst(inst);
+                    func.layout.insert_inst_before(inst, store);
+                }
+                number(func, func.layout.inst_block(store), &mut order);
                 changed = true;
             }
         }
@@ -79,6 +96,31 @@ fn chain(func: &Function, head: InstId) -> Vec<InstId> {
         (*insert.dest() == result && func.layout.inst_block(user) == block).then_some(user)
     })
     .collect()
+}
+
+/// The store of `chain`'s result into an object, when it is the result's
+/// one use, later in the chain's block with no call between, and not right
+/// after the chain already.
+fn sunk_position(func: &Function, chain: &[InstId]) -> Option<InstId> {
+    let tail_inst = *chain.last()?;
+    let tail = func.dfg.inst_result(tail_inst)?;
+    let mut users = func.dfg.users(tail).copied();
+    let (Some(store), None) = (users.next(), users.next()) else {
+        return None;
+    };
+    let store_info = func.dfg.downcast::<&ObjStore>(store)?;
+    let between: Vec<InstId> =
+        std::iter::successors(func.layout.next_inst_of(tail_inst), |&inst| {
+            func.layout.next_inst_of(inst)
+        })
+        .take_while(|&inst| inst != store)
+        .collect();
+    (*store_info.value() == tail
+        && func.layout.inst_block(store) == func.layout.inst_block(tail_inst)
+        && !between.is_empty()
+        && func.layout.next_inst_of(*between.last()?) == Some(store)
+        && between.iter().all(|&inst| !func.dfg.is_call(inst)))
+    .then_some(store)
 }
 
 /// The instruction after which `chain` can run instead, if earlier than its

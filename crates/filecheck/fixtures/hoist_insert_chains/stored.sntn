@@ -1,0 +1,42 @@
+#! An `insert_value` chain on undef whose result is only stored into an object later in its block moves down to just before the store, unless a call comes between.
+
+target = "evm-ethereum-osaka"
+
+declare external %clobber();
+
+# The slot's address comes after the chain, which moves down past it so that
+# the store's destination exists before the chain starts.
+# sameln: func private %stored_after_index(v0.objref<[[i64; 2]; 4]>, v1.i64, v2.i64) {
+# nextln: block0:
+# nextln: v5.i64 = and v1 3.i64;
+# nextln: v6.objref<[i64; 2]> = obj.index v0 v5;
+# nextln: v3.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+# nextln: v4.[i64; 2] = insert_value v3 1.i256 v2;
+# nextln: obj.store v6 v4;
+func private %stored_after_index(v0.objref<[[i64; 2]; 4]>, v1.i64, v2.i64) {
+block0:
+    v3.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+    v4.[i64; 2] = insert_value v3 1.i256 v2;
+    v5.i64 = and v1 3.i64;
+    v6.objref<[i64; 2]> = obj.index v0 v5;
+    obj.store v6 v4;
+    return;
+}
+
+# A call between them would hold the chain's inputs across it, so the chain
+# stays.
+# sameln: func private %call_between(v0.objref<[[i64; 2]; 4]>, v1.i64, v2.i64) {
+# nextln: block0:
+# nextln: v3.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+# nextln: v4.[i64; 2] = insert_value v3 1.i256 v2;
+# nextln: call %clobber;
+func private %call_between(v0.objref<[[i64; 2]; 4]>, v1.i64, v2.i64) {
+block0:
+    v3.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+    v4.[i64; 2] = insert_value v3 1.i256 v2;
+    call %clobber;
+    v5.i64 = and v1 3.i64;
+    v6.objref<[i64; 2]> = obj.index v0 v5;
+    obj.store v6 v4;
+    return;
+}
