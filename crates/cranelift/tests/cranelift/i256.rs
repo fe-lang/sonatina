@@ -806,11 +806,11 @@ fn i256_modular_arithmetic_matches_reference() {
 }
 
 #[test]
-fn i256_modular_arithmetic_by_two_limbs_matches_reference() {
-    // Sums and products by moduli of 65 to 128 bits, which divide in
-    // registers with a 3-by-2 division per numerator limb. Boundary limbs
-    // reach the division's rare last step, which leaves the remainder at
-    // least the modulus.
+fn i256_modular_arithmetic_by_short_moduli_matches_reference() {
+    // Sums and products by moduli of one or two limbs, which divide in
+    // registers with a division by reciprocal per numerator limb. Boundary
+    // limbs reach the 3-by-2 division's rare last step, which leaves the
+    // remainder at least the modulus.
     let mut state = 0x9e37_79b9_7f4a_7c15u64;
     let mut next = || {
         state ^= state << 13;
@@ -822,6 +822,7 @@ fn i256_modular_arithmetic_by_two_limbs_matches_reference() {
     let mut cases = Vec::new();
     let mut last_steps = 0;
     for _ in 0..20_000 {
+        let one_limb = next() % 3 == 0;
         let mut limb = || {
             let choice = next();
             if choice % 5 < 3 {
@@ -831,10 +832,10 @@ fn i256_modular_arithmetic_by_two_limbs_matches_reference() {
             }
         };
         let [a, b] = [(); 2].map(|()| word([limb(), limb(), limb(), limb()]));
-        let high = limb().max(1);
+        let high = if one_limb { 0 } else { limb().max(1) };
         let m = word([limb(), high, 0, 0]);
         let multiply = cases.len() % 2 == 1;
-        let takes = two_limb_last_step(a, b, m, multiply);
+        let takes = high != 0 && two_limb_last_step(a, b, m, multiply);
         if takes || cases.len() < 2000 {
             last_steps += usize::from(takes);
             cases.push(([a, b, m], multiply));

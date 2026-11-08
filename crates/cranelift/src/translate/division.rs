@@ -1,11 +1,11 @@
 //! Wide unsigned division. Division sites handle a zero divisor, a smaller
 //! numerator, single-limb operands, power-of-two divisors and one-limb
-//! divisors inline, and modular sites a zero modulus and power-of-two moduli
-//! below 2^192; everything else calls the module's divider: Knuth's
-//! algorithm D on 64-bit limbs. Quotient digits come from a 128/64-bit
-//! division by reciprocal (Möller and Granlund, "Improved division by
-//! invariant integers"), and reciprocals from the module's table of 9-bit
-//! estimates and three Newton steps. The remainder of a reduced product by a
+//! divisors inline, and modular sites a zero modulus, power-of-two moduli
+//! below 2^192 and moduli of one or two limbs; everything else calls the
+//! module's divider: Knuth's algorithm D on 64-bit limbs. Quotient digits
+//! come from a 128/64-bit division by reciprocal (Möller and Granlund,
+//! "Improved division by invariant integers"), and reciprocals from the
+//! module's table of 9-bit estimates and three Newton steps. The remainder of a reduced product by a
 //! four-limb modulus, the usual modular case, is computed in registers.
 
 use cranelift_codegen::{
@@ -273,7 +273,8 @@ fn udivrem(
         .brif(divisor_high, call_block, &[], one_limb, &[]);
 
     builder.switch_to_block(one_limb);
-    let (quotient, remainder) = divide_by_limb(numerator, divisor[0], call.table, builder);
+    let (quotient, remainder) = divide_by_limb(&numerator, divisor[0], call.table, builder);
+    let quotient = quotient.try_into().unwrap();
     builder
         .ins()
         .jump(exit, &exit_with(quotient, [remainder, zero, zero, zero]));
@@ -299,36 +300,26 @@ fn power_of_two(divisor: Limbs, builder: &mut FunctionBuilder) -> (clif::Value, 
     (is_zero(overlap, builder), mask)
 }
 
-/// The quotient and remainder of `numerator` by a nonzero one-limb
+/// The quotient and remainder of numerator limbs by a nonzero one-limb
 /// divisor: a digit per limb, each a 128/64-bit division of the normalized
 /// operands by the divisor's reciprocal.
 fn divide_by_limb(
-    numerator: Limbs,
+    numerator: &[clif::Value],
     divisor: clif::Value,
     table: clif::GlobalValue,
     builder: &mut FunctionBuilder,
-) -> (Limbs, clif::Value) {
+) -> (Vec<clif::Value>, clif::Value) {
     let shift = builder.ins().clz(divisor);
     let inverse = builder.ins().bxor_imm_s(shift, 63);
     let normalized = builder.ins().ishl(divisor, shift);
     let reciprocal = reciprocal(normalized, table, builder);
     // The bits shifted out of the top limb start the remainder, below the
     // normalized divisor's set top bit.
-    let top = builder.ins().ushr_imm_s(numerator[LIMBS - 1], 1);
-    let mut remainder = builder.ins().ushr(top, inverse);
-    let mut quotient = numerator;
-    for limb in (0..LIMBS).rev() {
-        let low = match limb {
-            0 => builder.ins().ishl(numerator[0], shift),
-            _ => funnel(
-                numerator[limb],
-                numerator[limb - 1],
-                shift,
-                inverse,
-                builder,
-            ),
-        };
-        (quotient[limb], remainder) = div2by1(remainder, low, normalized, reciprocal, builder);
+    let mut remainder = normalized_limb(numerator, numerator.len(), shift, inverse, builder);
+    let mut quotient = numerator.to_vec();
+    for (limb, digit) in quotient.iter_mut().enumerate().rev() {
+        let low = normalized_limb(numerator, limb, shift, inverse, builder);
+        (*digit, remainder) = div2by1(remainder, low, normalized, reciprocal, builder);
     }
     (quotient, builder.ins().ushr(remainder, shift))
 }
@@ -410,21 +401,30 @@ fn remainder(
     call: DividerCall,
     builder: &mut FunctionBuilder,
 ) -> Limbs {
-    // A modulus of two limbs divides in registers, one 3-by-2 division per
-    // limb; any other calls the divider.
-    let [_, m1, m2, m3] = modulus;
+    // A modulus of one or two limbs divides in registers, a division by
+    // reciprocal per numerator limb; any other calls the divider.
+    let [m0, m1, m2, m3] = modulus;
+    let short = builder.create_block();
+    let one = builder.create_block();
     let two = builder.create_block();
     let other = builder.create_block();
     let done = builder.create_block();
     let results = std::array::from_fn(|_| builder.append_block_param(done, I64));
     let upper = builder.ins().bor(m2, m3);
-    let upper_zero = builder.ins().icmp_imm_u(IntCC::Equal, upper, 0);
-    let second = builder.ins().icmp_imm_u(IntCC::NotEqual, m1, 0);
-    let two_limbs = builder.ins().band(upper_zero, second);
-    builder.ins().brif(two_limbs, two, &[], other, &[]);
+    builder.ins().brif(upper, other, &[], short, &[]);
+
+    builder.switch_to_block(short);
+    builder.ins().brif(m1, two, &[], one, &[]);
+
+    builder.switch_to_block(one);
+    let zero = builder.ins().iconst(I64, 0);
+    let (_, result) = divide_by_limb(numerator, m0, call.table, builder);
+    builder
+        .ins()
+        .jump(done, &[result, zero, zero, zero].map(BlockArg::Value));
 
     builder.switch_to_block(two);
-    let result = remainder_by_two_limbs(numerator, [modulus[0], m1], call.table, builder);
+    let result = remainder_by_two_limbs(numerator, [m0, m1], call.table, builder);
     builder.ins().jump(done, &result.map(BlockArg::Value));
 
     builder.switch_to_block(other);
