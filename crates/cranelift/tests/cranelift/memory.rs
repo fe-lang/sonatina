@@ -2208,3 +2208,41 @@ block0:
         assert_eq!(out, zeros_out, "{level:?}");
     }
 }
+
+#[test]
+fn nested_aggregates_build_in_their_destination_object() {
+    // The inner array's chain starts before the outer one's, and both are
+    // built in the object the outer value is stored into.
+    let source = r#"
+func public %nested(v0.i64, v1.*i8) {
+block0:
+    v2.objref<[[i64; 3]; 2]> = obj.alloc [[i64; 3]; 2];
+    v3.[i64; 3] = insert_value undef.[i64; 3] 0.i64 v0;
+    v4.i64 = add v0 1.i64;
+    v5.[i64; 3] = insert_value v3 2.i64 v4;
+    v6.[[i64; 3]; 2] = insert_value undef.[[i64; 3]; 2] 1.i64 v5;
+    v7.i64 = add v0 2.i64;
+    v8.[i64; 3] = insert_value undef.[i64; 3] 1.i64 v7;
+    v9.[[i64; 3]; 2] = insert_value v6 0.i64 v8;
+    obj.store v2 v9;
+    v10.[[i64; 3]; 2] = obj.load v2;
+    v11.*[[i64; 3]; 2] = bitcast v1 *[[i64; 3]; 2];
+    mstore v11 v10 [[i64; 3]; 2];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let nested: unsafe extern "C" fn(i64, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("nested").unwrap()) };
+        let mut out = [-1i64; 6];
+        unsafe { nested(10, out.as_mut_ptr()) };
+        assert_eq!(out, [0, 12, 0, 10, 0, 11], "{level:?}");
+    }
+}

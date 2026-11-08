@@ -264,6 +264,12 @@ impl FrameSlots {
         })
     }
 
+    /// The class root `value`'s storage lies in, with its offset there, if
+    /// its class is embedded in another.
+    pub fn embedded_in(&self, value: ValueId) -> Option<(ValueId, u32)> {
+        self.embedded.get(&value).copied()
+    }
+
     /// The object whose storage the class of root `value` is built in, if
     /// it is built at its store's destination.
     pub fn stored_at(&self, value: ValueId) -> Option<ValueId> {
@@ -704,41 +710,61 @@ impl Plan {
     }
 
     /// Builds each `insert_value` chain on undef whose last value is only
-    /// stored into an object at that object, when the object's address is
-    /// defined before the chain and everything in between is free of
-    /// effects and uses no forwarded load, which reads memory where it is
-    /// used. No other class lives inside such a chain, and none of the
-    /// values it inserts is a forwarded load.
+    /// stored into an object at that object, with the chains embedded in it,
+    /// when the object's address is defined before the first of them starts
+    /// and everything from there to the store is free of effects and uses no
+    /// forwarded load, which reads memory where it is used. No other class
+    /// lives inside such a chain, and none of the values it inserts is a
+    /// forwarded load. Every class embedded in it must be such a chain in
+    /// its block too, so that all of them write the object only there.
     fn store_in_place(&mut self, function: &Function, position: &SecondaryMap<InstId, u32>) {
         let dfg = &function.dfg;
-        let parents: FxHashSet<usize> = self.embedded.values().map(|&(parent, _)| parent).collect();
-        for class in 0..self.classes.len() {
-            if self.embedded.contains_key(&class) || parents.contains(&class) {
-                continue;
+        // The classes embedded in each class, directly or not.
+        let mut descendants = FxHashMap::<usize, Vec<usize>>::default();
+        for &child in self.embedded.keys() {
+            let mut outer = child;
+            while let Some(&(parent, _)) = self.embedded.get(&outer) {
+                descendants.entry(parent).or_default().push(child);
+                outer = parent;
             }
-            let Some(&root) = self.members[class].first() else {
-                continue;
-            };
-            let Some(head) = dfg.value_inst(root) else {
-                continue;
-            };
-            let chain: Vec<InstId> = std::iter::successors(Some(head), |&inst| {
+        }
+        // The `insert_value` chain of a class on undef, if it is one: each
+        // insert with the value it inserts.
+        let chain_of = |class: usize| -> Option<Vec<(InstId, ValueId)>> {
+            let head = dfg.value_inst(*self.members[class].first()?)?;
+            let chain: Option<Vec<_>> = std::iter::successors(Some(head), |&inst| {
                 self.continuation.get(&dfg.inst_result(inst)?).copied()
             })
+            .map(
+                |inst| match native_inst_set().resolve_inst(dfg.inst(inst)) {
+                    NativeInstKind::InsertValue(insert) => {
+                        Some((inst, *insert.dest(), *insert.value()))
+                    }
+                    _ => None,
+                },
+            )
             .collect();
-            let inserts: Option<Vec<_>> = chain
-                .iter()
-                .map(
-                    |&inst| match native_inst_set().resolve_inst(dfg.inst(inst)) {
-                        NativeInstKind::InsertValue(insert) => Some(insert),
-                        _ => None,
-                    },
-                )
-                .collect();
-            let Some(inserts) = inserts else {
+            let chain = chain?;
+            (is_undef(function, chain[0].1)
+                && chain
+                    .iter()
+                    .all(|(_, _, value)| !self.forwarded.contains(value)))
+            .then(|| {
+                chain
+                    .into_iter()
+                    .map(|(inst, _, value)| (inst, value))
+                    .collect()
+            })
+        };
+        'classes: for class in 0..self.classes.len() {
+            if self.embedded.contains_key(&class) {
+                continue;
+            }
+            let Some(chain) = chain_of(class) else {
                 continue;
             };
-            let Some(tail) = chain.last().and_then(|&inst| dfg.inst_result(inst)) else {
+            let (head, _) = chain[0];
+            let Some(tail) = chain.last().and_then(|&(inst, _)| dfg.inst_result(inst)) else {
                 continue;
             };
             let mut users = dfg.users(tail).copied();
@@ -749,17 +775,36 @@ impl Plan {
             else {
                 continue;
             };
-            let object = *info.object();
             let block = function.layout.inst_block(head);
+            if *info.value() != tail || function.layout.inst_block(store) != block {
+                continue;
+            }
+            let mut builders: FxHashSet<InstId> = chain.iter().map(|&(inst, _)| inst).collect();
+            for &child in descendants.get(&class).into_iter().flatten() {
+                let Some(chain) = chain_of(child) else {
+                    continue 'classes;
+                };
+                if chain
+                    .iter()
+                    .any(|&(inst, _)| function.layout.inst_block(inst) != block)
+                {
+                    continue 'classes;
+                }
+                builders.extend(chain.iter().map(|&(inst, _)| inst));
+            }
+            let Some(&first) = builders.iter().min_by_key(|&&inst| position[inst]) else {
+                continue;
+            };
+            let object = *info.object();
             let defined_before = dfg.value_inst(object).is_none_or(|def| {
-                function.layout.inst_block(def) != block || position[def] < position[head]
+                function.layout.inst_block(def) != block || position[def] < position[first]
             });
-            let untouched = std::iter::successors(function.layout.next_inst_of(head), |&next| {
+            let untouched = std::iter::successors(function.layout.next_inst_of(first), |&next| {
                 function.layout.next_inst_of(next)
             })
             .take_while(|&next| next != store)
             .all(|next| {
-                chain.contains(&next)
+                builders.contains(&next)
                     || (dfg.has_value_semantics(next)
                         && !dfg
                             .inst(next)
@@ -767,15 +812,7 @@ impl Plan {
                             .iter()
                             .any(|value| self.forwarded.contains(value)))
             });
-            if *info.value() == tail
-                && is_undef(function, *inserts[0].dest())
-                && function.layout.inst_block(store) == block
-                && defined_before
-                && untouched
-                && inserts
-                    .iter()
-                    .all(|insert| !self.forwarded.contains(insert.value()))
-            {
+            if defined_before && untouched {
                 self.stored.insert(class, (object, store));
             }
         }
@@ -1376,6 +1413,48 @@ block0:
 "#,
         );
         assert_eq!(sizes, [256]);
+    }
+
+    #[test]
+    fn stored_chains_build_their_embedded_chains_at_the_destination() {
+        // `v4`'s chain, built before its parent's starts, fills a field of
+        // the chain stored into `v1`, so both are built in `v1`.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64) {
+block0:
+    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v3.[i64; 32] = insert_value v2 1.i64 v0;
+    v4.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v3;
+    v5.[i64; 32] = insert_value undef.[i64; 32] 2.i64 v0;
+    v6.[[i64; 32]; 2] = insert_value v4 0.i64 v5;
+    obj.store v1 v6;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [0u32; 0]);
+    }
+
+    #[test]
+    fn stored_chains_keep_storage_when_a_store_comes_between_their_parts() {
+        // `v2`'s chain is embedded but a store comes between it and the store
+        // of its parent, which may read what the chain would overwrite.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v7.*i64) {
+block0:
+    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    mstore v7 v0 i64;
+    v4.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
+    obj.store v1 v4;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [512]);
     }
 
     #[test]

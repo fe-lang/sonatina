@@ -1965,12 +1965,8 @@ fn translate_function(
                     let result_addr = if frame.continues_source(inst_id, source_value) {
                         resolve_value(function, source_value, &value_map, &mut builder)?
                     } else {
-                        let address = match frame.stored_at(result) {
-                            Some(object) => {
-                                resolve_value(function, object, &value_map, &mut builder)?
-                            }
-                            None => frame.address(result, &mut builder)?,
-                        };
+                        let address =
+                            storage_address(&frame, function, result, &value_map, &mut builder)?;
                         if is_undef(function, source_value) {
                             // An undef source is zero, but only the bytes no
                             // insert of the chain writes need zeroing.
@@ -2656,6 +2652,26 @@ fn translate_function(
     }
 
     Ok(ctx)
+}
+
+/// The address of the storage of the class root `value`: its frame slot, the
+/// object its class is built at, or its place in the class it is embedded
+/// in, which may itself be built at an object.
+fn storage_address(
+    frame: &FrameSlots,
+    function: &Function,
+    value: ValueId,
+    value_map: &ValueMap,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    if let Some((parent, offset)) = frame.embedded_in(value) {
+        let parent = storage_address(frame, function, parent, value_map, builder)?;
+        return Ok(builder.ins().iadd_imm_s(parent, i64::from(offset)));
+    }
+    match frame.stored_at(value) {
+        Some(object) => resolve_value(function, object, value_map, builder),
+        None => frame.address(value, builder),
+    }
 }
 
 /// The bytes of a cache line on the native hosts' cores.
