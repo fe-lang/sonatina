@@ -117,6 +117,72 @@ fn keeps_conditional_reads_writes_and_escaped_objects() {
     }
 }
 
+/// `%sum` with its pair marked `marks` and the body `body`, called with a
+/// fresh pair and a distinct `i256` object as `v6`.
+fn marked_sum(marks: &str, body: &str) -> String {
+    let start = PAIR.find("    v1.objref<i256>").unwrap();
+    let end = PAIR[start..].find("\n}").unwrap() + start;
+    let mut source = PAIR.to_owned();
+    source.replace_range(start..end, body);
+    source
+        .replace(
+            "%sum(v0.objref<@Pair>)",
+            &format!("%sum({marks} v0.objref<@Pair>, v6.objref<i256>)"),
+        )
+        .replace(
+            "    v5.i256 = call %sum v2;",
+            "    v6.objref<i256> = obj.alloc i256;\n    obj.store v6 0.i256;\n    v5.i256 = call %sum v2 v6;",
+        )
+}
+
+/// Reads of `%sum`'s pair outside its entry prefix.
+const LATE_READS: [&str; 3] = [
+    // Conditional reads.
+    "v1.objref<i256> = obj.proj v0 0.i8;\n    br 0.i1 block1 block2;\nblock1:\n    v2.i256 = obj.load v1;\n    return v2;\nblock2:\n    v3.objref<i256> = obj.proj v0 1.i8;\n    v4.i256 = obj.load v3;\n    return v4;",
+    // Reads after an unrelated effect and a write to another object.
+    "evm_sstore 0.i256 7.i256;\n    obj.store v6 22.i256;\n    v1.objref<i256> = obj.proj v0 0.i8;\n    v2.i256 = obj.load v1;\n    return v2;",
+    // A read repeated in a loop whose body writes another object.
+    "jump block1;\nblock1:\n    v1.objref<i256> = obj.proj v0 1.i8;\n    v2.i256 = obj.load v1;\n    v3.i256 = obj.load v6;\n    v4.i1 = eq v3 22.i256;\n    br v4 block2 block3;\nblock2:\n    return v2;\nblock3:\n    obj.store v6 22.i256;\n    jump block1;",
+];
+
+#[test]
+fn promotes_view_reads_after_branches_effects_and_in_loops() {
+    for body in LATE_READS {
+        let module = checked(&marked_sum("noalias readonly", body));
+        let stats = ObjectArgPromotion::default().run(&module);
+        assert_eq!(
+            (stats.promoted_args, stats.rewritten_calls),
+            (1, 1),
+            "{body}"
+        );
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        let arguments = argument_types(&module, "sum");
+        assert!(arguments[0].is_integral(), "{body}");
+        assert!(
+            matches!(
+                arguments.last().unwrap().resolve_compound(&module.ctx),
+                Some(CompoundType::ObjRef(Type::I256))
+            ),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn keeps_late_reads_of_writable_noalias_arguments_and_escaped_views() {
+    let escaped = "v1.objref<i256> = obj.proj v0 0.i8;\n    v2.i256 = obj.load v1;\n    v3.*@Pair = obj.materialize.stack v0;\n    return v2;";
+    let sources = LATE_READS
+        .iter()
+        .map(|body| marked_sum("noalias", body))
+        .chain([marked_sum("noalias readonly", escaped)]);
+    for source in sources {
+        let module = checked(&source);
+        let before = ModuleWriter::new(&module).dump_string();
+        assert_eq!(ObjectArgPromotion::default().run(&module).promoted_args, 0);
+        assert_eq!(before, ModuleWriter::new(&module).dump_string());
+    }
+}
+
 #[test]
 fn alias_writes_before_any_demanded_read_block_promotion() {
     let source = PAIR
