@@ -342,24 +342,26 @@ pub(super) fn zero_unwritten_fields(
 }
 
 /// Loads the scalar or i256 value `result` of type `ty` from `src + offset`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn load_value(
     result: ValueId,
     ty: Type,
     src: clif::Value,
     offset: i32,
+    flags: MemFlagsData,
     value_map: &mut ValueMap,
     ctx: &ModuleCtx,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
     if ty == Type::I256 {
-        let limbs = load_limbs(src, offset, LOAD_FLAGS, builder);
+        let limbs = load_limbs(src, offset, flags, builder);
         value_map.insert_limbs(result, limbs);
     } else if let Some(parts) = register_parts(ctx, ty) {
-        let values = load_parts(ctx, &parts, src, offset, builder)?;
+        let values = load_parts(ctx, &parts, src, offset, flags, builder)?;
         value_map.insert_parts(result, values);
     } else {
         let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_clif_type(ctx)?)?;
-        let loaded = builder.ins().load(clif_ty, LOAD_FLAGS, src, offset);
+        let loaded = builder.ins().load(clif_ty, flags, src, offset);
         value_map.insert(result, loaded);
     }
     Ok(())

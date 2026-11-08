@@ -34,7 +34,12 @@ use sonatina_codegen::analysis::{arg_writes::ArgWrites, known_bits::KnownBitsQue
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Type, U256,
     Value, ValueId,
-    inst::{InstId, control_flow, inst_set::InstSetExt, native::inst_set::NativeInstKind},
+    inst::{
+        InstId, control_flow,
+        data::{ObjIndex, ObjProj},
+        inst_set::InstSetExt,
+        native::inst_set::NativeInstKind,
+    },
     isa::native::inst_set as native_inst_set,
     module::{FuncHints, FuncRef},
     parallel,
@@ -404,6 +409,37 @@ fn clif_signature(
     Ok(sig)
 }
 
+/// Whether `object` lies in a `noalias` `readonly` object argument, reached
+/// from it by projections and indexes with constant operands: nothing writes
+/// its memory while the function runs, and a load from it is in bounds
+/// wherever it runs.
+fn is_constant_object(function: &Function, readonly_args: &[usize], mut object: ValueId) -> bool {
+    loop {
+        match function.dfg.value(object) {
+            Value::Arg { idx, .. } => {
+                return function.is_noalias_arg(object) && readonly_args.contains(idx);
+            }
+            Value::Inst { inst, .. } => {
+                let inst = *inst;
+                if let Some(proj) = function.dfg.downcast::<&ObjProj>(inst)
+                    && proj.values()[1..]
+                        .iter()
+                        .all(|&index| function.dfg.value_imm(index).is_some())
+                {
+                    object = proj.values()[0];
+                } else if let Some(index) = function.dfg.downcast::<&ObjIndex>(inst)
+                    && function.dfg.value_imm(*index.index()).is_some()
+                {
+                    object = *index.object();
+                } else {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn translate_function(
     module: &Module,
@@ -423,6 +459,9 @@ fn translate_function(
     let pointer_type = target_config.pointer_type();
     let mut ctx = clif_module.make_context();
     ctx.func.signature = clif_signature(module, func_ref, tail_calls, clif_module)?;
+    let readonly_args: Vec<usize> = module
+        .ctx
+        .func_sig(func_ref, |sig| sig.readonly_args().collect());
 
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
@@ -483,7 +522,14 @@ fn translate_function(
                     .map(|part| Ok(normalize_scalar(next_param()?, part.ty, &mut builder)))
                     .collect::<Result<_, String>>()?
             } else {
-                load_parts(&module.ctx, &parts, next_param()?, 0, &mut builder)?
+                load_parts(
+                    &module.ctx,
+                    &parts,
+                    next_param()?,
+                    0,
+                    LOAD_FLAGS,
+                    &mut builder,
+                )?
             };
             value_map.insert_parts(arg_value, values);
         } else {
@@ -1158,6 +1204,7 @@ fn translate_function(
                             to_ty,
                             source,
                             0,
+                            LOAD_FLAGS,
                             &mut value_map,
                             &module.ctx,
                             &mut builder,
@@ -1644,6 +1691,7 @@ fn translate_function(
                                 result_ty,
                                 sret_addr,
                                 0,
+                                LOAD_FLAGS,
                                 &mut value_map,
                                 &module.ctx,
                                 &mut builder,
@@ -1846,6 +1894,14 @@ fn translate_function(
                 NativeInstKind::ObjLoad(obj_load) => {
                     let addr =
                         resolve_value(function, *obj_load.object(), &value_map, &mut builder)?;
+                    // Memory nothing changes while the function runs loads
+                    // anywhere: Cranelift places the load at its first use.
+                    let flags = if is_constant_object(function, &readonly_args, *obj_load.object())
+                    {
+                        LOAD_FLAGS.with_readonly().with_can_move()
+                    } else {
+                        LOAD_FLAGS
+                    };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let result_ty = function.dfg.value_ty(result);
                         if frame.forwards(result) {
@@ -1867,6 +1923,7 @@ fn translate_function(
                                 result_ty,
                                 addr,
                                 0,
+                                flags,
                                 &mut value_map,
                                 &module.ctx,
                                 &mut builder,
@@ -1926,6 +1983,7 @@ fn translate_function(
                                 result_ty,
                                 base,
                                 offset,
+                                LOAD_FLAGS,
                                 &mut value_map,
                                 &module.ctx,
                                 &mut builder,
@@ -2192,6 +2250,7 @@ fn translate_function(
                                 result_ty,
                                 base,
                                 offset,
+                                LOAD_FLAGS,
                                 &mut value_map,
                                 &module.ctx,
                                 &mut builder,
@@ -2346,6 +2405,7 @@ fn translate_function(
                                 result_ty,
                                 addr,
                                 0,
+                                LOAD_FLAGS,
                                 &mut value_map,
                                 &module.ctx,
                                 &mut builder,
@@ -2442,6 +2502,7 @@ fn translate_function(
                             ty,
                             addr,
                             0,
+                            LOAD_FLAGS,
                             &mut value_map,
                             &module.ctx,
                             &mut builder,
@@ -2457,6 +2518,7 @@ fn translate_function(
                             ty,
                             addr,
                             0,
+                            LOAD_FLAGS,
                             &mut value_map,
                             &module.ctx,
                             &mut builder,
@@ -2558,6 +2620,7 @@ fn translate_function(
                                 ty,
                                 base,
                                 offset,
+                                LOAD_FLAGS,
                                 &mut value_map,
                                 &module.ctx,
                                 &mut builder,

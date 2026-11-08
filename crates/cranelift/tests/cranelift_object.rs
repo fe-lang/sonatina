@@ -285,6 +285,93 @@ block0:
 }
 
 #[test]
+fn readonly_argument_fields_load_at_their_uses() {
+    // Fields of a `noalias` `readonly` object argument loaded before a call
+    // and stored after it load after it: nothing changes the object, so
+    // they need no registers or spill slots across the call.
+    let triple = native_isa(host_architecture()).triple();
+    let text_size_of = |marks: &str| {
+        let source = format!(
+            r#"target = "{triple}"
+type @Fields = {{i64, i64, i64, i64, i64, i64, i64, i64}};
+declare external %clobber();
+func inline(never) private %copy({marks} v0.objref<@Fields>, noalias nocapture v1.objref<@Fields>) {{
+block0:
+    v2.objref<i64> = obj.proj v0 0.i256;
+    v3.i64 = obj.load v2;
+    v5.objref<i64> = obj.proj v0 1.i256;
+    v6.i64 = obj.load v5;
+    v8.objref<i64> = obj.proj v0 2.i256;
+    v9.i64 = obj.load v8;
+    v11.objref<i64> = obj.proj v0 3.i256;
+    v12.i64 = obj.load v11;
+    v14.objref<i64> = obj.proj v0 4.i256;
+    v15.i64 = obj.load v14;
+    v17.objref<i64> = obj.proj v0 5.i256;
+    v18.i64 = obj.load v17;
+    v20.objref<i64> = obj.proj v0 6.i256;
+    v21.i64 = obj.load v20;
+    v23.objref<i64> = obj.proj v0 7.i256;
+    v24.i64 = obj.load v23;
+    call %clobber;
+    v4.objref<i64> = obj.proj v1 0.i256;
+    obj.store v4 v3;
+    v7.objref<i64> = obj.proj v1 1.i256;
+    obj.store v7 v6;
+    v10.objref<i64> = obj.proj v1 2.i256;
+    obj.store v10 v9;
+    v13.objref<i64> = obj.proj v1 3.i256;
+    obj.store v13 v12;
+    v16.objref<i64> = obj.proj v1 4.i256;
+    obj.store v16 v15;
+    v19.objref<i64> = obj.proj v1 5.i256;
+    obj.store v19 v18;
+    v22.objref<i64> = obj.proj v1 6.i256;
+    obj.store v22 v21;
+    v25.objref<i64> = obj.proj v1 7.i256;
+    obj.store v25 v24;
+    return;
+}}
+func public %entry() -> i64 {{
+block0:
+    v0.objref<@Fields> = obj.alloc @Fields;
+    v1.objref<@Fields> = obj.alloc @Fields;
+    v2.objref<i64> = obj.proj v0 0.i256;
+    obj.store v2 1.i64;
+    v4.objref<i64> = obj.proj v0 1.i256;
+    obj.store v4 2.i64;
+    v6.objref<i64> = obj.proj v0 2.i256;
+    obj.store v6 3.i64;
+    v8.objref<i64> = obj.proj v0 3.i256;
+    obj.store v8 4.i64;
+    v10.objref<i64> = obj.proj v0 4.i256;
+    obj.store v10 5.i64;
+    v12.objref<i64> = obj.proj v0 5.i256;
+    obj.store v12 6.i64;
+    v14.objref<i64> = obj.proj v0 6.i256;
+    obj.store v14 7.i64;
+    v16.objref<i64> = obj.proj v0 7.i256;
+    obj.store v16 8.i64;
+    call %copy v0 v1;
+    v20.objref<i64> = obj.proj v1 7.i256;
+    v21.i64 = obj.load v20;
+    return v21;
+}}
+"#
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let artifact = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(OptLevel::O2)
+            .compile()
+            .unwrap();
+        text_size(artifact.as_bytes())
+    };
+    let readonly = text_size_of("noalias nocapture readonly");
+    let writable = text_size_of("noalias nocapture");
+    assert!(readonly < writable, "{readonly} >= {writable}");
+}
+
+#[test]
 fn large_aggregate_copies_have_constant_code_size() {
     // Snapshot loads, chain-head copies, return buffers, stores and undef
     // zero fills of every length share one bounded code size.
