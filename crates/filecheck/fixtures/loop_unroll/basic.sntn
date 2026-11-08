@@ -1,7 +1,8 @@
 target = "evm-ethereum-osaka"
 
 # A loop that runs three times: two copies of its body run before it, each
-# with its iteration's counter, and it runs the last without its back edge.
+# in its own block with its iteration's counter, and it runs the last
+# without its back edge.
 # regex: VAL=\bv\d+\b
 # sameln: func public %sum_of_squares() -> i64 {
 # check:   block0:
@@ -11,6 +12,8 @@ target = "evm-ethereum-osaka"
 # nextln:      $(s=$VAL).i64 = add 0.i64 $a;
 # nextln:      $(i=$VAL).i64 = add 0.i64 1.i64;
 # nextln:      $VAL.i1 = lt $i 3.i64;
+# nextln:      jump block4;
+# check:   block4:
 # nextln:      $(b=$VAL).i64 = mul $i $i;
 # nextln:      $(t=$VAL).i64 = add $s $b;
 # nextln:      $(j=$VAL).i64 = add $i 1.i64;
