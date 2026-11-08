@@ -7,7 +7,7 @@ use sonatina_filecheck::{
     if_convert::IfConvertTransform, jump_thread::JumpThreadTransform,
     known_bits_simplify::KnownBitsSimplifyTransform, licm::LicmTransformer,
     load_store::LoadStoreTransform, loop_rotate::LoopRotateTransform,
-    loop_strength_reduce::LoopStrengthReduceTransform,
+    loop_strength_reduce::LoopStrengthReduceTransform, loop_unroll::LoopUnrollTransform,
     narrow_object_loads::NarrowObjectLoadsTransform,
     range_branch_simplify::RangeBranchSimplifyTransform, return_thread::ReturnThreadTransform,
     sccp::SccpTransform, switch_formation::SwitchFormationTransform,
@@ -42,6 +42,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(IfConvertTransform);
+    runner.run();
+
+    runner.attach_transformer(LoopUnrollTransform);
     runner.run();
 
     runner.attach_transformer(RangeBranchSimplifyTransform::default());

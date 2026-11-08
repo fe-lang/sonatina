@@ -56,6 +56,7 @@ use super::{
     load_store::LoadStoreSolver,
     loop_rotate::LoopRotate,
     loop_strength_reduce::LoopStrengthReduce,
+    loop_unroll::LoopUnroll,
     multi_result_legalize::legalize_multi_result,
     narrow_object_loads::NarrowObjectLoads,
     range_branch_simplify::{RangeBranchSimplify, has_conditional_branch},
@@ -103,6 +104,9 @@ pub enum Pass {
     Licm,
     /// Move a loop's exit test from its header to its latch.
     LoopRotate,
+    /// Run each iteration of a one-block loop with a constant trip count in
+    /// sequence (native pipelines only).
+    LoopUnroll,
     /// Loop strength reduction for affine memory addresses.
     LoopStrengthReduce,
     /// Sink pure instructions into the blocks that use their results.
@@ -220,6 +224,11 @@ impl Pass {
             },
             Pass::LoopRotate => PassInfo {
                 name: "loop_rotate",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::LoopUnroll => PassInfo {
+                name: "loop_unroll",
                 needs_func_behavior: false,
                 invalidates_func_behavior: true,
             },
@@ -369,6 +378,7 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::JumpThread,
     Pass::RangeBranchSimplify,
     Pass::LoopRotate,
+    Pass::LoopUnroll,
     Pass::Sccp,
     Pass::ScalarCanonicalize,
     Pass::Gvn,
@@ -394,6 +404,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::JumpThread,
     Pass::RangeBranchSimplify,
     Pass::LoopRotate,
+    Pass::LoopUnroll,
     Pass::Sccp,
     Pass::ScalarCanonicalize,
     Pass::Gvn,
@@ -420,6 +431,15 @@ const POST_INLINE_CLEANUP_PASSES: &[Pass] = &[
     Pass::CodeSink,
     Pass::CfgCleanup,
 ];
+
+/// What the optimization schedule does to loops.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Loops {
+    Keep,
+    Rotate,
+    /// Rotate, then unroll the one-block loops that run a few times.
+    Unroll,
+}
 
 fn size_inliner_config() -> InlinerConfig {
     InlinerConfig {
@@ -524,14 +544,19 @@ fn native_inliner_config() -> InlinerConfig {
 impl Pipeline {
     /// The optimization schedule. Without `late_rounds` it stops after the
     /// second of its four inline rounds.
-    fn optimized(inliner_config: InlinerConfig, rotate_loops: bool, late_rounds: bool) -> Self {
+    fn optimized(inliner_config: InlinerConfig, loops: Loops, late_rounds: bool) -> Self {
         // Rotation copies each rotated loop's header, so a size-oriented
-        // pipeline leaves loops as they are.
+        // pipeline leaves loops as they are; unrolling copies whole bodies,
+        // which only native code affords.
         let passes = |passes: &[Pass]| {
             passes
                 .iter()
                 .copied()
-                .filter(|&pass| rotate_loops || pass != Pass::LoopRotate)
+                .filter(|&pass| match pass {
+                    Pass::LoopRotate => loops != Loops::Keep,
+                    Pass::LoopUnroll => loops == Loops::Unroll,
+                    _ => true,
+                })
                 .collect()
         };
         let mut p = Self::new();
@@ -578,7 +603,7 @@ impl Pipeline {
     /// keeps inlining biased toward avoiding code size growth and does not
     /// rotate loops.
     pub fn size() -> Self {
-        Self::optimized(size_inliner_config(), false, true)
+        Self::optimized(size_inliner_config(), Loops::Keep, true)
     }
 
     /// Speed-oriented optimization pipeline preset.
@@ -586,13 +611,14 @@ impl Pipeline {
     /// Uses the same pass schedule as [`Pipeline::size`], but widens the
     /// inliner budget for runtime speed and rotates loops.
     pub fn speed() -> Self {
-        Self::optimized(speed_inliner_config(), true, true)
+        Self::optimized(speed_inliner_config(), Loops::Rotate, true)
     }
 
     /// Optimization pipeline for native code, which runs on a register
     /// machine rather than the EVM.
     ///
-    /// O2 runs the speed schedule with an inliner tuned for native code. O1
+    /// O2 runs the speed schedule with an inliner tuned for native code,
+    /// unrolling the loops that run a few times after rotating them. O1
     /// stops that schedule after its second of four inline rounds, for
     /// quicker builds. Both end by simplifying with known bits and ranges
     /// again, so code inlined after the first round has bounded shift counts
@@ -604,9 +630,9 @@ impl Pipeline {
     pub fn native(level: OptLevel) -> Self {
         let mut pipeline = match level {
             OptLevel::O0 => return Self::none(),
-            OptLevel::O1 => Self::optimized(native_inliner_config(), true, false),
+            OptLevel::O1 => Self::optimized(native_inliner_config(), Loops::Unroll, false),
             OptLevel::Os => return Self::size(),
-            OptLevel::O2 => Self::optimized(native_inliner_config(), true, true),
+            OptLevel::O2 => Self::optimized(native_inliner_config(), Loops::Unroll, true),
         };
         pipeline.add_step(Step::FuncPasses(vec![
             Pass::NarrowObjectLoads,
@@ -1137,6 +1163,10 @@ fn run_pass(
         Pass::LoopRotate => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.loop_rotate").entered();
             LoopRotate::new().run(func)
+        }
+        Pass::LoopUnroll => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.loop_unroll").entered();
+            LoopUnroll.run(func)
         }
         Pass::LoopStrengthReduce => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.loop_strength_reduce").entered();
@@ -2828,7 +2858,7 @@ func private %entry(v0.i32, v1.i32) -> i32 {
     }
 
     #[test]
-    fn native_o2_runs_the_speed_schedule_and_o1_its_first_two_inline_rounds() {
+    fn native_o2_runs_the_speed_schedule_unrolling_loops_and_o1_its_first_two_inline_rounds() {
         let steps = |pipeline: &Pipeline| -> Vec<String> {
             pipeline
                 .steps
@@ -2857,7 +2887,16 @@ func private %entry(v0.i32, v1.i32) -> i32 {
         let mut o2 = steps(&Pipeline::native(OptLevel::O2));
         assert_eq!(o1.pop(), Some(switches.clone()));
         assert_eq!(o2.pop(), Some(switches));
-        assert_eq!(o2, steps(&Pipeline::speed()));
+        // Native code unrolls loops after rotating them.
+        assert!(
+            o2.iter()
+                .any(|step| step.contains("LoopRotate, LoopUnroll, Sccp"))
+        );
+        let rotated: Vec<_> = o2
+            .iter()
+            .map(|step| step.replace("LoopUnroll, ", ""))
+            .collect();
+        assert_eq!(rotated, steps(&Pipeline::speed()));
         assert!(o2.starts_with(&o1));
         let inline_rounds =
             |steps: &[String]| steps.iter().filter(|step| *step == "Inline").count();
