@@ -1,5 +1,6 @@
 mod abi;
 mod black_box;
+mod carry;
 mod division;
 mod enums;
 mod frame;
@@ -43,6 +44,7 @@ use sonatina_triple::TargetTriple;
 use self::{
     abi::*,
     black_box::BlackBoxBarrier,
+    carry::CarryChains,
     division::{Divider, DividerCall, Numerator, addmod, div_rem, div_rem_i128, mulmod},
     enums::{store_tag, store_variant, tag_clif_type, variant_field_offset},
     frame::{CallFacts, FrameSlots},
@@ -517,6 +519,7 @@ fn translate_function(
         .map(|arg| arg.store)
         .collect();
     let mut known_bits = None;
+    let mut carry_chains = CarryChains::default();
     // A jump table's entries per key: at least 10% of a run's entries are
     // keys when optimizing for speed and 40% for size, as in LLVM.
     let (table_entries, per_keys) = match clif_module.isa().flags().opt_level() {
@@ -596,6 +599,30 @@ fn translate_function(
 
             match native_inst_set().resolve_inst(inst_data) {
                 _ if i256_op => {}
+                NativeInstKind::Add(_)
+                    if let Some(limb) =
+                        carry_chains.add_limb(function, inst_id, &mut known_bits) =>
+                {
+                    carry_chains.translate_add(
+                        function,
+                        inst_id,
+                        limb,
+                        &mut value_map,
+                        &mut builder,
+                    )?
+                }
+                NativeInstKind::Sub(_)
+                    if let Some(limb) =
+                        carry_chains.sub_limb(function, inst_id, &mut known_bits) =>
+                {
+                    carry_chains.translate_sub(
+                        function,
+                        inst_id,
+                        limb,
+                        &mut value_map,
+                        &mut builder,
+                    )?
+                }
                 NativeInstKind::Add(add) => {
                     let lhs = resolve_value(function, *add.lhs(), &value_map, &mut builder)?;
                     let rhs = resolve_value(function, *add.rhs(), &value_map, &mut builder)?;
@@ -708,6 +735,15 @@ fn translate_function(
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
+                }
+                NativeInstKind::Shr(shr)
+                    if let Some(flag) = carry_chains.shifted_flag(function, shr, &mut builder) =>
+                {
+                    let result = function
+                        .dfg
+                        .inst_result(inst_id)
+                        .ok_or("shr has no result")?;
+                    value_map.insert(result, flag);
                 }
                 NativeInstKind::Shr(shr) => {
                     let val = resolve_value(function, *shr.value(), &value_map, &mut builder)?;

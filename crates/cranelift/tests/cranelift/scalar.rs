@@ -525,6 +525,135 @@ block0:
 }
 
 #[test]
+fn i128_limb_carry_chains_match_ir() {
+    // Three-limb addition and subtraction in Fe's spelling: each limb widens
+    // to i128, adds or subtracts the previous limb's carry (high word) or
+    // borrow (bit 127), and splits. The last sum adds a full limb as its
+    // third term, which is no carry.
+    let source = r#"func public %apply(v0.*[i64; 3], v1.*[i64; 3], v2.*[i64; 10]) {
+block0:
+    v3.[i64; 3] = mload v0 [i64; 3];
+    v4.[i64; 3] = mload v1 [i64; 3];
+    v5.i64 = extract_value v3 0.i256;
+    v6.i64 = extract_value v3 1.i256;
+    v7.i64 = extract_value v3 2.i256;
+    v8.i64 = extract_value v4 0.i256;
+    v9.i64 = extract_value v4 1.i256;
+    v10.i64 = extract_value v4 2.i256;
+    v11.i128 = zext v5 i128;
+    v12.i128 = zext v6 i128;
+    v13.i128 = zext v7 i128;
+    v14.i128 = zext v8 i128;
+    v15.i128 = zext v9 i128;
+    v16.i128 = zext v10 i128;
+    v17.i128 = add v11 v14;
+    v18.i64 = trunc v17 i64;
+    v19.i128 = shr 64.i128 v17;
+    v20.i64 = trunc v19 i64;
+    v21.i128 = add v12 v15;
+    v22.i128 = zext v20 i128;
+    v23.i128 = add v21 v22;
+    v24.i64 = trunc v23 i64;
+    v25.i128 = shr 64.i128 v23;
+    v26.i64 = trunc v25 i64;
+    v27.i128 = zext v26 i128;
+    v28.i128 = add v13 v16;
+    v29.i128 = add v27 v28;
+    v30.i64 = trunc v29 i64;
+    v31.i128 = shr 64.i128 v29;
+    v32.i64 = trunc v31 i64;
+    v33.i128 = sub v11 v14;
+    v34.i64 = trunc v33 i64;
+    v35.i128 = shr 127.i128 v33;
+    v36.i64 = trunc v35 i64;
+    v37.i128 = sub v12 v15;
+    v38.i128 = zext v36 i128;
+    v39.i128 = sub v37 v38;
+    v40.i64 = trunc v39 i64;
+    v41.i128 = shr 127.i128 v39;
+    v42.i64 = trunc v41 i64;
+    v43.i128 = sub v13 v16;
+    v44.i128 = zext v42 i128;
+    v45.i128 = sub v43 v44;
+    v46.i64 = trunc v45 i64;
+    v47.i128 = shr 127.i128 v45;
+    v48.i64 = trunc v47 i64;
+    v49.i128 = add v28 v11;
+    v50.i128 = shr 64.i128 v49;
+    v51.i64 = trunc v50 i64;
+    v52.[i64; 10] = insert_value undef.[i64; 10] 0.i256 v18;
+    v53.[i64; 10] = insert_value v52 1.i256 v24;
+    v54.[i64; 10] = insert_value v53 2.i256 v30;
+    v55.[i64; 10] = insert_value v54 3.i256 v32;
+    v56.[i64; 10] = insert_value v55 4.i256 v34;
+    v57.[i64; 10] = insert_value v56 5.i256 v40;
+    v58.[i64; 10] = insert_value v57 6.i256 v46;
+    v59.[i64; 10] = insert_value v58 7.i256 v48;
+    v60.[i64; 10] = insert_value v59 8.i256 v51;
+    v61.i64 = trunc v49 i64;
+    v62.[i64; 10] = insert_value v60 9.i256 v61;
+    mstore v2 v62 [i64; 10];
+    return;
+}
+"#;
+    let low_words = |words: [u64; 3]| u128::from(words[0]) | (u128::from(words[1]) << 64);
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let apply: unsafe extern "C" fn(*const [u64; 3], *const [u64; 3], *mut [u64; 10]) =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        for (a, b) in [
+            ([0, 0, 0], [0, 0, 0]),
+            ([u64::MAX; 3], [1, 0, 0]),
+            ([u64::MAX; 3], [u64::MAX; 3]),
+            ([0, 0, 0], [1, 0, 0]),
+            ([5, 0, 7], [6, 0, 7]),
+            (
+                [
+                    0x0123_4567_89ab_cdef,
+                    0xfedc_ba98_7654_3210,
+                    0x8000_0000_0000_0001,
+                ],
+                [
+                    0xfedc_ba98_7654_3211,
+                    0x0123_4567_89ab_cdef,
+                    0x8000_0000_0000_0000,
+                ],
+            ),
+        ] {
+            // Two words of each operand, then the third with the carry or
+            // borrow out of the second.
+            let (low_a, low_b) = (low_words(a), low_words(b));
+            let (low_sum, carry) = low_a.overflowing_add(low_b);
+            let top = u128::from(a[2]) + u128::from(b[2]) + u128::from(carry);
+            let (low_difference, borrow) = low_a.overflowing_sub(low_b);
+            let top_difference = i128::from(a[2]) - i128::from(b[2]) - i128::from(borrow);
+            let third_term = u128::from(a[2]) + u128::from(b[2]) + u128::from(a[0]);
+            let expected = [
+                low_sum as u64,
+                (low_sum >> 64) as u64,
+                top as u64,
+                (top >> 64) as u64,
+                low_difference as u64,
+                (low_difference >> 64) as u64,
+                top_difference as u64,
+                u64::from(top_difference < 0),
+                (third_term >> 64) as u64,
+                third_term as u64,
+            ];
+            let mut result = [0; 10];
+            unsafe { apply(&a, &b, &mut result) };
+            assert_eq!(result, expected, "{a:x?} {b:x?} {level:?}");
+        }
+    }
+}
+
+#[test]
 fn freeze_passes_values_through_and_fixes_undef() {
     let source = r#"func public %frozen(v0.i64, v1.*i256, v2.*i256) -> i64 {
 block0:
