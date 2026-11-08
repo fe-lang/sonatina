@@ -266,7 +266,7 @@ fn use_blocks(func: &Function, value: ValueId) -> Vec<BlockId> {
 
 /// Whether `inst` comes before `user` in its block or `inst`'s block
 /// dominates `user`'s.
-fn dominates(func: &Function, dom: &DomTree, inst: InstId, user: InstId) -> bool {
+pub(crate) fn dominates(func: &Function, dom: &DomTree, inst: InstId, user: InstId) -> bool {
     let block = func.layout.inst_block(inst);
     if func.layout.inst_block(user) != block {
         return dom.dominates(block, func.layout.inst_block(user));
