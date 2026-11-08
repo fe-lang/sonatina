@@ -26,16 +26,16 @@ global private const @layout_5 $const_region_0 = {0};
 
 func private %contract_init_root_DepositContract() {
     block0:
-        v97.i256 = evm_call_value;
-        v60.i1 = is_zero v97;
+        v98.i256 = evm_call_value;
+        v60.i1 = is_zero v98;
         br v60 block11 block5;
 
     block5:
         evm_revert 0.i256 0.i256;
 
     block11:
-        v94.i256 = phi (33.i256 block0) (v57 block30);
-        v87.i256 = phi (0.i256 block0) (v85 block30);
+        v94.i256 = phi (v57 block30) (33.i256 block0);
+        v87.i256 = phi (v85 block30) (0.i256 block0);
         v30.i256 = evm_sload v94;
         v34.*i8 = evm_malloc 64.i256;
         v35.i256 = ptr_to_int v34 i256;
@@ -123,20 +123,20 @@ func private %contract_runtime_root_DepositContract() {
 
     block182:
         v254.i1 = phi (0.i1 block181) (1.i1 block146) (1.i1 block183);
-        v2212.*i8 = evm_malloc 32.i256;
-        v2213.i256 = ptr_to_int v2212 i256;
+        v2247.*i8 = evm_malloc 32.i256;
+        v2248.i256 = ptr_to_int v2247 i256;
         br v254 block942 block943;
 
     block942:
-        mstore v2213 1.i256 i256;
+        mstore v2248 1.i256 i256;
         jump block944;
 
     block943:
-        mstore v2213 0.i256 i256;
+        mstore v2248 0.i256 i256;
         jump block944;
 
     block944:
-        evm_return v2213 32.i256;
+        evm_return v2248 32.i256;
 
     block183:
         v252.i1 = eq v238 2237925639.i256;
@@ -217,516 +217,516 @@ func private %contract_runtime_root_DepositContract() {
         v652.i256 = extract_value v651 0.i256;
         v653.i256 = extract_value v651 1.i256;
         v654.i256 = extract_value v651 2.i256;
-        v2229.i1 = eq v338 48.i256;
-        br v2229 block949 block948;
+        v2264.i1 = eq v338 48.i256;
+        br v2264 block949 block948;
 
     block948:
-        v2231.*i8 = evm_malloc 160.i256;
-        v2232.i256 = ptr_to_int v2231 i256;
-        mstore v2232 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
-        v2234.i256 = add v2232 32.i256;
-        mstore v2234 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
-        v2236.i256 = add v2232 64.i256;
-        mstore v2236 1031680938851907703276691398622778079940259496193930592586952336242018.i256 i256;
-        v2239.i256 = add v2232 96.i256;
-        mstore v2239 48576762337393829283129508017289583311657812164410499692937193761974138175488.i256 i256;
-        v2242.i256 = add v2232 128.i256;
-        mstore v2242 0.i256 i256;
-        evm_revert v2232 132.i256;
-
-    block949:
-        v2244.i1 = eq v495 32.i256;
-        br v2244 block951 block950;
-
-    block950:
-        v2245.*i8 = evm_malloc 160.i256;
-        v2246.i256 = ptr_to_int v2245 i256;
-        mstore v2246 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
-        v2247.i256 = add v2246 32.i256;
-        mstore v2247 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
-        v2248.i256 = add v2246 64.i256;
-        mstore v2248 1463040085526317939991363640015092170718453806954579752284610100685172.i256 i256;
-        v2250.i256 = add v2246 96.i256;
-        mstore v2250 47218010385908144003813089253757259093500130473809738114111675728878616182784.i256 i256;
-        v2252.i256 = add v2246 128.i256;
-        mstore v2252 0.i256 i256;
-        evm_revert v2246 132.i256;
-
-    block951:
-        v2254.i1 = eq v653 96.i256;
-        br v2254 block953 block952;
-
-    block952:
-        v2255.*i8 = evm_malloc 160.i256;
-        v2256.i256 = ptr_to_int v2255 i256;
-        mstore v2256 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
-        v2257.i256 = add v2256 32.i256;
-        mstore v2257 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
-        v2258.i256 = add v2256 64.i256;
-        mstore v2258 1112560778853359622660692443883836971961170929461552310030263167183207.i256 i256;
-        v2260.i256 = add v2256 96.i256;
-        mstore v2260 49926601278379996105778806739676673275643568075033057345245384995251781894144.i256 i256;
-        v2262.i256 = add v2256 128.i256;
-        mstore v2262 0.i256 i256;
-        evm_revert v2256 132.i256;
-
-    block953:
-        v2263.i256 = evm_call_value;
-        v2265.i1 = lt v2263 1000000000000000000.i256;
-        br v2265 block954 block955;
-
-    block954:
         v2266.*i8 = evm_malloc 160.i256;
         v2267.i256 = ptr_to_int v2266 i256;
         mstore v2267 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
-        v2268.i256 = add v2267 32.i256;
-        mstore v2268 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
-        v2269.i256 = add v2267 64.i256;
-        mstore v2269 1031680938851907703276691398622778079940259490106690526480247486308716.i256 i256;
-        v2271.i256 = add v2267 96.i256;
-        mstore v2271 53099278832757074173835278800140323080839071743974098709447321471383270064128.i256 i256;
-        v2273.i256 = add v2267 128.i256;
-        mstore v2273 0.i256 i256;
+        v2269.i256 = add v2267 32.i256;
+        mstore v2269 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
+        v2271.i256 = add v2267 64.i256;
+        mstore v2271 1031680938851907703276691398622778079940259496193930592586952336242018.i256 i256;
+        v2274.i256 = add v2267 96.i256;
+        mstore v2274 48576762337393829283129508017289583311657812164410499692937193761974138175488.i256 i256;
+        v2277.i256 = add v2267 128.i256;
+        mstore v2277 0.i256 i256;
         evm_revert v2267 132.i256;
 
+    block949:
+        v2279.i1 = eq v495 32.i256;
+        br v2279 block951 block950;
+
+    block950:
+        v2280.*i8 = evm_malloc 160.i256;
+        v2281.i256 = ptr_to_int v2280 i256;
+        mstore v2281 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
+        v2282.i256 = add v2281 32.i256;
+        mstore v2282 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
+        v2283.i256 = add v2281 64.i256;
+        mstore v2283 1463040085526317939991363640015092170718453806954579752284610100685172.i256 i256;
+        v2285.i256 = add v2281 96.i256;
+        mstore v2285 47218010385908144003813089253757259093500130473809738114111675728878616182784.i256 i256;
+        v2287.i256 = add v2281 128.i256;
+        mstore v2287 0.i256 i256;
+        evm_revert v2281 132.i256;
+
+    block951:
+        v2289.i1 = eq v653 96.i256;
+        br v2289 block953 block952;
+
+    block952:
+        v2290.*i8 = evm_malloc 160.i256;
+        v2291.i256 = ptr_to_int v2290 i256;
+        mstore v2291 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
+        v2292.i256 = add v2291 32.i256;
+        mstore v2292 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
+        v2293.i256 = add v2291 64.i256;
+        mstore v2293 1112560778853359622660692443883836971961170929461552310030263167183207.i256 i256;
+        v2295.i256 = add v2291 96.i256;
+        mstore v2295 49926601278379996105778806739676673275643568075033057345245384995251781894144.i256 i256;
+        v2297.i256 = add v2291 128.i256;
+        mstore v2297 0.i256 i256;
+        evm_revert v2291 132.i256;
+
+    block953:
+        v2298.i256 = evm_call_value;
+        v2300.i1 = lt v2298 1000000000000000000.i256;
+        br v2300 block954 block1020;
+
+    block954:
+        v2301.*i8 = evm_malloc 160.i256;
+        v2302.i256 = ptr_to_int v2301 i256;
+        mstore v2302 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
+        v2303.i256 = add v2302 32.i256;
+        mstore v2303 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
+        v2304.i256 = add v2302 64.i256;
+        mstore v2304 1031680938851907703276691398622778079940259490106690526480247486308716.i256 i256;
+        v2306.i256 = add v2302 96.i256;
+        mstore v2306 53099278832757074173835278800140323080839071743974098709447321471383270064128.i256 i256;
+        v2308.i256 = add v2302 128.i256;
+        mstore v2308 0.i256 i256;
+        evm_revert v2302 132.i256;
+
     block955:
-        v2275.i256 = evm_umod v2263 1000000000.i256;
-        v2276.i1 = is_zero v2275;
-        br v2276 block957 block956;
+        v2312.*i8 = evm_malloc 160.i256;
+        v2313.i256 = ptr_to_int v2312 i256;
+        mstore v2313 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
+        v2314.i256 = add v2313 32.i256;
+        mstore v2314 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
+        v2315.i256 = add v2313 64.i256;
+        mstore v2315 1382160245524866020607362594754033278697542367599717968734594419548524.i256 i256;
+        v2317.i256 = add v2313 96.i256;
+        mstore v2317 53099278670999451058051302811168505420277119914841686327538985755642649640960.i256 i256;
+        v2319.i256 = add v2313 128.i256;
+        mstore v2319 0.i256 i256;
+        evm_revert v2313 132.i256;
 
     block956:
-        v2277.*i8 = evm_malloc 160.i256;
-        v2278.i256 = ptr_to_int v2277 i256;
-        mstore v2278 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
-        v2279.i256 = add v2278 32.i256;
-        mstore v2279 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
-        v2280.i256 = add v2278 64.i256;
-        mstore v2280 1382160245524866020607362594754033278697542367599717968734594419548524.i256 i256;
-        v2282.i256 = add v2278 96.i256;
-        mstore v2282 53099278670999451058051302811168505420277119914841686327538985755642649640960.i256 i256;
-        v2284.i256 = add v2278 128.i256;
-        mstore v2284 0.i256 i256;
-        evm_revert v2278 132.i256;
+        v2323.*i8 = evm_malloc 160.i256;
+        v2324.i256 = ptr_to_int v2323 i256;
+        mstore v2324 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
+        v2325.i256 = add v2324 32.i256;
+        mstore v2325 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
+        v2326.i256 = add v2324 64.i256;
+        mstore v2326 1058640885519058343071358413709797710613896634529231098961351096557932.i256 i256;
+        v2328.i256 = add v2324 96.i256;
+        mstore v2328 53099278832757074148578258702149201104194448644414839292545997318223346794496.i256 i256;
+        v2330.i256 = add v2324 128.i256;
+        mstore v2330 0.i256 i256;
+        evm_revert v2324 132.i256;
 
     block957:
-        v2285.i256 = evm_udiv v2263 1000000000.i256;
-        v2287.i1 = gt v2285 18446744073709551615.i256;
-        br v2287 block958 block959;
+        v2331.i64 = trunc v2320 i64;
+        v2332.*i8 = evm_malloc 64.i256;
+        v2333.i256 = ptr_to_int v2332 i256;
+        v2335.i256 = add v337 32.i256;
+        v2336.i256 = mload v2335 i256;
+        mstore v2333 v2336 i256;
+        (v2337.i256, v2338.i1) = uaddo v2335 32.i256;
+        br v2338 block958 block959;
 
     block958:
-        v2288.*i8 = evm_malloc 160.i256;
-        v2289.i256 = ptr_to_int v2288 i256;
-        mstore v2289 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
-        v2290.i256 = add v2289 32.i256;
-        mstore v2290 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
-        v2291.i256 = add v2289 64.i256;
-        mstore v2291 1058640885519058343071358413709797710613896634529231098961351096557932.i256 i256;
-        v2293.i256 = add v2289 96.i256;
-        mstore v2293 53099278832757074148578258702149201104194448644414839292545997318223346794496.i256 i256;
-        v2295.i256 = add v2289 128.i256;
-        mstore v2295 0.i256 i256;
-        evm_revert v2289 132.i256;
-
-    block959:
-        v2296.i64 = trunc v2285 i64;
-        v2297.*i8 = evm_malloc 64.i256;
-        v2298.i256 = ptr_to_int v2297 i256;
-        v2300.i256 = add v337 32.i256;
-        v2301.i256 = mload v2300 i256;
-        mstore v2298 v2301 i256;
-        (v2302.i256, v2303.i1) = uaddo v2300 32.i256;
-        br v2303 block960 block961;
-
-    block960:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
+    block959:
+        v2339.i256 = mload v2337 i256;
+        v2340.i256 = add v2333 32.i256;
+        v2341.i256 = shr 128.i256 v2339;
+        v2342.i256 = shl 128.i256 v2341;
+        mstore v2340 v2342 i256;
+        v2343.i256 = evm_gas;
+        v2344.i256 = evm_static_call v2343 2.i256 v2333 64.i256 v2333 32.i256;
+        v2345.i1 = is_zero v2344;
+        br v2345 block960 block961;
+
+    block960:
+        evm_revert 0.i256 0.i256;
+
     block961:
-        v2304.i256 = mload v2302 i256;
-        v2305.i256 = add v2298 32.i256;
-        v2306.i256 = shr 128.i256 v2304;
-        v2307.i256 = shl 128.i256 v2306;
-        mstore v2305 v2307 i256;
-        v2308.i256 = evm_gas;
-        v2309.i256 = evm_static_call v2308 2.i256 v2298 64.i256 v2298 32.i256;
-        v2310.i1 = is_zero v2309;
-        br v2310 block962 block963;
+        v2346.i256 = evm_return_data_size;
+        v2347.i1 = lt v2346 32.i256;
+        br v2347 block962 block963;
 
     block962:
         evm_revert 0.i256 0.i256;
 
     block963:
-        v2311.i256 = evm_return_data_size;
-        v2312.i1 = lt v2311 32.i256;
-        br v2312 block964 block965;
+        v2348.i256 = mload v2333 i256;
+        v2350.i256 = add v494 32.i256;
+        v2351.i256 = mload v2350 i256;
+        v2352.i256 = zext v2331 i256;
+        v2353.i256 = and v2352 71777214294589695.i256;
+        v2354.i256 = shl 8.i256 v2353;
+        v2355.i256 = shr 8.i256 v2352;
+        v2356.i256 = and v2355 71777214294589695.i256;
+        v2357.i256 = or v2354 v2356;
+        v2358.i256 = and v2357 281470681808895.i256;
+        v2359.i256 = shl 16.i256 v2358;
+        v2360.i256 = shr 16.i256 v2357;
+        v2361.i256 = and v2360 281470681808895.i256;
+        v2362.i256 = or v2359 v2361;
+        v2363.i256 = shl 32.i256 v2362;
+        v2364.i256 = shr 32.i256 v2362;
+        v2365.i256 = or v2363 v2364;
+        v2366.i256 = shl 192.i256 v2365;
+        v2368.i256 = add v652 32.i256;
+        v2369.*i8 = evm_malloc 64.i256;
+        v2370.i256 = ptr_to_int v2369 i256;
+        v2371.i256 = evm_gas;
+        v2372.i256 = evm_static_call v2371 2.i256 v2368 64.i256 v2370 32.i256;
+        v2373.i1 = is_zero v2372;
+        br v2373 block964 block965;
 
     block964:
         evm_revert 0.i256 0.i256;
 
     block965:
-        v2313.i256 = mload v2298 i256;
-        v2315.i256 = add v494 32.i256;
-        v2316.i256 = mload v2315 i256;
-        v2317.i256 = zext v2296 i256;
-        v2318.i256 = and v2317 71777214294589695.i256;
-        v2319.i256 = shl 8.i256 v2318;
-        v2320.i256 = shr 8.i256 v2317;
-        v2321.i256 = and v2320 71777214294589695.i256;
-        v2322.i256 = or v2319 v2321;
-        v2323.i256 = and v2322 281470681808895.i256;
-        v2324.i256 = shl 16.i256 v2323;
-        v2325.i256 = shr 16.i256 v2322;
-        v2326.i256 = and v2325 281470681808895.i256;
-        v2327.i256 = or v2324 v2326;
-        v2328.i256 = shl 32.i256 v2327;
-        v2329.i256 = shr 32.i256 v2327;
-        v2330.i256 = or v2328 v2329;
-        v2331.i256 = shl 192.i256 v2330;
-        v2333.i256 = add v652 32.i256;
-        v2334.*i8 = evm_malloc 64.i256;
-        v2335.i256 = ptr_to_int v2334 i256;
-        v2336.i256 = evm_gas;
-        v2337.i256 = evm_static_call v2336 2.i256 v2333 64.i256 v2335 32.i256;
-        v2338.i1 = is_zero v2337;
-        br v2338 block966 block967;
+        v2374.i256 = evm_return_data_size;
+        v2375.i1 = lt v2374 32.i256;
+        br v2375 block966 block967;
 
     block966:
         evm_revert 0.i256 0.i256;
 
     block967:
-        v2339.i256 = evm_return_data_size;
-        v2340.i1 = lt v2339 32.i256;
-        br v2340 block968 block969;
+        v2376.i256 = mload v2370 i256;
+        (v2377.i256, v2378.i1) = uaddo v2368 64.i256;
+        br v2378 block968 block969;
 
     block968:
-        evm_revert 0.i256 0.i256;
-
-    block969:
-        v2341.i256 = mload v2335 i256;
-        (v2342.i256, v2343.i1) = uaddo v2333 64.i256;
-        br v2343 block970 block971;
-
-    block970:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
+    block969:
+        v2379.i256 = mload v2377 i256;
+        mstore v2370 v2379 i256;
+        v2380.i256 = add v2370 32.i256;
+        mstore v2380 0.i256 i256;
+        v2381.i256 = evm_gas;
+        v2382.i256 = evm_static_call v2381 2.i256 v2370 64.i256 v2370 32.i256;
+        v2383.i1 = is_zero v2382;
+        br v2383 block970 block971;
+
+    block970:
+        evm_revert 0.i256 0.i256;
+
     block971:
-        v2344.i256 = mload v2342 i256;
-        mstore v2335 v2344 i256;
-        v2345.i256 = add v2335 32.i256;
-        mstore v2345 0.i256 i256;
-        v2346.i256 = evm_gas;
-        v2347.i256 = evm_static_call v2346 2.i256 v2335 64.i256 v2335 32.i256;
-        v2348.i1 = is_zero v2347;
-        br v2348 block972 block973;
+        v2384.i256 = evm_return_data_size;
+        v2385.i1 = lt v2384 32.i256;
+        br v2385 block972 block973;
 
     block972:
         evm_revert 0.i256 0.i256;
 
     block973:
-        v2349.i256 = evm_return_data_size;
-        v2350.i1 = lt v2349 32.i256;
-        br v2350 block974 block975;
+        v2386.i256 = mload v2370 i256;
+        mstore v2370 v2376 i256;
+        mstore v2380 v2386 i256;
+        v2387.i256 = evm_gas;
+        v2388.i256 = evm_static_call v2387 2.i256 v2370 64.i256 v2370 32.i256;
+        v2389.i1 = is_zero v2388;
+        br v2389 block974 block975;
 
     block974:
         evm_revert 0.i256 0.i256;
 
     block975:
-        v2351.i256 = mload v2335 i256;
-        mstore v2335 v2341 i256;
-        mstore v2345 v2351 i256;
-        v2352.i256 = evm_gas;
-        v2353.i256 = evm_static_call v2352 2.i256 v2335 64.i256 v2335 32.i256;
-        v2354.i1 = is_zero v2353;
-        br v2354 block976 block977;
+        v2390.i256 = evm_return_data_size;
+        v2391.i1 = lt v2390 32.i256;
+        br v2391 block976 block977;
 
     block976:
         evm_revert 0.i256 0.i256;
 
     block977:
-        v2355.i256 = evm_return_data_size;
-        v2356.i1 = lt v2355 32.i256;
-        br v2356 block978 block979;
+        v2392.i256 = mload v2370 i256;
+        v2393.*i8 = evm_malloc 64.i256;
+        v2394.i256 = ptr_to_int v2393 i256;
+        mstore v2394 v2348 i256;
+        v2395.i256 = add v2394 32.i256;
+        mstore v2395 v2351 i256;
+        v2396.i256 = evm_gas;
+        v2397.i256 = evm_static_call v2396 2.i256 v2394 64.i256 v2394 32.i256;
+        v2398.i1 = is_zero v2397;
+        br v2398 block978 block979;
 
     block978:
         evm_revert 0.i256 0.i256;
 
     block979:
-        v2357.i256 = mload v2335 i256;
-        v2358.*i8 = evm_malloc 64.i256;
-        v2359.i256 = ptr_to_int v2358 i256;
-        mstore v2359 v2313 i256;
-        v2360.i256 = add v2359 32.i256;
-        mstore v2360 v2316 i256;
-        v2361.i256 = evm_gas;
-        v2362.i256 = evm_static_call v2361 2.i256 v2359 64.i256 v2359 32.i256;
-        v2363.i1 = is_zero v2362;
-        br v2363 block980 block981;
+        v2399.i256 = evm_return_data_size;
+        v2400.i1 = lt v2399 32.i256;
+        br v2400 block980 block981;
 
     block980:
         evm_revert 0.i256 0.i256;
 
     block981:
-        v2364.i256 = evm_return_data_size;
-        v2365.i1 = lt v2364 32.i256;
-        br v2365 block982 block983;
+        v2401.i256 = mload v2394 i256;
+        mstore v2394 v2366 i256;
+        mstore v2395 v2392 i256;
+        v2402.i256 = evm_gas;
+        v2403.i256 = evm_static_call v2402 2.i256 v2394 64.i256 v2394 32.i256;
+        v2404.i1 = is_zero v2403;
+        br v2404 block982 block983;
 
     block982:
         evm_revert 0.i256 0.i256;
 
     block983:
-        v2366.i256 = mload v2359 i256;
-        mstore v2359 v2331 i256;
-        mstore v2360 v2357 i256;
-        v2367.i256 = evm_gas;
-        v2368.i256 = evm_static_call v2367 2.i256 v2359 64.i256 v2359 32.i256;
-        v2369.i1 = is_zero v2368;
-        br v2369 block984 block985;
+        v2405.i256 = evm_return_data_size;
+        v2406.i1 = lt v2405 32.i256;
+        br v2406 block984 block985;
 
     block984:
         evm_revert 0.i256 0.i256;
 
     block985:
-        v2370.i256 = evm_return_data_size;
-        v2371.i1 = lt v2370 32.i256;
-        br v2371 block986 block987;
+        v2407.i256 = mload v2394 i256;
+        mstore v2394 v2401 i256;
+        mstore v2395 v2407 i256;
+        v2408.i256 = evm_gas;
+        v2409.i256 = evm_static_call v2408 2.i256 v2394 64.i256 v2394 32.i256;
+        v2410.i1 = is_zero v2409;
+        br v2410 block986 block987;
 
     block986:
         evm_revert 0.i256 0.i256;
 
     block987:
-        v2372.i256 = mload v2359 i256;
-        mstore v2359 v2366 i256;
-        mstore v2360 v2372 i256;
-        v2373.i256 = evm_gas;
-        v2374.i256 = evm_static_call v2373 2.i256 v2359 64.i256 v2359 32.i256;
-        v2375.i1 = is_zero v2374;
-        br v2375 block988 block989;
+        v2411.i256 = evm_return_data_size;
+        v2412.i1 = lt v2411 32.i256;
+        br v2412 block988 block989;
 
     block988:
         evm_revert 0.i256 0.i256;
 
     block989:
-        v2376.i256 = evm_return_data_size;
-        v2377.i1 = lt v2376 32.i256;
-        br v2377 block990 block991;
+        v2413.i256 = mload v2394 i256;
+        v933.i256 = evm_calldata_load 100.i256;
+        v2415.i1 = eq v2413 v933;
+        br v2415 block991 block990;
 
     block990:
-        evm_revert 0.i256 0.i256;
+        v2416.*i8 = evm_malloc 192.i256;
+        v2417.i256 = ptr_to_int v2416 i256;
+        mstore v2417 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
+        v2418.i256 = add v2417 32.i256;
+        mstore v2418 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
+        v2419.i256 = add v2417 64.i256;
+        mstore v2419 2271838485540837133831374092625681090927568150468278526146485387879284.i256 i256;
+        v2421.i256 = add v2417 96.i256;
+        mstore v2421 45860505113230009003653384507463286088227873891696224869644101506549401285493.i256 i256;
+        v2423.i256 = add v2417 128.i256;
+        mstore v2423 50857674142658599099104034450484956899680155407165510152240236734701237174272.i256 i256;
+        v2425.i256 = add v2417 160.i256;
+        mstore v2425 0.i256 i256;
+        evm_revert v2417 164.i256;
 
     block991:
-        v2378.i256 = mload v2359 i256;
-        v933.i256 = evm_calldata_load 100.i256;
-        v2380.i1 = eq v2378 v933;
-        br v2380 block993 block992;
+        v2427.*i8 = evm_malloc 64.i256;
+        v2428.i256 = ptr_to_int v2427 i256;
+        mstore v2428 8.i256 i256;
+        v2429.i256 = add v2428 32.i256;
+        mstore v2429 v2366 i256;
+        v2435.i256 = evm_sload 32.i256;
+        v2436.i64 = trunc v2435 i64;
+        v2437.*i8 = evm_malloc 64.i256;
+        v2438.i256 = ptr_to_int v2437 i256;
+        mstore v2438 8.i256 i256;
+        v2439.i256 = add v2438 32.i256;
+        v2440.i256 = zext v2436 i256;
+        v2441.i256 = and v2440 71777214294589695.i256;
+        v2442.i256 = shl 8.i256 v2441;
+        v2443.i256 = shr 8.i256 v2440;
+        v2444.i256 = and v2443 71777214294589695.i256;
+        v2445.i256 = or v2442 v2444;
+        v2446.i256 = and v2445 281470681808895.i256;
+        v2447.i256 = shl 16.i256 v2446;
+        v2448.i256 = shr 16.i256 v2445;
+        v2449.i256 = and v2448 281470681808895.i256;
+        v2450.i256 = or v2447 v2449;
+        v2451.i256 = shl 32.i256 v2450;
+        v2452.i256 = shr 32.i256 v2450;
+        v2453.i256 = or v2451 v2452;
+        v2454.i256 = shl 192.i256 v2453;
+        mstore v2439 v2454 i256;
+        v2471.i256 = add 160.i256 v340;
+        v2473.i256 = add v2471 v496;
+        v2475.i256 = add v2473 64.i256;
+        v2477.i256 = add v2475 v654;
+        v2479.i256 = add v2477 64.i256;
+        v2480.*i8 = evm_malloc v2479;
+        v2481.i256 = ptr_to_int v2480 i256;
+        v2482.i256 = add v2481 160.i256;
+        mstore v2481 160.i256 i256;
+        v2492.i1 = is_zero v337;
+        br v2492 block994 block995;
 
-    block992:
-        v2381.*i8 = evm_malloc 192.i256;
-        v2382.i256 = ptr_to_int v2381 i256;
-        mstore v2382 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
-        v2383.i256 = add v2382 32.i256;
-        mstore v2383 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
-        v2384.i256 = add v2382 64.i256;
-        mstore v2384 2271838485540837133831374092625681090927568150468278526146485387879284.i256 i256;
-        v2386.i256 = add v2382 96.i256;
-        mstore v2386 45860505113230009003653384507463286088227873891696224869644101506549401285493.i256 i256;
-        v2388.i256 = add v2382 128.i256;
-        mstore v2388 50857674142658599099104034450484956899680155407165510152240236734701237174272.i256 i256;
-        v2390.i256 = add v2382 160.i256;
-        mstore v2390 0.i256 i256;
-        evm_revert v2382 164.i256;
+    block994:
+        mstore v2482 v338 i256;
+        jump block996;
 
-    block993:
-        v2392.*i8 = evm_malloc 64.i256;
-        v2393.i256 = ptr_to_int v2392 i256;
-        mstore v2393 8.i256 i256;
-        v2394.i256 = add v2393 32.i256;
-        mstore v2394 v2331 i256;
-        v2400.i256 = evm_sload 32.i256;
-        v2401.i64 = trunc v2400 i64;
-        v2402.*i8 = evm_malloc 64.i256;
-        v2403.i256 = ptr_to_int v2402 i256;
-        mstore v2403 8.i256 i256;
-        v2404.i256 = add v2403 32.i256;
-        v2405.i256 = zext v2401 i256;
-        v2406.i256 = and v2405 71777214294589695.i256;
-        v2407.i256 = shl 8.i256 v2406;
-        v2408.i256 = shr 8.i256 v2405;
-        v2409.i256 = and v2408 71777214294589695.i256;
-        v2410.i256 = or v2407 v2409;
-        v2411.i256 = and v2410 281470681808895.i256;
-        v2412.i256 = shl 16.i256 v2411;
-        v2413.i256 = shr 16.i256 v2410;
-        v2414.i256 = and v2413 281470681808895.i256;
-        v2415.i256 = or v2412 v2414;
-        v2416.i256 = shl 32.i256 v2415;
-        v2417.i256 = shr 32.i256 v2415;
-        v2418.i256 = or v2416 v2417;
-        v2419.i256 = shl 192.i256 v2418;
-        mstore v2404 v2419 i256;
-        v2436.i256 = add 160.i256 v340;
-        v2438.i256 = add v2436 v496;
-        v2440.i256 = add v2438 64.i256;
-        v2442.i256 = add v2440 v654;
-        v2444.i256 = add v2442 64.i256;
-        v2445.*i8 = evm_malloc v2444;
-        v2446.i256 = ptr_to_int v2445 i256;
-        v2447.i256 = add v2446 160.i256;
-        mstore v2446 160.i256 i256;
-        v2457.i1 = is_zero v337;
-        br v2457 block996 block997;
+    block995:
+        evm_mcopy v2482 v337 v340;
+        jump block996;
 
     block996:
-        mstore v2447 v338 i256;
-        jump block998;
-
-    block997:
-        evm_mcopy v2447 v337 v340;
-        jump block998;
+        v2500.i256 = add v2482 v340;
+        v2502.i256 = sub v2500 v2481;
+        v2483.i256 = add v2481 32.i256;
+        mstore v2483 v2502 i256;
+        v2507.i1 = is_zero v494;
+        br v2507 block998 block999;
 
     block998:
-        v2465.i256 = add v2447 v340;
-        v2467.i256 = sub v2465 v2446;
-        v2448.i256 = add v2446 32.i256;
-        mstore v2448 v2467 i256;
-        v2472.i1 = is_zero v494;
-        br v2472 block1000 block1001;
+        mstore v2500 v495 i256;
+        jump block1000;
+
+    block999:
+        evm_mcopy v2500 v494 v496;
+        jump block1000;
 
     block1000:
-        mstore v2465 v495 i256;
-        jump block1002;
-
-    block1001:
-        evm_mcopy v2465 v494 v496;
-        jump block1002;
+        v2515.i256 = add v2500 v496;
+        v2517.i256 = sub v2515 v2481;
+        v2484.i256 = add v2483 32.i256;
+        mstore v2484 v2517 i256;
+        v2522.i1 = is_zero v2428;
+        br v2522 block1002 block1003;
 
     block1002:
-        v2480.i256 = add v2465 v496;
-        v2482.i256 = sub v2480 v2446;
-        v2449.i256 = add v2448 32.i256;
-        mstore v2449 v2482 i256;
-        v2487.i1 = is_zero v2393;
-        br v2487 block1004 block1005;
+        mstore v2515 8.i256 i256;
+        jump block1004;
+
+    block1003:
+        evm_mcopy v2515 v2428 64.i256;
+        jump block1004;
 
     block1004:
-        mstore v2480 8.i256 i256;
-        jump block1006;
-
-    block1005:
-        evm_mcopy v2480 v2393 64.i256;
-        jump block1006;
+        v2530.i256 = add v2515 64.i256;
+        v2532.i256 = sub v2530 v2481;
+        v2485.i256 = add v2484 32.i256;
+        mstore v2485 v2532 i256;
+        v2537.i1 = is_zero v652;
+        br v2537 block1006 block1007;
 
     block1006:
-        v2495.i256 = add v2480 64.i256;
-        v2497.i256 = sub v2495 v2446;
-        v2450.i256 = add v2449 32.i256;
-        mstore v2450 v2497 i256;
-        v2502.i1 = is_zero v652;
-        br v2502 block1008 block1009;
+        mstore v2530 v653 i256;
+        jump block1008;
+
+    block1007:
+        evm_mcopy v2530 v652 v654;
+        jump block1008;
 
     block1008:
-        mstore v2495 v653 i256;
-        jump block1010;
-
-    block1009:
-        evm_mcopy v2495 v652 v654;
-        jump block1010;
+        v2545.i256 = add v2530 v654;
+        v2546.i256 = sub v2545 v2481;
+        v2486.i256 = add v2485 32.i256;
+        mstore v2486 v2546 i256;
+        v2551.i1 = is_zero v2438;
+        br v2551 block1010 block1011;
 
     block1010:
-        v2510.i256 = add v2495 v654;
-        v2511.i256 = sub v2510 v2446;
-        v2451.i256 = add v2450 32.i256;
-        mstore v2451 v2511 i256;
-        v2516.i1 = is_zero v2403;
-        br v2516 block1012 block1013;
+        mstore v2545 8.i256 i256;
+        jump block1012;
+
+    block1011:
+        evm_mcopy v2545 v2438 64.i256;
+        jump block1012;
 
     block1012:
-        mstore v2510 8.i256 i256;
-        jump block1014;
-
-    block1013:
-        evm_mcopy v2510 v2403 64.i256;
-        jump block1014;
+        evm_log1 v2481 v2479 45506446345753628416285423056165511379837572639148407563471291220684748896453.i256;
+        v2561.i1 = lt v2435 4294967295.i256;
+        br v2561 block1015 block1014;
 
     block1014:
-        evm_log1 v2446 v2444 45506446345753628416285423056165511379837572639148407563471291220684748896453.i256;
-        v2526.i1 = lt v2400 4294967295.i256;
-        br v2526 block1017 block1016;
+        v2562.*i8 = evm_malloc 160.i256;
+        v2563.i256 = ptr_to_int v2562 i256;
+        mstore v2563 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
+        v2564.i256 = add v2563 32.i256;
+        mstore v2564 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
+        v2565.i256 = add v2563 64.i256;
+        mstore v2565 896881205516154504303356323187679926572073778874356643889081023096165.i256 i256;
+        v2567.i256 = add v2563 96.i256;
+        mstore v2567 14655039982642461678000273325010428970207607663688395511528687823510665428992.i256 i256;
+        v2569.i256 = add v2563 128.i256;
+        mstore v2569 0.i256 i256;
+        evm_revert v2563 132.i256;
 
-    block1016:
-        v2527.*i8 = evm_malloc 160.i256;
-        v2528.i256 = ptr_to_int v2527 i256;
-        mstore v2528 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256 i256;
-        v2529.i256 = add v2528 32.i256;
-        mstore v2529 862718293348820473429344482784628181556388621521298319395315527974912.i256 i256;
-        v2530.i256 = add v2528 64.i256;
-        mstore v2530 896881205516154504303356323187679926572073778874356643889081023096165.i256 i256;
-        v2532.i256 = add v2528 96.i256;
-        mstore v2532 14655039982642461678000273325010428970207607663688395511528687823510665428992.i256 i256;
-        v2534.i256 = add v2528 128.i256;
-        mstore v2534 0.i256 i256;
-        evm_revert v2528 132.i256;
-
-    block1017:
-        v2535.i256 = add v2400 1.i256;
-        evm_sstore 32.i256 v2535;
-        v2692.i256 = and v2535 1.i256;
-        v2694.i1 = eq v2692 1.i256;
-        br v2694 block1019 block1020;
+    block1015:
+        v2570.i256 = add v2435 1.i256;
+        evm_sstore 32.i256 v2570;
+        v2728.i256 = and v2570 1.i256;
+        v2730.i1 = eq v2728 1.i256;
+        br v2730 block1017 block1018;
 
     block1061:
-        v2693.i256 = and v2556 1.i256;
-        v2695.i1 = eq v2693 1.i256;
-        br v2695 block1019 block1020;
+        v2729.i256 = and v2591 1.i256;
+        v2731.i1 = eq v2729 1.i256;
+        br v2731 block1017 block1018;
 
-    block1019:
-        v2697.i256 = phi (v2378 block1017) (v2555 block1061);
-        v2696.i256 = phi (0.i256 block1017) (v2557 block1061);
-        evm_sstore v2696 v2697;
+    block1017:
+        v2733.i256 = phi (v2413 block1015) (v2590 block1061);
+        v2732.i256 = phi (0.i256 block1015) (v2592 block1061);
+        evm_sstore v2732 v2733;
         evm_return 0.i256 0.i256;
 
+    block1018:
+        v2727.i256 = phi (v2413 block1015) (v2590 block1061);
+        v2726.i256 = phi (v2570 block1015) (v2591 block1061);
+        v2725.i256 = phi (0.i256 block1015) (v2592 block1061);
+        v2581.i256 = evm_sload v2725;
+        v2582.*i8 = evm_malloc 64.i256;
+        v2583.i256 = ptr_to_int v2582 i256;
+        mstore v2583 v2581 i256;
+        v2584.i256 = add v2583 32.i256;
+        mstore v2584 v2727 i256;
+        v2585.i256 = evm_gas;
+        v2586.i256 = evm_static_call v2585 2.i256 v2583 64.i256 v2583 32.i256;
+        v2587.i1 = is_zero v2586;
+        br v2587 block1022 block1023;
+
+    block1019:
+        v2594.*i8 = evm_malloc 64.i256;
+        v2595.i256 = ptr_to_int v2594 i256;
+        mstore v2595 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        v2596.i256 = add v2595 32.i256;
+        mstore v2596 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
+        evm_revert v2595 36.i256;
+
     block1020:
-        v2691.i256 = phi (v2378 block1017) (v2555 block1061);
-        v2690.i256 = phi (v2535 block1017) (v2556 block1061);
-        v2689.i256 = phi (0.i256 block1017) (v2557 block1061);
-        v2546.i256 = evm_sload v2689;
-        v2547.*i8 = evm_malloc 64.i256;
-        v2548.i256 = ptr_to_int v2547 i256;
-        mstore v2548 v2546 i256;
-        v2549.i256 = add v2548 32.i256;
-        mstore v2549 v2691 i256;
-        v2550.i256 = evm_gas;
-        v2551.i256 = evm_static_call v2550 2.i256 v2548 64.i256 v2548 32.i256;
-        v2552.i1 = is_zero v2551;
-        br v2552 block1022 block1023;
+        v2310.i256 = evm_umod v2298 1000000000.i256;
+        v2311.i1 = is_zero v2310;
+        br v2311 block1021 block955;
 
     block1021:
-        v2559.*i8 = evm_malloc 64.i256;
-        v2560.i256 = ptr_to_int v2559 i256;
-        mstore v2560 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        v2561.i256 = add v2560 32.i256;
-        mstore v2561 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-        evm_revert v2560 36.i256;
+        v2320.i256 = evm_udiv v2298 1000000000.i256;
+        v2322.i1 = gt v2320 18446744073709551615.i256;
+        br v2322 block956 block957;
 
     block1022:
         evm_revert 0.i256 0.i256;
 
     block1023:
-        v2553.i256 = evm_return_data_size;
-        v2554.i1 = lt v2553 32.i256;
-        br v2554 block1024 block1025;
+        v2588.i256 = evm_return_data_size;
+        v2589.i1 = lt v2588 32.i256;
+        br v2589 block1024 block1025;
 
     block1024:
         evm_revert 0.i256 0.i256;
 
     block1025:
-        v2555.i256 = mload v2548 i256;
-        v2556.i256 = shr 1.i256 v2690;
-        v2557.i256 = add v2689 1.i256;
-        v2558.i1 = lt v2557 32.i256;
-        br v2558 block1061 block1021;
+        v2590.i256 = mload v2583 i256;
+        v2591.i256 = shr 1.i256 v2726;
+        v2592.i256 = add v2725 1.i256;
+        v2593.i1 = lt v2592 32.i256;
+        br v2593 block1061 block1019;
 
     block641:
         v968.i256 = evm_call_value;
@@ -746,12 +746,12 @@ func private %contract_runtime_root_DepositContract() {
 
     block924:
         v1005.i256 = evm_sload 32.i256;
-        v2563.i64 = trunc v1005 i64;
+        v2598.i64 = trunc v1005 i64;
         v1009.*i8 = evm_malloc 64.i256;
         v1010.i256 = ptr_to_int v1009 i256;
         mstore v1010 8.i256 i256;
         v2207.i256 = add v1010 32.i256;
-        v1022.i256 = zext v2563 i256;
+        v1022.i256 = zext v2598 i256;
         v1024.i256 = and v1022 71777214294589695.i256;
         v1025.i256 = shl 8.i256 v1024;
         v1026.i256 = shr 8.i256 v1022;
@@ -767,23 +767,23 @@ func private %contract_runtime_root_DepositContract() {
         v1040.i256 = or v1038 v1039;
         v1042.i256 = shl 192.i256 v1040;
         mstore v2207 v1042 i256;
-        v2568.*i8 = evm_malloc 96.i256;
-        v2569.i256 = ptr_to_int v2568 i256;
-        v2575.i256 = add v2569 32.i256;
-        mstore v2569 32.i256 i256;
-        v2579.i1 = is_zero v1010;
-        br v2579 block1033 block1034;
+        v2603.*i8 = evm_malloc 96.i256;
+        v2604.i256 = ptr_to_int v2603 i256;
+        v2610.i256 = add v2604 32.i256;
+        mstore v2604 32.i256 i256;
+        v2614.i1 = is_zero v1010;
+        br v2614 block1033 block1034;
 
     block1033:
-        mstore v2575 8.i256 i256;
+        mstore v2610 8.i256 i256;
         jump block1035;
 
     block1034:
-        evm_mcopy v2575 v1010 64.i256;
+        evm_mcopy v2610 v1010 64.i256;
         jump block1035;
 
     block1035:
-        evm_return v2569 96.i256;
+        evm_return v2604 96.i256;
 
     block691:
         v1050.i256 = evm_call_value;
@@ -802,123 +802,123 @@ func private %contract_runtime_root_DepositContract() {
         evm_revert 0.i256 0.i256;
 
     block1037:
-        v2591.i256 = evm_sload 32.i256;
+        v2626.i256 = evm_sload 32.i256;
         jump block1039;
 
     block1039:
-        v2601.i256 = phi (v2632 block1047) (0.i256 block1037);
-        v2603.i256 = phi (v2633 block1047) (v2591 block1037);
-        v2605.i256 = phi (v2634 block1047) (0.i256 block1037);
-        v2606.i256 = and v2603 1.i256;
-        v2607.i1 = eq v2606 1.i256;
-        br v2607 block1045 block1046;
+        v2636.i256 = phi (v2667 block1058) (0.i256 block1037);
+        v2638.i256 = phi (v2668 block1058) (v2626 block1037);
+        v2640.i256 = phi (v2669 block1058) (0.i256 block1037);
+        v2641.i256 = and v2638 1.i256;
+        v2642.i1 = eq v2641 1.i256;
+        br v2642 block1045 block1046;
 
     block1040:
-        v2637.i64 = trunc v2591 i64;
-        v2638.i256 = zext v2637 i256;
-        v2639.i256 = and v2638 71777214294589695.i256;
-        v2640.i256 = shl 8.i256 v2639;
-        v2641.i256 = shr 8.i256 v2638;
-        v2642.i256 = and v2641 71777214294589695.i256;
-        v2643.i256 = or v2640 v2642;
-        v2644.i256 = and v2643 281470681808895.i256;
-        v2645.i256 = shl 16.i256 v2644;
-        v2646.i256 = shr 16.i256 v2643;
-        v2647.i256 = and v2646 281470681808895.i256;
-        v2648.i256 = or v2645 v2647;
-        v2649.i256 = shl 32.i256 v2648;
-        v2650.i256 = shr 32.i256 v2648;
-        v2651.i256 = or v2649 v2650;
-        v2652.i256 = shl 192.i256 v2651;
-        v2653.*i8 = evm_malloc 64.i256;
-        v2654.i256 = ptr_to_int v2653 i256;
-        mstore v2654 v2632 i256;
-        v2655.i256 = add v2654 32.i256;
-        mstore v2655 v2652 i256;
-        v2656.i256 = evm_gas;
-        v2657.i256 = evm_static_call v2656 2.i256 v2654 64.i256 v2654 32.i256;
-        v2658.i1 = is_zero v2657;
-        br v2658 block1041 block1042;
+        v2672.i64 = trunc v2626 i64;
+        v2673.i256 = zext v2672 i256;
+        v2674.i256 = and v2673 71777214294589695.i256;
+        v2675.i256 = shl 8.i256 v2674;
+        v2676.i256 = shr 8.i256 v2673;
+        v2677.i256 = and v2676 71777214294589695.i256;
+        v2678.i256 = or v2675 v2677;
+        v2679.i256 = and v2678 281470681808895.i256;
+        v2680.i256 = shl 16.i256 v2679;
+        v2681.i256 = shr 16.i256 v2678;
+        v2682.i256 = and v2681 281470681808895.i256;
+        v2683.i256 = or v2680 v2682;
+        v2684.i256 = shl 32.i256 v2683;
+        v2685.i256 = shr 32.i256 v2683;
+        v2686.i256 = or v2684 v2685;
+        v2687.i256 = shl 192.i256 v2686;
+        v2688.*i8 = evm_malloc 64.i256;
+        v2689.i256 = ptr_to_int v2688 i256;
+        mstore v2689 v2667 i256;
+        v2690.i256 = add v2689 32.i256;
+        mstore v2690 v2687 i256;
+        v2691.i256 = evm_gas;
+        v2692.i256 = evm_static_call v2691 2.i256 v2689 64.i256 v2689 32.i256;
+        v2693.i1 = is_zero v2692;
+        br v2693 block1041 block1042;
 
     block1041:
         evm_revert 0.i256 0.i256;
 
     block1042:
-        v2659.i256 = evm_return_data_size;
-        v2660.i1 = lt v2659 32.i256;
-        br v2660 block1043 block1044;
+        v2694.i256 = evm_return_data_size;
+        v2695.i1 = lt v2694 32.i256;
+        br v2695 block1043 block1044;
 
     block1043:
         evm_revert 0.i256 0.i256;
 
     block1044:
-        v2661.i256 = mload v2654 i256;
-        v2663.*i8 = evm_malloc 32.i256;
-        v2664.i256 = ptr_to_int v2663 i256;
-        mstore v2664 v2661 i256;
-        evm_return v2664 32.i256;
+        v2696.i256 = mload v2689 i256;
+        v2698.*i8 = evm_malloc 32.i256;
+        v2699.i256 = ptr_to_int v2698 i256;
+        mstore v2699 v2696 i256;
+        evm_return v2699 32.i256;
 
     block1045:
-        v2610.i256 = evm_sload v2605;
-        v2611.*i8 = evm_malloc 64.i256;
-        v2612.i256 = ptr_to_int v2611 i256;
-        mstore v2612 v2610 i256;
-        v2613.i256 = add v2612 32.i256;
-        mstore v2613 v2601 i256;
-        v2614.i256 = evm_gas;
-        v2615.i256 = evm_static_call v2614 2.i256 v2612 64.i256 v2612 32.i256;
-        v2616.i1 = is_zero v2615;
-        br v2616 block1050 block1051;
+        v2645.i256 = evm_sload v2640;
+        v2646.*i8 = evm_malloc 64.i256;
+        v2647.i256 = ptr_to_int v2646 i256;
+        mstore v2647 v2645 i256;
+        v2648.i256 = add v2647 32.i256;
+        mstore v2648 v2636 i256;
+        v2649.i256 = evm_gas;
+        v2650.i256 = evm_static_call v2649 2.i256 v2647 64.i256 v2647 32.i256;
+        v2651.i1 = is_zero v2650;
+        br v2651 block1049 block1050;
 
     block1046:
-        v2621.i256 = add 33.i256 v2605;
-        v2622.i256 = evm_sload v2621;
-        v2623.*i8 = evm_malloc 64.i256;
-        v2624.i256 = ptr_to_int v2623 i256;
-        mstore v2624 v2601 i256;
-        v2625.i256 = add v2624 32.i256;
-        mstore v2625 v2622 i256;
-        v2626.i256 = evm_gas;
-        v2627.i256 = evm_static_call v2626 2.i256 v2624 64.i256 v2624 32.i256;
-        v2628.i1 = is_zero v2627;
-        br v2628 block1055 block1056;
+        v2656.i256 = add 33.i256 v2640;
+        v2657.i256 = evm_sload v2656;
+        v2658.*i8 = evm_malloc 64.i256;
+        v2659.i256 = ptr_to_int v2658 i256;
+        mstore v2659 v2636 i256;
+        v2660.i256 = add v2659 32.i256;
+        mstore v2660 v2657 i256;
+        v2661.i256 = evm_gas;
+        v2662.i256 = evm_static_call v2661 2.i256 v2659 64.i256 v2659 32.i256;
+        v2663.i1 = is_zero v2662;
+        br v2663 block1054 block1055;
 
-    block1047:
-        v2632.i256 = phi (v2619 block1053) (v2631 block1058);
-        v2633.i256 = shr 1.i256 v2603;
-        v2634.i256 = add v2605 1.i256;
-        v2635.i1 = lt v2634 32.i256;
-        br v2635 block1039 block1040;
+    block1049:
+        evm_revert 0.i256 0.i256;
 
     block1050:
-        evm_revert 0.i256 0.i256;
+        v2652.i256 = evm_return_data_size;
+        v2653.i1 = lt v2652 32.i256;
+        br v2653 block1051 block1052;
 
     block1051:
-        v2617.i256 = evm_return_data_size;
-        v2618.i1 = lt v2617 32.i256;
-        br v2618 block1052 block1053;
+        evm_revert 0.i256 0.i256;
 
     block1052:
-        evm_revert 0.i256 0.i256;
+        v2654.i256 = mload v2647 i256;
+        jump block1058;
 
-    block1053:
-        v2619.i256 = mload v2612 i256;
-        jump block1047;
+    block1054:
+        evm_revert 0.i256 0.i256;
 
     block1055:
-        evm_revert 0.i256 0.i256;
+        v2664.i256 = evm_return_data_size;
+        v2665.i1 = lt v2664 32.i256;
+        br v2665 block1056 block1057;
 
     block1056:
-        v2629.i256 = evm_return_data_size;
-        v2630.i1 = lt v2629 32.i256;
-        br v2630 block1057 block1058;
-
-    block1057:
         evm_revert 0.i256 0.i256;
 
+    block1057:
+        v2666.i256 = mload v2659 i256;
+        jump block1058;
+
     block1058:
-        v2631.i256 = mload v2624 i256;
-        jump block1047;
+        v2667.i256 = phi (v2654 block1052) (v2666 block1057);
+        v2668.i256 = shr 1.i256 v2638;
+        v2669.i256 = add v2640 1.i256;
+        v2670.i1 = lt v2669 32.i256;
+        br v2670 block1039 block1040;
 }
 
 func private %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7(v0.@layout_5, v1.i256, v2.i256) -> @layout_7 {

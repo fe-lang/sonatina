@@ -316,8 +316,8 @@ contract_runtime_root_DepositContract:
     PUSH8 0xde0b6b3a7640000 (1000000000000000000)  // v176.i256 = lt v174 1000000000000000000.i256;
     DUP2
     LT
-    ISZERO  // br v176 block35 block36;
-    PUSH1 block36
+    ISZERO  // br v176 block35 block98;
+    PUSH1 block98
     JUMPI
   block35:
     PUSH10 0x756520746f6f206c6f77 (554382338263822742876023)  // evm_mstore 352.i256 53099278832757074173835278800140323080839071743974098709447321471383270064128.i256;
@@ -326,20 +326,20 @@ contract_runtime_root_DepositContract:
     PUSH29 0x264465706f736974436f6e74726163743a206465706f7369742076616c (1031680938851907703276691398622778079940259490106690526480247486308716)  // evm_mstore 320.i256 1031680938851907703276691398622778079940259490106690526480247486308716.i256;
     PUSH0 __evm_shared_tail_2
     JUMP
-  block36:
+  block98:
     JUMPDEST
     PUSH4 0x3b9aca00 (1000000000)  // v184.i256 = evm_umod v174 1000000000.i256;
     DUP2
     MOD
-    ISZERO  // br v184 block37 block38;
-    PUSH1 block38
+    ISZERO  // br v184 block36 block99;
+    PUSH1 block99
     JUMPI
-  block37:
+  block36:
     PUSH32 0x7565206e6f74206d756c7469706c65206f662067776569000000000000000000 (53099278670999451058051302811168505420277119914841686327538985755642649640960)  // evm_mstore 352.i256 53099278670999451058051302811168505420277119914841686327538985755642649640960.i256;
     PUSH29 0x334465706f736974436f6e74726163743a206465706f7369742076616c (1382160245524866020607362594754033278697542367599717968734594419548524)  // evm_mstore 320.i256 1382160245524866020607362594754033278697542367599717968734594419548524.i256;
     PUSH0 __evm_shared_tail_2
     JUMP
-  block38:
+  block99:
     JUMPDEST
     PUSH4 0x3b9aca00 (1000000000)  // v192.i256 = evm_udiv v174 1000000000.i256;
     SWAP1
@@ -350,17 +350,17 @@ contract_runtime_root_DepositContract:
     SHR
     DUP2
     GT
-    ISZERO  // br v193 block39 block40;
-    PUSH1 block40
+    ISZERO  // br v193 block37 block38;
+    PUSH1 block38
     JUMPI
-  block39:
+  block37:
     PUSH11 0xeaca40e8dede40d0d2ced (17740234824442327763594477)  // evm_mstore 352.i256 53099278832757074148578258702149201104194448644414839292545997318223346794496.i256;
     PUSH1 0xab (171)
     SHL
     PUSH29 0x274465706f736974436f6e74726163743a206465706f7369742076616c (1058640885519058343071358413709797710613896634529231098961351096557932)  // evm_mstore 320.i256 1058640885519058343071358413709797710613896634529231098961351096557932.i256;
     PUSH0 __evm_shared_tail_2
     JUMP
-  block40:
+  block38:
     JUMPDEST
     PUSH1 0x20 (32)  // v200.i256 = add v133 32.i256;
     DUP9
@@ -375,9 +375,9 @@ contract_runtime_root_DepositContract:
     SWAP1  // v203.i256 = lt v202 v200;
     DUP2
     LT
-    PUSH1 __evm_shared_tail_1  // br v203 block41 block42;
+    PUSH1 __evm_shared_tail_1  // br v203 block39 block40;
     JUMPI
-  block42:
+  block40:
     MLOAD  // v204.i256 = evm_mload v202;
     PUSH1 0x80 (128)  // v206.i256 = shr 128.i256 v204;
     SHR
@@ -394,17 +394,17 @@ contract_runtime_root_DepositContract:
     SWAP5
     STATICCALL
     ISZERO
-    PUSH1 __evm_shared_tail_0  // br v209 block44 block43;
+    PUSH1 __evm_shared_tail_0  // br v209 block42 block41;
     JUMPI
-  block44:
+  block42:
     JUMPDEST
     RETURNDATASIZE  // v211.i256 = evm_return_data_size;
     PUSH1 0x20 (32)  // v212.i256 = lt v211 32.i256;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v212 block45 block46;
+    PUSH1 __evm_shared_tail_0  // br v212 block43 block44;
     JUMPI
-  block46:
+  block44:
     PUSH2 0x100 (256)  // v213.i256 = evm_mload 256.i256;
     MLOAD
     PUSH1 0x20 (32)  // v214.i256 = add v139 32.i256;
@@ -456,16 +456,16 @@ contract_runtime_root_DepositContract:
     SWAP5
     STATICCALL
     ISZERO
-    PUSH1 __evm_shared_tail_0  // br v233 block48 block47;
+    PUSH1 __evm_shared_tail_0  // br v233 block46 block45;
     JUMPI
-  block48:
+  block46:
     RETURNDATASIZE  // v235.i256 = evm_return_data_size;
     PUSH1 0x20 (32)  // v236.i256 = lt v235 32.i256;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v236 block49 block50;
+    PUSH1 __evm_shared_tail_0  // br v236 block47 block48;
     JUMPI
-  block50:
+  block48:
     PUSH2 0x140 (320)  // v237.i256 = evm_mload 320.i256;
     MLOAD
     PUSH1 0x40 (64)  // v238.i256 = add v230 64.i256;
@@ -474,9 +474,9 @@ contract_runtime_root_DepositContract:
     SWAP2  // v239.i256 = lt v238 v230;
     DUP3
     LT
-    PUSH1 __evm_shared_tail_1  // br v239 block51 block52;
+    PUSH1 __evm_shared_tail_1  // br v239 block49 block50;
     JUMPI
-  block52:
+  block50:
     SWAP1  // v240.i256 = evm_mload v238;
     MLOAD
     PUSH2 0x140 (320)  // evm_mstore 320.i256 v240;
@@ -493,16 +493,16 @@ contract_runtime_root_DepositContract:
     SWAP5
     STATICCALL
     ISZERO
-    PUSH1 __evm_shared_tail_0  // br v243 block54 block53;
+    PUSH1 __evm_shared_tail_0  // br v243 block52 block51;
     JUMPI
-  block54:
+  block52:
     RETURNDATASIZE  // v245.i256 = evm_return_data_size;
     PUSH1 0x20 (32)  // v246.i256 = lt v245 32.i256;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v246 block55 block56;
+    PUSH1 __evm_shared_tail_0  // br v246 block53 block54;
     JUMPI
-  block56:
+  block54:
     PUSH2 0x140 (320)  // v247.i256 = evm_mload 320.i256;
     MLOAD
     SWAP1  // evm_mstore 320.i256 v237;
@@ -519,16 +519,16 @@ contract_runtime_root_DepositContract:
     SWAP5
     STATICCALL
     ISZERO
-    PUSH1 __evm_shared_tail_0  // br v249 block58 block57;
+    PUSH1 __evm_shared_tail_0  // br v249 block56 block55;
     JUMPI
-  block58:
+  block56:
     RETURNDATASIZE  // v251.i256 = evm_return_data_size;
     PUSH1 0x20 (32)  // v252.i256 = lt v251 32.i256;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v252 block59 block60;
+    PUSH1 __evm_shared_tail_0  // br v252 block57 block58;
     JUMPI
-  block60:
+  block58:
     PUSH2 0x140 (320)  // v253.i256 = evm_mload 320.i256;
     MLOAD
     SWAP2  // evm_mstore 384.i256 v213;
@@ -546,16 +546,16 @@ contract_runtime_root_DepositContract:
     SWAP5
     STATICCALL
     ISZERO
-    PUSH1 __evm_shared_tail_0  // br v257 block62 block61;
+    PUSH1 __evm_shared_tail_0  // br v257 block60 block59;
     JUMPI
-  block62:
+  block60:
     RETURNDATASIZE  // v259.i256 = evm_return_data_size;
     PUSH1 0x20 (32)  // v260.i256 = lt v259 32.i256;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v260 block63 block64;
+    PUSH1 __evm_shared_tail_0  // br v260 block61 block62;
     JUMPI
-  block64:
+  block62:
     PUSH2 0x180 (384)  // v261.i256 = evm_mload 384.i256;
     MLOAD
     DUP3  // evm_mstore 384.i256 v229;
@@ -573,16 +573,16 @@ contract_runtime_root_DepositContract:
     SWAP5
     STATICCALL
     ISZERO
-    PUSH1 __evm_shared_tail_0  // br v263 block66 block65;
+    PUSH1 __evm_shared_tail_0  // br v263 block64 block63;
     JUMPI
-  block66:
+  block64:
     RETURNDATASIZE  // v265.i256 = evm_return_data_size;
     PUSH1 0x20 (32)  // v266.i256 = lt v265 32.i256;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v266 block67 block68;
+    PUSH1 __evm_shared_tail_0  // br v266 block65 block66;
     JUMPI
-  block68:
+  block66:
     PUSH2 0x180 (384)  // v267.i256 = evm_mload 384.i256;
     MLOAD
     SWAP1  // evm_mstore 384.i256 v261;
@@ -599,25 +599,25 @@ contract_runtime_root_DepositContract:
     SWAP5
     STATICCALL
     ISZERO
-    PUSH1 __evm_shared_tail_0  // br v269 block70 block69;
+    PUSH1 __evm_shared_tail_0  // br v269 block68 block67;
     JUMPI
-  block70:
+  block68:
     RETURNDATASIZE  // v271.i256 = evm_return_data_size;
     PUSH1 0x20 (32)  // v272.i256 = lt v271 32.i256;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v272 block71 block72;
+    PUSH1 __evm_shared_tail_0  // br v272 block69 block70;
     JUMPI
-  block72:
+  block70:
     PUSH2 0x180 (384)  // v273.i256 = evm_mload 384.i256;
     MLOAD
     PUSH1 0x64 (100)  // v275.i256 = evm_calldata_load 100.i256;
     CALLDATALOAD
     DUP2  // v276.i256 = eq v273 v275;
     EQ
-    PUSH1 block74  // br v276 block74 block73;
+    PUSH1 block72  // br v276 block72 block71;
     JUMPI
-  block73:
+  block71:
     PUSH3 0x461bcd (4594637)  // evm_mstore 256.i256 3963877391197344453575983046348115674221700746820753546331534351508065746944.i256;
     PUSH1 0xe5 (229)
     SHL
@@ -643,7 +643,7 @@ contract_runtime_root_DepositContract:
     PUSH1 0xa4 (164)  // evm_revert 256.i256 164.i256;
     PUSH2 0x100 (256)
     REVERT
-  block74:
+  block72:
     JUMPDEST
     PUSH1 0x40 (64)  // v286.i256 = evm_mload 64.i256;
     MLOAD
@@ -738,14 +738,14 @@ contract_runtime_root_DepositContract:
     PUSH1 0xa0 (160)  // evm_mstore v313 160.i256;
     DUP3
     MSTORE
-    DUP14  // br v133 block76 block75;
-    PUSH1 block76
+    DUP14  // br v133 block74 block73;
+    PUSH1 block74
     JUMPI
-  block75:
+  block73:
     SWAP14  // evm_mstore v314 v134;
     DUP15
     MSTORE
-    SWAP12  // jump block77;
+    SWAP12  // jump block75;
     POP
     SWAP14
     POP
@@ -763,16 +763,16 @@ contract_runtime_root_DepositContract:
     SWAP11
     SWAP12
     SWAP13
-    PUSH1 block77
+    PUSH1 block75
     JUMP
-  block76:
+  block74:
     JUMPDEST
     DUP16  // evm_mcopy v314 v133 v135;
     DUP2
     SWAP15
     DUP3
     MCOPY
-    POP  // jump block77;
+    POP  // jump block75;
     SWAP13
     POP
     SWAP14
@@ -790,7 +790,7 @@ contract_runtime_root_DepositContract:
     SWAP7
     SWAP9
     SWAP11
-  block77:
+  block75:
     JUMPDEST
     SWAP13  // v316.i256 = add v314 v135;
     SWAP1
@@ -805,14 +805,14 @@ contract_runtime_root_DepositContract:
     SWAP1  // evm_mstore v318 v317;
     DUP2
     MSTORE
-    DUP10  // br v139 block79 block78;
-    PUSH1 block79
+    DUP10  // br v139 block77 block76;
+    PUSH1 block77
     JUMPI
-  block78:
+  block76:
     SWAP10  // evm_mstore v316 v140;
     DUP2
     MSTORE
-    SWAP8  // jump block80;
+    SWAP8  // jump block78;
     POP
     SWAP1
     SWAP2
@@ -821,16 +821,16 @@ contract_runtime_root_DepositContract:
     SWAP5
     SWAP6
     SWAP7
-    PUSH1 block80
+    PUSH1 block78
     JUMP
-  block79:
+  block77:
     JUMPDEST
     DUP12  // evm_mcopy v316 v139 v141;
     SWAP1
     SWAP10
     DUP3
     MCOPY
-    SWAP9  // jump block80;
+    SWAP9  // jump block78;
     POP
     SWAP1
     SWAP2
@@ -840,7 +840,7 @@ contract_runtime_root_DepositContract:
     SWAP6
     SWAP7
     SWAP8
-  block80:
+  block78:
     JUMPDEST
     SWAP1  // v320.i256 = add v316 v141;
     SWAP9
@@ -854,25 +854,25 @@ contract_runtime_root_DepositContract:
     SWAP8  // evm_mstore v322 v321;
     DUP9
     MSTORE
-    DUP4  // br v286 block82 block81;
-    PUSH1 block82
+    DUP4  // br v286 block80 block79;
+    PUSH1 block80
     JUMPI
-  block81:
+  block79:
     PUSH1 0x8 (8)  // evm_mstore v320 8.i256;
     DUP2
     MSTORE
-    SWAP3  // jump block83;
+    SWAP3  // jump block81;
     POP
-    PUSH1 block83
+    PUSH1 block81
     JUMP
-  block82:
+  block80:
     JUMPDEST
     DUP1  // evm_mcopy v320 v286 64.i256;
     SWAP4
     PUSH1 0x40 (64)
     SWAP2
     MCOPY
-  block83:
+  block81:
     JUMPDEST
     SWAP2  // v324.i256 = add v320 64.i256;
     PUSH1 0x40 (64)
@@ -886,33 +886,33 @@ contract_runtime_root_DepositContract:
     SWAP7  // evm_mstore v326 v325;
     DUP8
     MSTORE
-    DUP4  // br v146 block85 block84;
-    PUSH1 block85
+    DUP4  // br v146 block83 block82;
+    PUSH1 block83
     JUMPI
-  block84:
+  block82:
     SWAP4  // evm_mstore v324 v147;
     DUP5
     MSTORE
-    SWAP2  // jump block86;
+    SWAP2  // jump block84;
     POP
     SWAP1
     SWAP3
     SWAP2
     SWAP3
-    PUSH1 block86
+    PUSH1 block84
     JUMP
-  block85:
+  block83:
     JUMPDEST
     SWAP5  // evm_mcopy v324 v146 v148;
     DUP1
     SWAP4
     DUP7
     MCOPY
-    SWAP3  // jump block86;
+    SWAP3  // jump block84;
     POP
     SWAP1
     SWAP2
-  block86:
+  block84:
     JUMPDEST
     SWAP2  // v328.i256 = add v324 v148;
     SWAP1
@@ -928,27 +928,27 @@ contract_runtime_root_DepositContract:
     SWAP1
     SWAP4
     MSTORE
-    DUP4  // br v291 block88 block87;
-    PUSH1 block88
+    DUP4  // br v291 block86 block85;
+    PUSH1 block86
     JUMPI
-  block87:
+  block85:
     PUSH1 0x8 (8)  // evm_mstore v328 8.i256;
     SWAP1
     SWAP3
     MSTORE
-    SWAP2  // jump block89;
+    SWAP2  // jump block87;
     POP
     SWAP1
-    PUSH1 block89
+    PUSH1 block87
     JUMP
-  block88:
+  block86:
     JUMPDEST
     SWAP3  // evm_mcopy v328 v291 64.i256;
     PUSH1 0x40 (64)
     SWAP2
     SWAP3
     MCOPY
-  block89:
+  block87:
     JUMPDEST
     SWAP2  // evm_log1 v313 v312 45506446345753628416285423056165511379837572639148407563471291220684748896453.i256;
     PUSH32 0x649bbc62d0e31342afea4e5cd82d4049e7e1ee912fc0889aa790803be39038c5 (45506446345753628416285423056165511379837572639148407563471291220684748896453)
@@ -958,16 +958,16 @@ contract_runtime_root_DepositContract:
     PUSH4 0xffffffff (4294967295)  // v334.i256 = lt v289 4294967295.i256;
     DUP2
     LT
-    PUSH1 block91  // br v334 block91 block90;
+    PUSH1 block89  // br v334 block89 block88;
     JUMPI
-  block90:
+  block88:
     PUSH5 0x8199d5b1b (34789481243)  // evm_mstore 352.i256 14655039982642461678000273325010428970207607663688395511528687823510665428992.i256;
     PUSH1 0xda (218)
     SHL
     PUSH29 0x214465706f736974436f6e74726163743a206d65726b6c652074726565 (896881205516154504303356323187679926572073778874356643889081023096165)  // evm_mstore 320.i256 896881205516154504303356323187679926572073778874356643889081023096165.i256;
     PUSH0 __evm_shared_tail_2
     JUMP
-  block91:
+  block89:
     JUMPDEST
     PUSH1 0x1 (1)  // v341.i256 = add v289 1.i256;
     ADD
@@ -983,22 +983,22 @@ contract_runtime_root_DepositContract:
     PUSH1 block143
     JUMPI
   block142:
-    POP  // jump block95;
+    POP  // jump block93;
     PUSH0
     SWAP1
-    PUSH1 block95
+    PUSH1 block93
     JUMP
   block143:
     JUMPDEST
-    PUSH0  // jump block98;
+    PUSH0  // jump block96;
     SWAP2
-    PUSH1 block98
+    PUSH1 block96
     JUMP
   block145:
     JUMPDEST
-    SWAP2  // jump block98;
+    SWAP2  // jump block96;
     SWAP1
-  block98:
+  block96:
     JUMPDEST
     DUP3  // v344.i256 = evm_sload v5;
     SLOAD
@@ -1036,10 +1036,10 @@ contract_runtime_root_DepositContract:
     PUSH1 0x20 (32)  // v354.i256 = lt v353 32.i256;
     DUP2
     LT
-    ISZERO  // br v354 block92 block99;
-    PUSH1 block99
+    ISZERO  // br v354 block90 block97;
+    PUSH1 block97
     JUMPI
-  block92:
+  block90:
     PUSH1 0x1 (1)  // v357.i256 = and v352 1.i256;
     DUP4
     AND
@@ -1049,16 +1049,16 @@ contract_runtime_root_DepositContract:
     PUSH1 block145
     JUMPI
   block144:
-    SWAP2  // jump block95;
+    SWAP2  // jump block93;
     POP
-  block95:
+  block93:
     JUMPDEST
     SWAP1  // evm_sstore v4 v3;
     SSTORE
     PUSH0  // evm_return 0.i256 0.i256;
     PUSH0
     RETURN
-  block99:
+  block97:
     JUMPDEST
     PUSH4 0x4e487b71 (1313373041)  // evm_mstore 256.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
     PUSH1 0xe0 (224)
@@ -1225,19 +1225,19 @@ contract_runtime_root_DepositContract:
     SWAP5
     STATICCALL
     ISZERO
-    PUSH1 __evm_shared_tail_0  // br v84 block128 block127;
+    PUSH1 __evm_shared_tail_0  // br v84 block127 block126;
     JUMPI
-  block128:
+  block127:
     RETURNDATASIZE  // v86.i256 = evm_return_data_size;
     PUSH1 0x20 (32)  // v87.i256 = lt v86 32.i256;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v87 block129 block130;
+    PUSH1 __evm_shared_tail_0  // br v87 block128 block129;
     JUMPI
-  block130:
+  block129:
     PUSH1 0xa0 (160)  // v88.i256 = evm_mload 160.i256;
     MLOAD
-    PUSH1 block126  // jump block126;
+    PUSH1 block134  // jump block134;
     JUMP
   block125:
     JUMPDEST
@@ -1259,19 +1259,19 @@ contract_runtime_root_DepositContract:
     SWAP5
     STATICCALL
     ISZERO
-    PUSH1 __evm_shared_tail_0  // br v94 block132 block131;
+    PUSH1 __evm_shared_tail_0  // br v94 block131 block130;
     JUMPI
-  block132:
+  block131:
     RETURNDATASIZE  // v96.i256 = evm_return_data_size;
     PUSH1 0x20 (32)  // v97.i256 = lt v96 32.i256;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v97 block133 block134;
+    PUSH1 __evm_shared_tail_0  // br v97 block132 block133;
     JUMPI
-  block134:
+  block133:
     PUSH1 0xa0 (160)  // v98.i256 = evm_mload 160.i256;
     MLOAD
-  block126:
+  block134:
     JUMPDEST
     SWAP1  // v99.i256 = shr 1.i256 v365;
     PUSH1 0x1 (1)

@@ -54,12 +54,19 @@ block7:
     return 0.i256;
 }
 
-# A value of the join used below a successor with other predecessors cannot
-# take a phi there, so the join stays.
-# sameln: func public %shared_successor_keeps_join(v0.i256, v1.i1) -> i256 {
-# check:       enum.tag
-# check:       br_table
-func public %shared_successor_keeps_join(v0.i256, v1.i1) -> i256 {
+# A value of the join used below a successor with other predecessors takes
+# a phi there of each path's value.
+# regex: JOIN=\bv\d+\b
+# sameln: func public %shared_successor_takes_phi_of_join_value(v0.i256, v1.i1) -> i256 {
+# check:   block1:
+# check:       jump block4;
+# check:   block2:
+# check:       jump block5;
+# check:   block5:
+# nextln:      $JOIN.@Opt = phi (v2 block4) (v3 block2);
+# nextln:      v6.i1 = enum.is_variant $JOIN #Some;
+# not:         br_table
+func public %shared_successor_takes_phi_of_join_value(v0.i256, v1.i1) -> i256 {
 block0:
     br v1 block1 block2;
 

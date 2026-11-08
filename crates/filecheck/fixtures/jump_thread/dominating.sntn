@@ -1,0 +1,226 @@
+target = "evm-ethereum-osaka"
+
+# A join that tests the condition its predecessors were split on sends each
+# arm straight to its own successor; uses of the join's phi below take each
+# arm's value.
+# sameln: func public %repeated_test_threads_each_arm(v0.i256, v1.i1) -> i256 {
+# check:   block1:
+# nextln:      v2.i256 = add v0 1.i256;
+# nextln:      jump block4;
+# check:   block2:
+# nextln:      jump block5;
+# check:   block4:
+# nextln:      return v2;
+# check:   block5:
+# nextln:      return 0.i256;
+# not:     block3:
+func public %repeated_test_threads_each_arm(v0.i256, v1.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    v2.i256 = add v0 1.i256;
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v3.i256 = phi (v2 block1) (0.i256 block2);
+    br v1 block4 block5;
+
+block4:
+    return v3;
+
+block5:
+    return v3;
+}
+
+# Where the second test's arms meet again, a phi takes each arm's value.
+# regex: MEET=\bv\d+\b
+# sameln: func public %repeated_test_values_meet_in_phi(v0.i256, v1.i1) -> i256 {
+# check:   block1:
+# nextln:      v2.i256 = add v0 1.i256;
+# nextln:      jump block4;
+# check:   block2:
+# nextln:      v3.i256 = add v0 2.i256;
+# nextln:      jump block5;
+# check:   block6:
+# nextln:      $MEET.i256 = phi (v2 block4) (v3 block5);
+# nextln:      return $MEET;
+# not:     block3:
+func public %repeated_test_values_meet_in_phi(v0.i256, v1.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    v2.i256 = add v0 1.i256;
+    jump block3;
+
+block2:
+    v3.i256 = add v0 2.i256;
+    jump block3;
+
+block3:
+    v4.i256 = phi (v2 block1) (v3 block2);
+    br v1 block4 block5;
+
+block4:
+    mstore 0.i256 1.i256 i256;
+    jump block6;
+
+block5:
+    mstore 0.i256 2.i256 i256;
+    jump block6;
+
+block6:
+    return v4;
+}
+
+# A predecessor that joins paths of its own still knows the condition the
+# block dominating them was entered by.
+# sameln: func public %condition_known_through_inner_join(v0.i256, v1.i1, v2.i1) -> i256 {
+# check:   block5:
+# nextln:      jump block7;
+# check:   block6:
+# nextln:      jump block8;
+# not:     block4:
+func public %condition_known_through_inner_join(v0.i256, v1.i1, v2.i1) -> i256 {
+block0:
+    br v1 block1 block6;
+
+block1:
+    br v2 block2 block3;
+
+block2:
+    mstore 0.i256 1.i256 i256;
+    jump block5;
+
+block3:
+    mstore 0.i256 2.i256 i256;
+    jump block5;
+
+block5:
+    jump block4;
+
+block6:
+    jump block4;
+
+block4:
+    br v1 block7 block8;
+
+block7:
+    return 1.i256;
+
+block8:
+    return 2.i256;
+}
+
+# A `br_table` case edge decides its key; its default edge decides only
+# that no case matched, so it threads only to a block testing those cases.
+# sameln: func public %table_edges_decide_their_keys(v0.i8) -> i256 {
+# check:   block1:
+# nextln:      jump block4;
+# check:   block2:
+# nextln:      jump block3;
+# check:   block3:
+# nextln:      br_table v0 block6 (1.i8 block4) (2.i8 block5);
+func public %table_edges_decide_their_keys(v0.i8) -> i256 {
+block0:
+    br_table v0 block2 (1.i8 block1);
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    br_table v0 block6 (1.i8 block4) (2.i8 block5);
+
+block4:
+    return 1.i256;
+
+block5:
+    return 2.i256;
+
+block6:
+    return 3.i256;
+}
+
+# A condition defined in the block is not known on edges into it.
+# sameln: func public %condition_defined_in_block_not_threaded(v0.i256, v1.i1) -> i256 {
+# check:       v2.i1 = lt v0 10.i256;
+# nextln:      br v2 block4 block5;
+func public %condition_defined_in_block_not_threaded(v0.i256, v1.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v2.i1 = lt v0 10.i256;
+    br v2 block4 block5;
+
+block4:
+    return 1.i256;
+
+block5:
+    return 2.i256;
+}
+
+# Every path into the entry block includes the function's start, which knows
+# nothing, so the search for a branch on a parameter stops there, even when
+# the entry has a backedge.
+# sameln: func public %entry_backedge_ends_the_search(v0.i1, v1.i1) -> i256 {
+# check:   block2:
+# nextln:      br v0 block3 block4;
+func public %entry_backedge_ends_the_search(v0.i1, v1.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    jump block0;
+
+block2:
+    br v0 block3 block4;
+
+block3:
+    return 1.i256;
+
+block4:
+    return 2.i256;
+}
+
+# A condition that may be undef is chosen apart at each branch on it, so the
+# first test tells nothing of the second, which stays.
+# sameln: func public %maybe_undef_condition_is_tested_again(v0.i256, v1.i1) -> i256 {
+# check:   block3:
+# nextln:      v4.i256 = phi (v3 block1) (0.i256 block2);
+# nextln:      br v2 block4 block5;
+func public %maybe_undef_condition_is_tested_again(v0.i256, v1.i1) -> i256 {
+block0:
+    v2.i1 = xor v1 undef.i1;
+    br v2 block1 block2;
+
+block1:
+    v3.i256 = add v0 1.i256;
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v4.i256 = phi (v3 block1) (0.i256 block2);
+    br v2 block4 block5;
+
+block4:
+    return v4;
+
+block5:
+    return v4;
+}
