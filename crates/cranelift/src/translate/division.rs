@@ -410,8 +410,63 @@ fn remainder(
     call: DividerCall,
     builder: &mut FunctionBuilder,
 ) -> Limbs {
+    // A modulus of two limbs divides in registers, one 3-by-2 division per
+    // limb; any other calls the divider.
+    let [_, m1, m2, m3] = modulus;
+    let two = builder.create_block();
+    let other = builder.create_block();
+    let done = builder.create_block();
+    let results = std::array::from_fn(|_| builder.append_block_param(done, I64));
+    let upper = builder.ins().bor(m2, m3);
+    let upper_zero = builder.ins().icmp_imm_u(IntCC::Equal, upper, 0);
+    let second = builder.ins().icmp_imm_u(IntCC::NotEqual, m1, 0);
+    let two_limbs = builder.ins().band(upper_zero, second);
+    builder.ins().brif(two_limbs, two, &[], other, &[]);
+
+    builder.switch_to_block(two);
+    let result = remainder_by_two_limbs(numerator, [modulus[0], m1], call.table, builder);
+    builder.ins().jump(done, &result.map(BlockArg::Value));
+
+    builder.switch_to_block(other);
     let buffer = call_divider(numerator, modulus, call, builder);
-    load_limbs(buffer, DIVISOR_OFFSET, MemFlagsData::trusted(), builder)
+    let result = load_limbs(buffer, DIVISOR_OFFSET, MemFlagsData::trusted(), builder);
+    builder.ins().jump(done, &result.map(BlockArg::Value));
+
+    builder.switch_to_block(done);
+    results
+}
+
+/// The remainder of numerator limbs by a divisor of exactly two limbs: the
+/// normalized numerator's top two limbs, below the divisor, then a 3-by-2
+/// division by reciprocal for each limb below them (Möller and Granlund,
+/// algorithm 5), keeping only the remainder.
+fn remainder_by_two_limbs(
+    numerator: &[clif::Value],
+    divisor: [clif::Value; 2],
+    table: clif::GlobalValue,
+    builder: &mut FunctionBuilder,
+) -> Limbs {
+    let shift = builder.ins().clz(divisor[1]);
+    let inverse = builder.ins().bxor_imm_s(shift, 63);
+    let divisor = [0, 1].map(|limb| normalized_limb(&divisor, limb, shift, inverse, builder));
+    // One limb past the top holds the bits shifted out of it, below 2^63 and
+    // so below the divisor's top limb.
+    let numerator: Vec<_> = (0..=numerator.len())
+        .map(|limb| normalized_limb(numerator, limb, shift, inverse, builder))
+        .collect();
+    let reciprocal = reciprocal(divisor[1], table, builder);
+    let reciprocal = reciprocal_3by2(divisor, reciprocal, builder);
+    let wide_divisor = builder.ins().iconcat(divisor[0], divisor[1]);
+    let (low, high) = numerator.split_at(numerator.len() - 2);
+    let top = builder.ins().iconcat(high[0], high[1]);
+    let remainder = low.iter().rev().fold(top, |remainder, &limb| {
+        let (r0, r1) = builder.ins().isplit(remainder);
+        let (_, remainder, reaches) = div3by2([limb, r0, r1], divisor, reciprocal, builder);
+        let reduced = builder.ins().isub(remainder, wide_divisor);
+        builder.ins().select(reaches, reduced, remainder)
+    });
+    let (r0, r1) = builder.ins().isplit(remainder);
+    denormalize(&[r0, r1], shift, inverse, builder)
 }
 
 /// Starts a modular operation: returns its exit block and the block's
