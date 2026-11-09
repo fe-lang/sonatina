@@ -344,6 +344,64 @@ block0:
 }
 
 #[test]
+fn enums_built_at_their_stores_hold_their_variant() {
+    // `%push`'s chain, with the enum in its second field, is only stored
+    // into `v0`, so both are built there.
+    let source = r#"
+type @kind = enum {
+    #Storage(i64, i64, i64),
+    #Mark(i8),
+};
+type @change = {i64, @kind};
+
+func private %push(v0.objref<@change>, v1.i64) {
+block0:
+    v2.i64 = add v1 1.i64;
+    v3.i64 = add v1 2.i64;
+    v4.@kind = enum.make @kind #Storage (v2, v3, v1);
+    v5.@change = insert_value undef.@change 0.i64 v1;
+    v6.@change = insert_value v5 1.i64 v4;
+    obj.store v0 v6;
+    return;
+}
+func public %apply(v0.i64, v20.*[i64; 4]) {
+block0:
+    v1.objref<@change> = obj.alloc @change;
+    call %push v1 v0;
+    v2.@change = obj.load v1;
+    v3.i64 = extract_value v2 0.i64;
+    v4.@kind = extract_value v2 1.i64;
+    enum.assert_variant v4 #Storage;
+    v5.i64 = enum.extract v4 #Storage 0.i8;
+    v6.i64 = enum.extract v4 #Storage 1.i8;
+    v7.i64 = enum.extract v4 #Storage 2.i8;
+    v8.[i64; 4] = insert_value undef.[i64; 4] 0.i64 v3;
+    v9.[i64; 4] = insert_value v8 1.i64 v5;
+    v10.[i64; 4] = insert_value v9 2.i64 v6;
+    v11.[i64; 4] = insert_value v10 3.i64 v7;
+    mstore v20 v11 [i64; 4];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let apply: unsafe extern "C" fn(i64, *mut [i64; 4]) =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        for x in [3, -1, i64::MAX - 2] {
+            let mut result = [-7; 4];
+            unsafe { apply(x, &mut result) };
+            assert_eq!(result, [x, x + 1, x + 2, x], "{x} {level:?}");
+        }
+    }
+}
+
+#[test]
 fn object_and_constant_indices_zero_extend_narrow_integers() {
     let values = (0..256)
         .map(|i| (1000 + i).to_string())

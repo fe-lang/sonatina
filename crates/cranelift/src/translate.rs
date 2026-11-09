@@ -2385,7 +2385,8 @@ fn translate_function(
                 }
                 NativeInstKind::EnumMake(make) => {
                     if let Some(result) = function.dfg.inst_result(inst_id) {
-                        let addr = frame.address(result, &mut builder)?;
+                        let addr =
+                            storage_address(&frame, function, result, &value_map, &mut builder)?;
                         // Padding and other variants' payloads are not part
                         // of the value, so they keep whatever they hold.
                         store_variant(

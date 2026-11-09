@@ -716,13 +716,14 @@ impl Plan {
     }
 
     /// Builds each `insert_value` chain on undef whose last value is only
-    /// stored into an object at that object, with the chains embedded in it,
-    /// when the object's address is defined before the first of them starts
-    /// and everything from there to the store is free of effects and uses no
-    /// forwarded load, which reads memory where it is used. No other class
-    /// lives inside such a chain, and none of the values it inserts is a
-    /// forwarded load. Every class embedded in it must be such a chain in
-    /// its block too, so that all of them write the object only there.
+    /// stored into an object at that object, with the classes embedded in
+    /// it, when the object's address is defined before the first of them
+    /// starts and everything from there to the store is free of effects and
+    /// uses no forwarded load, which reads memory where it is used. No other
+    /// class lives inside such a chain, and none of the values it inserts is
+    /// a forwarded load. Every class embedded in it must be such a chain or
+    /// an `enum.make` in its block too, so that all of them write the object
+    /// only there.
     fn store_in_place(&mut self, function: &Function, position: &SecondaryMap<InstId, u32>) {
         let dfg = &function.dfg;
         // The classes embedded in each class, directly or not.
@@ -762,6 +763,26 @@ impl Plan {
                     .collect()
             })
         };
+        // The instructions that write a class embedded in such a chain: its
+        // own chain, or an `enum.make`, which writes the tag and the
+        // variant's fields. Neither may write a forwarded load.
+        let writes_of = |class: usize| -> Option<Vec<InstId>> {
+            if let Some(chain) = chain_of(class) {
+                return Some(chain.into_iter().map(|(inst, _)| inst).collect());
+            }
+            let [root] = self.members[class][..] else {
+                return None;
+            };
+            let inst = dfg.value_inst(root)?;
+            let NativeInstKind::EnumMake(make) = native_inst_set().resolve_inst(dfg.inst(inst))
+            else {
+                return None;
+            };
+            make.values()
+                .iter()
+                .all(|value| !self.forwarded.contains(value))
+                .then(|| vec![inst])
+        };
         'classes: for class in 0..self.classes.len() {
             if self.embedded.contains_key(&class) {
                 continue;
@@ -787,16 +808,16 @@ impl Plan {
             }
             let mut builders: FxHashSet<InstId> = chain.iter().map(|&(inst, _)| inst).collect();
             for &child in descendants.get(&class).into_iter().flatten() {
-                let Some(chain) = chain_of(child) else {
+                let Some(writes) = writes_of(child) else {
                     continue 'classes;
                 };
-                if chain
+                if writes
                     .iter()
-                    .any(|&(inst, _)| function.layout.inst_block(inst) != block)
+                    .any(|&inst| function.layout.inst_block(inst) != block)
                 {
                     continue 'classes;
                 }
-                builders.extend(chain.iter().map(|&(inst, _)| inst));
+                builders.extend(writes);
             }
             let Some(&first) = builders.iter().min_by_key(|&&inst| position[inst]) else {
                 continue;
@@ -1468,6 +1489,32 @@ block0:
     v5.[i64; 32] = insert_value undef.[i64; 32] 2.i64 v0;
     v6.[[i64; 32]; 2] = insert_value v4 0.i64 v5;
     obj.store v1 v6;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [0u32; 0]);
+    }
+
+    #[test]
+    fn stored_chains_build_their_embedded_enums_at_the_destination() {
+        // `v3`, an enum too wide for registers, fills a field of the chain
+        // stored into `v2`, so both are built in `v2`.
+        let sizes = slot_sizes(
+            r#"
+type @kind = enum {
+    #Storage(i64, i64, i64, i1),
+    #Mark(i8),
+};
+type @change = {i64, @kind};
+
+func public %f(v0.i64, v1.*@change) {
+block0:
+    v2.objref<@change> = obj.from_ptr v1;
+    v3.@kind = enum.make @kind #Storage (v0, v0, v0, 1.i1);
+    v4.@change = insert_value undef.@change 0.i64 v0;
+    v5.@change = insert_value v4 1.i64 v3;
+    obj.store v2 v5;
     return;
 }
 "#,
