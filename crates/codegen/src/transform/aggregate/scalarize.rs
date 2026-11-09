@@ -9,6 +9,7 @@ use sonatina_ir::{
     module::FuncRef,
     types::CompoundType,
 };
+use sonatina_triple::Architecture;
 
 use crate::{
     analysis::definedness::{UndefTaint, insert_before, is_defined_source, is_scalar},
@@ -555,6 +556,15 @@ impl AggregateScalarize {
         callers: Option<&FunctionArgInvariance>,
     ) -> (Vec<PromotableRoot>, ExactProjectionMap) {
         let mut promoted = Vec::new();
+        // Each promoted leaf is a stack value on the EVM, which reaches only
+        // 16 of them, so it promotes objects of at most four leaves. Native
+        // code holds leaves in registers, or spills them as it would any
+        // value, and promotes objects as large as the values it scalarizes.
+        let max_leaves = if module.triple.architecture == Architecture::Evm {
+            4
+        } else {
+            MAX_SCALARIZABLE_VALUE_LEAVES
+        };
 
         let mut roots: Vec<(ValueId, RootKind, Type, shape::AggregateShape)> = Vec::new();
         for block in func.layout.iter_block() {
@@ -584,12 +594,12 @@ impl AggregateScalarize {
                 let Some(ptr_value) = ptr_value else {
                     continue;
                 };
-                let Some(shape) = self.promotable_root_shape(module, ty) else {
+                let Some(shape) = self
+                    .promotable_root_shape(module, ty)
+                    .filter(|shape| shape.leaves.len() <= max_leaves)
+                else {
                     continue;
                 };
-                if shape.leaves.len() > 4 {
-                    continue;
-                }
                 roots.push((ptr_value, root_kind, ty, shape));
             }
         }
@@ -605,12 +615,12 @@ impl AggregateScalarize {
                 let Some(root_ty) = objref_element_ty(module, func.dfg.value_ty(root_value)) else {
                     continue;
                 };
-                let Some(shape) = self.promotable_root_shape(module, root_ty) else {
+                let Some(shape) = self
+                    .promotable_root_shape(module, root_ty)
+                    .filter(|shape| shape.leaves.len() <= max_leaves)
+                else {
                     continue;
                 };
-                if shape.leaves.len() > 4 {
-                    continue;
-                }
                 let kind = if info.output_contract(func, idx).is_some() {
                     RootKind::SyntheticOutArg { index: idx }
                 } else {
