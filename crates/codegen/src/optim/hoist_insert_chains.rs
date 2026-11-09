@@ -15,11 +15,13 @@
 //! A stored chain is built at the store's destination when that object's
 //! address exists before the chain starts. A struct literal pushed onto a
 //! vector, `v.push(S { .. })`, comes before the address of its slot, so it
-//! moves down to the store instead of being built aside and copied.
+//! moves down to the store instead of being built aside and copied. The
+//! chains embedded in it are built there too, but only from its block, so
+//! they stay in that block.
 
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
-    BlockId, Function, InstId, Value,
+    BlockId, Function, InstId, Value, ValueId,
     inst::{
         control_flow::Return,
         data::{InsertValue, ObjStore},
@@ -88,10 +90,7 @@ fn chain(func: &Function, head: InstId) -> Vec<InstId> {
     let block = func.layout.inst_block(head);
     std::iter::successors(Some(head), |&inst| {
         let result = func.dfg.inst_result(inst)?;
-        let mut users = func.dfg.users(result).copied();
-        let (Some(user), None) = (users.next(), users.next()) else {
-            return None;
-        };
+        let user = sole_user(func, result)?;
         let insert = func.dfg.downcast::<&InsertValue>(user)?;
         (*insert.dest() == result && func.layout.inst_block(user) == block).then_some(user)
     })
@@ -104,10 +103,7 @@ fn chain(func: &Function, head: InstId) -> Vec<InstId> {
 fn sunk_position(func: &Function, chain: &[InstId]) -> Option<InstId> {
     let tail_inst = *chain.last()?;
     let tail = func.dfg.inst_result(tail_inst)?;
-    let mut users = func.dfg.users(tail).copied();
-    let (Some(store), None) = (users.next(), users.next()) else {
-        return None;
-    };
+    let store = sole_user(func, tail)?;
     let store_info = func.dfg.downcast::<&ObjStore>(store)?;
     let between: Vec<InstId> =
         std::iter::successors(func.layout.next_inst_of(tail_inst), |&inst| {
@@ -134,10 +130,7 @@ fn hoisted_position(
     chain: &[InstId],
 ) -> Option<InstId> {
     let tail = func.dfg.inst_result(*chain.last()?)?;
-    let mut users = func.dfg.users(tail).copied();
-    let (Some(user), None) = (users.next(), users.next()) else {
-        return None;
-    };
+    let user = sole_user(func, tail)?;
     let fills_field = func
         .dfg
         .downcast::<&InsertValue>(user)
@@ -167,6 +160,9 @@ fn hoisted_position(
         }
     }
     let (def_block, def) = latest?;
+    if def_block != block && embedded_in_stored_chain(func, tail) {
+        return None;
+    }
     let after = if func.dfg.is_phi(def) {
         func.layout
             .iter_inst(def_block)
@@ -177,4 +173,42 @@ fn hoisted_position(
     };
     let earlier = def_block != block || order[after] + 1 < order[head];
     (earlier && lpt.loop_of_block(def_block) == lpt.loop_of_block(block)).then_some(after)
+}
+
+/// Whether `value`, a chain's result, fills a field of a chain that is only
+/// stored into an object, directly or through further chains.
+fn embedded_in_stored_chain(func: &Function, mut value: ValueId) -> bool {
+    loop {
+        let Some(user) = sole_user(func, value) else {
+            return false;
+        };
+        if let Some(store) = func.dfg.downcast::<&ObjStore>(user) {
+            return *store.value() == value;
+        }
+        let Some(insert) = func.dfg.downcast::<&InsertValue>(user) else {
+            return false;
+        };
+        if *insert.value() != value || *insert.dest() == value {
+            return false;
+        }
+        // The rest of the chain `value` fills ends at its own result.
+        value = func.dfg.inst_result(user).expect("an insert has a result");
+        while let Some(next) = sole_user(func, value)
+            && func
+                .dfg
+                .downcast::<&InsertValue>(next)
+                .is_some_and(|insert| *insert.dest() == value)
+        {
+            value = func.dfg.inst_result(next).expect("an insert has a result");
+        }
+    }
+}
+
+/// The one user of `value`, if it has exactly one.
+fn sole_user(func: &Function, value: ValueId) -> Option<InstId> {
+    let mut users = func.dfg.users(value).copied();
+    match (users.next(), users.next()) {
+        (Some(user), None) => Some(user),
+        _ => None,
+    }
 }
