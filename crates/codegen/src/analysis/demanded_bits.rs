@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
-    Function, U256, Value, ValueId,
-    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind},
+    Function, InstDowncast, U256, Value, ValueId,
+    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, evm::EvmMstore8},
 };
 
 use super::known_bits::{bswap_bits, low_mask, supports_known_bits, type_bits, type_mask};
@@ -63,6 +63,17 @@ impl<'a> DemandedBitsQuery<'a> {
             || inst_data.kind() == InstClassKind::Opaque
             || !self.func.dfg.can_drop_if_unused(inst);
         if !is_external_use {
+            return;
+        }
+
+        // `mstore8` writes the low byte of its value.
+        if let Some(store) =
+            <&EvmMstore8 as InstDowncast>::downcast(self.func.inst_set(), inst_data)
+        {
+            let (addr, value) = (*store.addr(), *store.val());
+            self.add_demand(addr, type_mask_or_zero(self.func, addr), worklist, queued);
+            let demand = type_mask_or_zero(self.func, value) & low_mask(8);
+            self.add_demand(value, demand, worklist, queued);
             return;
         }
 

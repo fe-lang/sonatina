@@ -1,0 +1,45 @@
+#! `mstore8` writes the low byte of its value, so a mask that keeps the low
+#! byte, or bits above it that change, are not demanded.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %drops_low_byte_mask(v0.i256, v1.i256) {
+# check: evm_mstore8 v0 v1;
+# not: and
+func public %drops_low_byte_mask(v0.i256, v1.i256) {
+block0:
+    v2.i256 = and v1 255.i256;
+    evm_mstore8 v0 v2;
+    return;
+}
+
+# sameln: func public %drops_high_bits(v0.i256, v1.i256) {
+# check: evm_mstore8 v0 v1;
+# not: or
+func public %drops_high_bits(v0.i256, v1.i256) {
+block0:
+    v2.i256 = or v1 65280.i256;
+    evm_mstore8 v0 v2;
+    return;
+}
+
+# The address keeps every bit.
+# sameln: func public %keeps_address_mask(v0.i256, v1.i256) {
+# check: v2.i256 = and v0 255.i256;
+# check: evm_mstore8 v2 v1;
+func public %keeps_address_mask(v0.i256, v1.i256) {
+block0:
+    v2.i256 = and v0 255.i256;
+    evm_mstore8 v2 v1;
+    return;
+}
+
+# A mask that clears bits of the low byte stays.
+# sameln: func public %keeps_mask_inside_low_byte(v0.i256, v1.i256) {
+# check: v2.i256 = and v1 15.i256;
+func public %keeps_mask_inside_low_byte(v0.i256, v1.i256) {
+block0:
+    v2.i256 = and v1 15.i256;
+    evm_mstore8 v0 v2;
+    return;
+}
