@@ -4,7 +4,7 @@
 use std::{cmp::Ordering, collections::HashMap};
 
 use cranelift_codegen::ir::{
-    self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
+    self as clif, BlockArg, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
     condcodes::{CondCode, IntCC},
     types::{I64, I128},
 };
@@ -932,21 +932,33 @@ pub(super) fn translate_i256_op(
                 let zeros = builder.ins().clz(top);
                 builder.ins().iadd(above, zeros)
             } else {
-                // Each limb's count at once, then a tree of choices: a pair's
-                // count is its high limb's, or 64 plus its low limb's when the
-                // high limb is zero, and likewise for the two pairs.
+                // From the top limb down, the first nonzero limb's count:
+                // leading zeros of words come in runs, random words with a
+                // nonzero top limb or small values whose high limbs stay
+                // zero, which branches predict, and the usual case counts
+                // one limb.
                 let [l0, l1, l2, l3] = limbs;
-                let pair = |high, low, builder: &mut FunctionBuilder| {
-                    let high_zeros = builder.ins().clz(high);
-                    let low_zeros = builder.ins().clz(low);
-                    let low_zeros = builder.ins().iadd_imm_u(low_zeros, 64);
-                    builder.ins().select(high, high_zeros, low_zeros)
-                };
-                let upper = pair(l3, l2, builder);
-                let lower = pair(l1, l0, builder);
-                let lower = builder.ins().iadd_imm_u(lower, 128);
-                let upper_nonzero = builder.ins().bor(l3, l2);
-                builder.ins().select(upper_nonzero, upper, lower)
+                let done = builder.create_block();
+                let count = builder.append_block_param(done, I64);
+                for (limb, above) in [(l3, 0), (l2, 64), (l1, 128)] {
+                    let found = builder.create_block();
+                    let below = builder.create_block();
+                    builder.ins().brif(limb, found, &[], below, &[]);
+                    builder.switch_to_block(found);
+                    let zeros = builder.ins().clz(limb);
+                    let zeros = if above == 0 {
+                        zeros
+                    } else {
+                        builder.ins().iadd_imm_u(zeros, above)
+                    };
+                    builder.ins().jump(done, &[BlockArg::Value(zeros)]);
+                    builder.switch_to_block(below);
+                }
+                let zeros = builder.ins().clz(l0);
+                let zeros = builder.ins().iadd_imm_u(zeros, 192);
+                builder.ins().jump(done, &[BlockArg::Value(zeros)]);
+                builder.switch_to_block(done);
+                count
             };
             let zero = builder.ins().iconst(I64, 0);
             Output::Limbs([count, zero, zero, zero])
