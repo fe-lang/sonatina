@@ -2415,6 +2415,11 @@ type @opt = enum {
     #None,
     #Some(i256),
 };
+type @empty = {};
+type @result = enum {
+    #Ok(@empty),
+    #Err(i256),
+};
 
 func private %pass_nested(v0.@nested) -> @nested {
     block0:
@@ -2440,6 +2445,19 @@ func private %undef_opt() -> @opt {
 func private %some_opt(v0.i256) -> @opt {
     block0:
         v1.@opt = enum.make @opt #Some (v0);
+        return v1;
+}
+
+func private %ok() -> @result {
+    block0:
+        v0.@result = enum.make @result #Ok (undef.@empty);
+        return v0;
+}
+
+func public %empty_payload_result() -> i1 {
+    block0:
+        v0.@result = call %ok;
+        v1.i1 = enum.is_variant v0 #Ok;
         return v1;
 }
 
@@ -2493,7 +2511,8 @@ func public %defined_enums(v0.i256) -> i256 {
 
 /// A parameter or call result is never undef: an inlined aggregate argument
 /// or result has its undefined fields frozen, and a call that passes or
-/// returns an enum part that may be undef stays.
+/// returns an enum part that may be undef stays. An undef payload of no
+/// bytes, as in `Result::Ok(())`, is no undefined part.
 #[test]
 fn inlining_defines_undefined_parts_of_arguments_and_results() {
     for config in [InlinerConfig::default(), full_only_inliner_test_config()] {
@@ -2518,6 +2537,7 @@ fn inlining_defines_undefined_parts_of_arguments_and_results() {
         assert!(dump("enum_argument").contains("call %pass_opt"));
         assert!(dump("enum_result").contains("call %undef_opt"));
         assert!(!dump("defined_enums").contains("call"));
+        assert!(!dump("empty_payload_result").contains("call"));
     }
 }
 
