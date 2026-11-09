@@ -1,6 +1,4 @@
-use std::cell::RefCell;
-
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     ControlFlowGraph, Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
     inst::{BinaryInstKind, InstClassKind, logic::And},
@@ -10,7 +8,7 @@ use sonatina_triple::Architecture;
 
 use crate::{
     analysis::{
-        definedness::value_may_be_undef,
+        definedness::maybe_undef_values,
         known_bits::{KnownBits, type_bits, type_mask},
         scalar_facts::ScalarFacts,
     },
@@ -55,7 +53,7 @@ struct LocalExprFacts<'a, 'b> {
     func: &'a Function,
     scalar_facts: &'b ScalarFacts<'a, 'b>,
     range_env: Option<&'b RangeEnv>,
-    may_be_undef: &'b RefCell<FxHashMap<ValueId, bool>>,
+    maybe_undef: &'b FxHashSet<ValueId>,
 }
 
 impl ExprFactProvider for LocalExprFacts<'_, '_> {
@@ -81,7 +79,7 @@ impl ExprFactProvider for LocalExprFacts<'_, '_> {
     }
 
     fn may_be_undef(&self, v: ValueId) -> bool {
-        value_may_be_undef(self.func, v, &mut self.may_be_undef.borrow_mut(), |_| None)
+        self.maybe_undef.contains(&v)
     }
 }
 
@@ -128,7 +126,8 @@ impl KnownBitsSimplify {
             range_analysis = Some(analysis);
         }
 
-        let may_be_undef = RefCell::default();
+        // A loop-carried value that no undef reaches is defined.
+        let maybe_undef = maybe_undef_values(func);
         let mut counts = Vec::new();
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
@@ -142,7 +141,7 @@ impl KnownBitsSimplify {
                     func,
                     scalar_facts: &scalar_facts,
                     range_env: range_env.as_ref(),
-                    may_be_undef: &may_be_undef,
+                    maybe_undef: &maybe_undef,
                 };
                 match self.plan_inst(func, &facts, inst) {
                     Some((plan, false)) => self.plans.push(plan),
