@@ -20,18 +20,30 @@
 //! with nothing that reads memory between them and the store: they stay in
 //! that block, and move down to the store with it, past a load of the old
 //! value in `core::mem::replace(mut x, S { .. })`.
+//!
+//! A value stored in a later block than the one building it, which may also
+//! be used elsewhere, is built again right before each use outside its
+//! block, as a push builds an element before learning whether its slot
+//! exists and hands it back when it does not. Each copy then has its own
+//! uses, and the stored one is built at its destination. The construction
+//! is an `insert_value` chain on undef or an `enum.make`, with the
+//! constructions only it uses, all in its block. It is not built again in a
+//! loop it was outside of, and goes once its block has no use of it left.
 
 use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, Function, InstId, Value, ValueId,
     inst::{
         control_flow::Return,
-        data::{InsertValue, ObjStore},
+        data::{EnumMake, InsertValue, ObjStore},
     },
 };
 
-use crate::{domtree::DomTree, loop_analysis::LoopTree};
+use crate::{cfg_edit::clone_inst_before, domtree::DomTree, loop_analysis::LoopTree};
+
+/// The most instructions a construction built again at its uses may have.
+const MAX_REBUILT_INSTS: usize = 16;
 
 #[derive(Default)]
 pub struct HoistInsertChains;
@@ -76,7 +88,7 @@ impl HoistInsertChains {
             .flat_map(|block| func.layout.iter_inst(block))
             .filter(|&inst| func.dfg.downcast::<&ObjStore>(inst).is_some())
             .collect();
-        for store in stores {
+        for &store in &stores {
             let Some(tree) = stored_tree(func, store) else {
                 continue;
             };
@@ -86,8 +98,137 @@ impl HoistInsertChains {
             }
             changed = true;
         }
+        for store in stores {
+            changed |= rebuild_at_uses(func, lpt, store);
+        }
         changed
     }
+}
+
+/// Builds the value `store` stores again right before its first use in each
+/// other block of its loop, when an earlier block builds it, and removes the
+/// original once nothing uses it.
+fn rebuild_at_uses(func: &mut Function, lpt: &LoopTree, store: InstId) -> bool {
+    let Some(stored) = func.dfg.downcast::<&ObjStore>(store) else {
+        return false;
+    };
+    let value = *stored.value();
+    let Some(def) = func.dfg.value_inst(value) else {
+        return false;
+    };
+    let block = func.layout.inst_block(def);
+    let mut tree = Vec::new();
+    if func.layout.inst_block(store) == block
+        || func.dfg.users(value).any(|&user| func.dfg.is_phi(user))
+        || !construction(func, value, None, block, &mut tree)
+        || tree.len() > MAX_REBUILT_INSTS
+    {
+        return false;
+    }
+    let users: FxHashSet<InstId> = func.dfg.users(value).copied().collect();
+    let mut user_blocks: Vec<BlockId> = users
+        .iter()
+        .map(|&user| func.layout.inst_block(user))
+        .filter(|&user_block| {
+            user_block != block && lpt.loop_of_block(user_block) == lpt.loop_of_block(block)
+        })
+        .collect();
+    user_blocks.sort_unstable();
+    user_blocks.dedup();
+    if !user_blocks.contains(&func.layout.inst_block(store)) {
+        return false;
+    }
+    for user_block in user_blocks {
+        let block_users: Vec<InstId> = func
+            .layout
+            .iter_inst(user_block)
+            .filter(|inst| users.contains(inst))
+            .collect();
+        let mut rebuilt = FxHashMap::default();
+        for &inst in &tree {
+            clone_inst_before(func, inst, block_users[0], &mut rebuilt);
+        }
+        let copy = rebuilt[&value];
+        for user in block_users {
+            let mut inst = func.dfg.clone_inst(user);
+            inst.for_each_value_mut(&mut |operand| {
+                if *operand == value {
+                    *operand = copy;
+                }
+            });
+            func.dfg.replace_inst(user, inst);
+        }
+    }
+    if func.dfg.users_num(value) == 0 {
+        for &inst in &tree {
+            func.layout.remove_inst(inst);
+        }
+        func.erase_insts(&tree);
+    }
+    true
+}
+
+/// Appends to `tree` the instructions building `value` in `block`, after
+/// those of the constructions embedded in it: an `insert_value` chain on
+/// undef or an `enum.make`. An embedded construction is used only by `user`,
+/// the instruction embedding it; another value it takes is an input, which
+/// the construction leaves where it is.
+fn construction(
+    func: &Function,
+    value: ValueId,
+    user: Option<InstId>,
+    block: BlockId,
+    tree: &mut Vec<InstId>,
+) -> bool {
+    let Some(def) = func.dfg.value_inst(value) else {
+        return false;
+    };
+    if func.layout.inst_block(def) != block
+        || user.is_some_and(|user| sole_user(func, value) != Some(user))
+    {
+        return false;
+    }
+    if let Some(make) = func.dfg.downcast::<&EnumMake>(def) {
+        // A construction filling several fields is built once.
+        let mut fields = FxHashSet::default();
+        for &field in make.values() {
+            if fields.insert(field) {
+                construction(func, field, Some(def), block, tree);
+            }
+        }
+        tree.push(def);
+        return true;
+    }
+    let mut head = def;
+    loop {
+        let Some(insert) = func.dfg.downcast::<&InsertValue>(head) else {
+            return false;
+        };
+        let dest = *insert.dest();
+        if matches!(func.dfg.value(dest), Value::Undef { .. }) {
+            break;
+        }
+        let Some(dest_def) = func.dfg.value_inst(dest) else {
+            return false;
+        };
+        if sole_user(func, dest) != Some(head) || func.layout.inst_block(dest_def) != block {
+            return false;
+        }
+        head = dest_def;
+    }
+    let chain = chain(func, head);
+    if chain.last() != Some(&def) {
+        return false;
+    }
+    for &inst in &chain {
+        let insert = func
+            .dfg
+            .downcast::<&InsertValue>(inst)
+            .expect("a chain holds inserts");
+        construction(func, *insert.value(), Some(inst), block, tree);
+    }
+    tree.extend_from_slice(&chain);
+    true
 }
 
 /// The chains `store` stores, when its value is a chain in its block that
