@@ -17,6 +17,7 @@ use sonatina_ir::{
     },
     isa::native::inst_set as native_inst_set,
 };
+use sonatina_triple::TargetTriple;
 
 use super::{LOAD_FLAGS, ValueMap, iconst_value, resolve_i256, resolve_value};
 
@@ -910,23 +911,43 @@ pub(super) fn translate_i256_op(
             }))
         }
         // The leading zeros of the most significant nonzero limb, plus 64 for
-        // each limb above it; zero gives the low limb's 64 plus 192. One `clz`
-        // keeps targets without a count instruction, like SP1's, to one loop.
+        // each limb above it; zero gives the low limb's 64 plus 192.
         NativeInstKind::Clz(op) if wide(op.arg()) => {
-            let [low, rest @ ..] = resolve_i256(function, *op.arg(), value_map, builder)?;
-            let start = (low, builder.ins().iconst(I64, 192));
-            let (top, above) =
-                rest.into_iter()
-                    .zip([128, 64, 0])
-                    .fold(start, |(top, above), (limb, bits)| {
-                        let bits = builder.ins().iconst(I64, bits);
-                        (
-                            builder.ins().select(limb, limb, top),
-                            builder.ins().select(limb, bits, above),
-                        )
-                    });
-            let zeros = builder.ins().clz(top);
-            let count = builder.ins().iadd(above, zeros);
+            let limbs = resolve_i256(function, *op.arg(), value_map, builder)?;
+            let count = if function.ctx().triple == TargetTriple::SP1 {
+                // One `clz` keeps a target without a count instruction to one
+                // loop: the limb and its offset are chosen first.
+                let [low, rest @ ..] = limbs;
+                let start = (low, builder.ins().iconst(I64, 192));
+                let (top, above) =
+                    rest.into_iter()
+                        .zip([128, 64, 0])
+                        .fold(start, |(top, above), (limb, bits)| {
+                            let bits = builder.ins().iconst(I64, bits);
+                            (
+                                builder.ins().select(limb, limb, top),
+                                builder.ins().select(limb, bits, above),
+                            )
+                        });
+                let zeros = builder.ins().clz(top);
+                builder.ins().iadd(above, zeros)
+            } else {
+                // Each limb's count at once, then a tree of choices: a pair's
+                // count is its high limb's, or 64 plus its low limb's when the
+                // high limb is zero, and likewise for the two pairs.
+                let [l0, l1, l2, l3] = limbs;
+                let pair = |high, low, builder: &mut FunctionBuilder| {
+                    let high_zeros = builder.ins().clz(high);
+                    let low_zeros = builder.ins().clz(low);
+                    let low_zeros = builder.ins().iadd_imm_u(low_zeros, 64);
+                    builder.ins().select(high, high_zeros, low_zeros)
+                };
+                let upper = pair(l3, l2, builder);
+                let lower = pair(l1, l0, builder);
+                let lower = builder.ins().iadd_imm_u(lower, 128);
+                let upper_nonzero = builder.ins().bor(l3, l2);
+                builder.ins().select(upper_nonzero, upper, lower)
+            };
             let zero = builder.ins().iconst(I64, 0);
             Output::Limbs([count, zero, zero, zero])
         }
