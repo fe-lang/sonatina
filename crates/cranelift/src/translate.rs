@@ -370,6 +370,9 @@ impl CallFacts for Calls<'_> {
     fn owns(&self, callee: FuncRef, index: usize) -> bool {
         self.ownership.owns(callee, index)
     }
+    fn owns_arg(&self, index: usize) -> bool {
+        self.ownership.owns(self.func_ref, index)
+    }
     fn may_write(&self, callee: FuncRef, index: usize) -> bool {
         self.arg_writes.may_write(callee, index)
     }
@@ -2229,12 +2232,17 @@ fn translate_function(
                 }
                 NativeInstKind::ObjAlloc(_)
                     if let Some(result) = function.dfg.inst_result(inst_id)
-                        && let Some(arg) = owned_objects
+                        && let Some((arg, offset)) = owned_objects
                             .get(&result)
-                            .copied()
+                            .map(|&arg| (arg, 0))
                             .or_else(|| frame.aliased(result)) =>
                 {
                     let storage = resolve_value(function, arg, &value_map, &mut builder)?;
+                    let storage = if offset == 0 {
+                        storage
+                    } else {
+                        builder.ins().iadd_imm_u(storage, i64::from(offset))
+                    };
                     value_map.insert(result, storage);
                 }
                 NativeInstKind::ObjAlloc(obj_alloc) => {

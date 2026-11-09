@@ -68,8 +68,10 @@ use super::{
 /// arguments, which lets values move between it and calls without copies;
 /// so is a `noalias` object argument whose address does not escape, though
 /// its storage stays the caller's. A local object initialized from a
-/// by-reference argument at the top of the entry block, and not written
-/// afterwards, lives in the argument's storage.
+/// by-reference argument in the entry block, before any other use, and not
+/// written afterwards, lives in the argument's storage; so does one
+/// initialized from a constant projection of such an argument, at the
+/// field, unless the function owns the argument and may write its storage.
 /// A load of a whole such object whose only use passes it to a call later
 /// in its block, with no state change in between, owns no storage: the
 /// call reads the object, which nothing else can change while it runs. A
@@ -106,8 +108,8 @@ pub(super) struct FrameSlots {
     /// into.
     temporary: FxHashMap<(InstId, usize), clif::StackSlot>,
     /// Objects living in the storage of the argument they are initialized
-    /// from.
-    aliased: FxHashMap<ValueId, ValueId>,
+    /// from, with their offset there.
+    aliased: FxHashMap<ValueId, (ValueId, u32)>,
     /// Roots of classes living in a field of another class's storage, with
     /// that class's root and the field's offset.
     embedded: FxHashMap<ValueId, (ValueId, u32)>,
@@ -235,13 +237,13 @@ impl FrameSlots {
                 .destination
                 .values()
                 .map(|&(_, store)| store)
-                .chain(plan.aliased.values().map(|&(_, store)| store))
+                .chain(plan.aliased.values().map(|&(_, _, store)| store))
                 .chain(plan.stored.values().map(|&(_, store)| store))
                 .collect(),
             aliased: plan
                 .aliased
                 .iter()
-                .map(|(&object, &(arg, _))| (object, arg))
+                .map(|(&object, &(arg, offset, _))| (object, (arg, offset)))
                 .collect(),
             destination: plan
                 .destination
@@ -282,8 +284,9 @@ impl FrameSlots {
         self.destination.get(&inst).copied()
     }
 
-    /// The argument whose storage the object `object` lives in, if any.
-    pub fn aliased(&self, object: ValueId) -> Option<ValueId> {
+    /// The argument whose storage the object `object` lives in, if any,
+    /// with the object's offset there.
+    pub fn aliased(&self, object: ValueId) -> Option<(ValueId, u32)> {
         self.aliased.get(&object).copied()
     }
 
@@ -371,6 +374,8 @@ pub(super) trait CallFacts {
     fn is_tail_call(&self, call: InstId) -> bool;
     /// Whether `callee` owns its argument `index` (`Ownership`).
     fn owns(&self, callee: FuncRef, index: usize) -> bool;
+    /// Whether the function being translated owns its argument `index`.
+    fn owns_arg(&self, index: usize) -> bool;
     /// Whether `callee` may write through its argument `index`.
     fn may_write(&self, callee: FuncRef, index: usize) -> bool;
 }
@@ -408,9 +413,9 @@ struct Plan {
     destination: FxHashMap<InstId, (ValueId, InstId)>,
     /// The class of each owned argument copied into a temporary.
     temporaries: Vec<((InstId, usize), usize)>,
-    /// Objects living in an argument's storage, with the argument and the
-    /// store that would have copied it.
-    aliased: FxHashMap<ValueId, (ValueId, InstId)>,
+    /// Objects living in an argument's storage, with the argument, the
+    /// object's offset there and the store that would have copied it.
+    aliased: FxHashMap<ValueId, (ValueId, u32, InstId)>,
     /// Classes living in a field of another class's storage, with that
     /// class and the field's offset.
     embedded: FxHashMap<usize, (usize, u32)>,
@@ -456,8 +461,9 @@ impl Plan {
             stored: FxHashMap::default(),
         };
         let local = local_objects(function);
-        // Objects initialized from a by-reference argument at the top of the
-        // entry block and not written afterwards.
+        // Objects initialized from a by-reference argument, or a constant
+        // projection of one, in the entry block before any other use, and
+        // not written afterwards.
         if let Some(entry) = function.layout.entry_block() {
             for inst in function.layout.iter_inst(entry) {
                 let NativeInstKind::ObjStore(store) =
@@ -465,11 +471,11 @@ impl Plan {
                 else {
                     continue;
                 };
-                let (object, arg) = (*store.object(), *store.value());
+                let (object, value) = (*store.object(), *store.value());
                 let is_object = dfg.value_inst(object).is_some_and(|alloc| {
                     matches!(
                         native_inst_set().resolve_inst(dfg.inst(alloc)),
-                        NativeInstKind::ObjAlloc(alloc) if *alloc.ty() == dfg.value_ty(arg)
+                        NativeInstKind::ObjAlloc(alloc) if *alloc.ty() == dfg.value_ty(value)
                     )
                 });
                 let first_use = function
@@ -478,12 +484,12 @@ impl Plan {
                     .find(|&other| dfg.users(object).any(|&user| user == other));
                 if is_object
                     && local.get(&object) == Some(&object)
-                    && function.arg_values.contains(&arg)
-                    && uses_indirect_value_representation(ctx, dfg.value_ty(arg))
+                    && let Some((arg, offset)) = argument_storage(function, value, calls)?
+                    && uses_indirect_value_representation(ctx, dfg.value_ty(value))
                     && first_use == Some(inst)
                     && !object_written_after(function, cfg, &position, &local, object, inst, calls)
                 {
-                    plan.aliased.insert(object, (arg, inst));
+                    plan.aliased.insert(object, (arg, offset, inst));
                 }
             }
         }
@@ -938,6 +944,35 @@ fn object_used_after(
 /// object in place (`passed_once`) for an argument its callee owns, when the
 /// object is an `obj.alloc` not used after the call; the load itself may
 /// come before `inst`.
+/// The by-reference argument whose storage holds `value`, with `value`'s
+/// offset there: the argument itself, or a projection of it by constant
+/// indices that the function cannot write, as it neither owns the argument
+/// nor passes it on to a callee that does.
+fn argument_storage(
+    function: &Function,
+    mut value: ValueId,
+    calls: &impl CallFacts,
+) -> Result<Option<(ValueId, u32)>, String> {
+    let dfg = &function.dfg;
+    let mut offset = 0;
+    loop {
+        if let Some(index) = function.arg_values.iter().position(|&arg| arg == value) {
+            return Ok((offset == 0 || !calls.owns_arg(index)).then_some((value, offset)));
+        }
+        let Some(inst) = dfg.value_inst(value) else {
+            return Ok(None);
+        };
+        let NativeInstKind::ExtractValue(extract) = native_inst_set().resolve_inst(dfg.inst(inst))
+        else {
+            return Ok(None);
+        };
+        let index = constant_value_index(function, *extract.idx(), "extract_value")?;
+        value = *extract.dest();
+        let (field, _) = aggregate_elem_offset(function.ctx(), dfg.value_ty(value), index)?;
+        offset += field as u32;
+    }
+}
+
 fn object_written_after(
     function: &Function,
     cfg: &ControlFlowGraph,
@@ -1240,6 +1275,9 @@ mod tests {
             false
         }
         fn owns(&self, _: FuncRef, _: usize) -> bool {
+            false
+        }
+        fn owns_arg(&self, _: usize) -> bool {
             false
         }
         fn may_write(&self, _: FuncRef, _: usize) -> bool {
