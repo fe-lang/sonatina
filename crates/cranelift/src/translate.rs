@@ -2590,6 +2590,7 @@ fn translate_function(
     builder.seal_all_blocks();
     builder.finalize(clif_module.target_config());
     propagate_cold_blocks(&mut ctx.func);
+    merge_repeated_isplits(&mut ctx.func);
 
     if module.ctx.triple == TargetTriple::SP1 {
         // SP1 objects are statically linked within PC-relative relocation range.

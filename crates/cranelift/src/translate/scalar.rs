@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use cranelift_codegen::ir::{self as clif, InstBuilder, InstructionData, Opcode, condcodes::IntCC};
 use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Immediate, Type, U256};
@@ -49,6 +51,40 @@ pub(super) fn compare_disjunction(
     };
     let [lhs, rhs] = binary(unmasked(value), Opcode::Bor)?;
     Some([compare(lhs)?, compare(rhs)?])
+}
+
+/// Makes each repeated `isplit` of a value in a block take the first one's
+/// words. The low and the high word of a product are extracted apart, and
+/// Cranelift neither merges the splits nor folds a load into an instruction
+/// whose result two instructions use: a 64-bit product split twice read its
+/// operand into a register instead of from memory.
+pub(super) fn merge_repeated_isplits(func: &mut clif::Function) {
+    for block in func.layout.blocks().collect::<Vec<_>>() {
+        let mut first = HashMap::<clif::Value, clif::Inst>::new();
+        let mut inst = func.layout.first_inst(block);
+        while let Some(current) = inst {
+            inst = func.layout.next_inst(current);
+            let InstructionData::Unary {
+                opcode: Opcode::Isplit,
+                arg,
+            } = func.dfg.insts[current]
+            else {
+                continue;
+            };
+            let arg = func.dfg.resolve_aliases(arg);
+            let Some(&kept) = first.get(&arg) else {
+                first.insert(arg, current);
+                continue;
+            };
+            let kept = func.dfg.inst_results(kept).to_vec();
+            let repeated = func.dfg.inst_results(current).to_vec();
+            func.dfg.detach_inst_results(current);
+            for (value, original) in repeated.into_iter().zip(kept) {
+                func.dfg.change_to_alias(value, original);
+            }
+            func.layout.remove_inst(current);
+        }
+    }
 }
 
 /// The low `to_ty` bits of an i128 value, from its low word: the `iconcat`
@@ -346,4 +382,51 @@ pub(super) fn emit_scalar_mul_overflow(
         raw
     };
     (result, overflow)
+}
+
+#[cfg(test)]
+mod tests {
+    use cranelift_codegen::{
+        cursor::{Cursor, FuncCursor},
+        ir::{AbiParam, InstBuilder, InstructionData, Opcode, Signature, UserFuncName, types},
+        isa::CallConv,
+    };
+
+    use super::{clif, merge_repeated_isplits};
+
+    #[test]
+    fn repeated_isplits_take_the_first_words() {
+        let mut signature = Signature::new(CallConv::SystemV);
+        signature.params.push(AbiParam::new(types::I128));
+        signature.returns.extend([AbiParam::new(types::I64); 2]);
+        let mut func = clif::Function::with_name_signature(UserFuncName::default(), signature);
+        let block = func.dfg.make_block();
+        let value = func.dfg.append_block_param(block, types::I128);
+        func.layout.append_block(block);
+        let mut cursor = FuncCursor::new(&mut func).at_bottom(block);
+        // A product's low word, then its high word, each split apart.
+        let (low, _) = cursor.ins().isplit(value);
+        let (_, high) = cursor.ins().isplit(value);
+        cursor.ins().return_(&[low, high]);
+
+        merge_repeated_isplits(&mut func);
+
+        let splits: Vec<_> = func
+            .layout
+            .block_insts(block)
+            .filter(|&inst| func.dfg.insts[inst].opcode() == Opcode::Isplit)
+            .collect();
+        assert_eq!(splits.len(), 1, "{}", func.display());
+        let words = func.dfg.inst_results(splits[0]).to_vec();
+        let ret = func.layout.last_inst(block).unwrap();
+        let InstructionData::MultiAry { args, .. } = func.dfg.insts[ret] else {
+            panic!("{}", func.display());
+        };
+        let returned: Vec<_> = args
+            .as_slice(&func.dfg.value_lists)
+            .iter()
+            .map(|&value| func.dfg.resolve_aliases(value))
+            .collect();
+        assert_eq!(returned, words, "{}", func.display());
+    }
 }
