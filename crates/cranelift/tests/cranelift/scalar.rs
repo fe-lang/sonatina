@@ -376,6 +376,78 @@ block0:
 }
 
 #[test]
+fn i128_products_with_word_operands_match_ir() {
+    // Operands whose high limb is known zero, from a zero extension, a mask
+    // or a choice of small constants, multiply as one limb.
+    let values: [u128; 7] = [0, 1, 6, u64::MAX as u128, 1 << 64, 3 << 100, u128::MAX];
+    for (op, narrow, narrowed) in [
+        (
+            "umulo",
+            "v5.i128 = zext v4 i128;",
+            (|a| a & u64::MAX as u128) as fn(u128) -> u128,
+        ),
+        (
+            "umulo",
+            "v5.i128 = and v2 18446744073709551615.i128;",
+            |a| a & u64::MAX as u128,
+        ),
+        ("umulo", "v5.i128 = select v6 2.i128 6.i128;", |a| {
+            if a & 1 == 1 { 2 } else { 6 }
+        }),
+        ("umulsat", "v5.i128 = zext v4 i128;", |a| {
+            a & u64::MAX as u128
+        }),
+    ] {
+        let (results, status) = if op == "umulo" {
+            ("(v7.i128, v8.i1)", "v9.i8 = zext v8 i8;\n    return v9;")
+        } else {
+            ("v7.i128", "return 0.i8;")
+        };
+        let source = format!(
+            r#"func public %apply(v0.*i128, v1.*i128, v10.*i128) -> i8 {{
+block0:
+    v2.i128 = mload v0 i128;
+    v3.i128 = mload v1 i128;
+    v4.i64 = trunc v2 i64;
+    v6.i1 = trunc v2 i1;
+    {narrow}
+    {results} = {op} v5 v3;
+    mstore v10 v7 i128;
+    {status}
+}}
+"#
+        );
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let artifact = Compile::new(
+                parse_verified_native_module(&source),
+                CraneliftJitBackend::new(),
+            )
+            .with_opt_level(level)
+            .compile()
+            .unwrap_or_else(|errors| panic!("{source} {level:?}: {errors:?}"));
+            let apply: unsafe extern "C" fn(*const u128, *const u128, *mut u128) -> u8 =
+                unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+            for a in values {
+                for b in values {
+                    let (product, overflow) = narrowed(a).overflowing_mul(b);
+                    let expected = match op {
+                        "umulo" => (product, overflow),
+                        _ => (if overflow { u128::MAX } else { product }, false),
+                    };
+                    let mut result = 0;
+                    let status = unsafe { apply(&a, &b, &mut result) };
+                    assert_eq!(
+                        (result, status == 1),
+                        expected,
+                        "{source} {level:?} {a:x} {b:x}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn i128_truncations_take_the_low_bits() {
     let source = r#"func public %apply(v0.*i64, v1.*i64, v2.*i128, v3.*[i64; 9]) {
 block0:

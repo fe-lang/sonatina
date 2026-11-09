@@ -265,6 +265,34 @@ pub(super) fn emit_scalar_div_rem(
     }
 }
 
+/// The low and high limbs of the i128 `value`; a zero extension of a word
+/// has a constant zero high limb, which `mul_limbs` skips.
+fn i128_limbs(value: clif::Value, builder: &mut FunctionBuilder) -> (clif::Value, clif::Value) {
+    let dfg = &builder.func.dfg;
+    if let Some(inst) = dfg.value_def(value).inst()
+        && let InstructionData::Unary {
+            opcode: Opcode::Uextend,
+            arg,
+        } = dfg.insts[inst]
+        && dfg.value_type(arg).bits() <= 64
+    {
+        let low = if dfg.value_type(arg) == clif::types::I64 {
+            arg
+        } else {
+            builder.ins().uextend(clif::types::I64, arg)
+        };
+        return (low, builder.ins().iconst(clif::types::I64, 0));
+    }
+    builder.ins().isplit(value)
+}
+
+/// `value`, an i128 whose high 64 bits are zero, as the zero extension of its
+/// low limb, so that products take it as one limb.
+pub(super) fn narrow_i128(value: clif::Value, builder: &mut FunctionBuilder) -> clif::Value {
+    let low = builder.ins().ireduce(clif::types::I64, value);
+    builder.ins().uextend(clif::types::I128, low)
+}
+
 pub(super) fn emit_scalar_mul_overflow(
     lhs: clif::Value,
     rhs: clif::Value,
@@ -299,8 +327,8 @@ pub(super) fn emit_scalar_mul_overflow(
     };
     let lhs = magnitude(lhs, builder);
     let rhs = magnitude(rhs, builder);
-    let (lhs_low, lhs_high) = builder.ins().isplit(lhs);
-    let (rhs_low, rhs_high) = builder.ins().isplit(rhs);
+    let (lhs_low, lhs_high) = i128_limbs(lhs, builder);
+    let (rhs_low, rhs_high) = i128_limbs(rhs, builder);
     let [low, high, upper_low, upper_high] =
         mul_limbs::<4>(&[lhs_low, lhs_high], &[rhs_low, rhs_high], builder);
     let raw = builder.ins().iconcat(low, high);
