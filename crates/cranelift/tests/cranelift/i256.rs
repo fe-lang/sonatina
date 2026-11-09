@@ -171,7 +171,7 @@ fn pairs(lhs: &[U256], rhs: &[U256]) -> Vec<[U256; 3]> {
 }
 
 fn binary(op: &str) -> String {
-    format!("    v7.i256 = {op} v4 v5;\n    mstore v3 v7 i256;\n    return 0.i8;")
+    binary_with(op, "v4", "v5")
 }
 
 fn flag(op: &str) -> String {
@@ -181,8 +181,16 @@ fn flag(op: &str) -> String {
 }
 
 fn overflowing(op: &str) -> String {
+    overflowing_with(op, "v4", "v5")
+}
+
+fn binary_with(op: &str, lhs: &str, rhs: &str) -> String {
+    format!("    v7.i256 = {op} {lhs} {rhs};\n    mstore v3 v7 i256;\n    return 0.i8;")
+}
+
+fn overflowing_with(op: &str, lhs: &str, rhs: &str) -> String {
     format!(
-        "    (v7.i256, v8.i1) = {op} v4 v5;\n    mstore v3 v7 i256;\n    v9.i8 = zext v8 i8;\n    return v9;"
+        "    (v7.i256, v8.i1) = {op} {lhs} {rhs};\n    mstore v3 v7 i256;\n    v9.i8 = zext v8 i8;\n    return v9;"
     )
 }
 
@@ -459,6 +467,83 @@ fn i256_overflow_and_saturating_ops_match_reference() {
         let (product, negative, overflow) = signed_product(a, b);
         (if overflow { bound(negative) } else { product }, false)
     });
+}
+
+#[test]
+fn i256_products_with_zero_limbs_match_reference() {
+    let values = operands();
+    let cases = pairs(&values, &values);
+    // A zero-extended word has three zero limbs, and these constants have
+    // zero low, middle or high limbs: their partial products are skipped.
+    let low_bits = |value: U256| value & U256::from(u64::MAX);
+    let extended = |op: &str, lhs: &str, rhs: &str| {
+        format!(
+            "    v8.i64 = trunc v5 i64;\n    v9.i256 = zext v8 i256;\n    (v7.i256, v10.i1) = {op} {lhs} {rhs};\n    mstore v3 v7 i256;\n    v11.i8 = zext v10 i8;\n    return v11;"
+        )
+    };
+    check(&extended("umulo", "v4", "v9"), &cases, |[a, b, _]| {
+        a.overflowing_mul(low_bits(b))
+    });
+    check(&extended("umulo", "v9", "v4"), &cases, |[a, b, _]| {
+        low_bits(b).overflowing_mul(a)
+    });
+    let product = |lhs: &str, rhs: &str| {
+        format!(
+            "    v8.i64 = trunc v5 i64;\n    v9.i256 = zext v8 i256;\n    v7.i256 = mul {lhs} {rhs};\n    mstore v3 v7 i256;\n    return 0.i8;"
+        )
+    };
+    check(&product("v4", "v9"), &cases, |[a, b, _]| {
+        (a.overflowing_mul(low_bits(b)).0, false)
+    });
+    check(&product("v9", "v9"), &cases, |[_, b, _]| {
+        (low_bits(b) * low_bits(b), false)
+    });
+    for constant in [
+        word([0, 0, 1, 0]),
+        word([1, 0, 1, 0]),
+        word([u64::MAX, 1, 0, 0]),
+        word([0, 0, 0, 3]),
+    ] {
+        let literal = format!("0x{constant:x}.i256");
+        check(
+            &overflowing_with("umulo", "v4", &literal),
+            &cases,
+            |[a, _, _]| a.overflowing_mul(constant),
+        );
+        check(
+            &overflowing_with("umulo", &literal, "v4"),
+            &cases,
+            |[a, _, _]| constant.overflowing_mul(a),
+        );
+        check(&binary_with("mul", &literal, "v4"), &cases, |[a, _, _]| {
+            (constant.overflowing_mul(a).0, false)
+        });
+    }
+    // Masks with zero and all-ones limbs fold to limbs of either operand.
+    for mask in [
+        U256::from(u64::MAX),
+        word([0, u64::MAX, 0, u64::MAX]),
+        word([u64::MAX, 0, 0, 5]),
+    ] {
+        let literal = format!("0x{mask:x}.i256");
+        for (op, expected) in [
+            ("and", (|a, b| a & b) as fn(U256, U256) -> U256),
+            ("or", |a, b| a | b),
+            ("xor", |a, b| a ^ b),
+        ] {
+            let body = |lhs: &str, rhs: &str| {
+                format!(
+                    "    v8.i256 = {op} {lhs} {rhs};\n    v7.i256 = mul v8 v5;\n    mstore v3 v7 i256;\n    return 0.i8;"
+                )
+            };
+            check(&body("v4", &literal), &cases, |[a, b, _]| {
+                (expected(a, mask).overflowing_mul(b).0, false)
+            });
+            check(&body(&literal, "v4"), &cases, |[a, b, _]| {
+                (expected(mask, a).overflowing_mul(b).0, false)
+            });
+        }
+    }
 }
 
 fn shifted(op: &str, value: U256, amount: U256) -> U256 {

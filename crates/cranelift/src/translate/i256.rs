@@ -18,7 +18,7 @@ use sonatina_ir::{
     isa::native::inst_set as native_inst_set,
 };
 
-use super::{LOAD_FLAGS, ValueMap, resolve_i256, resolve_value};
+use super::{LOAD_FLAGS, ValueMap, iconst_value, resolve_i256, resolve_value};
 
 pub(super) const LIMBS: usize = 4;
 pub(super) type Limbs = [clif::Value; LIMBS];
@@ -94,6 +94,16 @@ fn i256_slot(builder: &mut FunctionBuilder) -> clif::StackSlot {
         32,
         I256_ALIGN_SHIFT,
     ))
+}
+
+/// The constant values of limbs `lhs` and `rhs`, where they are `iconst`s.
+fn limb_constants(
+    lhs: clif::Value,
+    rhs: clif::Value,
+    builder: &FunctionBuilder,
+) -> (Option<i64>, Option<i64>) {
+    let dfg = &builder.func.dfg;
+    (iconst_value(lhs, dfg), iconst_value(rhs, dfg))
 }
 
 pub(super) fn constant_limbs(value: U256, builder: &mut FunctionBuilder) -> Limbs {
@@ -439,12 +449,27 @@ pub(super) fn mul_limbs<const N: usize>(
     rhs: &[clif::Value],
     builder: &mut FunctionBuilder,
 ) -> [clif::Value; N] {
+    // Zero limbs add nothing: a zero `lhs` limb's row is skipped, and `rhs`
+    // ends after its last limb that is not zero. A zero-extended operand,
+    // such as a gas amount, has one limb.
+    let zero = |limb| iconst_value(limb, &builder.func.dfg) == Some(0);
+    let lhs: Vec<_> = lhs
+        .iter()
+        .map(|&limb| (!zero(limb)).then_some(limb))
+        .collect();
+    let rhs = &rhs[..rhs
+        .iter()
+        .rposition(|&limb| !zero(limb))
+        .map_or(0, |last| last + 1)];
     // Schoolbook rows. Each partial sum `lhs[i] * rhs[j] + result + carry`
     // fits in 128 bits; when the product is truncated, the top limb needs
     // only the low halves of its partial products.
     let truncated = N < lhs.len() + rhs.len();
     let mut result: [Option<clif::Value>; N] = [None; N];
-    for (i, &lhs_limb) in lhs.iter().enumerate() {
+    for (i, lhs_limb) in lhs.into_iter().enumerate() {
+        let Some(lhs_limb) = lhs_limb else {
+            continue;
+        };
         let mut carry = None;
         for (j, &rhs_limb) in rhs.iter().enumerate().take(N.saturating_sub(i)) {
             let k = i + j;
@@ -829,24 +854,39 @@ pub(super) fn translate_i256_op(
         NativeInstKind::Sar(op) if wide(op.value()) => {
             shift_op(op.value(), op.bits(), ShiftKind::Sar, value_map, builder)?
         }
+        // Limbs of masks and zero-extended words are often constant zeros or
+        // ones; the result limb is then one of the operands, so `mul_limbs`
+        // and comparisons see its zeros.
         NativeInstKind::And(op) if wide(op.lhs()) => bitwise(
             op.lhs(),
             op.rhs(),
-            |builder, lhs, rhs| builder.ins().band(lhs, rhs),
+            |builder, lhs, rhs| match limb_constants(lhs, rhs, builder) {
+                (Some(0), _) | (_, Some(-1)) => lhs,
+                (_, Some(0)) | (Some(-1), _) => rhs,
+                _ => builder.ins().band(lhs, rhs),
+            },
             value_map,
             builder,
         )?,
         NativeInstKind::Or(op) if wide(op.lhs()) => bitwise(
             op.lhs(),
             op.rhs(),
-            |builder, lhs, rhs| builder.ins().bor(lhs, rhs),
+            |builder, lhs, rhs| match limb_constants(lhs, rhs, builder) {
+                (Some(-1), _) | (_, Some(0)) => lhs,
+                (Some(0), _) | (_, Some(-1)) => rhs,
+                _ => builder.ins().bor(lhs, rhs),
+            },
             value_map,
             builder,
         )?,
         NativeInstKind::Xor(op) if wide(op.lhs()) => bitwise(
             op.lhs(),
             op.rhs(),
-            |builder, lhs, rhs| builder.ins().bxor(lhs, rhs),
+            |builder, lhs, rhs| match limb_constants(lhs, rhs, builder) {
+                (_, Some(0)) => lhs,
+                (Some(0), _) => rhs,
+                _ => builder.ins().bxor(lhs, rhs),
+            },
             value_map,
             builder,
         )?,
