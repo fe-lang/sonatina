@@ -417,6 +417,7 @@ fn size_inliner_config() -> InlinerConfig {
         max_growth_per_caller: 64,
         max_total_growth: 640,
         max_inline_depth: 3,
+        call_site_insts: 4,
         inline_threshold: 16,
         inline_threshold_cold: 10,
         small_function_block_limit: 4,
@@ -451,6 +452,7 @@ fn speed_inliner_config() -> InlinerConfig {
         max_growth_per_caller: 48,
         max_total_growth: 256,
         max_inline_depth: 3,
+        call_site_insts: 4,
         inline_threshold: 8,
         inline_threshold_cold: 4,
         small_function_block_limit: 4,
@@ -489,6 +491,9 @@ fn native_inliner_config() -> InlinerConfig {
         max_inlinee_insts: 128,
         max_growth_per_caller: 4096,
         max_total_growth: 65536,
+        // The EVM call sequence the speed config credits differs from a
+        // native call's.
+        call_site_insts: 0,
         inline_threshold: 64,
         inline_threshold_cold: 64,
         duplicated_block_penalty: 0,

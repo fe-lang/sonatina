@@ -137,6 +137,11 @@ pub struct InlinerConfig {
     pub max_total_growth: usize,
     pub max_inline_depth: usize,
     pub allow_inline_recursive: bool,
+    /// Instructions a call site costs beyond the call itself: pushing the
+    /// return address and callee, the jumps, and shuffling arguments and
+    /// results. Inlining removes them, so they are credited against its
+    /// growth, and a callee no larger than a call spends no budget.
+    pub call_site_insts: usize,
 
     /// Prefer removable single-use callees up to this resulting caller size.
     /// Zero disables the preference. Growth budgets charge only net module growth.
@@ -185,6 +190,7 @@ impl Default for InlinerConfig {
             max_total_growth: 0,
             max_inline_depth: 8,
             allow_inline_recursive: false,
+            call_site_insts: 0,
 
             max_single_use_caller_insts: 1024,
 
@@ -603,7 +609,10 @@ impl Inliner {
                             let growth = if always_inline {
                                 0
                             } else {
-                                result.net_growth.saturating_sub(plan.removed_insts)
+                                result
+                                    .net_growth
+                                    .saturating_sub(plan.removed_insts)
+                                    .saturating_sub(self.config.call_site_insts)
                             };
                             *growth_by_caller.entry(caller_ref).or_insert(0) += growth;
                             total_growth += growth;

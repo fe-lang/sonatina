@@ -1049,6 +1049,62 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 }
 
 #[test]
+fn full_inliner_credits_the_call_sequence_against_growth() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %multi(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}
+
+func public %caller(v0.i1, v1.i1, v2.i1) -> i32 {
+    block0:
+        v3.i32 = call %multi v0;
+        v4.i32 = call %multi v1;
+        v5.i32 = call %multi v2;
+        v6.i32 = add v3 v4;
+        v7.i32 = add v6 v5;
+        return v7;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    // `%multi` and its merge phi are no larger than the call sequence, so
+    // inlining it spends none of a budget that fits nothing else.
+    let cfg = InlinerConfig {
+        enable_full_inliner: true,
+        max_single_use_caller_insts: 0,
+        max_growth_per_caller: 1,
+        max_total_growth: 1,
+        call_site_insts: 4,
+        max_inlinee_blocks: 64,
+        max_inlinee_insts: 256,
+        inline_threshold: 1000,
+        inline_threshold_cold: 1000,
+        ..Default::default()
+    };
+    let stats = Inliner::new(cfg).run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %multi"),
+        "a call-sized callee should not spend the budget:\n{dumped}"
+    );
+    assert_eq!(stats.skipped_budget, 0);
+}
+
+#[test]
 fn full_inliner_skips_recursive_scc_when_disabled() {
     let source = r#"
 target = "evm-ethereum-london"
@@ -2509,9 +2565,11 @@ fn loaded_aggregate_reconstruction_inlines_in_trivial_and_full_modes() {
 #[test]
 fn loaded_aggregate_reconstruction_preserves_full_growth_limits() {
     let mut parsed = sonatina_parser::parse_module(&loaded_triple_module()).unwrap();
+    // `%read` grows each caller by 6 instructions after the call credit; its
+    // reconstruction discount must not bring that under the cap.
     let config = InlinerConfig {
         enable_single_block_splice: false,
-        max_growth_per_caller: 9,
+        max_growth_per_caller: 5,
         ..Pipeline::size().inliner_config
     };
     let stats = Inliner::new(config).run(&mut parsed.module);
