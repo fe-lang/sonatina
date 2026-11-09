@@ -10,10 +10,24 @@
 
 use std::collections::{HashMap, HashSet};
 
-use sonatina_ir::{Module, inst::InstId, module::FuncRef};
+use cranelift_codegen::{
+    ir::{self as clif, Opcode, ValueDef},
+    isa::TargetFrontendConfig,
+};
+use cranelift_frontend::FunctionBuilder;
+use sonatina_ir::{
+    Function, Module,
+    inst::{InstId, control_flow::Call},
+    module::FuncRef,
+};
 
 use sonatina_codegen::analysis::tail_position::{
-    TailSwitch, tail_callers, tail_calls, tail_switches,
+    TailSwitch, tail_call_storage, tail_callers, tail_calls, tail_switches,
+};
+
+use super::{
+    ValueMap, copy_value, create_stack_slot_for_type, register_parts, resolve_operand,
+    resolve_parts, resolve_value,
 };
 
 /// The tail calls of a module.
@@ -66,6 +80,61 @@ impl TailCalls {
             .get(&func)
             .is_some_and(|sites| sites.contains(&call))
     }
+}
+
+/// The Cranelift arguments of the tail call `call`, after any result
+/// buffer: an aggregate held in registers as its parts, which every private
+/// callee takes, another aggregate in the storage `tail_call_storage` gives
+/// it, and a scalar as itself. Every copy reads its source before any copy
+/// writes: with more than one, a source outside this frame's slots, which may
+/// lie in another copy's storage, goes through a temporary first.
+pub(super) fn tail_call_args(
+    function: &Function,
+    call: &Call,
+    value_map: &ValueMap,
+    config: TargetFrontendConfig,
+    builder: &mut FunctionBuilder,
+) -> Result<Vec<clif::Value>, String> {
+    let ctx = function.ctx();
+    let storage =
+        tail_call_storage(function, call.args()).ok_or("a tail call's argument cannot pass")?;
+    let mut args = Vec::new();
+    let mut copies = Vec::new();
+    for (&arg, param) in call.args().iter().zip(storage) {
+        let ty = function.dfg.value_ty(arg);
+        if let Some(parts) = register_parts(ctx, ty) {
+            args.extend(resolve_parts(function, arg, &parts, value_map, builder)?);
+            continue;
+        }
+        let value = resolve_operand(function, arg, value_map, config, builder)?;
+        match param {
+            Some(param) => {
+                let storage =
+                    resolve_value(function, function.arg_values[param], value_map, builder)?;
+                if storage != value {
+                    copies.push((ty, value, storage));
+                }
+                args.push(storage);
+            }
+            None => args.push(value),
+        }
+    }
+    if copies.len() > 1 {
+        for (ty, src, _) in &mut copies {
+            let dfg = &builder.func.dfg;
+            if !matches!(dfg.value_def(*src), ValueDef::Result(inst, _)
+                if dfg.insts[inst].opcode() == Opcode::StackAddr)
+            {
+                let temporary = create_stack_slot_for_type(*ty, ctx, builder)?;
+                copy_value(*ty, *src, temporary, ctx, config, builder)?;
+                *src = temporary;
+            }
+        }
+    }
+    for (ty, src, dst) in copies {
+        copy_value(ty, src, dst, ctx, config, builder)?;
+    }
+    Ok(args)
 }
 
 #[cfg(test)]
@@ -229,7 +298,8 @@ func private %narrows(v0.i64) -> i32 {
     #[test]
     fn aggregate_arguments_pass_on() {
         // A caller's own aggregate argument lives outside its frame; one
-        // passed twice, or one loaded into the frame, does not pass on.
+        // passed twice does not pass on, nor one loaded into the frame
+        // without an argument of its type to hold it.
         let (module, tail_calls) = tail_calls(
             r#"
 func private %forwards(v0.[i64; 32], v1.i64) -> i64 {
@@ -275,6 +345,70 @@ func private %takes(v0.[i64; 32], v1.i64, v2.*[i64; 32]) -> i64 {
         assert_eq!(tail_call_count(&module, &tail_calls, "pair"), 1);
         assert_eq!(tail_call_count(&module, &tail_calls, "twice"), 0);
         assert_eq!(tail_call_count(&module, &tail_calls, "loads"), 0);
+    }
+
+    #[test]
+    fn aggregate_arguments_take_their_callers_storage() {
+        // `%step` writes a new aggregate into its own argument's storage, and
+        // `%swap` passes its two arguments on in place. `%grow` has one
+        // argument of the type to give two new aggregates, and `%widen` none
+        // of the second one's type.
+        let (module, tail_calls) = tail_calls(
+            r#"
+func private %step(v0.[i64; 32], v1.i64) -> i64 {
+    block0:
+        v2.i1 = eq v1 0.i64;
+        br v2 block1 block2;
+    block1:
+        v3.i64 = extract_value v0 0.i64;
+        return v3;
+    block2:
+        v4.i64 = sub v1 1.i64;
+        v5.[i64; 32] = insert_value v0 0.i64 v4;
+        v6.i64 = call %step v5 v4;
+        return v6;
+}
+
+func private %swap(v0.[i64; 32], v1.[i64; 32], v2.i64) -> i64 {
+    block0:
+        v3.i64 = call %swap v1 v0 v2;
+        return v3;
+}
+
+func private %grow(v0.[i64; 32], v1.i64) -> i64 {
+    block0:
+        v2.[i64; 32] = insert_value v0 0.i64 v1;
+        v3.i64 = call %pair v2 v2 v1;
+        return v3;
+}
+
+func private %pair(v0.[i64; 32], v1.[i64; 32], v2.i64) -> i64 {
+    block0:
+        v3.i64 = call %grow v0 v2;
+        return v3;
+}
+
+func private %widen(v0.[i64; 32], v1.i64) -> i64 {
+    block0:
+        v2.[i64; 64] = insert_value undef.[i64; 64] 0.i64 v1;
+        v3.i64 = call %wide v2 v1;
+        return v3;
+}
+
+func private %wide(v0.[i64; 64], v1.i64) -> i64 {
+    block0:
+        v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v1;
+        v3.i64 = call %widen v2 v1;
+        return v3;
+}
+"#,
+        );
+        assert_eq!(tail_call_count(&module, &tail_calls, "step"), 1);
+        assert_eq!(tail_call_count(&module, &tail_calls, "swap"), 1);
+        assert_eq!(tail_call_count(&module, &tail_calls, "pair"), 1);
+        assert_eq!(tail_call_count(&module, &tail_calls, "grow"), 0);
+        assert_eq!(tail_call_count(&module, &tail_calls, "widen"), 0);
+        assert_eq!(tail_call_count(&module, &tail_calls, "wide"), 0);
     }
 
     #[test]

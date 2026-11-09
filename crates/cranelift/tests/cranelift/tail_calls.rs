@@ -396,3 +396,203 @@ block0:
         assert_eq!(unsafe { run(7, DEPTH) }, 8 + 7 * 1000, "{level:?}");
     }
 }
+
+#[test]
+fn interpreter_handlers_tail_call_with_their_frame() {
+    // Each handler takes the interpreter's frame (code, pc, count, top,
+    // depth) and tail-calls `%next`, whose switch tail-calls the next
+    // opcode's handler through a table. Five fields are held in registers;
+    // with a sixth, the frame passes in storage, which each handler writes
+    // its new frame into. The code `[1, 2, 0]` counts to `DEPTH`.
+    for (extra_field, extra_init, extra_out) in [
+        ("", "v8.@Frame = insert_value v7 4.i64 0.i64;", ""),
+        (
+            ", i64",
+            "v8.@Frame = insert_value v7 5.i64 77.i64;",
+            "v8.i64 = extract_value v1 5.i64;
+    v9.*i64 = gep v0 3.i64;
+    mstore v9 v8 i64;",
+        ),
+    ] {
+        let source = format!(
+            r#"
+type @Frame = {{*i8, i64, i64, *i8, i64{extra_field}}};
+func private %next(v0.*i64, v1.@Frame) {{
+block0:
+    v2.*i8 = extract_value v1 0.i64;
+    v3.i64 = extract_value v1 1.i64;
+    v4.*i8 = gep v2 v3;
+    v5.i8 = mload v4 i8;
+    br_table v5 block1 (1.i8 block2) (2.i8 block3);
+block1:
+    call %op_stop v0 v1;
+    return;
+block2:
+    call %op_count v0 v1;
+    return;
+block3:
+    call %op_loop v0 v1;
+    return;
+}}
+
+func inline(never) private %op_stop(v0.*i64, v1.@Frame) {{
+block0:
+    v2.i64 = extract_value v1 2.i64;
+    v3.*i8 = extract_value v1 3.i64;
+    v4.i64 = extract_value v1 4.i64;
+    v5.i64 = ptr_to_int v3 i64;
+    mstore v0 v2 i64;
+    v6.*i64 = gep v0 1.i64;
+    mstore v6 v4 i64;
+    v7.*i64 = gep v0 2.i64;
+    mstore v7 v5 i64;
+    {extra_out}
+    return;
+}}
+
+func private %op_count(v0.*i64, v1.@Frame) {{
+block0:
+    v2.i64 = extract_value v1 1.i64;
+    v3.i64 = add v2 1.i64;
+    v4.i64 = extract_value v1 2.i64;
+    v5.i64 = add v4 1.i64;
+    v6.*i8 = extract_value v1 3.i64;
+    v7.*i8 = gep v6 8.i64;
+    v8.i64 = extract_value v1 4.i64;
+    v9.i64 = add v8 1.i64;
+    v10.@Frame = insert_value v1 1.i64 v3;
+    v11.@Frame = insert_value v10 2.i64 v5;
+    v12.@Frame = insert_value v11 3.i64 v7;
+    v13.@Frame = insert_value v12 4.i64 v9;
+    call %next v0 v13;
+    return;
+}}
+
+func private %op_loop(v0.*i64, v1.@Frame) {{
+block0:
+    v2.i64 = extract_value v1 2.i64;
+    v3.i64 = extract_value v1 4.i64;
+    v4.i64 = add v3 2.i64;
+    v5.@Frame = insert_value v1 4.i64 v4;
+    v6.i1 = lt v2 {DEPTH}.i64;
+    br v6 block1 block2;
+block1:
+    v7.@Frame = insert_value v5 1.i64 0.i64;
+    call %next v0 v7;
+    return;
+block2:
+    v8.i64 = extract_value v1 1.i64;
+    v9.i64 = add v8 1.i64;
+    v10.@Frame = insert_value v5 1.i64 v9;
+    call %next v0 v10;
+    return;
+}}
+
+func public %run(v0.*i8, v1.*i8, v2.*i64) {{
+block0:
+    v3.@Frame = insert_value undef.@Frame 0.i64 v0;
+    v4.@Frame = insert_value v3 1.i64 0.i64;
+    v5.@Frame = insert_value v4 2.i64 0.i64;
+    v6.@Frame = insert_value v5 3.i64 v1;
+    v7.@Frame = insert_value v6 4.i64 0.i64;
+    {extra_init}
+    call %next v2 v8;
+    return;
+}}
+"#
+        );
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let artifact = Compile::new(
+                parse_verified_native_module(&source),
+                CraneliftJitBackend::new(),
+            )
+            .with_opt_level(level)
+            .compile()
+            .unwrap_or_else(|errors| panic!("{level:?} {extra_field:?}: {errors:?}"));
+            let run: unsafe extern "C" fn(*const u8, *const u8, *mut i64) =
+                unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+            let code = [1u8, 2, 0];
+            let top = 4096usize as *const u8;
+            let mut status = [-1i64; 4];
+            unsafe { run(code.as_ptr(), top, status.as_mut_ptr()) };
+            let extra = if extra_field.is_empty() { -1 } else { 77 };
+            assert_eq!(
+                status,
+                [DEPTH, 3 * DEPTH, 4096 + 8 * DEPTH, extra],
+                "{level:?} {extra_field:?}"
+            );
+            assert!(
+                artifact.function_address("next").is_none(),
+                "{level:?} {extra_field:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn tail_calls_read_arguments_before_writing_their_storage() {
+    // `%rotate`'s tail call writes a new `@Holder` into its first
+    // argument's storage and passes the old first field, a view of that
+    // storage, in its second argument's: the field is read first.
+    let source = r#"
+type @Holder = {[i64; 8], [i64; 8]};
+func private %rotate(v0.@Holder, v1.[i64; 8], v2.i64, v3.*i8) {
+block0:
+    v4.i1 = eq v2 0.i64;
+    br v4 block1 block2;
+block1:
+    v5.*@Holder = bitcast v3 *@Holder;
+    mstore v5 v0 @Holder;
+    v6.*i8 = gep v3 128.i64;
+    v7.*[i64; 8] = bitcast v6 *[i64; 8];
+    mstore v7 v1 [i64; 8];
+    return;
+block2:
+    v8.[i64; 8] = extract_value v0 0.i64;
+    v9.[i64; 8] = insert_value v1 0.i64 v2;
+    v10.@Holder = insert_value v0 0.i64 v9;
+    v11.i64 = sub v2 1.i64;
+    call %rotate v10 v8 v11 v3;
+    return;
+}
+
+func public %run(v0.*i8, v1.i64, v2.*i8) {
+block0:
+    v3.*@Holder = bitcast v0 *@Holder;
+    v4.@Holder = mload v3 @Holder;
+    v5.*i8 = gep v0 128.i64;
+    v6.*[i64; 8] = bitcast v5 *[i64; 8];
+    v7.[i64; 8] = mload v6 [i64; 8];
+    call %rotate v4 v7 v1 v2;
+    return;
+}
+"#;
+    let steps = DEPTH / 10;
+    // Each step makes the holder `{big with [0] = n, second}` and the big
+    // the holder's old first field.
+    let input: [i64; 24] = std::array::from_fn(|index| index as i64 + 1);
+    let (mut first, mut second, mut big) = ([0i64; 8], [0i64; 8], [0i64; 8]);
+    first.copy_from_slice(&input[..8]);
+    second.copy_from_slice(&input[8..16]);
+    big.copy_from_slice(&input[16..]);
+    for n in (1..=steps).rev() {
+        let mut next = big;
+        next[0] = n;
+        big = std::mem::replace(&mut first, next);
+    }
+    let expected = [first, second, big].concat();
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let run: unsafe extern "C" fn(*const i64, i64, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        let mut output = [0i64; 24];
+        unsafe { run(input.as_ptr(), steps, output.as_mut_ptr()) };
+        assert_eq!(output[..], expected[..], "{level:?}");
+    }
+}

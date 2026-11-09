@@ -145,8 +145,9 @@ fn returns_at_once(function: &Function, block: BlockId, last: InstId, results: &
 
 /// The call ending `block` and its callee, if it is a tail call: the block
 /// returns the call's results right after it, and the callee is a private
-/// function returning the same types. No argument refers to the caller's
-/// frame, and an indirect result passes the caller's own result buffer on.
+/// function returning the same types. Its arguments pass in storage outside
+/// the caller's frame ([`tail_call_storage`]), and an indirect result passes
+/// the caller's own result buffer on.
 fn tail_call(func_ref: FuncRef, function: &Function, block: BlockId) -> Option<(InstId, FuncRef)> {
     let last = function.layout.last_inst_of(block)?;
     let call_inst = function.layout.prev_inst_of(last)?;
@@ -156,20 +157,50 @@ fn tail_call(func_ref: FuncRef, function: &Function, block: BlockId) -> Option<(
     let same_returns = ctx.func_sig(func_ref, |caller| {
         ctx.func_sig(callee, |callee| caller.ret_tys() == callee.ret_tys())
     });
-    let args = call.args();
-    let args_outside_frame = args.iter().all(|&arg| outside_frame(function, arg));
-    // An aggregate passed twice would reach the callee as two references to
-    // one storage, which it may own and overwrite through either.
-    let aggregates_distinct = args
-        .iter()
-        .enumerate()
-        .all(|(index, arg)| !is_aggregate(function, *arg) || !args[..index].contains(arg));
     (ctx.func_linkage(callee).is_private()
         && returns_at_once(function, block, last, function.dfg.inst_results(call_inst))
         && same_returns
-        && args_outside_frame
-        && aggregates_distinct)
-        .then_some((call_inst, callee))
+        && tail_call_storage(function, call.args()).is_some())
+    .then_some((call_inst, callee))
+}
+
+/// The storage outside `function`'s frame that each argument of a tail call
+/// passes in, if every argument can pass: none for a scalar, or for one of
+/// the function's own aggregate arguments, which passes on in place, and for
+/// any other aggregate a distinct argument of the function of the same type,
+/// whose storage the tail call writes the aggregate into. No storage passes
+/// twice, since a callee may own and overwrite it. An i256 cannot pass: a
+/// call passes it through the frame's outgoing storage.
+pub fn tail_call_storage(function: &Function, args: &[ValueId]) -> Option<Vec<Option<usize>>> {
+    let params = &function.arg_values;
+    let mut taken = vec![false; params.len()];
+    for &arg in args {
+        if is_aggregate(function, arg)
+            && let Some(index) = params.iter().position(|&param| param == arg)
+        {
+            if taken[index] {
+                return None;
+            }
+            taken[index] = true;
+        }
+    }
+    args.iter()
+        .map(|&arg| {
+            let ty = function.dfg.value_ty(arg);
+            if ty == Type::I256 {
+                return None;
+            }
+            if !is_aggregate(function, arg) || params.contains(&arg) {
+                return Some(None);
+            }
+            let index = params
+                .iter()
+                .zip(&taken)
+                .position(|(&param, &taken)| !taken && function.dfg.value_ty(param) == ty)?;
+            taken[index] = true;
+            Some(Some(index))
+        })
+        .collect()
 }
 
 /// The tail switch `inst` ends its block with, if it is one.
@@ -223,15 +254,6 @@ fn tail_switch(
         call,
         bits,
     })
-}
-
-/// Whether `arg` lives outside this function's frame: a scalar, or an
-/// aggregate argument of this function, which its own caller's storage
-/// holds. Other aggregates, and every i256, which a call passes through the
-/// frame's outgoing storage, live in the frame.
-fn outside_frame(function: &Function, arg: ValueId) -> bool {
-    function.dfg.value_ty(arg) != Type::I256
-        && (!is_aggregate(function, arg) || function.arg_values.contains(&arg))
 }
 
 fn is_aggregate(function: &Function, value: ValueId) -> bool {

@@ -53,7 +53,7 @@ use self::{
     phi::Edges,
     prediction::{BranchPrediction, propagate_cold_blocks},
     scalar::*,
-    tail::TailCalls,
+    tail::{TailCalls, tail_call_args},
     values::*,
 };
 
@@ -1206,27 +1206,14 @@ fn translate_function(
                             .dfg
                             .downcast::<&control_flow::Call>(switch.call)
                             .ok_or("a tail switch's call is not a call")?;
-                        // Every callee is private, so it takes aggregates held in
-                        // registers as their parts.
                         let mut call_args: Vec<_> = sret_ptr.into_iter().collect();
-                        for &arg in call.args() {
-                            match register_parts(&module.ctx, function.dfg.value_ty(arg)) {
-                                Some(parts) => call_args.extend(resolve_parts(
-                                    function,
-                                    arg,
-                                    &parts,
-                                    &value_map,
-                                    &mut builder,
-                                )?),
-                                None => call_args.push(resolve_operand(
-                                    function,
-                                    arg,
-                                    &value_map,
-                                    target_config,
-                                    &mut builder,
-                                )?),
-                            }
-                        }
+                        call_args.extend(tail_call_args(
+                            function,
+                            call,
+                            &value_map,
+                            target_config,
+                            &mut builder,
+                        )?);
                         let sig = clif_signature(module, switch.default, tail_calls, clif_module)?;
                         let sig = builder.import_signature(sig);
                         builder.ins().return_call_indirect(sig, callee, &call_args);
@@ -1444,6 +1431,20 @@ fn translate_function(
                         .ok_or_else(|| format!("unknown callee {callee:?}"))?;
                     let clif_func_ref =
                         clif_module.declare_func_in_func(*clif_func_id, builder.func);
+                    if tail_calls.is_tail_call(func_ref, inst_id) {
+                        // An indirect result goes to the caller's own buffer.
+                        let mut call_args: Vec<_> = sret_ptr.into_iter().collect();
+                        call_args.extend(tail_call_args(
+                            function,
+                            call,
+                            &value_map,
+                            target_config,
+                            &mut builder,
+                        )?);
+                        builder.ins().return_call(clif_func_ref, &call_args);
+                        // The tail call replaces the block's `return`.
+                        break;
+                    }
                     let ir_results = function.dfg.inst_results(inst_id);
                     let callee_linkage = module.ctx.func_linkage(callee);
                     let indirect = matches!(ir_results, [result] if passes_by_reference(
@@ -1451,14 +1452,8 @@ fn translate_function(
                         callee_linkage,
                         function.dfg.value_ty(*result),
                     ));
-
-                    let tail_call = tail_calls.is_tail_call(func_ref, inst_id);
                     let mut call_args = Vec::new();
-                    let sret_slot = if tail_call {
-                        // An indirect result goes to the caller's own buffer.
-                        call_args.extend(sret_ptr);
-                        None
-                    } else if indirect {
+                    let sret_slot = if indirect {
                         let result_ty = function.dfg.value_ty(ir_results[0]);
                         let addr = if result_ty == Type::I256 {
                             i256_storage.result(&mut builder)
@@ -1524,11 +1519,6 @@ fn translate_function(
                         call_args.push(value);
                     }
 
-                    if tail_call {
-                        builder.ins().return_call(clif_func_ref, &call_args);
-                        // The tail call replaces the block's `return`.
-                        break;
-                    }
                     let clif_call = builder.ins().call(clif_func_ref, &call_args);
                     if let Some(sret_addr) = sret_slot {
                         let result = ir_results[0];
