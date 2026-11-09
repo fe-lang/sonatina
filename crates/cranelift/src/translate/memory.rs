@@ -13,11 +13,13 @@ use sonatina_ir::{
     module::ModuleCtx,
     types::CompoundType,
 };
+use sonatina_triple::TargetTriple;
 
 use super::{
     LOAD_FLAGS, ValueMap, is_aggregate, load_limbs, load_parts, pointer_clif_type, register_parts,
     resize_int_value, resolve_i256, resolve_parts, resolve_value, signed_scalar,
-    sonatina_type_to_clif_or_err, store_limbs, store_parts, uses_indirect_value_representation,
+    sonatina_type_to_clif_or_err, store_limbs, store_limbs_pairing_zeros, store_parts,
+    uses_indirect_value_representation,
 };
 
 /// Copies and fills of at most this many bytes use inline loads and stores.
@@ -380,7 +382,12 @@ pub(super) fn store_value(
     let ty = function.dfg.value_ty(value);
     if ty == Type::I256 {
         let limbs = resolve_i256(function, value, value_map, builder)?;
-        store_limbs(limbs, dst, offset, MemFlagsData::new(), builder);
+        // RV64IM has no vector registers.
+        if function.ctx().triple == TargetTriple::SP1 {
+            store_limbs(limbs, dst, offset, MemFlagsData::new(), builder);
+        } else {
+            store_limbs_pairing_zeros(limbs, dst, offset, MemFlagsData::new(), builder);
+        }
     } else if let Some(parts) = register_parts(function.ctx(), ty) {
         let values = resolve_parts(function, value, &parts, value_map, builder)?;
         store_parts(&parts, &values, dst, offset, builder);

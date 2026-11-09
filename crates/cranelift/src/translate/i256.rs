@@ -4,9 +4,10 @@
 use std::{cmp::Ordering, collections::HashMap};
 
 use cranelift_codegen::ir::{
-    self as clif, BlockArg, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
+    self as clif, BlockArg, ConstantData, InstBuilder, InstructionData, MemFlagsData, Opcode,
+    StackSlotData, StackSlotKind,
     condcodes::{CondCode, IntCC},
-    types::{I64, I128},
+    types::{I64, I64X2, I128},
 };
 use cranelift_frontend::FunctionBuilder;
 use sonatina_codegen::analysis::known_bits::KnownBitsQuery;
@@ -135,6 +136,54 @@ pub(super) fn store_limbs(
         builder
             .ins()
             .store(flags, value, address, offset + 8 * limb as i32);
+    }
+}
+
+/// As `store_limbs`, but two adjacent zero limbs, as above a pushed byte or
+/// address, store as one 16-byte zero vector: half the stores, and no
+/// immediate to encode. The vector store claims no alignment, since limbs
+/// only align to 8 bytes. For targets with vector registers.
+pub(super) fn store_limbs_pairing_zeros(
+    limbs: Limbs,
+    address: clif::Value,
+    offset: i32,
+    flags: MemFlagsData,
+    builder: &mut FunctionBuilder,
+) {
+    let is_zero = |value: clif::Value, builder: &FunctionBuilder| {
+        builder
+            .func
+            .dfg
+            .value_def(value)
+            .inst()
+            .is_some_and(|inst| {
+                matches!(
+                    builder.func.dfg.insts[inst],
+                    InstructionData::UnaryImm { opcode: Opcode::Iconst, imm } if imm.bits() == 0
+                )
+            })
+    };
+    let mut limb = 0;
+    while limb < LIMBS {
+        let at = offset + 8 * limb as i32;
+        if limb + 1 < LIMBS && is_zero(limbs[limb], builder) && is_zero(limbs[limb + 1], builder) {
+            let zeros = builder
+                .func
+                .dfg
+                .constants
+                .insert(ConstantData::from(vec![0; 16]));
+            let zero = builder.ins().vconst(I64X2, zeros);
+            let vector_flags = if flags.notrap() {
+                MemFlagsData::new().with_notrap()
+            } else {
+                MemFlagsData::new()
+            };
+            builder.ins().store(vector_flags, zero, address, at);
+            limb += 2;
+        } else {
+            builder.ins().store(flags, limbs[limb], address, at);
+            limb += 1;
+        }
     }
 }
 
