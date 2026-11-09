@@ -11,12 +11,13 @@
 //! backend legalizes `usubo` back into a subtraction and a comparison, so this
 //! pass belongs in native pipelines.
 //!
-//! A difference used in only a few blocks stays apart: Cranelift computes it
-//! in each and branches on the comparison's flags, where `usub_overflow`'s
-//! borrow would take a `setb` and a `test` before the branch. A guard that
-//! exits a loop, for example, uses its difference on the back edge and on
-//! the exit. The destinations of a tail switch count as the switch's block:
-//! the backend makes their calls one indirect tail call there.
+//! The x64 backend branches on the borrow in the flags, so the `usubo` costs
+//! what the comparison did and each subtraction is saved. A minuend used
+//! after the comparison too, such as a stack depth a fault path reports,
+//! stays live past the `usubo`, which then subtracts from a copy of it; its
+//! difference is fused only when used in many blocks. The destinations of a
+//! tail switch count as the switch's block: the backend makes their calls
+//! one indirect tail call there.
 //!
 //! An overflow test `b > MAX - a` (or `MAX - a < b`, or with `not a`) is the
 //! carry of `a + b`: it becomes `uaddo a b`, whose sum replaces the
@@ -37,8 +38,8 @@ use sonatina_ir::{
 
 use crate::domtree::DomTree;
 
-/// The fewest blocks using a difference for which one `usubo` is cheaper
-/// than a subtraction in each.
+/// The fewest blocks using a difference for which one `usubo` on a copy of a
+/// live minuend is cheaper than a subtraction in each.
 const MIN_USE_BLOCKS: usize = 4;
 
 #[derive(Default)]
@@ -113,7 +114,12 @@ impl CompareSubFusion {
                 })
                 .map(|block| switch_blocks.get(&block).copied().unwrap_or(block))
                 .collect();
-            if use_blocks.len() < MIN_USE_BLOCKS {
+            // A minuend used after the comparison stays live past the
+            // `usubo`, which then subtracts from a copy of it.
+            let minuend_live = func.dfg.users(lhs).any(|&user| {
+                user != compare && !fused.contains(&user) && dominates(func, dom, compare, user)
+            });
+            if fused.is_empty() || (minuend_live && use_blocks.len() < MIN_USE_BLOCKS) {
                 continue;
             }
 

@@ -1,12 +1,14 @@
-#! An unsigned comparison and the subtractions of its operands it dominates become one `usubo` when the difference is used in four or more blocks.
+#! An unsigned comparison and the subtractions of its operands it dominates become one `usubo`, unless the minuend is used after the comparison and the difference in fewer than four blocks.
 
 target = "evm-ethereum-osaka"
 
-# sameln: func public %one_use_block_stays(v0.i64, v1.i64) -> i64 {
-# check: v2.i1 = gt v1 v0;
-# check: v3.i64 = sub v0 v1;
-# not: usubo
-func public %one_use_block_stays(v0.i64, v1.i64) -> i64 {
+# regex: VALUE=\bv\d+\b
+# sameln: func public %one_use_block(v0.i64, v1.i64) -> i64 {
+# check: ($(diff=$VALUE).i64, $(borrow=$VALUE).i1) = usubo v0 v1;
+# nextln: br $borrow block1 block2;
+# check: return $diff;
+# not: sub
+func public %one_use_block(v0.i64, v1.i64) -> i64 {
 block0:
     v2.i1 = gt v1 v0;
     br v2 block1 block2;
@@ -19,11 +21,13 @@ block2:
     return v3;
 }
 
-# sameln: func public %exit_and_back_edge_stay(v0.i64, v1.i64, v2.i1) -> i64 {
-# check: v3.i1 = gt v1 v0;
-# check: v4.i64 = sub v0 v1;
-# not: usubo
-func public %exit_and_back_edge_stay(v0.i64, v1.i64, v2.i1) -> i64 {
+# regex: VALUE=\bv\d+\b
+# sameln: func public %exit_and_back_edge(v0.i64, v1.i64, v2.i1) -> i64 {
+# check: ($(diff=$VALUE).i64, $(borrow=$VALUE).i1) = usubo v0 v1;
+# nextln: br $borrow block1 block2;
+# check: phi ($diff block3) ($diff block4);
+# not: sub
+func public %exit_and_back_edge(v0.i64, v1.i64, v2.i1) -> i64 {
 block0:
     v3.i1 = gt v1 v0;
     br v3 block1 block2;
@@ -44,6 +48,24 @@ block4:
 block5:
     v5.i64 = phi (v4 block3) (v4 block4);
     return v5;
+}
+
+# A minuend a fault path reports stays live past the comparison.
+# sameln: func public %live_minuend_stays(v0.i64, v1.i64) -> i64 {
+# check: v2.i1 = gt v1 v0;
+# check: v3.i64 = sub v0 v1;
+# not: usubo
+func public %live_minuend_stays(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i1 = gt v1 v0;
+    br v2 block1 block2;
+
+block1:
+    return v0;
+
+block2:
+    v3.i64 = sub v0 v1;
+    return v3;
 }
 
 # regex: VALUE=\bv\d+\b
