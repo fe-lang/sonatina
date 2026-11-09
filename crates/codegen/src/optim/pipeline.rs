@@ -450,7 +450,10 @@ fn speed_inliner_config() -> InlinerConfig {
         max_inlinee_blocks: 8,
         max_inlinee_insts: 32,
         max_growth_per_caller: 48,
-        max_total_growth: 256,
+        // No module cap: the per-caller cap already bounds growth by the
+        // number of callers, and a fixed module cap leaves a large module's
+        // later callers uninlined.
+        max_total_growth: 0,
         max_inline_depth: 3,
         call_site_insts: 4,
         inline_threshold: 8,
@@ -2777,7 +2780,8 @@ func private %entry(v0.i32, v1.i32) -> i32 {
         assert!(
             size.inliner_config.max_growth_per_caller >= speed.inliner_config.max_growth_per_caller
         );
-        assert!(size.inliner_config.max_total_growth >= speed.inliner_config.max_total_growth);
+        assert!(size.inliner_config.max_total_growth > 0);
+        assert_eq!(speed.inliner_config.max_total_growth, 0);
         assert!(
             speed.inliner_config.small_function_bonus > size.inliner_config.small_function_bonus
         );

@@ -1105,6 +1105,72 @@ func public %caller(v0.i1, v1.i1, v2.i1) -> i32 {
 }
 
 #[test]
+fn speed_inliner_has_no_module_growth_cap() {
+    let mut source = String::from(
+        r#"
+target = "evm-ethereum-london"
+
+func private %grow(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i32 = add v1 1.i32;
+        v3.i32 = mul v2 3.i32;
+        v4.i32 = xor v3 5.i32;
+        v5.i32 = add v4 7.i32;
+        v6.i32 = mul v5 9.i32;
+        v7.i32 = xor v6 11.i32;
+        return v7;
+
+    block2:
+        v8.i32 = sub v1 1.i32;
+        v9.i32 = mul v8 13.i32;
+        v10.i32 = xor v9 15.i32;
+        v11.i32 = sub v10 17.i32;
+        v12.i32 = mul v11 19.i32;
+        v13.i32 = xor v12 21.i32;
+        return v13;
+}
+"#,
+    );
+    // Each inline grows its caller by 12 instructions, 360 in all.
+    for index in 0..30 {
+        source.push_str(&format!(
+            r#"
+func public %caller{index}(v0.i1, v1.i32) -> i32 {{
+    block0:
+        v2.i32 = call %grow v0 v1;
+        return v2;
+}}
+"#
+        ));
+    }
+    let inline = |config: InlinerConfig| {
+        let mut parsed = sonatina_parser::parse_module(&source)
+            .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+        let module = &mut parsed.module;
+        let grow = find_func(module, "grow");
+        module.ctx.set_inline_hint(grow, InlineHint::Inline);
+        let stats = Inliner::new(config).run(module);
+        assert_module_verified(module);
+        (dump_module(module).matches("call %grow").count(), stats)
+    };
+
+    let speed = Pipeline::speed().inliner_config;
+    let (calls, stats) = inline(speed);
+    assert_eq!(calls, 0);
+    assert_eq!(stats.skipped_budget, 0);
+
+    // A 256-instruction module cap would leave the later callers' calls.
+    let (calls, _) = inline(InlinerConfig {
+        max_total_growth: 256,
+        ..speed
+    });
+    assert!(calls > 0);
+}
+
+#[test]
 fn full_inliner_skips_recursive_scc_when_disabled() {
     let source = r#"
 target = "evm-ethereum-london"
