@@ -467,7 +467,7 @@ fn small_aggregates_in_registers_reach_objects_and_public_functions() {
     let source = r#"
 type @Opt = enum { #None, #Some(i64) };
 type @Pair = {i8, i64};
-type @Big = {i64, i64, i64, i64, i64};
+type @Big = {i64, i64, i64, i64, i64, i64};
 type @Holder = {i8, @Opt, @Big};
 type @E = enum { #Empty, #Full(@Opt, i8) };
 func public %make(v0.i64) -> @Pair {
@@ -570,7 +570,7 @@ block2:
             unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
         for value in [0i64, 1, 5] {
             // `@Holder`: the i8 at 0, `@Opt` at 8 (its i64 at 16), `@Big` at 24.
-            let mut holder = [0xa5u8; 64];
+            let mut holder = [0xa5u8; 72];
             for (index, word) in holder[24..].chunks_mut(8).enumerate() {
                 word.copy_from_slice(&(index as i64 * 10 + 1).to_le_bytes());
             }
@@ -580,14 +580,14 @@ block2:
             // first takes `#Some` of the previous `@Big`'s first word, which
             // the previous entry set to its counter.
             let first = (value != 0).then_some(value);
-            let (mut opt, mut big) = (first, [1i64, 11, 21, 31, 41]);
+            let (mut opt, mut big) = (first, [1i64, 11, 21, 31, 41, 51]);
             for counter in (2..=value).rev() {
                 opt = Some(big[0]);
                 big[0] = counter;
             }
             let taken = |opt: Option<i64>| opt.unwrap_or(100);
             assert_eq!(total, taken(first) + taken(opt), "{level:?} {value}");
-            let mut expected = [0u8; 64];
+            let mut expected = [0u8; 72];
             expected[0] = 3;
             expected[8] = u8::from(opt.is_some());
             expected[16..24].copy_from_slice(&opt.unwrap_or(0).to_le_bytes());

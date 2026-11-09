@@ -17,8 +17,11 @@ use super::{
     value_storage_size,
 };
 
-/// Values held in registers have at most this many parts.
-const MAX_PARTS: usize = 4;
+/// Values held in registers have at most this many parts. Cranelift's
+/// `tail` convention passes six integer arguments in registers on both
+/// x86_64 (rdi to r9) and aarch64 (x2 to x7), so a value of this many parts
+/// passes in registers beside one other argument, such as a receiver.
+const MAX_PARTS: usize = 5;
 
 /// A scalar field, element or enum tag of a value held in registers, at its
 /// offset in the value's storage.
@@ -289,4 +292,37 @@ pub(super) fn replace_parts(
     }
     values[range].copy_from_slice(field);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::Type;
+    use sonatina_parser::parse_module;
+
+    use super::register_parts;
+
+    #[test]
+    fn values_of_five_scalars_are_held_in_registers() {
+        let module = parse_module(
+            r#"target = "x86_64-unknown-native"
+type @Five = {*i8, i64, i64, *i8, i64};
+type @Six = {*i8, i64, i64, *i8, i64, i8};
+func private %f(v0.@Five, v1.@Six) {
+    block0:
+        return;
+}
+"#,
+        )
+        .expect("parse should succeed")
+        .module;
+        let func = module.funcs()[0];
+        let [five, six] = module
+            .ctx
+            .func_sig(func, |sig| [sig.args()[0], sig.args()[1]]);
+        let parts = register_parts(&module.ctx, five).expect("five scalars have parts");
+        let offsets: Vec<_> = parts.iter().map(|part| part.offset).collect();
+        assert_eq!(offsets, [0, 8, 16, 24, 32]);
+        assert_eq!(parts[1].ty, Type::I64);
+        assert!(register_parts(&module.ctx, six).is_none());
+    }
 }
