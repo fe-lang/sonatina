@@ -501,37 +501,40 @@ fn modular_entry(
 ) -> (clif::Block, Limbs) {
     let exit = builder.create_block();
     let results = std::array::from_fn(|_| builder.append_block_param(exit, I64));
-    let short = builder.create_block();
-    let nonzero = builder.create_block();
+    let special = builder.create_block();
     let masked = builder.create_block();
     let other = builder.create_block();
-    // Out of line, so allocation favours the four-limb moduli of field
-    // arithmetic.
-    for block in [short, nonzero, masked] {
+    // A zero or power-of-two modulus has at most one bit set. Counting them
+    // keeps every other modulus, of any width, on one path without a taken
+    // branch: a branch out to the special cases and back on every short
+    // modulus put two more taken branches between the handlers' dispatches.
+    for block in [special, masked] {
         builder.set_cold_block(block);
     }
+    let bits = modulus.map(|limb| builder.ins().popcnt(limb));
+    let low = builder.ins().iadd(bits[0], bits[1]);
+    let high = builder.ins().iadd(bits[2], bits[3]);
+    let count = builder.ins().iadd(low, high);
+    let special_modulus = builder
+        .ins()
+        .icmp_imm_u(IntCC::UnsignedLessThanOrEqual, count, 1);
     builder
         .ins()
-        .brif(modulus[LIMBS - 1], other, &[], short, &[]);
+        .brif(special_modulus, special, &[], other, &[]);
 
-    builder.switch_to_block(short);
+    builder.switch_to_block(special);
     let zero = builder.ins().iconst(I64, 0);
-    let [m0, m1, m2, _] = modulus;
-    let low = [m0, m1, m2, zero];
-    let modulus_zero = is_zero(low, builder);
+    let modulus_zero = is_zero(modulus, builder);
     builder.ins().brif(
         modulus_zero,
         exit,
         &[BlockArg::Value(zero); LIMBS],
-        nonzero,
+        masked,
         &[],
     );
 
-    builder.switch_to_block(nonzero);
-    let (power, mask) = power_of_two(low, builder);
-    builder.ins().brif(power, masked, &[], other, &[]);
-
     builder.switch_to_block(masked);
+    let (_, mask) = power_of_two(modulus, builder);
     let value = wrapped(builder);
     let result = std::array::from_fn::<_, LIMBS, _>(|limb| {
         BlockArg::Value(builder.ins().band(value[limb], mask[limb]))
