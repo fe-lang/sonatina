@@ -585,7 +585,8 @@ fn loads_pass_other_loads_to_their_uses() {
 #[test]
 fn undef_insert_chains_zero_only_unwritten_bytes() {
     // A chain that writes both halves needs no zero fill, one that writes a
-    // half zeroes the other, and padding is zeroed inline.
+    // half zeroes the other, past the inline limit, and padding is zeroed
+    // inline.
     let triple = native_isa(host_architecture()).triple();
     let cases = [
         (
@@ -597,11 +598,11 @@ fn undef_insert_chains_zero_only_unwritten_bytes() {
     for (inserts, zero_fill) in cases {
         let source = format!(
             r#"target = "{triple}"
-type @T = {{[i64; 32], [i64; 32]}};
+type @T = {{[i64; 64], [i64; 64]}};
 type @Padded = {{i8, [i64; 32]}};
-func public %build(v0.*[i64; 32], v1.*@T) {{
+func public %build(v0.*[i64; 64], v1.*@T) {{
 block0:
-    v2.[i64; 32] = mload v0 [i64; 32];
+    v2.[i64; 64] = mload v0 [i64; 64];
     {inserts}
     mstore v1 v4 @T;
     return;
@@ -646,12 +647,12 @@ block0:
                 unsafe { std::mem::transmute(artifact.function_address("build").unwrap()) };
             let pad: unsafe extern "C" fn(*const i64, u8, *mut u8) =
                 unsafe { std::mem::transmute(artifact.function_address("pad").unwrap()) };
-            let input: Vec<i64> = (1..=32).collect();
-            let mut output = vec![-1; 64];
+            let input: Vec<i64> = (1..=64).collect();
+            let mut output = vec![-1; 128];
             unsafe { build(input.as_ptr(), output.as_mut_ptr()) };
-            let first: &[i64] = if zero_fill { &[0; 32] } else { &input };
-            assert_eq!(output[..32], first[..], "{inserts}");
-            assert_eq!(output[32..], input[..], "{inserts}");
+            let first: &[i64] = if zero_fill { &[0; 64] } else { &input };
+            assert_eq!(output[..64], first[..], "{inserts}");
+            assert_eq!(output[64..], input[..], "{inserts}");
             let mut padded = vec![0xa5u8; 8 + 256];
             unsafe { pad(input.as_ptr(), 7, padded.as_mut_ptr()) };
             assert_eq!(padded[..8], [7, 0, 0, 0, 0, 0, 0, 0]);

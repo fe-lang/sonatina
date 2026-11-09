@@ -1,7 +1,7 @@
 use cranelift_codegen::{
     ir::{
-        self as clif, InstBuilder, InstructionData, MemFlagsData, Opcode, StackSlotData,
-        StackSlotKind,
+        self as clif, ConstantData, InstBuilder, InstructionData, MemFlagsData, Opcode,
+        StackSlotData, StackSlotKind,
     },
     isa::TargetFrontendConfig,
 };
@@ -25,6 +25,28 @@ use super::{
 /// Copies and fills of at most this many bytes use inline loads and stores.
 /// Larger ones call `memcpy` or `memset`, so their code size is constant.
 pub(super) const INLINE_MEMORY_BYTES: u32 = 128;
+
+/// The inline limit for zero fills where the target has vector registers:
+/// a 16-byte zero store fills twice as much per instruction, and a `memset`
+/// call costs more than the stores below this size. Copies stay in field
+/// pieces (`value_pieces`), so their loads are forwarded from the stores
+/// that wrote the fields.
+const INLINE_VECTOR_ZERO_BYTES: u32 = 256;
+
+/// Whether the target has 16-byte vector registers for zero fills. RV64IM
+/// has none.
+fn vector_registers(ctx: &ModuleCtx) -> bool {
+    ctx.triple != TargetTriple::SP1
+}
+
+/// The most bytes a zero fill does inline.
+fn inline_zero_limit(ctx: &ModuleCtx) -> u32 {
+    if vector_registers(ctx) {
+        INLINE_VECTOR_ZERO_BYTES
+    } else {
+        INLINE_MEMORY_BYTES
+    }
+}
 
 /// Copies the `ty` value at `src` to distinct, non-overlapping storage at
 /// `dst`.
@@ -93,7 +115,7 @@ pub(super) fn move_bytes(
     builder: &mut FunctionBuilder,
 ) {
     debug_assert!(size <= INLINE_MEMORY_BYTES);
-    let pieces = aligned_chunks(0, size).map(|(offset, ty)| Piece::Field(offset, ty));
+    let pieces = chunks(0, size, false).map(|(offset, ty)| Piece::Field(offset, ty));
     move_pieces(pieces, src, dst, builder);
 }
 
@@ -131,7 +153,7 @@ pub(super) enum Piece {
 /// to a load only if the store covers the load; otherwise the load waits for
 /// the store to reach the cache. Fields are written by their own stores, often
 /// narrower than a word, so the pieces split wherever a scalar field starts or
-/// ends, then as `aligned_chunks`, as zero fills split too. Padding is not
+/// ends, then as `chunks` without vectors, as zero fills split too. Padding is not
 /// part of the value, and often nothing has written it, so a copy skips it.
 pub(super) fn value_pieces(ty: Type, size: u32, ctx: &ModuleCtx) -> Result<Vec<Piece>, String> {
     let mut fields = Vec::new();
@@ -150,7 +172,7 @@ pub(super) fn value_pieces(ty: Type, size: u32, ctx: &ModuleCtx) -> Result<Vec<P
             let field = fields
                 .iter()
                 .any(|&(first, last)| first <= start && end <= last);
-            aligned_chunks(start, end).map(move |(offset, ty)| {
+            chunks(start, end, false).map(move |(offset, ty)| {
                 if field {
                     Piece::Field(offset, ty)
                 } else {
@@ -237,22 +259,38 @@ fn field_ranges(
 pub(super) fn zero_bytes(
     dst: clif::Value,
     size: u32,
+    ctx: &ModuleCtx,
     config: TargetFrontendConfig,
     builder: &mut FunctionBuilder,
 ) {
-    if size > INLINE_MEMORY_BYTES {
+    if size > inline_zero_limit(ctx) {
         let zero = builder.ins().iconst(clif::types::I8, 0);
         let size = builder.ins().iconst(config.pointer_type(), i64::from(size));
         builder.call_memset(config, dst, zero, size);
         return;
     }
-    zero_range(dst, 0, size, builder);
+    zero_range(dst, 0, size, vector_registers(ctx), builder);
 }
 
-/// Zeroes `dst + start..dst + end` in `aligned_chunks`.
-fn zero_range(dst: clif::Value, start: u32, end: u32, builder: &mut FunctionBuilder) {
-    for (offset, ty) in aligned_chunks(start, end) {
-        let zero = builder.ins().iconst(ty, 0);
+/// Zeroes `dst + start..dst + end` in `chunks`.
+fn zero_range(
+    dst: clif::Value,
+    start: u32,
+    end: u32,
+    vectors: bool,
+    builder: &mut FunctionBuilder,
+) {
+    for (offset, ty) in chunks(start, end, vectors) {
+        let zero = if ty.is_vector() {
+            let zeros = builder
+                .func
+                .dfg
+                .constants
+                .insert(ConstantData::from(vec![0; 16]));
+            builder.ins().vconst(ty, zeros)
+        } else {
+            builder.ins().iconst(ty, 0)
+        };
         builder.ins().store(MemFlagsData::new(), zero, dst, offset);
     }
 }
@@ -308,14 +346,15 @@ pub(super) fn zero_unwritten_fields(
 ) -> Result<(), String> {
     let size = value_storage_size(ty, ctx)?;
     written.sort_unstable();
+    let vectors = vector_registers(ctx);
     if size > INLINE_MEMORY_BYTES {
         let mut zeroed = 0;
         for (offset, len) in written.into_iter().chain([(size, 0)]) {
-            if offset > zeroed && offset - zeroed > INLINE_MEMORY_BYTES {
+            if offset > zeroed && offset - zeroed > inline_zero_limit(ctx) {
                 let gap = builder.ins().iadd_imm_s(dst, i64::from(zeroed));
-                zero_bytes(gap, offset - zeroed, config, builder);
+                zero_bytes(gap, offset - zeroed, ctx, config, builder);
             } else if offset > zeroed {
-                zero_range(dst, zeroed, offset, builder);
+                zero_range(dst, zeroed, offset, vectors, builder);
             }
             zeroed = zeroed.max(offset + len);
         }
@@ -332,12 +371,12 @@ pub(super) fn zero_unwritten_fields(
                 break;
             }
             if at > start {
-                zero_range(dst, start, at, builder);
+                zero_range(dst, start, at, vectors, builder);
             }
             start = start.max(at + len);
         }
         if start < end {
-            zero_range(dst, start, end, builder);
+            zero_range(dst, start, end, vectors, builder);
         }
     }
     Ok(())
@@ -413,6 +452,7 @@ pub(super) fn store_indirect(
         zero_bytes(
             dst,
             value_storage_size(ty, function.ctx())?,
+            function.ctx(),
             config,
             builder,
         );
@@ -440,6 +480,7 @@ pub(super) fn resolve_operand(
     zero_bytes(
         address,
         value_storage_size(ty, function.ctx())?,
+        function.ctx(),
         config,
         builder,
     );
@@ -488,17 +529,23 @@ pub(super) fn translate_bitcast(
 /// Splits `start..end` into loads or stores of at most a word, each at an
 /// offset its size divides. Two such splits of overlapping ranges put each
 /// piece of one within a piece of the other, or around it.
-fn aligned_chunks(start: u32, end: u32) -> impl Iterator<Item = (i32, clif::Type)> {
+/// `start..end` in pieces: with `vectors`, 16-byte vectors at any alignment
+/// while 16 bytes remain, then naturally aligned integers.
+fn chunks(start: u32, end: u32, vectors: bool) -> impl Iterator<Item = (i32, clif::Type)> {
     let mut offset = start;
     std::iter::from_fn(move || {
-        let (bytes, ty) = [
-            (8, clif::types::I64),
-            (4, clif::types::I32),
-            (2, clif::types::I16),
-            (1, clif::types::I8),
-        ]
-        .into_iter()
-        .find(|&(bytes, _)| offset.is_multiple_of(bytes) && offset + bytes <= end)?;
+        let (bytes, ty) = if vectors && offset + 16 <= end {
+            (16, clif::types::I8X16)
+        } else {
+            [
+                (8, clif::types::I64),
+                (4, clif::types::I32),
+                (2, clif::types::I16),
+                (1, clif::types::I8),
+            ]
+            .into_iter()
+            .find(|&(bytes, _)| offset.is_multiple_of(bytes) && offset + bytes <= end)?
+        };
         let chunk = (offset as i32, ty);
         offset += bytes;
         Some(chunk)
