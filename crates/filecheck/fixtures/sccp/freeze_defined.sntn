@@ -1,0 +1,48 @@
+#! A `freeze` of a value that is never undef is that value: the loop counter
+#! below, whose cycle no undef reaches, becomes an ordinary induction
+#! variable. A `freeze` of a value that may be undef stays.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %drops_counter_freeze(v0.i256) -> i256 {
+# not: freeze
+# check: v3.i256 = add v2 1.i256;
+# check: v4.i1 = lt v3 v0;
+func public %drops_counter_freeze(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = phi (0.i256 block0) (v5 block1);
+        v3.i256 = add v2 1.i256;
+        v5.i256 = freeze v3;
+        v4.i1 = lt v5 v0;
+        br v4 block1 block2;
+
+    block2:
+        return v5;
+}
+
+# sameln: func public %drops_argument_freeze(v0.i256) -> i256 {
+# not: freeze
+# check: return v0;
+func public %drops_argument_freeze(v0.i256) -> i256 {
+    block0:
+        v1.i256 = freeze v0;
+        return v1;
+}
+
+# sameln: func public %keeps_undef_freeze(v0.i1, v1.i256) -> i256 {
+# check: v3.i256 = freeze v2;
+func public %keeps_undef_freeze(v0.i1, v1.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block2;
+
+    block2:
+        v2.i256 = phi (undef.i256 block0) (v1 block1);
+        v3.i256 = freeze v2;
+        return v3;
+}

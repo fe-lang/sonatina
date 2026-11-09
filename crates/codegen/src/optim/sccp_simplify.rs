@@ -263,6 +263,12 @@ pub(super) fn simplify_inst(
             }
         }
         InstClassKind::Phi | InstClassKind::Opaque => {
+            // A value that is never undef is already one fixed value.
+            if let Some(freeze) = downcast::<&data::Freeze>(is, inst)
+                && !facts.may_be_undef(*freeze.arg())
+            {
+                return wrap_action(SimplifyAction::Copy(*freeze.arg()));
+            }
             if let Some(i) = downcast::<&data::ConstLoad>(is, inst) {
                 return wrap_action(simplify_const_load(
                     func,
