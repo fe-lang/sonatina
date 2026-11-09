@@ -616,6 +616,65 @@ block0:
     }
 
     #[test]
+    fn folds_integer_round_trips_through_pointers() {
+        // A dangling pointer's address, as an empty vector's drop compares.
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "x86_64-unknown-native"
+
+func public %f(v0.i64, v1.*i8) -> *i8 {
+block0:
+    v2.*i8 = int_to_ptr 16.i64 *i8;
+    v3.i64 = ptr_to_int v2 i64;
+    v4.i1 = eq v3 v0;
+    v5.i64 = ptr_to_int v1 i64;
+    v6.*i8 = int_to_ptr v5 *i8;
+    br v4 block1 block2;
+block1:
+    return v2;
+block2:
+    return v6;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(ScalarCanonicalize::new().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains("v4.i1 = eq 16.i64 v0;"), "{dumped}");
+        // A pointer's round trip through an integer loses its provenance.
+        assert!(dumped.contains("v6.*i8 = int_to_ptr v5 *i8;"), "{dumped}");
+    }
+
+    #[test]
+    fn keeps_round_trips_of_integers_wider_than_pointers() {
+        // A pointer holds the low 64 bits of an i256, so `1 << 64` comes back
+        // as zero.
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "x86_64-unknown-native"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.*i8 = int_to_ptr v0 *i8;
+    v2.i256 = ptr_to_int v1 i256;
+    return v2;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            ScalarCanonicalize::new().run(func);
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains("v2.i256 = ptr_to_int v1 i256;"), "{dumped}");
+        assert!(dumped.contains("return v2;"), "{dumped}");
+    }
+
+    #[test]
     fn rewrites_zext_i1_eq_zero_to_is_zero_source() {
         let (module, func_ref) = parse_test_module(
             r#"
