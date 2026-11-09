@@ -620,9 +620,11 @@ impl Pipeline {
     /// O2 runs the speed schedule with an inliner tuned for native code,
     /// unrolling the loops that run a few times after rotating them. O1
     /// stops that schedule after its second of four inline rounds, for
-    /// quicker builds. Both end by simplifying with known bits and ranges
-    /// again, so code inlined after the first round has bounded shift counts
-    /// masked too, then narrowing aggregate loads to the fields read, folding
+    /// quicker builds. Both end by eliminating checked arithmetic, with the
+    /// overflow paths it leaves unreachable, and simplifying with known bits
+    /// and ranges again, so code inlined after the first round has its
+    /// provably safe overflow checks removed and bounded shift counts masked
+    /// too, then narrowing aggregate loads to the fields read, folding
     /// boolean phis, threading returns, forming switches from comparison
     /// trees, fusing comparisons with the subtractions they guard and
     /// converting branches whose paths meet at once to selects.
@@ -636,6 +638,8 @@ impl Pipeline {
         };
         pipeline.add_step(Step::FuncPasses(vec![
             Pass::NarrowObjectLoads,
+            Pass::CheckedArithElim,
+            Pass::Sccp,
             Pass::KnownBitsSimplify,
             Pass::BoolPhiFold,
             Pass::ReturnThread,
@@ -2866,13 +2870,16 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 .map(|step| format!("{step:?}"))
                 .collect()
         };
-        // Both end by narrowing aggregate loads, simplifying with known bits,
-        // folding boolean phis, threading returns, forming switches, fusing
-        // comparisons with subtractions and converting branches to selects.
+        // Both end by narrowing aggregate loads, eliminating checked
+        // arithmetic, simplifying with known bits, folding boolean phis,
+        // threading returns, forming switches, fusing comparisons with
+        // subtractions and converting branches to selects.
         let switches = format!(
             "{:?}",
             Step::FuncPasses(vec![
                 Pass::NarrowObjectLoads,
+                Pass::CheckedArithElim,
+                Pass::Sccp,
                 Pass::KnownBitsSimplify,
                 Pass::BoolPhiFold,
                 Pass::ReturnThread,
