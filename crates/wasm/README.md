@@ -78,6 +78,9 @@ are canonical: an `i8` holding -1 is returned as 255.
   `WasmBackend::with_import_module` selects another. Imports take the same
   kinds of parameters as exports.
 - Functions may return several values (WebAssembly multi-value).
+- The module has a name section with the names of its functions, so an engine
+  names them in the stack of a trap. The function behind an export `f` of a
+  module with frames is `f$body`.
 
 ## Linear memory
 
@@ -121,10 +124,17 @@ A call to an import first stores the end of its caller's frame in that global, s
 that an export that the host calls back runs above the caller's frames, and puts
 the global back when the import returns. The wrapper of an export also restores
 it when the export returns. A trap in the module therefore leaves the global as
-it was, except a trap during the call to an import: when the host throws an
-error or a callback traps, the module does not run again before the host call
-ends, and the frame of the caller stays reserved. Each such error costs the
-frame of one function.
+it was, except during the call to an import: when the host throws an error or a
+callback traps, the module does not run again before the host call ends, and
+the global stays at the end of the caller's frame. Every frame that was active
+then stays reserved for later calls.
+
+The host repairs this. A module with frames and at least one import exports the
+global as `stack_top` (a mutable `i32`; no function of the module may have the
+name). A host reads it before it calls an export and, if the call ends with an
+error, writes that value back. Calls that the host makes from inside an import do
+the same, so nested calls restore in order. A module with no imports does not
+export the global and needs no repair.
 
 There are no tail calls: WAFFLE 0.3.3 has no `return_call`. The native backend
 makes the calls of a recursive cycle tail calls, so a deep tail recursion that

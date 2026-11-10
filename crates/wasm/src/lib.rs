@@ -25,6 +25,11 @@ pub const DEFAULT_IMPORT_MODULE: &str = "env";
 /// `arena_release(mark)`.
 pub const HOST_ALLOCATOR_EXPORTS: [&str; 3] = ["alloc", "arena_mark", "arena_release"];
 
+/// The name under which a module with frames and imports exports the global
+/// that holds the top of its stack. A host puts it back to the value it had
+/// before a call that an import ended by throwing.
+pub const STACK_TOP_EXPORT: &str = "stack_top";
+
 #[derive(Debug)]
 pub enum WasmError {
     /// The module does not target `wasm32-unknown-native`.
@@ -115,12 +120,6 @@ impl WasmBackend {
         self
     }
 
-    /// Export the arena to the host, so that it can place data in linear
-    /// memory before a call: `alloc(size) -> address`, `arena_mark() ->
-    /// address` and `arena_release(mark)`, named by [`HOST_ALLOCATOR_EXPORTS`].
-    /// The module then has a stack and an arena even if its code uses neither,
-    /// and no function of the module may have one of these names. See the
-    /// section "The arena" of the module documentation for the protocol.
     /// Fill the payload of every block that `free` releases, except its first
     /// word (the link of the free list), with the byte `0xA5`. A program that
     /// reads a block after freeing it then sees that pattern, and a comparison
@@ -131,6 +130,12 @@ impl WasmBackend {
         self
     }
 
+    /// Export the arena to the host, so that it can place data in linear
+    /// memory before a call: `alloc(size) -> address`, `arena_mark() ->
+    /// address` and `arena_release(mark)`, named by [`HOST_ALLOCATOR_EXPORTS`].
+    /// The module then has a stack and an arena even if its code uses neither,
+    /// and no function of the module may have one of these names. See the
+    /// section "The host allocator" of the module documentation for the protocol.
     pub fn with_host_allocator(mut self) -> Self {
         self.host_allocator = true;
         self
