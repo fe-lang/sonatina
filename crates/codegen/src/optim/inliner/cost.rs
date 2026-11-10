@@ -163,12 +163,16 @@ pub(super) fn decide_inline(
     }
 
     // The split-block jump replaces the call. Each result needs a merge phi
-    // when there are multiple returns; the remaining growth is the cloned body.
-    let predicted_growth = summary.insts.saturating_add(if summary.returns > 1 {
-        request.call_result_count
-    } else {
-        0
-    });
+    // when there are multiple returns; the remaining growth is the cloned body,
+    // less the call sequence inlining removes.
+    let predicted_growth = summary
+        .insts
+        .saturating_add(if summary.returns > 1 {
+            request.call_result_count
+        } else {
+            0
+        })
+        .saturating_sub(config.call_site_insts);
 
     if hints.contains(FuncHints::ALWAYSINLINE) {
         return InlineDecision::Inline(InlinePlan { removed_insts: 0 });

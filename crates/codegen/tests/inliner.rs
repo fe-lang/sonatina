@@ -1049,6 +1049,128 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 }
 
 #[test]
+fn full_inliner_credits_the_call_sequence_against_growth() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %multi(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}
+
+func public %caller(v0.i1, v1.i1, v2.i1) -> i32 {
+    block0:
+        v3.i32 = call %multi v0;
+        v4.i32 = call %multi v1;
+        v5.i32 = call %multi v2;
+        v6.i32 = add v3 v4;
+        v7.i32 = add v6 v5;
+        return v7;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    // `%multi` and its merge phi are no larger than the call sequence, so
+    // inlining it spends none of a budget that fits nothing else.
+    let cfg = InlinerConfig {
+        enable_full_inliner: true,
+        max_single_use_caller_insts: 0,
+        max_growth_per_caller: 1,
+        max_total_growth: 1,
+        call_site_insts: 4,
+        max_inlinee_blocks: 64,
+        max_inlinee_insts: 256,
+        inline_threshold: 1000,
+        inline_threshold_cold: 1000,
+        ..Default::default()
+    };
+    let stats = Inliner::new(cfg).run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %multi"),
+        "a call-sized callee should not spend the budget:\n{dumped}"
+    );
+    assert_eq!(stats.skipped_budget, 0);
+}
+
+#[test]
+fn speed_inliner_has_no_module_growth_cap() {
+    let mut source = String::from(
+        r#"
+target = "evm-ethereum-london"
+
+func private %grow(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i32 = add v1 1.i32;
+        v3.i32 = mul v2 3.i32;
+        v4.i32 = xor v3 5.i32;
+        v5.i32 = add v4 7.i32;
+        v6.i32 = mul v5 9.i32;
+        v7.i32 = xor v6 11.i32;
+        return v7;
+
+    block2:
+        v8.i32 = sub v1 1.i32;
+        v9.i32 = mul v8 13.i32;
+        v10.i32 = xor v9 15.i32;
+        v11.i32 = sub v10 17.i32;
+        v12.i32 = mul v11 19.i32;
+        v13.i32 = xor v12 21.i32;
+        return v13;
+}
+"#,
+    );
+    // Each inline grows its caller by 12 instructions, 360 in all.
+    for index in 0..30 {
+        source.push_str(&format!(
+            r#"
+func public %caller{index}(v0.i1, v1.i32) -> i32 {{
+    block0:
+        v2.i32 = call %grow v0 v1;
+        return v2;
+}}
+"#
+        ));
+    }
+    let inline = |config: InlinerConfig| {
+        let mut parsed = sonatina_parser::parse_module(&source)
+            .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+        let module = &mut parsed.module;
+        let grow = find_func(module, "grow");
+        module.ctx.set_inline_hint(grow, InlineHint::Inline);
+        let stats = Inliner::new(config).run(module);
+        assert_module_verified(module);
+        (dump_module(module).matches("call %grow").count(), stats)
+    };
+
+    let speed = Pipeline::speed().inliner_config;
+    let (calls, stats) = inline(speed);
+    assert_eq!(calls, 0);
+    assert_eq!(stats.skipped_budget, 0);
+
+    // A 256-instruction module cap would leave the later callers' calls.
+    let (calls, _) = inline(InlinerConfig {
+        max_total_growth: 256,
+        ..speed
+    });
+    assert!(calls > 0);
+}
+
+#[test]
 fn full_inliner_skips_recursive_scc_when_disabled() {
     let source = r#"
 target = "evm-ethereum-london"
@@ -2509,9 +2631,11 @@ fn loaded_aggregate_reconstruction_inlines_in_trivial_and_full_modes() {
 #[test]
 fn loaded_aggregate_reconstruction_preserves_full_growth_limits() {
     let mut parsed = sonatina_parser::parse_module(&loaded_triple_module()).unwrap();
+    // `%read` grows each caller by 6 instructions after the call credit; its
+    // reconstruction discount must not bring that under the cap.
     let config = InlinerConfig {
         enable_single_block_splice: false,
-        max_growth_per_caller: 9,
+        max_growth_per_caller: 5,
         ..Pipeline::size().inliner_config
     };
     let stats = Inliner::new(config).run(&mut parsed.module);
