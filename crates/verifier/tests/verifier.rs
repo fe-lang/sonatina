@@ -3420,3 +3420,59 @@ block0:
         2
     );
 }
+
+#[test]
+fn selects_accept_integers_and_pointers_of_one_type() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %selects(v0.i1, v1.i8, v2.i8, v3.i256, v4.i256, v5.*i32, v6.*i32) -> unit {
+    block0:
+        v7.i8 = select v0 v1 v2;
+        v8.i256 = select v0 v3 v4;
+        v9.*i32 = select v0 v5 v6;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(!report.has_errors(), "unexpected errors: {report}");
+}
+
+#[test]
+fn selects_reject_wide_conditions_and_mixed_types() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %wide_condition(v0.i8, v1.i8, v2.i8) -> unit {
+    block0:
+        v3.i8 = select v0 v1 v2;
+        return;
+}
+
+func public %mixed(v0.i1, v1.i8, v2.i16) -> unit {
+    block0:
+        v3.i8 = select v0 v1 v2;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(&report, "select condition type must be i1"),
+        "expected the condition rejection, got {report}"
+    );
+    assert!(
+        has_message(
+            &report,
+            "select values must have one integral or pointer type"
+        ),
+        "expected the type rejection, got {report}"
+    );
+}

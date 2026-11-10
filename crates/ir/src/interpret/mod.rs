@@ -64,6 +64,7 @@ pub trait Interpret {
         inst::logic::And,
         inst::logic::Or,
         inst::logic::Xor,
+        inst::logic::Select,
         inst::logic::Bswap,
         inst::logic::Clz,
         inst::logic::Ctz,

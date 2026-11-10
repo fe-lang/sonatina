@@ -91,6 +91,7 @@ pub struct EvmInstSet(
     logic::And,
     logic::Or,
     logic::Xor,
+    logic::Select,
     logic::Bswap,
     logic::Clz,
     logic::Ctz,

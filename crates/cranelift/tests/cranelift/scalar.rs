@@ -810,3 +810,41 @@ block0:
         }
     }
 }
+
+#[test]
+fn selects_choose_at_every_width() {
+    for (ty, size) in [("i8", 1), ("i64", 8), ("i128", 16), ("i256", 32)] {
+        let source = format!(
+            r#"func public %choose(v0.i8, v1.*{ty}, v2.*{ty}, v3.*{ty}) {{
+block0:
+    v4.i1 = ne v0 0.i8;
+    v5.{ty} = mload v1 {ty};
+    v6.{ty} = mload v2 {ty};
+    v7.{ty} = select v4 v5 v6;
+    mstore v3 v7 {ty};
+    return;
+}}
+"#
+        );
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let artifact = Compile::new(
+                parse_verified_native_module(&source),
+                CraneliftJitBackend::new(),
+            )
+            .with_opt_level(level)
+            .compile()
+            .unwrap_or_else(|errors| panic!("{ty} {level:?}: {errors:?}"));
+            let choose: unsafe extern "C" fn(u8, *const u8, *const u8, *mut u8) =
+                unsafe { std::mem::transmute(artifact.function_address("choose").unwrap()) };
+            let a: [u8; 32] = std::array::from_fn(|i| 0x11 + i as u8);
+            let b: [u8; 32] = std::array::from_fn(|i| 0xc0 - i as u8);
+            for cond in [0u8, 1, 2, 255] {
+                let mut result = [0xa5u8; 32];
+                unsafe { choose(cond, a.as_ptr(), b.as_ptr(), result.as_mut_ptr()) };
+                let chosen = if cond != 0 { &a } else { &b };
+                assert_eq!(&result[..size], &chosen[..size], "{ty} {cond} {level:?}");
+                assert!(result[size..].iter().all(|&byte| byte == 0xa5));
+            }
+        }
+    }
+}

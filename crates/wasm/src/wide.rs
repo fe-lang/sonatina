@@ -400,7 +400,7 @@ impl Emit<'_> {
 // they are functions of the module that calls them with four limbs per operand.
 
 impl Emit<'_> {
-    fn select64(&mut self, if_true: V, if_false: V, cond: V) -> V {
+    pub(super) fn select64(&mut self, if_true: V, if_false: V, cond: V) -> V {
         self.op(Operator::Select, &[if_true, if_false, cond], WType::I64)
     }
 

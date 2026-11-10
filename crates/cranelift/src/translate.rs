@@ -740,6 +740,17 @@ fn translate_function(
                         value_map.insert(result, result_val);
                     }
                 }
+                NativeInstKind::Select(select) => {
+                    let cond = resolve_value(function, *select.cond(), &value_map, &mut builder)?;
+                    let then =
+                        resolve_value(function, *select.then_value(), &value_map, &mut builder)?;
+                    let otherwise =
+                        resolve_value(function, *select.else_value(), &value_map, &mut builder)?;
+                    let result_val = builder.ins().select(cond, then, otherwise);
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        value_map.insert(result, result_val);
+                    }
+                }
                 NativeInstKind::Not(not) => {
                     let val = resolve_value(function, *not.arg(), &value_map, &mut builder)?;
                     let result_val = if function.dfg.value_ty(*not.arg()) == Type::I1 {

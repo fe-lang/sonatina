@@ -593,6 +593,11 @@ impl<'a> FunctionLegalizer<'a> {
             downcast::<&arith::Sar>(is, self.func.dfg.inst(inst)).map(|i| (*i.bits(), *i.value()))
         {
             self.rewrite_sar(inst, bits, value);
+        } else if let Some((cond, then, otherwise)) =
+            downcast::<&logic::Select>(is, self.func.dfg.inst(inst))
+                .map(|i| (*i.cond(), *i.then_value(), *i.else_value()))
+        {
+            self.rewrite_select(inst, cond, then, otherwise);
         } else if let Some(arg) =
             downcast::<&logic::Not>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
         {
@@ -2155,6 +2160,35 @@ impl<'a> FunctionLegalizer<'a> {
                 self.replace_with_aliases(inst, &[result]);
             }
         }
+    }
+
+    /// `else ^ ((then ^ else) & -cond)`: the operands are normalized to the
+    /// result's width, and so is their masked difference.
+    fn rewrite_select(&mut self, inst: InstId, cond: ValueId, then: ValueId, otherwise: ValueId) {
+        let Some(width) = self.single_result_width(inst) else {
+            return;
+        };
+        let ty = self.func.dfg.value_ty(then);
+        let mask = self.bool_to_mask_i256(inst, cond);
+        let delta = self.insert_before_one(
+            inst,
+            Xor::new(self.evm_inst_set(), then, otherwise),
+            ty,
+            Some(width),
+        );
+        let masked = self.insert_before_one(
+            inst,
+            And::new(self.evm_inst_set(), delta, mask),
+            ty,
+            Some(width),
+        );
+        let result = self.insert_before_one(
+            inst,
+            Xor::new(self.evm_inst_set(), otherwise, masked),
+            ty,
+            Some(width),
+        );
+        self.replace_with_aliases(inst, &[result]);
     }
 
     fn rewrite_not(&mut self, inst: InstId, arg: ValueId) {

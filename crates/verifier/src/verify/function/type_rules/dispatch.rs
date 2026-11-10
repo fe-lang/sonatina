@@ -93,6 +93,41 @@ impl_binary_integral_same_rule!(
     logic::Xor => "xor",
 );
 
+impl VerifyInst for logic::Select {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        if let Some(cond_ty) = verifier.value_ty(*self.cond())
+            && cond_ty != Type::I1
+        {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "select condition type must be i1",
+                    location.clone(),
+                )
+                .with_note(format!("found condition type {cond_ty:?}")),
+            );
+        }
+        let (Some(then_ty), Some(else_ty)) = (
+            verifier.value_ty(*self.then_value()),
+            verifier.value_ty(*self.else_value()),
+        ) else {
+            return;
+        };
+        if then_ty != else_ty || !is_integral_or_pointer(verifier.ctx, then_ty) {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "select values must have one integral or pointer type",
+                    location.clone(),
+                )
+                .with_note(format!("then {then_ty:?}, else {else_ty:?}")),
+            );
+        }
+        verifier.expect_result_ty(inst_id, then_ty, location);
+    }
+}
+
 fn verify_binary_overflow_inst(
     verifier: &mut FunctionVerifier<'_>,
     inst_id: InstId,

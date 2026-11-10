@@ -261,7 +261,7 @@ aggregate combination and object returns the backend runs first.
 
 A front end whose `usize` has 256 bits makes every array index and loop counter an `i256`.
 The backend supports, for `i128` and `i256`, `add`, `sub`, `mul`, `neg`, `udiv`,
-`sdiv`, `umod`, `smod`, `shl`, `shr`, `sar`, `and`, `or`, `xor`, `not`, all
+`sdiv`, `umod`, `smod`, `shl`, `shr`, `sar`, `and`, `or`, `xor`, `not`, `select`, all
 comparisons, `is_zero`, `zext`, `sext` and `trunc` between them and to and from
 the narrower types, the checked forms `uaddo`, `usubo`, `umulo`, `saddo`,
 `ssubo`, `smulo` and `snego`, the saturating forms `uaddsat`, `usubsat`,

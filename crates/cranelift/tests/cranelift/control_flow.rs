@@ -917,3 +917,80 @@ block2:
         }
     }
 }
+
+#[test]
+fn branches_between_values_select_the_chosen_ones() {
+    // Two joins entered only from a branch's paths, through a triangle and
+    // through a diamond, choose the same with branches (O0) and with the
+    // selects of if-conversion (O2): an i64 and an i256 (four limbs), then
+    // the signed minimum of two i128s, which Cranelift folds to `smin`.
+    let source = r#"
+func public %choose(v0.i64, v1.i64, v2.*i256, v3.*i256, v4.*i128, v5.*i128, v6.*[i64; 5]) {
+block0:
+    v7.i256 = mload v2 i256;
+    v8.i256 = mload v3 i256;
+    v9.i128 = mload v4 i128;
+    v10.i128 = mload v5 i128;
+    v11.i1 = lt v0 v1;
+    br v11 block1 block2;
+block1:
+    jump block2;
+block2:
+    v12.i64 = phi (v0 block1) (v1 block0);
+    v13.i256 = phi (v7 block1) (v8 block0);
+    v14.i1 = slt v9 v10;
+    br v14 block3 block4;
+block3:
+    jump block5;
+block4:
+    jump block5;
+block5:
+    v15.i128 = phi (v9 block3) (v10 block4);
+    v16.i64 = trunc v13 i64;
+    v17.i256 = shr 192.i256 v13;
+    v18.i64 = trunc v17 i64;
+    v19.i64 = trunc v15 i64;
+    v20.i128 = shr 64.i128 v15;
+    v21.i64 = trunc v20 i64;
+    v22.[i64; 5] = insert_value undef.[i64; 5] 0.i256 v12;
+    v23.[i64; 5] = insert_value v22 1.i256 v16;
+    v24.[i64; 5] = insert_value v23 2.i256 v18;
+    v25.[i64; 5] = insert_value v24 3.i256 v19;
+    v26.[i64; 5] = insert_value v25 4.i256 v21;
+    mstore v6 v26 [i64; 5];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let choose: unsafe extern "C" fn(
+            u64,
+            u64,
+            *const [u64; 4],
+            *const [u64; 4],
+            *const i128,
+            *const i128,
+            *mut [u64; 5],
+        ) = unsafe { std::mem::transmute(artifact.function_address("choose").unwrap()) };
+        let wide = [[1, 2, 3, 4], [5, 6, 7, 8]];
+        for (x, y) in [(1, 2), (2, 1), (3, 3)] {
+            for (a, b) in [(-5i128, 7i128), (7, -5), (1 << 100, -(1 << 100)), (9, 9)] {
+                let mut out = [0u64; 5];
+                unsafe { choose(x, y, &wide[0], &wide[1], &a, &b, &mut out) };
+                let (chosen, limbs) = if x < y { (x, wide[0]) } else { (y, wide[1]) };
+                let min = a.min(b);
+                assert_eq!(
+                    out,
+                    [chosen, limbs[0], limbs[3], min as u64, (min >> 64) as u64],
+                    "{level:?} {x} {y} {a} {b}"
+                );
+            }
+        }
+    }
+}

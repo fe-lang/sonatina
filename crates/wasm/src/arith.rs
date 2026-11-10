@@ -148,7 +148,7 @@ impl Emit<'_> {
     }
 
     /// `if cond { a } else { b }` on values of the carrier of `int`.
-    fn select(&mut self, int: Int, a: V, b: V, cond: V) -> V {
+    pub(super) fn select(&mut self, int: Int, a: V, b: V, cond: V) -> V {
         self.op(Operator::Select, &[a, b, cond], int.carrier())
     }
 

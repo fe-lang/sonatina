@@ -2028,6 +2028,38 @@ impl<'a> FunctionTranslator<'a> {
                 |e, l, r| e.wide_bitwise(Operator::I64Or, l, r),
                 |e, int, l, r| e.bitwise(int, Operator::I32Or, Operator::I64Or, l, r),
             )?,
+            // A wasm32 pointer is an `i32`.
+            NativeInstKind::Select(i)
+                if self.is_pointer(self.function.dfg.value_ty(*i.then_value())) =>
+            {
+                let cond = self.operand(*wb, *i.cond())?;
+                let then = self.operand(*wb, *i.then_value())?;
+                let otherwise = self.operand(*wb, *i.else_value())?;
+                let value =
+                    self.emit(*wb)
+                        .op(Operator::Select, &[then, otherwise, cond], WType::I32);
+                let ty = self.function.dfg.value_ty(*i.then_value());
+                self.define(inst_id, 0, value, ty)?
+            }
+            NativeInstKind::Select(i) => {
+                let cond = self.operand(*wb, *i.cond())?;
+                self.binary_any(
+                    *wb,
+                    inst_id,
+                    (*i.then_value(), *i.else_value()),
+                    |e, then, otherwise| {
+                        let mut chosen = then;
+                        for (limb, (then, otherwise)) in
+                            chosen.iter_mut().zip(then.into_iter().zip(otherwise))
+                        {
+                            *limb = e.select64(then, otherwise, cond);
+                        }
+                        chosen
+                    },
+                    |e, int, then, otherwise| e.select(int, then, otherwise, cond),
+                )?
+            }
+
             NativeInstKind::Xor(i) => self.binary_any(
                 *wb,
                 inst_id,

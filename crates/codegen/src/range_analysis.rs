@@ -13,6 +13,7 @@ use sonatina_ir::{
         evm::{
             EvmCalldataSize, EvmCodeSize, EvmExtCodeSize, EvmMalloc, EvmMsize, EvmReturnDataSize,
         },
+        logic::Select,
     },
 };
 
@@ -560,6 +561,18 @@ fn transfer_inst(
             && supports_range_facts(func.dfg.value_ty(result)) =>
         {
             let fact = fact_for_value(func, env, *freeze.arg());
+            set_env_fact(func, env, result, fact);
+        }
+        // A selected value is one of its two.
+        _ if let Some(select) = func.dfg.downcast::<&Select>(inst)
+            && let Some(result) = func.dfg.inst_result(inst)
+            && supports_range_facts(func.dfg.value_ty(result)) =>
+        {
+            let fact = join_facts(
+                fact_for_value(func, env, *select.then_value()),
+                fact_for_value(func, env, *select.else_value()),
+                func.dfg.value_ty(result),
+            );
             set_env_fact(func, env, result, fact);
         }
         _ => match evm_byte_len_fact(func, inst) {
@@ -3224,6 +3237,33 @@ mod tests {
         module.func_store.view(func_ref, |func| {
             let analysis = compute_analysis(func);
             let fact = fact_for_value(func, analysis.entry_env(b3), phi);
+            assert_eq!(fact.unsigned.lo, U256::from(1u8));
+            assert_eq!(fact.unsigned.hi, U256::from(5u8));
+        });
+    }
+
+    #[test]
+    fn select_ranges_over_both_values() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1], Type::I8);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        builder.switch_to_block(b0);
+        let cond = builder.args()[0];
+        let one = builder.make_imm_value(1i8);
+        let five = builder.make_imm_value(5i8);
+        let chosen = builder.insert_inst_with(|| Select::new(is, cond, one, five), Type::I8);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, chosen));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.view(func_ref, |func| {
+            let analysis = compute_analysis(func);
+            let fact = fact_for_value(func, &facts_at_exit(func, &analysis, b0), chosen);
             assert_eq!(fact.unsigned.lo, U256::from(1u8));
             assert_eq!(fact.unsigned.hi, U256::from(5u8));
         });
