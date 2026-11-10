@@ -9,7 +9,7 @@
 //! Signed operations sign-extend their operands first and re-canonicalize the
 //! result.
 
-use waffle::{FunctionBody, Operator, Type as WType};
+use waffle::{FunctionBody, Operator, Type as WType, ValueDef};
 
 use sonatina_ir::Type;
 
@@ -124,6 +124,63 @@ type V = waffle::Value;
 impl Emit<'_> {
     pub(super) fn op(&mut self, op: Operator, args: &[V], ty: WType) -> V {
         self.body.add_op(self.block, op, args, &[ty])
+    }
+
+    /// The value of an integer constant.
+    fn constant_of(&self, value: V) -> Option<u64> {
+        match self.body.values[value] {
+            ValueDef::Operator(Operator::I64Const { value }, ..) => Some(value),
+            ValueDef::Operator(Operator::I32Const { value }, ..) => Some(u64::from(value)),
+            _ => None,
+        }
+    }
+
+    /// `op` of 64-bit limbs or of flags, or the operand or constant it comes
+    /// to when operands are constants. Wide arithmetic meets many: the high
+    /// limbs of a value extended from 64 or 128 bits are zero.
+    pub(super) fn fold(&mut self, op: Operator, args: &[V], ty: WType) -> V {
+        let flag = |this: &mut Self, value: bool| this.c32(u32::from(value));
+        let known = |index: usize| args.get(index).and_then(|&arg| self.constant_of(arg));
+        match (op, known(0), known(1)) {
+            (Operator::I64Add, Some(a), Some(b)) => self.c64(a.wrapping_add(b)),
+            (Operator::I64Sub, Some(a), Some(b)) => self.c64(a.wrapping_sub(b)),
+            (Operator::I64Or, Some(a), Some(b)) => self.c64(a | b),
+            (Operator::I64Xor, Some(a), Some(b)) => self.c64(a ^ b),
+            (Operator::I64And, Some(a), Some(b)) => self.c64(a & b),
+            (Operator::I64LtU, Some(a), Some(b)) => flag(self, a < b),
+            (Operator::I64LtS, Some(a), Some(b)) => flag(self, (a as i64) < (b as i64)),
+            (Operator::I64Eq, Some(a), Some(b)) => flag(self, a == b),
+            (Operator::I64Ne, Some(a), Some(b)) => flag(self, a != b),
+            (Operator::I32Or, Some(a), Some(b)) => self.c32((a | b) as u32),
+            (Operator::I64Eqz, Some(a), _) => flag(self, a == 0),
+            (Operator::I32Eqz, Some(a), _) => flag(self, a == 0),
+            (Operator::I64ExtendI32U, Some(a), _) => self.c64(a),
+            (
+                Operator::I64Add | Operator::I64Or | Operator::I64Xor | Operator::I32Or,
+                Some(0),
+                _,
+            ) => args[1],
+            (
+                Operator::I64Add
+                | Operator::I64Sub
+                | Operator::I64Or
+                | Operator::I64Xor
+                | Operator::I32Or,
+                _,
+                Some(0),
+            ) => args[0],
+            (Operator::I64Shl | Operator::I64ShrU, _, Some(0)) => args[0],
+            (Operator::I64And | Operator::I64Shl | Operator::I64ShrU, Some(0), _)
+            | (Operator::I64And, _, Some(0)) => self.c64(0),
+            // Nothing is below zero.
+            (Operator::I64LtU, _, Some(0)) => flag(self, false),
+            (Operator::Select, ..) => match known(2) {
+                Some(0) => args[1],
+                Some(_) => args[0],
+                None => self.op(op, args, ty),
+            },
+            _ => self.op(op, args, ty),
+        }
     }
 
     pub(super) fn c32(&mut self, value: u32) -> V {

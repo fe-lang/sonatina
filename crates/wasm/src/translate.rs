@@ -58,7 +58,7 @@ use super::{
 mod aggregate;
 mod wide_ops;
 
-use wide_ops::{WideHelpers, WideOp};
+use wide_ops::{WideHelpers, WideOp, constant_shift};
 
 type V = waffle::Value;
 
@@ -291,8 +291,10 @@ fn scan_module(module: &Module) -> Scan {
                     if matches!(kind, NativeInstKind::MemAllocDynamic(_)) {
                         arena = true;
                     }
-                    if let Some((op, lhs, _)) = wide_op_of(&kind)
+                    if let Some((op, lhs, rhs)) = wide_op_of(&kind)
                         && Wide::from_type(function.dfg.value_ty(lhs)).is_some()
+                        && !(matches!(op, WideOp::Shl | WideOp::Shr)
+                            && constant_shift(function, rhs).is_some())
                     {
                         let (mulo, divrem, shl, shr) = op.needs();
                         helpers.0 |= mulo;

@@ -298,8 +298,11 @@ Calls, returns, phis and memory carry only its two limbs.
 operands are zero-extended, as on the native target, so the sum or product
 does not wrap.
 
-Multiplication, division and variable shifts are functions of the module,
-emitted only when used. Division traps on a zero divisor. It is one 64-bit
+Multiplication, division and shifts by a count that is not a constant are
+functions of the module, emitted only when used. A shift by a constant is built
+in place. Limbs that are constants, such as the zero high limbs of a value
+extended from 64 or 128 bits, are folded out of additions, subtractions,
+comparisons and bitwise operations. Division traps on a zero divisor. It is one 64-bit
 division when both operands fit in 64 bits, no step when the dividend is below
 the divisor, and otherwise one step per bit of the dividend.
 

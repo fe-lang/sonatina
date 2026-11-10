@@ -592,6 +592,69 @@ fn run_case(case: &Case, level: OptLevel, rng: &mut Lcg, count: usize) {
 }
 
 #[test]
+fn shifts_by_a_constant_match_the_reference() {
+    // A constant count is shifted in place, limb by limb, at 256 bits and at
+    // 128 bits, where the low half of the wider shift is the result.
+    let counts = [
+        0, 1, 31, 32, 63, 64, 65, 127, 128, 129, 191, 192, 193, 255, 256, 300,
+    ];
+    let mut rng = Lcg(0x5eed_5417);
+    let low = (U256::one() << 128) - 1;
+    for (bits, left) in [(256, true), (256, false), (128, true), (128, false)] {
+        let op = if left { "shl" } else { "shr" };
+        let mut source = PRELUDE.to_string();
+        for count in counts {
+            let shift = if bits == 256 {
+                format!("v9.i256 = {op} {count}.i256 v8;")
+            } else {
+                format!(
+                    "v20.i128 = trunc v8 i128;
+        v21.i128 = {op} {count}.i128 v20;
+        v9.i256 = zext v21 i256;"
+                )
+            };
+            source += &format!(
+                "func public %by{count}(v0.i64, v1.i64, v2.i64, v3.i64) -> (i64, i64, i64, i64) {{
+    block0:
+        v8.i256 = call %pack v0 v1 v2 v3;
+        {shift}
+        (v11.i64, v12.i64, v13.i64, v14.i64) = call %unpack v9;
+        return (v11, v12, v13, v14);
+}}
+"
+            );
+        }
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let mut machine = Machine::new(&build_at(&source, level));
+            for count in counts {
+                let f = machine.func(&format!("by{count}"));
+                for _ in 0..40 {
+                    let a = operand(&mut rng);
+                    let value = if bits == 256 { a } else { a & low };
+                    let want = match (count < bits, left) {
+                        (false, _) => U256::zero(),
+                        (true, true) => value << count,
+                        (true, false) => value >> count,
+                    };
+                    let want = if bits == 256 { want } else { want & low };
+                    let args: Vec<Val> = limbs(a).map(|limb| Val::I64(limb as i64)).into();
+                    let got: Vec<u64> = machine
+                        .call(&f, &args)
+                        .iter()
+                        .map(|v| v.unwrap_i64() as u64)
+                        .collect();
+                    assert_eq!(
+                        from_limbs(&got),
+                        want,
+                        "{level:?}: i{bits} {op} {count} of {a:#x}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn every_256_bit_operation_matches_the_reference() {
     let mut rng = Lcg(0x5eed_2561);
     for case in cases() {

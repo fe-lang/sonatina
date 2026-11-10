@@ -4,7 +4,7 @@
 
 use waffle::{Func, Operator, Type as WType};
 
-use sonatina_ir::{InstId, Type, ValueId};
+use sonatina_ir::{Function, InstId, Type, ValueId};
 
 use super::{FunctionTranslator, V, invalid};
 use crate::{
@@ -345,6 +345,11 @@ impl FunctionTranslator<'_> {
             // A 128-bit shift by 128 to 255 bits leaves zero in the low 128
             // bits, as a shift by at least the width does.
             WideOp::Shl | WideOp::Shr => {
+                // A constant count shifts in place.
+                if let Some(count) = constant_shift(self.function, rhs) {
+                    let shifted = self.emit(wb).wide_shift_by(op == WideOp::Shl, a, count);
+                    return self.define_wide(wb, inst_id, 0, wide, shifted);
+                }
                 let func = if op == WideOp::Shl {
                     self.helper(helpers.shl, "shift")?
                 } else {
@@ -383,6 +388,12 @@ impl FunctionTranslator<'_> {
             }
         }
     }
+}
+
+/// The count of a wide shift when it is a constant, which the shift is then
+/// built for, without the helper function.
+pub(super) fn constant_shift(function: &Function, count: ValueId) -> Option<usize> {
+    function.dfg.value_imm(count)?.to_nonnegative_usize()
 }
 
 impl FunctionTranslator<'_> {

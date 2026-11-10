@@ -122,7 +122,7 @@ impl Emit<'_> {
     /// All ones if the top bit of `limb` is set, and zero otherwise.
     pub(super) fn sign_fill(&mut self, limb: V) -> V {
         let shift = self.c64(63);
-        self.op(Operator::I64ShrS, &[limb, shift], WType::I64)
+        self.fold(Operator::I64ShrS, &[limb, shift], WType::I64)
     }
 
     /// An `i32` that is non-zero if a 256-bit value is not the extension of
@@ -136,15 +136,15 @@ impl Emit<'_> {
         };
         let mut diff = self.c64(0);
         for &limb in &value[count..] {
-            let x = self.op(Operator::I64Xor, &[limb, fill], WType::I64);
-            diff = self.op(Operator::I64Or, &[diff, x], WType::I64);
+            let x = self.fold(Operator::I64Xor, &[limb, fill], WType::I64);
+            diff = self.fold(Operator::I64Or, &[diff, x], WType::I64);
         }
         let zero = self.c64(0);
-        self.op(Operator::I64Ne, &[diff, zero], WType::I32)
+        self.fold(Operator::I64Ne, &[diff, zero], WType::I32)
     }
 
     fn cmp64(&mut self, op: Operator, a: V, b: V) -> V {
-        self.op(op, &[a, b], WType::I32)
+        self.fold(op, &[a, b], WType::I32)
     }
 
     /// `zext` or `sext` of an integer of at most 64 bits.
@@ -167,15 +167,15 @@ impl Emit<'_> {
         let mut result = lhs;
         let mut carry: Option<V> = None;
         for index in 0..LIMBS {
-            let sum = self.op(Operator::I64Add, &[lhs[index], rhs[index]], WType::I64);
+            let sum = self.fold(Operator::I64Add, &[lhs[index], rhs[index]], WType::I64);
             let carry_a = self.cmp64(Operator::I64LtU, sum, lhs[index]);
             let (sum, carry_out) = match carry {
                 None => (sum, carry_a),
                 Some(carry_in) => {
-                    let carry_in64 = self.op(Operator::I64ExtendI32U, &[carry_in], WType::I64);
-                    let with_carry = self.op(Operator::I64Add, &[sum, carry_in64], WType::I64);
+                    let carry_in64 = self.fold(Operator::I64ExtendI32U, &[carry_in], WType::I64);
+                    let with_carry = self.fold(Operator::I64Add, &[sum, carry_in64], WType::I64);
                     let carry_b = self.cmp64(Operator::I64LtU, with_carry, sum);
-                    let carry_out = self.op(Operator::I32Or, &[carry_a, carry_b], WType::I32);
+                    let carry_out = self.fold(Operator::I32Or, &[carry_a, carry_b], WType::I32);
                     (with_carry, carry_out)
                 }
             };
@@ -189,15 +189,15 @@ impl Emit<'_> {
         let mut result = lhs;
         let mut borrow: Option<V> = None;
         for index in 0..LIMBS {
-            let diff = self.op(Operator::I64Sub, &[lhs[index], rhs[index]], WType::I64);
+            let diff = self.fold(Operator::I64Sub, &[lhs[index], rhs[index]], WType::I64);
             let borrow_a = self.cmp64(Operator::I64LtU, lhs[index], rhs[index]);
             let (diff, borrow_out) = match borrow {
                 None => (diff, borrow_a),
                 Some(borrow_in) => {
-                    let borrow_in64 = self.op(Operator::I64ExtendI32U, &[borrow_in], WType::I64);
-                    let with_borrow = self.op(Operator::I64Sub, &[diff, borrow_in64], WType::I64);
+                    let borrow_in64 = self.fold(Operator::I64ExtendI32U, &[borrow_in], WType::I64);
+                    let with_borrow = self.fold(Operator::I64Sub, &[diff, borrow_in64], WType::I64);
                     let borrow_b = self.cmp64(Operator::I64LtU, diff, borrow_in64);
-                    let borrow_out = self.op(Operator::I32Or, &[borrow_a, borrow_b], WType::I32);
+                    let borrow_out = self.fold(Operator::I32Or, &[borrow_a, borrow_b], WType::I32);
                     (with_borrow, borrow_out)
                 }
             };
@@ -231,16 +231,16 @@ impl Emit<'_> {
         // The zero bits above limb `index`.
         let above = |index: usize| 64 * (count - 1 - index) as u64;
         let base = self.c64(above(0));
-        let low = self.op(Operator::I64Clz, &[value[0]], WType::I64);
-        let mut leading = self.op(Operator::I64Add, &[low, base], WType::I64);
+        let low = self.fold(Operator::I64Clz, &[value[0]], WType::I64);
+        let mut leading = self.fold(Operator::I64Add, &[low, base], WType::I64);
         for (index, &limb) in value.iter().enumerate().take(count).skip(1) {
-            let mut here = self.op(Operator::I64Clz, &[limb], WType::I64);
+            let mut here = self.fold(Operator::I64Clz, &[limb], WType::I64);
             if above(index) != 0 {
                 let bits = self.c64(above(index));
-                here = self.op(Operator::I64Add, &[here, bits], WType::I64);
+                here = self.fold(Operator::I64Add, &[here, bits], WType::I64);
             }
-            let nonzero = self.op(Operator::I64Ne, &[limb, zero], WType::I32);
-            leading = self.op(Operator::Select, &[here, leading, nonzero], WType::I64);
+            let nonzero = self.fold(Operator::I64Ne, &[limb, zero], WType::I32);
+            leading = self.fold(Operator::Select, &[here, leading, nonzero], WType::I64);
         }
         let mut result = [zero; LIMBS];
         result[0] = leading;
@@ -252,17 +252,17 @@ impl Emit<'_> {
     pub(super) fn wide_ctz(&mut self, wide: Wide, value: Limbs) -> Limbs {
         let count = wide.limbs();
         let zero = self.c64(0);
-        let top = self.op(Operator::I64Ctz, &[value[count - 1]], WType::I64);
+        let top = self.fold(Operator::I64Ctz, &[value[count - 1]], WType::I64);
         let base = self.c64(64 * (count - 1) as u64);
-        let mut trailing = self.op(Operator::I64Add, &[top, base], WType::I64);
+        let mut trailing = self.fold(Operator::I64Add, &[top, base], WType::I64);
         for (index, &limb) in value.iter().enumerate().take(count - 1).rev() {
-            let mut here = self.op(Operator::I64Ctz, &[limb], WType::I64);
+            let mut here = self.fold(Operator::I64Ctz, &[limb], WType::I64);
             if index != 0 {
                 let bits = self.c64(64 * index as u64);
-                here = self.op(Operator::I64Add, &[here, bits], WType::I64);
+                here = self.fold(Operator::I64Add, &[here, bits], WType::I64);
             }
-            let nonzero = self.op(Operator::I64Ne, &[limb, zero], WType::I32);
-            trailing = self.op(Operator::Select, &[here, trailing, nonzero], WType::I64);
+            let nonzero = self.fold(Operator::I64Ne, &[limb, zero], WType::I32);
+            trailing = self.fold(Operator::Select, &[here, trailing, nonzero], WType::I64);
         }
         let mut result = [zero; LIMBS];
         result[0] = trailing;
@@ -271,13 +271,48 @@ impl Emit<'_> {
 
     pub(super) fn wide_not(&mut self, value: Limbs) -> Limbs {
         let ones = self.c64(u64::MAX);
-        value.map(|limb| self.op(Operator::I64Xor, &[limb, ones], WType::I64))
+        value.map(|limb| self.fold(Operator::I64Xor, &[limb, ones], WType::I64))
     }
 
     pub(super) fn wide_bitwise(&mut self, op: Operator, lhs: Limbs, rhs: Limbs) -> Limbs {
         let mut result = lhs;
         for index in 0..LIMBS {
-            result[index] = self.op(op, &[lhs[index], rhs[index]], WType::I64);
+            result[index] = self.fold(op, &[lhs[index], rhs[index]], WType::I64);
+        }
+        result
+    }
+
+    /// `value` shifted left or right by the constant `count`: each limb
+    /// takes the bits of the two limbs that the count brings to it. A count
+    /// of at least 256 gives zero.
+    pub(super) fn wide_shift_by(&mut self, left: bool, value: Limbs, count: usize) -> Limbs {
+        let (limbs, bits) = (count / 64, count as u64 % 64);
+        let zero = self.c64(0);
+        let (near, far) = (self.c64(bits), self.c64(64 - bits));
+        let mut result = [zero; LIMBS];
+        for (index, limb) in result.iter_mut().enumerate() {
+            // The limb that supplies most of this one, and the one beyond it.
+            let source = |offset: usize| {
+                let from = if left {
+                    index.checked_sub(limbs + offset)
+                } else {
+                    Some(index + limbs + offset)
+                };
+                from.and_then(|from| value.get(from).copied())
+                    .unwrap_or(zero)
+            };
+            let (toward, away) = if left {
+                (Operator::I64Shl, Operator::I64ShrU)
+            } else {
+                (Operator::I64ShrU, Operator::I64Shl)
+            };
+            let main = self.fold(toward, &[source(0), near], WType::I64);
+            *limb = if bits == 0 {
+                main
+            } else {
+                let spill = self.fold(away, &[source(1), far], WType::I64);
+                self.fold(Operator::I64Or, &[main, spill], WType::I64)
+            };
         }
         result
     }
@@ -296,36 +331,36 @@ impl Emit<'_> {
         // sub: the operands differ in sign and the result differs from `lhs`.
         let (left, right) = if sub {
             (
-                self.op(Operator::I64Xor, &[a, b], WType::I64),
-                self.op(Operator::I64Xor, &[a, r], WType::I64),
+                self.fold(Operator::I64Xor, &[a, b], WType::I64),
+                self.fold(Operator::I64Xor, &[a, r], WType::I64),
             )
         } else {
             (
-                self.op(Operator::I64Xor, &[a, r], WType::I64),
-                self.op(Operator::I64Xor, &[b, r], WType::I64),
+                self.fold(Operator::I64Xor, &[a, r], WType::I64),
+                self.fold(Operator::I64Xor, &[b, r], WType::I64),
             )
         };
-        let both = self.op(Operator::I64And, &[left, right], WType::I64);
+        let both = self.fold(Operator::I64And, &[left, right], WType::I64);
         let shift = self.c64(63);
-        let bit = self.op(Operator::I64ShrU, &[both, shift], WType::I64);
-        self.op(Operator::I32WrapI64, &[bit], WType::I32)
+        let bit = self.fold(Operator::I64ShrU, &[both, shift], WType::I64);
+        self.fold(Operator::I32WrapI64, &[bit], WType::I32)
     }
 
     pub(super) fn wide_is_zero(&mut self, value: Limbs) -> V {
         let mut any = value[0];
         for &limb in &value[1..] {
-            any = self.op(Operator::I64Or, &[any, limb], WType::I64);
+            any = self.fold(Operator::I64Or, &[any, limb], WType::I64);
         }
-        self.op(Operator::I64Eqz, &[any], WType::I32)
+        self.fold(Operator::I64Eqz, &[any], WType::I32)
     }
 
     fn wide_eq(&mut self, lhs: Limbs, rhs: Limbs) -> V {
         let mut diff = self.c64(0);
         for index in 0..LIMBS {
-            let x = self.op(Operator::I64Xor, &[lhs[index], rhs[index]], WType::I64);
-            diff = self.op(Operator::I64Or, &[diff, x], WType::I64);
+            let x = self.fold(Operator::I64Xor, &[lhs[index], rhs[index]], WType::I64);
+            diff = self.fold(Operator::I64Or, &[diff, x], WType::I64);
         }
-        self.op(Operator::I64Eqz, &[diff], WType::I32)
+        self.fold(Operator::I64Eqz, &[diff], WType::I32)
     }
 
     /// `lhs < rhs`, unsigned or signed.
@@ -340,13 +375,13 @@ impl Emit<'_> {
             };
             let equal = self.cmp64(Operator::I64Eq, lhs[index], rhs[index]);
             // The higher limb decides unless the two limbs are equal.
-            less = self.op(Operator::Select, &[less, limb_less, equal], WType::I32);
+            less = self.fold(Operator::Select, &[less, limb_less, equal], WType::I32);
         }
         less
     }
 
     pub(super) fn wide_compare(&mut self, cmp: Cmp, signed: bool, lhs: Limbs, rhs: Limbs) -> V {
-        let not = |this: &mut Self, value: V| this.op(Operator::I32Eqz, &[value], WType::I32);
+        let not = |this: &mut Self, value: V| this.fold(Operator::I32Eqz, &[value], WType::I32);
         match cmp {
             Cmp::Eq => self.wide_eq(lhs, rhs),
             Cmp::Ne => {
@@ -370,12 +405,12 @@ impl Emit<'_> {
     /// 32-bit integer.
     pub(super) fn wide_exceeds_u32(&mut self, value: Limbs) -> V {
         let shift = self.c64(32);
-        let mut high = self.op(Operator::I64ShrU, &[value[0], shift], WType::I64);
+        let mut high = self.fold(Operator::I64ShrU, &[value[0], shift], WType::I64);
         for &limb in &value[1..] {
-            high = self.op(Operator::I64Or, &[high, limb], WType::I64);
+            high = self.fold(Operator::I64Or, &[high, limb], WType::I64);
         }
         let zero = self.c64(0);
-        self.op(Operator::I64Ne, &[high, zero], WType::I32)
+        self.fold(Operator::I64Ne, &[high, zero], WType::I32)
     }
 
     /// An `i32` that is non-zero if the value does not fit in a signed 32-bit
@@ -383,16 +418,16 @@ impl Emit<'_> {
     pub(super) fn wide_exceeds_i32(&mut self, value: Limbs) -> V {
         // The value fits if limb 0 sign-extends from 32 bits to itself and the
         // limbs above are its sign fill.
-        let low = self.op(Operator::I32WrapI64, &[value[0]], WType::I32);
-        let extended = self.op(Operator::I64ExtendI32S, &[low], WType::I64);
-        let mut diff = self.op(Operator::I64Xor, &[extended, value[0]], WType::I64);
+        let low = self.fold(Operator::I32WrapI64, &[value[0]], WType::I32);
+        let extended = self.fold(Operator::I64ExtendI32S, &[low], WType::I64);
+        let mut diff = self.fold(Operator::I64Xor, &[extended, value[0]], WType::I64);
         let fill = self.sign_fill(value[0]);
         for &limb in &value[1..] {
-            let x = self.op(Operator::I64Xor, &[limb, fill], WType::I64);
-            diff = self.op(Operator::I64Or, &[diff, x], WType::I64);
+            let x = self.fold(Operator::I64Xor, &[limb, fill], WType::I64);
+            diff = self.fold(Operator::I64Or, &[diff, x], WType::I64);
         }
         let zero = self.c64(0);
-        self.op(Operator::I64Ne, &[diff, zero], WType::I32)
+        self.fold(Operator::I64Ne, &[diff, zero], WType::I32)
     }
 }
 
@@ -401,11 +436,11 @@ impl Emit<'_> {
 
 impl Emit<'_> {
     pub(super) fn select64(&mut self, if_true: V, if_false: V, cond: V) -> V {
-        self.op(Operator::Select, &[if_true, if_false, cond], WType::I64)
+        self.fold(Operator::Select, &[if_true, if_false, cond], WType::I64)
     }
 
     fn zero_extend(&mut self, flag: V) -> V {
-        self.op(Operator::I64ExtendI32U, &[flag], WType::I64)
+        self.fold(Operator::I64ExtendI32U, &[flag], WType::I64)
     }
 
     /// The 128-bit product of two 64-bit values, as (low, high).
