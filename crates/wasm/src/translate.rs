@@ -295,7 +295,7 @@ fn scan_module(module: &Module) -> Scan {
                     // in place.
                     if let Some((op, lhs, rhs)) = wide_op_of(&kind)
                         && let Some(wide) = Wide::from_type(function.dfg.value_ty(lhs))
-                        && !(matches!(op, WideOp::Shl | WideOp::Shr)
+                        && !(matches!(op, WideOp::Shl | WideOp::Shr | WideOp::Sar)
                             && constant_shift(function, rhs).is_some())
                         && !(op == WideOp::Mul && wide == Wide::I128)
                     {

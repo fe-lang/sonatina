@@ -299,8 +299,8 @@ operands are zero-extended, as on the native target, so the sum or product
 does not wrap.
 
 Multiplication, division and shifts by a count that is not a constant are
-functions of the module, emitted only when used. A shift by a constant is built
-in place, and so is a product with at most three limb products that are not
+functions of the module, emitted only when used. A shift by a constant, `sar`
+included, is built in place, and so is a product with at most three limb products that are not
 zero: any 128-bit product, and a 256-bit product of values extended from 64
 bits. Limbs that are constants, such as the zero high limbs of a value
 extended from 64 or 128 bits, are folded out of additions, subtractions,

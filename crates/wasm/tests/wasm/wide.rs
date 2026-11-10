@@ -651,8 +651,15 @@ fn shifts_by_a_constant_match_the_reference() {
     ];
     let mut rng = Lcg(0x5eed_5417);
     let low = (U256::one() << 128) - 1;
-    for (bits, left) in [(256, true), (256, false), (128, true), (128, false)] {
-        let op = if left { "shl" } else { "shr" };
+    let shifts = [
+        (256, "shl"),
+        (256, "shr"),
+        (256, "sar"),
+        (128, "shl"),
+        (128, "shr"),
+        (128, "sar"),
+    ];
+    for (bits, op) in shifts {
         let mut source = PRELUDE.to_string();
         for count in counts {
             let shift = if bits == 256 {
@@ -682,10 +689,16 @@ fn shifts_by_a_constant_match_the_reference() {
                 for _ in 0..40 {
                     let a = operand(&mut rng);
                     let value = if bits == 256 { a } else { a & low };
-                    let want = match (count < bits, left) {
-                        (false, _) => U256::zero(),
-                        (true, true) => value << count,
-                        (true, false) => value >> count,
+                    // The bits an arithmetic shift of a negative value brings in.
+                    let ones = if op == "sar" && value.bit(bits - 1) {
+                        !U256::zero() << (bits - count.min(bits)).min(255)
+                    } else {
+                        U256::zero()
+                    };
+                    let want = match (count < bits, op) {
+                        (false, _) => ones | (ones << 1),
+                        (true, "shl") => value << count,
+                        (true, _) => (value >> count) | ones,
                     };
                     let want = if bits == 256 { want } else { want & low };
                     let args: Vec<Val> = limbs(a).map(|limb| Val::I64(limb as i64)).into();

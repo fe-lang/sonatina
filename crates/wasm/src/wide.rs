@@ -286,11 +286,18 @@ impl Emit<'_> {
     }
 
     /// `value` shifted left or right by the constant `count`: each limb
-    /// takes the bits of the two limbs that the count brings to it. A count
-    /// of at least 256 gives zero.
-    pub(super) fn wide_shift_by(&mut self, left: bool, value: Limbs, count: usize) -> Limbs {
+    /// takes the bits of the two limbs that the count brings to it. `fill`
+    /// stands for the limbs beyond `value`: zero, or the sign fill for an
+    /// arithmetic shift right. A count of at least 256 leaves only `fill`.
+    pub(super) fn wide_shift_by(
+        &mut self,
+        left: bool,
+        value: Limbs,
+        count: usize,
+        fill: Option<V>,
+    ) -> Limbs {
         let (limbs, bits) = (count / 64, count as u64 % 64);
-        let zero = self.c64(0);
+        let zero = fill.unwrap_or_else(|| self.c64(0));
         let (near, far) = (self.c64(bits), self.c64(64 - bits));
         let mut result = [zero; LIMBS];
         for (index, limb) in result.iter_mut().enumerate() {

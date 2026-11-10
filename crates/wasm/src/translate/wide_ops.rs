@@ -350,7 +350,9 @@ impl FunctionTranslator<'_> {
             WideOp::Shl | WideOp::Shr => {
                 // A constant count shifts in place.
                 if let Some(count) = constant_shift(self.function, rhs) {
-                    let shifted = self.emit(wb).wide_shift_by(op == WideOp::Shl, a, count);
+                    let shifted = self
+                        .emit(wb)
+                        .wide_shift_by(op == WideOp::Shl, a, count, None);
                     return self.define_wide(wb, inst_id, 0, wide, shifted);
                 }
                 let func = if op == WideOp::Shl {
@@ -366,6 +368,12 @@ impl FunctionTranslator<'_> {
                 // For a negative value, shift the complement and complement the
                 // result, so the vacated bits are ones. The count is unsigned.
                 let a = self.emit(wb).wide_sign_extend(wide, a);
+                // A constant count shifts in place, with the sign beyond the top.
+                if let Some(count) = constant_shift(self.function, rhs) {
+                    let fill = self.emit(wb).sign_fill(a[LIMBS - 1]);
+                    let shifted = self.emit(wb).wide_shift_by(false, a, count, Some(fill));
+                    return self.define_wide(wb, inst_id, 0, wide, shifted);
+                }
                 let func = self.helper(helpers.shr, "shift")?;
                 let sign = self.sign_of(wb, a);
                 let flipped = self.emit(wb).wide_not(a);
