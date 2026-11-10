@@ -234,3 +234,34 @@ block5:
 block6:
     return 3.i256;
 }
+
+# A condition computed from a phi folds on each edge whose incoming value is
+# a constant.
+# sameln: func public %condition_folded_from_phi_threads(v0.i256, v1.i256) -> i256 {
+# check:   block1:
+# check:       jump block5;
+# check:   block2:
+# nextln:      jump block3;
+# check:       br v4 block5 block4;
+func public %condition_folded_from_phi_threads(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i1 = lt v0 10.i256;
+    br v2 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v3.i256 = phi (0.i256 block1) (v1 block2);
+    v4.i1 = is_zero v3;
+    br v4 block5 block4;
+
+block4:
+    return v3;
+
+block5:
+    return 0.i256;
+}

@@ -112,36 +112,36 @@ func private %mix(v0.*[i256; 3]) -> *[i256; 3] {
         jump block16;
 
     block16:
-        v67.i256 = phi (0.i256 block0) (v17 block3);
-        v29.*i256 = gep v6 0.i256 v67;
+        v68.i256 = phi (0.i256 block0) (v17 block3);
+        v29.*i256 = gep v6 0.i256 v68;
         jump block27;
 
     block3:
-        v17.i256 = add v67 1.i256;
-        v69.i1 = lt v17 3.i256;
-        br v69 block16 block4;
+        v17.i256 = add v68 1.i256;
+        v70.i1 = lt v17 3.i256;
+        br v70 block16 block4;
 
     block4:
         return v6;
 
     block27:
-        v64.i256 = phi (0.i256 block16) (v63 block27);
+        v65.i256 = phi (0.i256 block16) (v63 block27);
         v30.i256 = mload v29 i256;
         v32.*i8 = evm_malloc 288.i256;
         v35.i256 = ptr_to_int v32 i256;
         evm_code_copy v35 v33 v34;
         v36.*[[i256; 3]; 3] = bitcast v32 *[[i256; 3]; 3];
-        v40.*[i256; 3] = gep v36 0.i256 v67;
-        v44.*i256 = gep v40 0.i256 v64;
+        v40.*[i256; 3] = gep v36 0.i256 v68;
+        v44.*i256 = gep v40 0.i256 v65;
         v45.i256 = mload v44 i256;
-        v50.*i256 = gep v0 0.i256 v64;
+        v50.*i256 = gep v0 0.i256 v65;
         v51.i256 = mload v50 i256;
         v54.i256 = evm_mul_mod v45 v51 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v56.i256 = evm_add_mod v30 v54 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         mstore v29 v56 i256;
-        v63.i256 = add v64 1.i256;
-        v66.i1 = lt v63 3.i256;
-        br v66 block27 block3;
+        v63.i256 = add v65 1.i256;
+        v67.i1 = lt v63 3.i256;
+        br v67 block27 block3;
 }
 
 func private %poseidon_mock(v0.i256, v1.i256) -> i256 {

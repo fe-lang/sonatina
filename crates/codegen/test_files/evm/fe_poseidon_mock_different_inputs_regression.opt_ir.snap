@@ -85,36 +85,36 @@ func private %mix(v0.objref<[i256; 3]>) -> objref<[i256; 3]> {
         jump block16;
 
     block16:
-        v65.i256 = phi (0.i256 block0) (v16 block3);
-        v28.objref<i256> = obj.index v1 v65;
+        v66.i256 = phi (0.i256 block0) (v16 block3);
+        v28.objref<i256> = obj.index v1 v66;
         jump block27;
 
     block3:
-        v16.i256 = add v65 1.i256;
-        v67.i1 = lt v16 3.i256;
-        br v67 block16 block4;
+        v16.i256 = add v66 1.i256;
+        v68.i1 = lt v16 3.i256;
+        br v68 block16 block4;
 
     block4:
         return v1;
 
     block27:
-        v62.i256 = phi (0.i256 block16) (v61 block27);
+        v63.i256 = phi (0.i256 block16) (v61 block27);
         v29.i256 = obj.load v28;
         v30.objref<[[i256; 3]; 3]> = obj.alloc [[i256; 3]; 3];
         v31.*[[i256; 3]; 3] = obj.materialize.stack v30;
         v34.i256 = ptr_to_int v31 i256;
         evm_code_copy v34 v32 v33;
-        v38.objref<[i256; 3]> = obj.index v30 v65;
-        v42.objref<i256> = obj.index v38 v62;
+        v38.objref<[i256; 3]> = obj.index v30 v66;
+        v42.objref<i256> = obj.index v38 v63;
         v43.i256 = obj.load v42;
-        v48.objref<i256> = obj.index v0 v62;
+        v48.objref<i256> = obj.index v0 v63;
         v49.i256 = obj.load v48;
         v52.i256 = evm_mul_mod v43 v49 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v54.i256 = evm_add_mod v29 v52 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         obj.store v28 v54;
-        v61.i256 = add v62 1.i256;
-        v64.i1 = lt v61 3.i256;
-        br v64 block27 block3;
+        v61.i256 = add v63 1.i256;
+        v65.i1 = lt v61 3.i256;
+        br v65 block27 block3;
 }
 
 func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
@@ -136,10 +136,10 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
         v103.i256 = phi (0.i256 block0) (v36 block3);
         v29.objref<[i256; 3]> = call %ark v104 v105;
         v54.objref<i256> = obj.index v29 0.i256;
-        v119.i256 = obj.load v54;
-        v56.i256 = evm_mul_mod v119 v119 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v120.i256 = evm_mul_mod v56 v56 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v121.i256 = evm_mul_mod v120 v119 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v121.i256 = obj.load v54;
+        v56.i256 = evm_mul_mod v121 v121 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v122.i256 = evm_mul_mod v56 v56 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v123.i256 = evm_mul_mod v122 v121 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v59.objref<i256> = obj.index v29 1.i256;
         v60.i256 = obj.load v59;
         v61.i256 = evm_mul_mod v60 v60 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
@@ -152,7 +152,7 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
         v68.i256 = evm_mul_mod v67 v65 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v69.objref<[i256; 3]> = obj.alloc [i256; 3];
         v70.objref<i256> = obj.index v69 0.i256;
-        obj.store v70 v121;
+        obj.store v70 v123;
         v71.objref<i256> = obj.index v69 1.i256;
         obj.store v71 v63;
         v72.objref<i256> = obj.index v69 2.i256;
@@ -167,9 +167,9 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
         br v107 block17 block21;
 
     block21:
-        v99.i256 = phi (v33 block3) (v52 block7);
-        v98.objref<[i256; 3]> = phi (v31 block3) (v51 block7);
-        v97.i256 = phi (0.i256 block3) (v55 block7);
+        v99.i256 = phi (v52 block7) (v33 block3);
+        v98.objref<[i256; 3]> = phi (v51 block7) (v31 block3);
+        v97.i256 = phi (v55 block7) (0.i256 block3);
         v49.objref<[i256; 3]> = call %ark v98 v99;
         v73.objref<i256> = obj.index v49 0.i256;
         v74.i256 = obj.load v73;

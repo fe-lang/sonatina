@@ -18,7 +18,9 @@ use sonatina_ir::{
 
 use crate::{
     analysis::definedness::maybe_undef_values,
+    bitset::BitSet,
     domtree::{DomTree, DominatorTreeTraversable},
+    liveness::Liveness,
     loop_analysis::LoopTree,
 };
 
@@ -82,6 +84,7 @@ impl RangeAnalysis {
         let static_reachable = cfg.reachable_blocks();
         let mut rpo: Vec<_> = cfg.post_order().collect();
         rpo.reverse();
+        let (keep_entry, keep_exit) = kept_values(func, cfg, &rpo);
 
         let mut worklist = VecDeque::new();
         let mut queued = SecondaryMap::<BlockId, bool>::default();
@@ -120,6 +123,7 @@ impl RangeAnalysis {
                 continue;
             };
 
+            new_entry.retain(|value, _| keep_entry[block].contains(*value));
             if old_initialized {
                 revisit_count[block] = revisit_count[block].saturating_add(1);
             }
@@ -138,13 +142,14 @@ impl RangeAnalysis {
             self.reachable[block] = true;
             self.initialized[block] = true;
 
-            let new_exit = simulate_block_from_entry(
+            let mut new_exit = simulate_block_from_entry(
                 func,
                 block,
                 &new_entry,
                 &self.guarded_subs,
                 &self.maybe_undef,
             );
+            new_exit.retain(|value, _| keep_exit[block].contains(*value));
             let exit_changed = new_exit != self.exit_envs[block];
             if exit_changed {
                 self.exit_envs[block] = new_exit;
@@ -168,7 +173,7 @@ impl RangeAnalysis {
                 if !self.reachable[block] {
                     continue;
                 }
-                let Some(new_entry) = compute_block_entry(
+                let Some(mut new_entry) = compute_block_entry(
                     func,
                     cfg,
                     block,
@@ -184,16 +189,19 @@ impl RangeAnalysis {
                     changed = true;
                     continue;
                 };
+                new_entry.retain(|value, _| keep_entry[block].contains(*value));
                 if new_entry == self.entry_envs[block] {
                     continue;
                 }
-                self.exit_envs[block] = simulate_block_from_entry(
+                let mut new_exit = simulate_block_from_entry(
                     func,
                     block,
                     &new_entry,
                     &self.guarded_subs,
                     &self.maybe_undef,
                 );
+                new_exit.retain(|value, _| keep_exit[block].contains(*value));
+                self.exit_envs[block] = new_exit;
                 self.entry_envs[block] = new_entry;
                 changed = true;
             }
@@ -699,6 +707,110 @@ fn enqueue_succs(
 fn is_loop_header(lpt: &LoopTree, block: BlockId) -> bool {
     lpt.loop_of_block(block)
         .is_some_and(|lp| lpt.loop_header(lp) == block)
+}
+
+/// The values whose facts each block's entry and exit environments keep:
+/// those live into or out of it, the arguments it passes to successors'
+/// phis, the values its branch condition is read through, and the bases a
+/// kept value is a constant offset of (`unsigned_base_offset` reads their
+/// facts). A fact about any other value cannot matter later, and keeping
+/// every value's fact in every environment took memory in blocks times
+/// values: gigabytes for one large function.
+fn kept_values(
+    func: &Function,
+    cfg: &ControlFlowGraph,
+    blocks: &[BlockId],
+) -> (
+    SecondaryMap<BlockId, BitSet<ValueId>>,
+    SecondaryMap<BlockId, BitSet<ValueId>>,
+) {
+    let mut liveness = Liveness::new();
+    liveness.compute(func, cfg);
+    let mut keep_entry = SecondaryMap::<BlockId, BitSet<ValueId>>::default();
+    let mut keep_exit = SecondaryMap::<BlockId, BitSet<ValueId>>::default();
+    for &block in blocks {
+        let condition = condition_values(func, block);
+        let mut entry = liveness.block_live_ins(block).clone();
+        let mut exit = liveness.block_live_outs(block).clone();
+        for &value in &condition {
+            entry.insert(value);
+            exit.insert(value);
+        }
+        for &succ in cfg.succs_of(block) {
+            for inst in func.layout.iter_inst(succ) {
+                let Some(phi) = func.dfg.cast_phi(inst) else {
+                    break;
+                };
+                for &(value, pred) in phi.args() {
+                    if pred == block {
+                        exit.insert(value);
+                    }
+                }
+            }
+        }
+        close_over_offset_bases(func, &mut entry);
+        close_over_offset_bases(func, &mut exit);
+        keep_entry[block] = entry;
+        keep_exit[block] = exit;
+    }
+    (keep_entry, keep_exit)
+}
+
+/// Adds to `values` the operand each one adds a constant to or subtracts
+/// one from, and so on.
+fn close_over_offset_bases(func: &Function, values: &mut BitSet<ValueId>) {
+    let mut pending: Vec<_> = values.iter().collect();
+    while let Some(value) = pending.pop() {
+        let Some(inst) = func.dfg.value_inst(value) else {
+            continue;
+        };
+        if !matches!(
+            func.dfg.inst(inst).kind(),
+            InstClassKind::Binary(BinaryInstKind::Add | BinaryInstKind::Sub)
+        ) {
+            continue;
+        }
+        let args = func.dfg.inst(inst).collect_values();
+        if let [base, step] = args.as_slice()
+            && func.dfg.value_imm(*step).is_some()
+            && values.insert(*base)
+        {
+            pending.push(*base);
+        }
+    }
+}
+
+/// The values `normalize_condition` may read facts of for `block`'s branch:
+/// its condition and what that is a negation, zero test or comparison of.
+fn condition_values(func: &Function, block: BlockId) -> SmallVec<[ValueId; 8]> {
+    let mut values = SmallVec::new();
+    let Some(BranchKind::Br(br)) = func
+        .layout
+        .last_inst_of(block)
+        .and_then(|term| func.dfg.branch_info(term))
+        .map(|branch| branch.branch_kind())
+    else {
+        return values;
+    };
+    let mut pending: SmallVec<[ValueId; 8]> = smallvec![*br.cond()];
+    while let Some(value) = pending.pop() {
+        if values.contains(&value) || values.len() >= 32 {
+            continue;
+        }
+        values.push(value);
+        let Some(inst) = func.dfg.value_inst(value) else {
+            continue;
+        };
+        let reads_through = match func.dfg.inst(inst).kind() {
+            InstClassKind::Unary(UnaryInstKind::Not | UnaryInstKind::IsZero) => true,
+            InstClassKind::Binary(kind) => is_compare(kind),
+            _ => false,
+        };
+        if reads_through {
+            pending.extend(func.dfg.inst(inst).collect_values());
+        }
+    }
+    values
 }
 
 fn compute_block_entry(
@@ -2522,8 +2634,11 @@ mod tests {
         let func_ref = module.funcs()[0];
         module.func_store.view(func_ref, |func| {
             let analysis = compute_analysis(func);
-            assert_eq!(exact_bool(func, analysis.exit_env(b1), eq), Some(true));
-            let fact = fact_for_value(func, analysis.exit_env(b1), phi);
+            assert_eq!(
+                exact_bool(func, &facts_at_exit(func, &analysis, b1), eq),
+                Some(true)
+            );
+            let fact = fact_for_value(func, &facts_at_exit(func, &analysis, b1), phi);
             assert_eq!(fact.unsigned.lo, U256::from(1u8));
             assert_eq!(fact.unsigned.hi, U256::from(1u8));
         });
@@ -3067,7 +3182,7 @@ mod tests {
         module.func_store.view(func_ref, |func| {
             let analysis = compute_analysis(func);
             assert_eq!(
-                exact_immediate(func, analysis.exit_env(b0), sum),
+                exact_immediate(func, &facts_at_exit(func, &analysis, b0), sum),
                 Some(Immediate::from_i256(I256::from(3i8), Type::I8))
             );
         });
@@ -3155,7 +3270,7 @@ mod tests {
             assert_eq!(fact.unsigned.lo, U256::zero());
             assert_eq!(fact.unsigned.hi, U256::from(99u8));
             assert_eq!(
-                exact_bool(func, analysis.exit_env(b2), overflow),
+                exact_bool(func, &facts_at_exit(func, &analysis, b2), overflow),
                 Some(false)
             );
         });
@@ -3244,9 +3359,27 @@ mod tests {
         let func_ref = module.funcs()[0];
         module.func_store.view(func_ref, |func| {
             let analysis = compute_analysis(func);
-            assert_eq!(exact_bool(func, analysis.exit_env(b1), div_ov), Some(false));
-            assert_eq!(exact_bool(func, analysis.exit_env(b3), neg_ov), Some(false));
+            assert_eq!(
+                exact_bool(func, &facts_at_exit(func, &analysis, b1), div_ov),
+                Some(false)
+            );
+            assert_eq!(
+                exact_bool(func, &facts_at_exit(func, &analysis, b3), neg_ov),
+                Some(false)
+            );
         });
+    }
+
+    /// The facts at `block`'s end, as a pass replaying it from its entry
+    /// sees them: exit environments keep only values live out of a block.
+    fn facts_at_exit(func: &Function, analysis: &RangeAnalysis, block: BlockId) -> RangeEnv {
+        let mut env = analysis.entry_env(block).clone();
+        for inst in func.layout.iter_inst(block) {
+            if !func.dfg.is_phi(inst) {
+                analysis.transfer_inst(func, &mut env, inst);
+            }
+        }
+        env
     }
 
     fn compute_analysis(func: &Function) -> RangeAnalysis {
