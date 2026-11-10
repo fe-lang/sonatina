@@ -227,6 +227,64 @@ fn unread_i256_argument_limbs_are_not_loaded() {
 }
 
 #[test]
+fn lone_limb_carries_take_the_flag() {
+    // A limb that adds only the previous limb's carry, or subtracts only its
+    // borrow, compiles as if a zero were its other term: the flag continues
+    // the chain instead of becoming an addend.
+    let triple = native_isa(host_architecture()).triple();
+    let text_size_of = |add: &str, sub: &str| {
+        let source = format!(
+            r#"target = "{triple}"
+func public %apply(v0.*[i64; 3], v1.*[i64; 4]) {{
+block0:
+    v2.[i64; 3] = mload v0 [i64; 3];
+    v3.i64 = extract_value v2 0.i256;
+    v4.i64 = extract_value v2 1.i256;
+    v5.i64 = extract_value v2 2.i256;
+    v6.i128 = zext v3 i128;
+    v7.i128 = zext v4 i128;
+    v8.i128 = zext v5 i128;
+    v9.i128 = add v6 v7;
+    v10.i128 = shr 64.i128 v9;
+    v11.i64 = trunc v10 i64;
+    v12.i128 = zext v11 i128;
+    {add}
+    v14.i64 = trunc v13 i64;
+    v15.i128 = shr 64.i128 v13;
+    v16.i64 = trunc v15 i64;
+    v17.i128 = sub v6 v7;
+    v18.i128 = shr 127.i128 v17;
+    v19.i64 = trunc v18 i64;
+    v20.i128 = zext v19 i128;
+    {sub}
+    v22.i64 = trunc v21 i64;
+    v23.i128 = shr 127.i128 v21;
+    v24.i64 = trunc v23 i64;
+    v25.[i64; 4] = insert_value undef.[i64; 4] 0.i256 v14;
+    v26.[i64; 4] = insert_value v25 1.i256 v16;
+    v27.[i64; 4] = insert_value v26 2.i256 v22;
+    v28.[i64; 4] = insert_value v27 3.i256 v24;
+    mstore v1 v28 [i64; 4];
+    return;
+}}
+"#
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let artifact = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(OptLevel::O0)
+            .compile()
+            .unwrap();
+        text_size(artifact.as_bytes())
+    };
+    let alone = text_size_of("v13.i128 = add v8 v12;", "v21.i128 = sub v8 v20;");
+    let with_zero = text_size_of(
+        "v30.i128 = add v8 0.i128;\n    v13.i128 = add v30 v12;",
+        "v31.i128 = sub v8 0.i128;\n    v21.i128 = sub v31 v20;",
+    );
+    assert_eq!(alone, with_zero);
+}
+
+#[test]
 fn large_aggregate_copies_have_constant_code_size() {
     // Snapshot loads, chain-head copies, return buffers, stores and undef
     // zero fills of every length share one bounded code size.
