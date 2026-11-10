@@ -1,7 +1,7 @@
 use sonatina_codegen::{Compile, compile::OptLevel};
 use sonatina_cranelift::CraneliftJitBackend;
 
-use super::{parse_native_module, parse_verified_native_module};
+use super::{assert_fields_eq, parse_native_module, parse_verified_native_module};
 
 #[test]
 fn aggregate_updates_preserve_snapshots_extracted_views_and_arguments() {
@@ -789,9 +789,9 @@ block0:
 }
 
 #[test]
-fn field_wise_copies_keep_fields_and_zero_padding() {
-    // Copies split at narrow fields and overlapping enum payloads, and write
-    // zeros to padding. Each copy kind passes the values on: `mload`, phis,
+fn field_wise_copies_keep_fields() {
+    // Copies split at narrow fields and overlapping enum payloads, and skip
+    // padding. Each copy kind passes the values on: `mload`, phis,
     // object stores and loads, returns and `mstore`. Both types have too many
     // fields to be held in registers.
     let source = r#"
@@ -844,13 +844,6 @@ block2:
         let mut choice: [u8; 16] = std::array::from_fn(|i| (i * 53 + 5) as u8);
         choice[0] = 2;
         choice[8] = 1;
-        let mut expected_mixed = mixed;
-        expected_mixed[1..4].fill(0);
-        expected_mixed[10..16].fill(0);
-        expected_mixed[25] = 0;
-        expected_mixed[28..32].fill(0);
-        let mut expected_choice = choice;
-        expected_choice[1..8].fill(0);
         for rounds in [1, 3] {
             let (mut mixed_out, mut choice_out) = ([0xa5u8; 32], [0xa5u8; 16]);
             unsafe {
@@ -862,8 +855,18 @@ block2:
                     rounds,
                 )
             };
-            assert_eq!(mixed_out, expected_mixed, "{level:?} {rounds}");
-            assert_eq!(choice_out, expected_choice, "{level:?} {rounds}");
+            assert_fields_eq(
+                &mixed_out,
+                &mixed,
+                [1..4, 10..16, 25..26, 28..32],
+                format!("{level:?} {rounds}"),
+            );
+            assert_fields_eq(
+                &choice_out,
+                &choice,
+                Some(1..8),
+                format!("{level:?} {rounds}"),
+            );
         }
     }
 }
@@ -1006,7 +1009,6 @@ block0:
                 "{level:?}"
             );
             assert_eq!(value[0], 0, "{level:?}");
-            assert_eq!(value[1..8], [0; 7], "{level:?}");
             assert_eq!(word(&value, 8), u64::from(flag), "{level:?}");
         }
         let mut wide = [0u8; 24];

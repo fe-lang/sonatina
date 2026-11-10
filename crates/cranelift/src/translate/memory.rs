@@ -35,13 +35,10 @@ pub(super) fn copy_value(
         return Ok(());
     }
     for piece in value_pieces(ty, size, ctx)? {
-        let value = match piece {
-            Piece::Field(offset, ty) => builder.ins().load(ty, LOAD_FLAGS, src, offset),
-            Piece::Padding(_, ty) => builder.ins().iconst(ty, 0),
-        };
-        builder
-            .ins()
-            .store(MemFlagsData::new(), value, dst, piece.offset());
+        if let Piece::Field(offset, ty) = piece {
+            let value = builder.ins().load(ty, LOAD_FLAGS, src, offset);
+            builder.ins().store(MemFlagsData::new(), value, dst, offset);
+        }
     }
     Ok(())
 }
@@ -102,12 +99,11 @@ fn move_pieces(
 ) {
     let values: Vec<_> = pieces
         .into_iter()
-        .map(|piece| {
-            let value = match piece {
-                Piece::Field(offset, ty) => builder.ins().load(ty, LOAD_FLAGS, src, offset),
-                Piece::Padding(_, ty) => builder.ins().iconst(ty, 0),
-            };
-            (piece.offset(), value)
+        .filter_map(|piece| match piece {
+            Piece::Field(offset, ty) => {
+                Some((offset, builder.ins().load(ty, LOAD_FLAGS, src, offset)))
+            }
+            Piece::Padding(..) => None,
         })
         .collect();
     for (offset, value) in values {
@@ -115,28 +111,12 @@ fn move_pieces(
     }
 }
 
-/// A piece of a value's storage that a copy writes with one store: bytes of
-/// a field, which it loads, or padding, which it zeroes.
+/// A piece of a value's storage: bytes of a field, which a copy moves with
+/// one load and one store, or padding, which it skips.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Piece {
     Field(i32, clif::Type),
     Padding(i32, clif::Type),
-}
-
-impl Piece {
-    fn offset(self) -> i32 {
-        match self {
-            Self::Field(offset, _) | Self::Padding(offset, _) => offset,
-        }
-    }
-
-    /// The offset and type of a padding piece.
-    pub(super) fn padding(self) -> Option<(i32, clif::Type)> {
-        match self {
-            Self::Padding(offset, ty) => Some((offset, ty)),
-            Self::Field(..) => None,
-        }
-    }
 }
 
 /// The pieces of a copy of a `size`-byte `ty` value. The CPU forwards a store
@@ -144,8 +124,7 @@ impl Piece {
 /// the store to reach the cache. Fields are written by their own stores, often
 /// narrower than a word, so the pieces split wherever a scalar field starts or
 /// ends, then as `aligned_chunks`, as zero fills split too. Padding is not
-/// part of the value, and often nothing has written it, so a copy writes
-/// zeros there instead of loading it.
+/// part of the value, and often nothing has written it, so a copy skips it.
 pub(super) fn value_pieces(ty: Type, size: u32, ctx: &ModuleCtx) -> Result<Vec<Piece>, String> {
     let mut fields = Vec::new();
     field_ranges(ty, 0, ctx, &mut fields)?;
@@ -268,25 +247,53 @@ pub(super) fn is_undef(function: &Function, value: ValueId) -> bool {
     matches!(function.dfg.value(value), Value::Undef { .. })
 }
 
-/// Zeroes the bytes of `dst..dst + size` outside the `written` ranges.
-pub(super) fn zero_unwritten(
+/// Zeroes the field bytes of the `ty` value at `dst` outside the `written`
+/// ranges: the fields an insert chain on undef leaves, which read as zero.
+/// Padding is not part of the value, so it keeps whatever it holds; a value
+/// too large for inline copies has its gaps zeroed whole.
+pub(super) fn zero_unwritten_fields(
+    ty: Type,
     dst: clif::Value,
-    size: u32,
     mut written: Vec<(u32, u32)>,
+    ctx: &ModuleCtx,
     config: TargetFrontendConfig,
     builder: &mut FunctionBuilder,
-) {
+) -> Result<(), String> {
+    let size = value_storage_size(ty, ctx)?;
     written.sort_unstable();
-    let mut zeroed = 0;
-    for (offset, len) in written.into_iter().chain([(size, 0)]) {
-        if offset > zeroed && offset - zeroed > INLINE_MEMORY_BYTES {
-            let gap = builder.ins().iadd_imm_s(dst, i64::from(zeroed));
-            zero_bytes(gap, offset - zeroed, config, builder);
-        } else if offset > zeroed {
-            zero_range(dst, zeroed, offset, builder);
+    if size > INLINE_MEMORY_BYTES {
+        let mut zeroed = 0;
+        for (offset, len) in written.into_iter().chain([(size, 0)]) {
+            if offset > zeroed && offset - zeroed > INLINE_MEMORY_BYTES {
+                let gap = builder.ins().iadd_imm_s(dst, i64::from(zeroed));
+                zero_bytes(gap, offset - zeroed, config, builder);
+            } else if offset > zeroed {
+                zero_range(dst, zeroed, offset, builder);
+            }
+            zeroed = zeroed.max(offset + len);
         }
-        zeroed = zeroed.max(offset + len);
+        return Ok(());
     }
+    for piece in value_pieces(ty, size, ctx)? {
+        let Piece::Field(offset, piece_ty) = piece else {
+            continue;
+        };
+        let mut start = offset as u32;
+        let end = start + piece_ty.bytes();
+        for &(at, len) in &written {
+            if at >= end {
+                break;
+            }
+            if at > start {
+                zero_range(dst, start, at, builder);
+            }
+            start = start.max(at + len);
+        }
+        if start < end {
+            zero_range(dst, start, end, builder);
+        }
+    }
+    Ok(())
 }
 
 /// Loads the scalar or i256 value `result` of type `ty` from `src + offset`.
@@ -329,7 +336,7 @@ pub(super) fn store_value(
         store_limbs(limbs, dst, offset, MemFlagsData::new(), builder);
     } else if let Some(parts) = register_parts(function.ctx(), ty) {
         let values = resolve_parts(function, value, &parts, value_map, builder)?;
-        store_parts(function.ctx(), ty, &parts, &values, dst, offset, builder)?;
+        store_parts(&parts, &values, dst, offset, builder);
     } else {
         let value = resolve_value(function, value, value_map, builder)?;
         builder.ins().store(MemFlagsData::new(), value, dst, offset);

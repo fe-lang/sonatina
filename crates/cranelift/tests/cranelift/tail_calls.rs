@@ -1,7 +1,7 @@
 use sonatina_codegen::{Compile, compile::OptLevel};
 use sonatina_cranelift::CraneliftJitBackend;
 
-use super::parse_verified_native_module;
+use super::{assert_fields_eq, parse_verified_native_module};
 
 /// Deep enough that the test thread's stack overflows unless each call
 /// replaces its caller's frame.
@@ -190,7 +190,12 @@ block0:
                 (quad[0], second[0]) = (2, 2);
             }
             let expected = [&quad[..], &sum, &second].concat();
-            assert_eq!(result[..], expected, "{level:?} {depth}");
+            assert_fields_eq(
+                &result,
+                &expected,
+                [1..8, 18..24, 41..48, 58..64],
+                format!("{level:?} {depth}"),
+            );
         }
     }
 }

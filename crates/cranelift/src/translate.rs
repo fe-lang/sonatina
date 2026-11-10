@@ -1862,7 +1862,6 @@ fn translate_function(
                         resolve_value(function, source_value, &value_map, &mut builder)?
                     } else {
                         let address = frame.address(result, &mut builder)?;
-                        let size = value_storage_size(result_ty, &module.ctx)?;
                         if is_undef(function, source_value) {
                             // An undef source is zero, but only the bytes no
                             // insert of the chain writes need zeroing.
@@ -1886,7 +1885,14 @@ fn translate_function(
                                     Ok((offset as u32, value_storage_size(elem_ty, &module.ctx)?))
                                 })
                                 .collect::<Result<_, String>>()?;
-                            zero_unwritten(address, size, written, target_config, &mut builder);
+                            zero_unwritten_fields(
+                                result_ty,
+                                address,
+                                written,
+                                &module.ctx,
+                                target_config,
+                                &mut builder,
+                            )?;
                         } else {
                             store_indirect(
                                 function,
@@ -2265,7 +2271,9 @@ fn translate_function(
                 NativeInstKind::EnumMake(make) => {
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let addr = frame.address(result, &mut builder)?;
-                        let written = store_variant(
+                        // Padding and other variants' payloads are not part
+                        // of the value, so they keep whatever they hold.
+                        store_variant(
                             function,
                             *make.variant(),
                             make.values(),
@@ -2274,10 +2282,6 @@ fn translate_function(
                             target_config,
                             &mut builder,
                         )?;
-                        // Padding and other variants' payload bytes are zero,
-                        // like the bytes an insert chain on undef leaves.
-                        let size = value_storage_size(function.dfg.value_ty(result), &module.ctx)?;
-                        zero_unwritten(addr, size, written, target_config, &mut builder);
                         value_map.insert(result, addr);
                     }
                 }

@@ -58,8 +58,7 @@ pub(super) fn store_tag(
     Ok(())
 }
 
-/// Writes `variant`'s tag and the fields `values` to the enum at `dst`, and
-/// returns the byte ranges written: the tag's, then each field's.
+/// Writes `variant`'s tag and the fields `values` to the enum at `dst`.
 pub(super) fn store_variant(
     function: &Function,
     variant: EnumVariantRef,
@@ -68,7 +67,7 @@ pub(super) fn store_variant(
     value_map: &ValueMap,
     config: TargetFrontendConfig,
     builder: &mut FunctionBuilder,
-) -> Result<Vec<(u32, u32)>, String> {
+) -> Result<(), String> {
     let ctx = function.ctx();
     let enum_ty = Type::Compound(variant.enum_ty());
     let enum_size = value_storage_size(enum_ty, ctx)?;
@@ -78,11 +77,10 @@ pub(super) fn store_variant(
     } else {
         Vec::new()
     };
-    let mut written = vec![(0, tag_clif_type(ctx, variant)?.bytes())];
     for (field, &value) in values.iter().enumerate() {
         let (offset, ty) = variant_field_offset(ctx, variant, field)?;
         let indirect = uses_indirect_value_representation(ctx, ty);
-        let mut size = value_storage_size(ty, ctx)?;
+        let size = value_storage_size(ty, ctx)?;
         // A copy reads a wider variant's piece here whole. This field is all
         // the variant has in it, and a store covering both widths forwards to
         // either load, so it fills the piece. Native targets are little-endian.
@@ -96,15 +94,12 @@ pub(super) fn store_variant(
         {
             let wide = builder.ins().uextend(piece_ty, scalar);
             builder.ins().store(MemFlagsData::new(), wide, dst, offset);
-            size = piece_ty.bytes();
         } else if indirect {
             let field_dst = builder.ins().iadd_imm_s(dst, i64::from(offset));
             store_indirect(function, value, field_dst, ty, value_map, config, builder)?;
         } else {
             store_value(function, value, dst, offset, value_map, builder)?;
         }
-        written.push((offset as u32, size));
     }
-    store_tag(ctx, variant, dst, builder)?;
-    Ok(written)
+    store_tag(ctx, variant, dst, builder)
 }

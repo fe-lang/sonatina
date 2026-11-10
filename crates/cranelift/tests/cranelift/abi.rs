@@ -1,7 +1,7 @@
 use sonatina_codegen::{Compile, compile::OptLevel};
 use sonatina_cranelift::CraneliftJitBackend;
 
-use super::parse_verified_native_module;
+use super::{assert_fields_eq, parse_verified_native_module};
 
 #[test]
 fn direct_i128_arguments_returns_and_internal_calls_preserve_both_words() {
@@ -176,7 +176,12 @@ block0:
             } else {
                 opt(true, 2, 7)
             };
-            assert_eq!(&out[16..40], &previous, "{level:?} {rounds}");
+            assert_fields_eq(
+                &out[16..40],
+                &previous,
+                [1..8, 20..24],
+                format!("{level:?} {rounds}"),
+            );
             // The cast reads the same `@Opt`'s i64.
             assert_eq!(&out[40..48], &previous[8..16], "{level:?} {rounds}");
         }
@@ -190,7 +195,12 @@ block0:
                 expected[16..18].copy_from_slice(&9i16.to_le_bytes());
             }
             expected[24..32].copy_from_slice(&(pointer as i64).to_le_bytes());
-            assert_eq!(bytes, expected, "{level:?} {value}");
+            assert_fields_eq(
+                &bytes,
+                &expected,
+                [1..8, 18..24],
+                format!("{level:?} {value}"),
+            );
         }
         let mut quad = [0u8; 32];
         quad[0] = 3;
@@ -348,7 +358,12 @@ block0:
             expected[48] = 7;
             expected[56] = 1;
             expected[64..72].copy_from_slice(&3i64.to_le_bytes());
-            assert_eq!(out, expected, "{level:?} {value}");
+            // Padding, and `#None`'s payload, are not part of the values.
+            let mut padding = vec![12..16, 17..24, 25..32, 49..56, 57..64];
+            if value == 0 {
+                padding.push(32..40);
+            }
+            assert_fields_eq(&out, &expected, padding, format!("{level:?} {value}"));
         }
     }
 }
@@ -594,7 +609,12 @@ block2:
             for (index, word) in big.iter().enumerate() {
                 expected[24 + index * 8..32 + index * 8].copy_from_slice(&word.to_le_bytes());
             }
-            assert_eq!(holder, expected, "{level:?} {value}");
+            // Padding, and `#None`'s payload, are not part of the value.
+            let mut padding = vec![1..8, 9..16];
+            if opt.is_none() {
+                padding.push(16..24);
+            }
+            assert_fields_eq(&holder, &expected, padding, format!("{level:?} {value}"));
             // `@E`: its tag, `@Opt` at 8 (its i64 at 16), the i8 at 24.
             let mut expected = [0xa5u8; 32];
             expected[0] = 1;
@@ -602,7 +622,11 @@ block2:
             expected[8] = u8::from(value != 0);
             expected[16..24].copy_from_slice(&value.to_le_bytes());
             expected[24] = 4;
-            assert_eq!(variant, expected, "{level:?} {value}");
+            let mut padding = vec![1..8, 9..16, 25..32];
+            if value == 0 {
+                padding.push(16..24);
+            }
+            assert_fields_eq(&variant, &expected, padding, format!("{level:?} {value}"));
         }
     }
 }
