@@ -1810,8 +1810,10 @@ impl<'a> FunctionTranslator<'a> {
         kind: Shift,
     ) -> Result<(), WasmError> {
         // The count has the type of the value.
+        let known = self.function.dfg.value_imm(bits);
+        let known = known.and_then(Immediate::to_nonnegative_usize);
         self.binary(wb, inst_id, (value, bits), |emit, int, value, bits| {
-            emit.shift(int, kind, value, bits)
+            emit.shift(int, kind, value, bits, known.map(|count| count as u64))
         })
     }
 

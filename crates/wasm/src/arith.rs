@@ -292,7 +292,32 @@ impl Emit<'_> {
 
     /// Shifts saturate: a count of at least the width gives zero, or the sign
     /// fill for an arithmetic shift. WebAssembly instead masks the count.
-    pub(super) fn shift(&mut self, int: Int, kind: Shift, value: V, count: V) -> V {
+    /// `known` is the count when it is a constant, which needs no test when it
+    /// is below the width.
+    pub(super) fn shift(
+        &mut self,
+        int: Int,
+        kind: Shift,
+        value: V,
+        count: V,
+        known: Option<u64>,
+    ) -> V {
+        if known.is_some_and(|count| count < u64::from(int.bits())) {
+            return match kind {
+                Shift::Shl => {
+                    let shifted =
+                        self.pick(int, Operator::I32Shl, Operator::I64Shl, &[value, count]);
+                    self.canonicalize(int, shifted)
+                }
+                Shift::Shr => self.pick(int, Operator::I32ShrU, Operator::I64ShrU, &[value, count]),
+                Shift::Sar => {
+                    let signed = self.sign_extend(int, value);
+                    let shifted =
+                        self.pick(int, Operator::I32ShrS, Operator::I64ShrS, &[signed, count]);
+                    self.canonicalize(int, shifted)
+                }
+            };
+        }
         let width = self.constant(int, u64::from(int.bits()));
         let in_range = self.pick_cmp(int, Operator::I32LtU, Operator::I64LtU, &[count, width]);
         match kind {
