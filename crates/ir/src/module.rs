@@ -28,6 +28,10 @@ bitflags! {
         const NOINLINE = 1 << 0;
         const ALWAYSINLINE = 1 << 1;
         const INLINEHINT = 1 << 2;
+        /// The function is rarely called. The inliner keeps it out of callers
+        /// that are not cold themselves, unless it is `ALWAYSINLINE`, and a
+        /// native backend lays out a block that calls it as unlikely.
+        const COLD = 1 << 3;
     }
 }
 

@@ -21,7 +21,7 @@ target_triple    = @{ triple_component ~ ("-" ~ triple_component){2,3} }
 triple_component = _{ (ASCII_ALPHANUMERIC | "_")+ }
 
 declaration              = _{ function_declaration | struct_declaration | enum_declaration | gv_declaration }
-function_declaration     =  { "declare" ~ inline_hint? ~ linkage ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
+function_declaration     =  { "declare" ~ inline_hint? ~ cold? ~ linkage ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
 function_param_type_list =  { "(" ~ (function_param_type ~ ",")* ~ function_param_type? ~ ")" }
 function_param_type      =  { nocapture? ~ readonly? ~ type_name }
 struct_declaration       =  { "type" ~ struct_identifier ~ "=" ~ struct_fields ~ ";" }
@@ -42,9 +42,10 @@ variant_name             = @{ ident_start_char ~ ident_body_char* }
 
 function            =  { function_signature ~ function_body }
 _functions          = _{ (NEWLINE* ~ function ~ NEWLINE*)* }
-function_signature  =  { "func" ~ inline_hint? ~ linkage ~ function_identifier ~ function_params ~ function_ret_type? }
+function_signature  =  { "func" ~ inline_hint? ~ cold? ~ linkage ~ function_identifier ~ function_params ~ function_ret_type? }
 inline_hint         =  { "inline" ~ ("(" ~ inline_hint_mode ~ ")")? }
 inline_hint_mode    =  { "always" | "never" }
+cold                =  { "cold" }
 function_ret_type   =  { "->" ~ (type_name | multi_type_name_list) }
 linkage             =  { "public" | "private" | "external" }
 function_identifier = ${ "%" ~ function_name }

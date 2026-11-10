@@ -6,7 +6,7 @@ use smallvec::{Array, SmallVec};
 use super::{BlockId, Function};
 use crate::{
     DataFlowGraph, InstId, Module, Value, ValueId,
-    module::{FuncRef, InlineHint, ModuleCtx},
+    module::{FuncHints, FuncRef, InlineHint, ModuleCtx},
 };
 
 pub struct ModuleWriter<'a> {
@@ -78,7 +78,7 @@ impl<'a> ModuleWriter<'a> {
         for &func_ref in &func_decls {
             self.module.ctx.func_sig(func_ref, |sig| {
                 write!(w, "declare ")?;
-                write_inline_hint(w, self.module.ctx.inline_hint(func_ref))?;
+                write_func_hints(w, self.module.ctx.func_hints(func_ref))?;
                 sig.write(w, &self.module.ctx)?;
                 writeln!(w, ";")
             })?;
@@ -440,7 +440,7 @@ impl IrWrite<FuncWriteCtx<'_>> for FunctionSignature {
         let m_ctx = ctx.module_ctx();
 
         write!(w, "func ")?;
-        write_inline_hint(w, m_ctx.inline_hint(func_ref))?;
+        write_func_hints(w, m_ctx.func_hints(func_ref))?;
         let sig = m_ctx.func_sig(func_ref, |sig| {
             sig.linkage().write(w, ctx)?;
             write!(w, " %{}(", sig.name())?;
@@ -473,16 +473,20 @@ impl IrWrite<FuncWriteCtx<'_>> for FunctionSignature {
     }
 }
 
-fn write_inline_hint<W>(w: &mut W, hint: InlineHint) -> io::Result<()>
+fn write_func_hints<W>(w: &mut W, hints: FuncHints) -> io::Result<()>
 where
     W: io::Write,
 {
-    match hint {
-        InlineHint::Auto => Ok(()),
-        InlineHint::Inline => write!(w, "inline "),
-        InlineHint::Always => write!(w, "inline(always) "),
-        InlineHint::Never => write!(w, "inline(never) "),
+    match hints.inline_hint() {
+        InlineHint::Auto => {}
+        InlineHint::Inline => write!(w, "inline ")?,
+        InlineHint::Always => write!(w, "inline(always) ")?,
+        InlineHint::Never => write!(w, "inline(never) ")?,
     }
+    if hints.contains(FuncHints::COLD) {
+        write!(w, "cold ")?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

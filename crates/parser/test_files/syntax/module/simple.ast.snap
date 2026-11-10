@@ -16,6 +16,7 @@ Module {
         FuncDeclaration {
             linkage: External,
             inline_hint: Auto,
+            cold: false,
             name: FunctionName {
                 name: "add_i8",
                 ..
@@ -118,6 +119,7 @@ Module {
             signature: FuncSignature {
                 linkage: Public,
                 inline_hint: Auto,
+                cold: false,
                 name: FunctionName {
                     name: "main",
                     ..
@@ -206,6 +208,7 @@ Module {
             signature: FuncSignature {
                 linkage: Private,
                 inline_hint: Auto,
+                cold: false,
                 name: FunctionName {
                     name: "foo",
                     ..
@@ -406,6 +409,7 @@ Module {
             signature: FuncSignature {
                 linkage: Private,
                 inline_hint: Auto,
+                cold: false,
                 name: FunctionName {
                     name: "types",
                     ..
@@ -586,6 +590,7 @@ Module {
             signature: FuncSignature {
                 linkage: Private,
                 inline_hint: Auto,
+                cold: false,
                 name: FunctionName {
                     name: "table",
                     ..
@@ -784,6 +789,7 @@ Module {
             signature: FuncSignature {
                 linkage: Private,
                 inline_hint: Auto,
+                cold: false,
                 name: FunctionName {
                     name: "flow",
                     ..
