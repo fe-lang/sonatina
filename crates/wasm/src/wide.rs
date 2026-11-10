@@ -26,7 +26,10 @@ use waffle::{Operator, Type as WType};
 
 use sonatina_ir::{I256, Type};
 
-use super::arith::{Cmp, Emit, Int};
+use super::{
+    arith::{Cmp, Emit, Int},
+    memory::signature,
+};
 
 type V = waffle::Value;
 
@@ -708,10 +711,11 @@ pub(super) fn helper_signature(
     params: usize,
     results: &[WType],
 ) -> waffle::Signature {
-    wmod.signatures.push(waffle::SignatureData {
+    let data = waffle::SignatureData {
         params: vec![WType::I64; params],
         returns: results.to_vec(),
-    })
+    };
+    signature(wmod, data)
 }
 
 fn helper_params(body: &waffle::FunctionBody, count: usize) -> Vec<V> {

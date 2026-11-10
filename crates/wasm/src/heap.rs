@@ -23,7 +23,7 @@ use waffle::{
 
 use super::{
     arith::Emit,
-    memory::{ALIGN, PAGE},
+    memory::{ALIGN, PAGE, signature},
 };
 
 /// The size of a block header.
@@ -67,18 +67,20 @@ fn target(block: waffle::Block, args: Vec<V>) -> BlockTarget {
 
 /// The signature `(i32) -> i32` of the allocators.
 pub(super) fn alloc_signature(wmod: &mut WModule<'static>) -> Signature {
-    wmod.signatures.push(SignatureData {
+    let data = SignatureData {
         params: vec![WType::I32],
         returns: vec![WType::I32],
-    })
+    };
+    signature(wmod, data)
 }
 
 /// The signature `(i32) -> ()` of `free` and `arena_release`.
 pub(super) fn consume_signature(wmod: &mut WModule<'static>) -> Signature {
-    wmod.signatures.push(SignatureData {
+    let data = SignatureData {
         params: vec![WType::I32],
         returns: vec![],
-    })
+    };
+    signature(wmod, data)
 }
 
 /// The address of the list head of `class`, a value of type `i32`.

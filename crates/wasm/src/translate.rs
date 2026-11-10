@@ -429,7 +429,7 @@ pub(super) fn translate_module(
             }
             (Linkage::External, false) => {
                 let signature = declared_signature(module, func_ref, &name, &plan, true)?;
-                let wsig = wmod.signatures.push(signature.wasm);
+                let wsig = memory::signature(&mut wmod, signature.wasm);
                 let func = wmod.funcs.push(FuncDecl::Import(wsig, name.clone()));
                 wmod.imports.push(waffle::Import {
                     module: import_module.to_string(),
@@ -506,7 +506,7 @@ pub(super) fn translate_module(
         }
         let stack_param = plan.runtime;
         let sret = inner.sret;
-        let wsig = wmod.signatures.push(inner.wasm);
+        let wsig = memory::signature(&mut wmod, inner.wasm);
         let placeholder = FunctionBody::new(&wmod, wsig);
         let inner_name = if public && plan.runtime {
             format!("{name}$body")
@@ -518,7 +518,7 @@ pub(super) fn translate_module(
             .push(FuncDecl::Body(wsig, inner_name.clone(), placeholder));
         if public && plan.runtime {
             let exported = declared_signature(module, func_ref, &name, &plan, true)?;
-            let export_sig = wmod.signatures.push(exported.wasm);
+            let export_sig = memory::signature(&mut wmod, exported.wasm);
             let placeholder = FunctionBody::new(&wmod, export_sig);
             let wrapper = wmod
                 .funcs
@@ -765,19 +765,25 @@ pub(super) fn translate_module(
             let host_func = wmod
                 .funcs
                 .push(FuncDecl::Body(host_sig, alloc.to_string(), host_body));
-            let mark_sig = wmod.signatures.push(SignatureData {
-                params: vec![],
-                returns: vec![WType::I32],
-            });
+            let mark_sig = memory::signature(
+                &mut wmod,
+                SignatureData {
+                    params: vec![],
+                    returns: vec![WType::I32],
+                },
+            );
             let mark_func = wmod.funcs.push(FuncDecl::Body(
                 mark_sig,
                 mark.to_string(),
                 build_arena_mark(&wmod, mark_sig, arena_top),
             ));
-            let release_sig = wmod.signatures.push(SignatureData {
-                params: vec![WType::I32],
-                returns: vec![],
-            });
+            let release_sig = memory::signature(
+                &mut wmod,
+                SignatureData {
+                    params: vec![WType::I32],
+                    returns: vec![],
+                },
+            );
             let release_func = wmod.funcs.push(FuncDecl::Body(
                 release_sig,
                 release.to_string(),
