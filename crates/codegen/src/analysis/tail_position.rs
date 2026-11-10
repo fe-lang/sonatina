@@ -67,15 +67,17 @@ fn recursive_functions(module: &Module) -> Vec<FuncRef> {
 }
 
 /// The tail calls of `function`, one of the [`tail_callers`], with their
-/// callees: none when a callee could reach storage in its frame.
+/// callees. A tail call's callee runs once the frame is gone, so there are
+/// none when a reference to storage in the frame could outlive a call, and
+/// no tail call passes one.
 pub fn tail_calls(func_ref: FuncRef, function: &Function) -> Vec<(InstId, FuncRef)> {
-    if frame_storage_escapes(function) {
+    let Some(frame_references) = frame_references(function) else {
         return Vec::new();
-    }
+    };
     function
         .layout
         .iter_block()
-        .filter_map(|block| tail_call(func_ref, function, block))
+        .filter_map(|block| tail_call(func_ref, function, block, &frame_references))
         .collect()
 }
 
@@ -148,9 +150,15 @@ fn returns_at_once(function: &Function, block: BlockId, last: InstId, results: &
 /// The call ending `block` and its callee, if it is a tail call: the block
 /// returns the call's results right after it, and the callee is a private
 /// function returning the same types. Its arguments pass in registers or in
-/// storage outside the caller's frame ([`tail_call_storage`]), and an
-/// indirect result passes the caller's own result buffer on.
-fn tail_call(func_ref: FuncRef, function: &Function, block: BlockId) -> Option<(InstId, FuncRef)> {
+/// storage outside the caller's frame ([`tail_call_storage`]), none of them
+/// one of the `frame_references`, and an indirect result passes the caller's
+/// own result buffer on.
+fn tail_call(
+    func_ref: FuncRef,
+    function: &Function,
+    block: BlockId,
+    frame_references: &HashSet<ValueId>,
+) -> Option<(InstId, FuncRef)> {
     let last = function.layout.last_inst_of(block)?;
     let call_inst = function.layout.prev_inst_of(last)?;
     let call = function.dfg.downcast::<&control_flow::Call>(call_inst)?;
@@ -162,6 +170,7 @@ fn tail_call(func_ref: FuncRef, function: &Function, block: BlockId) -> Option<(
     (ctx.func_linkage(callee).is_private()
         && returns_at_once(function, block, last, function.dfg.inst_results(call_inst))
         && same_returns
+        && !call.args().iter().any(|arg| frame_references.contains(arg))
         && tail_call_storage(function, call.args()).is_some())
     .then_some((call_inst, callee))
 }
@@ -262,12 +271,14 @@ fn tail_switch(
     })
 }
 
-/// Whether a callee could reach storage in this function's frame: an
-/// `obj.alloc` whose reference, or a projection of it, is used other than as
-/// the address of an object load or store, or any `alloca` or
-/// `obj.materialize.stack`, whose addresses are raw pointers.
-fn frame_storage_escapes(function: &Function) -> bool {
-    let mut references: Vec<ValueId> = Vec::new();
+/// The references to storage in this function's frame, each `obj.alloc` and
+/// its projections, if none can outlive a call: each is used only as the
+/// address of an object load or store, or as a `nocapture` argument, whose
+/// callee keeps no reference to it past its return. None if one is used
+/// otherwise, or if there is any `alloca` or `obj.materialize.stack`, whose
+/// addresses are raw pointers.
+fn frame_references(function: &Function) -> Option<HashSet<ValueId>> {
+    let mut pending: Vec<ValueId> = Vec::new();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             if function.dfg.downcast::<&data::Alloca>(inst).is_some()
@@ -276,14 +287,16 @@ fn frame_storage_escapes(function: &Function) -> bool {
                     .downcast::<&data::ObjMaterializeStack>(inst)
                     .is_some()
             {
-                return true;
+                return None;
             }
             if function.dfg.downcast::<&data::ObjAlloc>(inst).is_some() {
-                references.extend(function.dfg.inst_results(inst));
+                pending.extend(function.dfg.inst_results(inst));
             }
         }
     }
-    while let Some(reference) = references.pop() {
+    let mut references = HashSet::new();
+    while let Some(reference) = pending.pop() {
+        references.insert(reference);
         for &user in function.dfg.users(reference) {
             if !function.layout.is_inst_inserted(user) {
                 continue;
@@ -303,18 +316,28 @@ fn frame_storage_escapes(function: &Function) -> bool {
                 && proj.values().first() == Some(&reference)
                 && !proj.values()[1..].contains(&reference)
             {
-                references.extend(function.dfg.inst_results(user));
+                pending.extend(function.dfg.inst_results(user));
                 continue;
             }
             if let Some(index) = function.dfg.downcast::<&data::ObjIndex>(user)
                 && *index.object() == reference
                 && *index.index() != reference
             {
-                references.extend(function.dfg.inst_results(user));
+                pending.extend(function.dfg.inst_results(user));
                 continue;
             }
-            return true;
+            if let Some(call) = function.dfg.downcast::<&control_flow::Call>(user)
+                && function.ctx().func_sig(*call.callee(), |sig| {
+                    call.args()
+                        .iter()
+                        .enumerate()
+                        .all(|(index, &arg)| arg != reference || sig.is_nocapture_arg(index))
+                })
+            {
+                continue;
+            }
+            return None;
         }
     }
-    false
+    Some(references)
 }

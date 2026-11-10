@@ -655,6 +655,61 @@ block0:
 }
 
 #[test]
+fn tail_calls_follow_calls_given_a_local_object() {
+    // Each step of `%count` passes a local object to `%mix`, which keeps no
+    // reference to it, and then tail-calls itself, adding up to `DEPTH`.
+    let source = r#"
+func private %count(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i1 = eq v0 0.i64;
+    br v2 block1 block2;
+block1:
+    return v1;
+block2:
+    v3.objref<[i64; 2]> = obj.alloc [i64; 2];
+    v4.objref<i64> = obj.index v3 0.i8;
+    obj.store v4 v1;
+    v5.objref<i64> = obj.index v3 1.i8;
+    obj.store v5 v0;
+    call %mix v3;
+    v6.i64 = obj.load v4;
+    v7.i64 = sub v0 1.i64;
+    v8.i64 = call %count v7 v6;
+    return v8;
+}
+
+func inline(never) private %mix(nocapture v0.objref<[i64; 2]>) {
+block0:
+    v1.objref<i64> = obj.index v0 0.i8;
+    v2.i64 = obj.load v1;
+    v3.objref<i64> = obj.index v0 1.i8;
+    v4.i64 = obj.load v3;
+    v5.i64 = add v2 v4;
+    obj.store v1 v5;
+    return;
+}
+
+func public %run(v0.i64) -> i64 {
+block0:
+    v1.i64 = call %count v0 0.i64;
+    return v1;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let run: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        assert_eq!(unsafe { run(DEPTH) }, DEPTH * (DEPTH + 1) / 2, "{level:?}");
+    }
+}
+
+#[test]
 fn tail_calls_read_arguments_before_writing_their_storage() {
     // `%rotate`'s tail call writes a new `@Holder` into its first
     // argument's storage and passes the old first field, a view of that

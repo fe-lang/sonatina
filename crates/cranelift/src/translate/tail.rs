@@ -619,4 +619,46 @@ func private %g(v0.i64) -> i64 {
         assert_eq!(tail_call_count(&module, &tail_calls, "passes_reference"), 0);
         assert_eq!(tail_call_count(&module, &tail_calls, "local_only"), 1);
     }
+
+    #[test]
+    fn allocations_passed_nocapture_keep_other_tail_calls() {
+        // No reference passed to a `nocapture` argument outlives its call,
+        // but a tail call's callee runs once the frame is gone.
+        let (module, tail_calls) = tail_calls(
+            r#"
+func private %passes_nocapture(v0.i64) -> i64 {
+    block0:
+        v1.objref<[i64; 2]> = obj.alloc [i64; 2];
+        v2.objref<i64> = obj.index v1 1.i8;
+        obj.store v2 v0;
+        v3.i64 = call %read v1;
+        v4.i64 = call %passes_nocapture v3;
+        return v4;
+}
+
+func private %read(nocapture v0.objref<[i64; 2]>) -> i64 {
+    block0:
+        v1.objref<i64> = obj.index v0 1.i8;
+        v2.i64 = obj.load v1;
+        v3.i64 = call %passes_in_tail_position v2;
+        return v3;
+}
+
+func private %passes_in_tail_position(v0.i64) -> i64 {
+    block0:
+        v1.objref<[i64; 2]> = obj.alloc [i64; 2];
+        v2.objref<i64> = obj.index v1 1.i8;
+        obj.store v2 v0;
+        v3.i64 = call %read v1;
+        return v3;
+}
+"#,
+        );
+        assert_eq!(tail_call_count(&module, &tail_calls, "passes_nocapture"), 1);
+        assert_eq!(tail_call_count(&module, &tail_calls, "read"), 1);
+        assert_eq!(
+            tail_call_count(&module, &tail_calls, "passes_in_tail_position"),
+            0
+        );
+    }
 }
