@@ -232,6 +232,11 @@ pub(super) fn translate_module(
     // Placing functions at the ISA's preferred alignment, as Wasmtime does,
     // keeps a function's hot code from moving with every change elsewhere.
     let preferred_alignment = isa.function_alignment().preferred;
+    // SP1 decodes every word of executable text as an instruction, but the
+    // object writer and the linker pad alignment gaps with zeros, which do not
+    // decode. A zkVM has no cache lines, and RV64IM's four-byte instructions at
+    // the preferred four-byte alignment leave no gaps.
+    let cache_line = (module.ctx.triple != TargetTriple::SP1).then_some(CACHE_LINE);
     let compiled = parallel::map_owned(
         &module.func_store,
         translated,
@@ -264,6 +269,7 @@ pub(super) fn translate_module(
                     code.code_buffer().len(),
                     code.buffer.alignment,
                     preferred_alignment,
+                    cache_line,
                 ),
                 code.code_buffer(),
                 &relocs,
@@ -2750,18 +2756,15 @@ fn storage_address(
 const CACHE_LINE: usize = 64;
 
 /// The alignment of a function of `size` bytes: at least `minimum` and the
-/// ISA's `preferred` one. A function no longer than a cache line is aligned
-/// to the power of two at or above its size, so that it never straddles two
-/// lines; a longer one starts a line. The op cache holds a line's ops
-/// together, so a function starting mid-line takes a line more, and a hot
-/// threaded handler at a 32-byte offset missed it six times as often.
-fn function_alignment(size: usize, minimum: u32, preferred: u32) -> u64 {
-    let line = if size <= CACHE_LINE {
-        size.next_power_of_two() as u64
-    } else {
-        CACHE_LINE as u64
-    };
-    u64::from(minimum.max(preferred)).max(line)
+/// ISA's `preferred` one. On a target with a `cache_line`, a function no
+/// longer than a line is aligned to the power of two at or above its size, so
+/// that it never straddles two lines; a longer one starts a line. The op cache
+/// holds a line's ops together, so a function starting mid-line takes a line
+/// more, and a hot threaded handler at a 32-byte offset missed it six times as
+/// often.
+fn function_alignment(size: usize, minimum: u32, preferred: u32, cache_line: Option<usize>) -> u64 {
+    let line = cache_line.map_or(1, |line| size.next_power_of_two().min(line));
+    u64::from(minimum.max(preferred)).max(line as u64)
 }
 
 /// A switch with one destination, as a mask of its keys from `first` on.
@@ -3018,12 +3021,12 @@ fn translate_icmp(
 mod tests {
     use sonatina_ir::inst::{arith::Shl, downcast};
 
-    use super::{function_alignment, shift_count_in_range};
+    use super::{CACHE_LINE, function_alignment, shift_count_in_range};
 
     #[test]
     fn functions_never_straddle_more_lines_than_they_need() {
         for size in 1..=64 {
-            let alignment = function_alignment(size, 1, 32);
+            let alignment = function_alignment(size, 1, 32, Some(CACHE_LINE));
             assert!(alignment >= 32 && alignment.is_power_of_two(), "{size}");
             // Any start at a multiple of the alignment keeps the function in
             // one 64-byte line.
@@ -3035,8 +3038,11 @@ mod tests {
                 );
             }
         }
-        assert_eq!(function_alignment(65, 1, 32), 64);
-        assert_eq!(function_alignment(300, 16, 32), 64);
+        assert_eq!(function_alignment(65, 1, 32, Some(CACHE_LINE)), 64);
+        assert_eq!(function_alignment(300, 16, 32, Some(CACHE_LINE)), 64);
+        // Without cache lines, the ISA's alignment alone.
+        assert_eq!(function_alignment(12, 2, 4, None), 4);
+        assert_eq!(function_alignment(300, 2, 4, None), 4);
     }
 
     #[test]
