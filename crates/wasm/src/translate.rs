@@ -308,10 +308,7 @@ fn scan_module(module: &Module) -> Scan {
                             helpers.1 = true;
                             helpers.4 = true;
                         }
-                        NativeInstKind::EvmMulMod(_) => {
-                            helpers.1 = true;
-                            helpers.5 = true;
-                        }
+                        NativeInstKind::EvmMulMod(_) => helpers.5 = true,
                         _ => {}
                     }
                 }
@@ -705,11 +702,12 @@ pub(super) fn translate_module(
             HelperKind::Mulo => wide::build_mulo(&wmod, sig),
             HelperKind::DivRem => wide::build_udivrem(&wmod, sig),
             HelperKind::Shift { left } => wide::build_shift(&wmod, sig, left),
-            HelperKind::Modular { product } => {
+            HelperKind::Modular { product: true } => wide::build_mulmod(&wmod, sig),
+            HelperKind::Modular { product: false } => {
                 let udivrem = helpers
                     .udivrem
-                    .expect("modular helpers are declared with the division helper");
-                wide::build_modular(&wmod, sig, udivrem, product)
+                    .expect("modular addition is declared with the division helper");
+                wide::build_addmod(&wmod, sig, udivrem)
             }
         };
         wmod.funcs[func] = FuncDecl::Body(sig, name, body);

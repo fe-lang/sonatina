@@ -311,7 +311,7 @@ fit in 64 bits, and no step when the dividend is below the divisor. Otherwise
 it is long division on 64-bit digits: one step per limb of the dividend for a
 divisor of one limb, and at most three steps for a longer divisor. A step
 multiplies by the reciprocal of the divisor's top limb, which takes two 64-bit
-divisions to compute.
+divisions to compute. `evm_mul_mod` divides the 512-bit product the same way.
 
 ## Instruction semantics
 

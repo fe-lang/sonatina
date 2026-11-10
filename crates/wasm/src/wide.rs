@@ -606,11 +606,10 @@ impl Emit<'_> {
             let half = self.op(Operator::I64ShrU, &[limbs[below], one], WType::I64);
             self.op(Operator::I64ShrU, &[half, back], WType::I64)
         });
-        match (high, low) {
-            (Some(high), Some(low)) => self.op(Operator::I64Or, &[high, low], WType::I64),
-            (Some(limb), None) | (None, Some(limb)) => limb,
-            (None, None) => self.c64(0),
-        }
+        high.into_iter()
+            .chain(low)
+            .reduce(|high, low| self.op(Operator::I64Or, &[high, low], WType::I64))
+            .expect("the index is at most one past the top limb")
     }
 
     /// The low 256 bits of the product and whether the product has more.
@@ -649,17 +648,6 @@ impl Emit<'_> {
             overflow = self.op(Operator::I32Or, &[overflow, carried], WType::I32);
         }
         (result, overflow)
-    }
-
-    /// Select limb `index` of `limbs` (0 to 3) by a run-time `index`.
-    fn pick_limb(&mut self, limbs: Limbs, index: V) -> V {
-        let mut picked = self.c64(0);
-        for (k, &limb) in limbs.iter().enumerate() {
-            let k = self.c32(k as u32);
-            let is_k = self.op(Operator::I32Eq, &[index, k], WType::I32);
-            picked = self.select64(limb, picked, is_k);
-        }
-        picked
     }
 
     /// The limbs of `value` shifted left or right by `count` bits (0 to 255).
@@ -1133,45 +1121,35 @@ fn add_below_modulus(e: &mut Emit<'_>, x: Limbs, y: Limbs, n: Limbs) -> Limbs {
     out
 }
 
-/// `addmod(a, b, n)` or `mulmod(a, b, n)`: the sum or product of `a` and `b`
-/// modulo `n`, computed without overflow, and zero if `n` is zero.
-///
-/// The operands are reduced with `udivrem`. The sum is then one addition and
-/// one conditional subtraction. The product takes one step per bit of `b`, from
-/// the top: double the running value modulo `n`, and add `a` modulo `n` when the
-/// bit is set. No step exceeds the modulus.
-pub(super) fn build_modular(
+/// Starts `addmod` or `mulmod`, which are zero if the modulus is zero. Returns
+/// the body, the operands and the modulus, and the block for a nonzero modulus.
+fn modular_entry(
     wmod: &waffle::Module<'static>,
     sig: waffle::Signature,
-    udivrem: waffle::Func,
-    product: bool,
-) -> waffle::FunctionBody {
+) -> (waffle::FunctionBody, [Limbs; 3], waffle::Block) {
     use waffle::{BlockTarget, Terminator};
-    let target = |block, args: Vec<V>| BlockTarget { block, args };
+    let target = |block| BlockTarget {
+        block,
+        args: vec![],
+    };
 
     let mut body = waffle::FunctionBody::new(wmod, sig);
     let entry = body.entry;
     let params = helper_params(&body, 3 * LIMBS);
-    let (a, b, n) = (
-        limbs_at(&params, 0),
-        limbs_at(&params, LIMBS),
-        limbs_at(&params, 2 * LIMBS),
-    );
-    let remainder_carriers = [WType::I64; 2 * LIMBS];
-
+    let operands = [0, 1, 2].map(|index| limbs_at(&params, index * LIMBS));
     let zero_block = body.add_block();
     let work = body.add_block();
     let modulus_zero = Emit {
         body: &mut body,
         block: entry,
     }
-    .wide_is_zero(n);
+    .wide_is_zero(operands[2]);
     body.set_terminator(
         entry,
         Terminator::CondBr {
             cond: modulus_zero,
-            if_true: target(zero_block, vec![]),
-            if_false: target(work, vec![]),
+            if_true: target(zero_block),
+            if_false: target(work),
         },
     );
     let zero = Emit {
@@ -1185,106 +1163,99 @@ pub(super) fn build_modular(
             values: zero.to_vec(),
         },
     );
+    (body, operands, work)
+}
 
-    // The operands modulo `n`.
-    let args_a: Vec<V> = a.into_iter().chain(n).collect();
-    let out_a = super::translate::emit_call(&mut body, work, udivrem, &args_a, &remainder_carriers);
-    let a_reduced = limbs_at(&out_a, LIMBS);
-
-    if !product {
-        let args_b: Vec<V> = b.into_iter().chain(n).collect();
-        let out_b =
-            super::translate::emit_call(&mut body, work, udivrem, &args_b, &remainder_carriers);
-        let b_reduced = limbs_at(&out_b, LIMBS);
-        let sum = add_below_modulus(
-            &mut Emit {
-                body: &mut body,
-                block: work,
-            },
-            a_reduced,
-            b_reduced,
-            n,
-        );
-        body.set_terminator(
-            work,
-            Terminator::Return {
-                values: sum.to_vec(),
-            },
-        );
-        return body;
-    }
-
-    let header = body.add_block();
-    let step = body.add_block();
-    let done = body.add_block();
-    let start: Vec<V> = {
-        let mut e = Emit {
+/// `addmod(a, b, n)`: the sum of `a` and `b` modulo `n`, computed without
+/// overflow, and zero if `n` is zero. The operands are reduced with `udivrem`.
+/// The sum is then one addition and one conditional subtraction.
+pub(super) fn build_addmod(
+    wmod: &waffle::Module<'static>,
+    sig: waffle::Signature,
+    udivrem: waffle::Func,
+) -> waffle::FunctionBody {
+    let (mut body, [a, b, n], work) = modular_entry(wmod, sig);
+    let [a, b] = [a, b].map(|operand| {
+        let args: Vec<V> = operand.into_iter().chain(n).collect();
+        let carriers = [WType::I64; 2 * LIMBS];
+        let out = super::translate::emit_call(&mut body, work, udivrem, &args, &carriers);
+        limbs_at(&out, LIMBS)
+    });
+    let sum = add_below_modulus(
+        &mut Emit {
             body: &mut body,
             block: work,
-        };
-        let bits = e.c32(256);
-        let zero = e.c64(0);
-        std::iter::once(bits)
-            .chain(std::iter::repeat_n(zero, LIMBS))
-            .collect()
-    };
+        },
+        a,
+        b,
+        n,
+    );
     body.set_terminator(
         work,
-        Terminator::Br {
-            target: target(header, start),
+        waffle::Terminator::Return {
+            values: sum.to_vec(),
         },
     );
+    body
+}
 
-    // The loop: `remaining` bits of `b` are still to be taken from the top.
-    let remaining = body.add_blockparam(header, WType::I32);
-    let r: Vec<V> = (0..LIMBS)
-        .map(|_| body.add_blockparam(header, WType::I64))
-        .collect();
-    let r = limbs_at(&r, 0);
-    let finished = Emit {
-        body: &mut body,
-        block: header,
-    }
-    .op(Operator::I32Eqz, &[remaining], WType::I32);
-    body.set_terminator(
-        header,
-        Terminator::CondBr {
-            cond: finished,
-            if_true: target(done, vec![]),
-            if_false: target(step, vec![]),
-        },
-    );
+/// `mulmod(a, b, n)`: the product of `a` and `b` modulo `n`, computed without
+/// overflow, and zero if `n` is zero: the remainder of the 512-bit product by
+/// [`divide_long`], by the modulus's low limb if its other limbs are zero.
+pub(super) fn build_mulmod(
+    wmod: &waffle::Module<'static>,
+    sig: waffle::Signature,
+) -> waffle::FunctionBody {
+    use waffle::{BlockTarget, Terminator};
+    let target = |block| BlockTarget {
+        block,
+        args: vec![],
+    };
 
+    let (mut body, [a, b, n], work) = modular_entry(wmod, sig);
     let mut e = Emit {
         body: &mut body,
-        block: step,
+        block: work,
     };
-    let one = e.c32(1);
-    let index = e.op(Operator::I32Sub, &[remaining, one], WType::I32);
-    let six = e.c32(6);
-    let limb_index = e.op(Operator::I32ShrU, &[index, six], WType::I32);
-    let sixty_three = e.c32(63);
-    let bit_index32 = e.op(Operator::I32And, &[index, sixty_three], WType::I32);
-    let bit_index = e.op(Operator::I64ExtendI32U, &[bit_index32], WType::I64);
-    let source = e.pick_limb(b, limb_index);
-    let moved = e.op(Operator::I64ShrU, &[source, bit_index], WType::I64);
-    let one64 = e.c64(1);
-    let masked = e.op(Operator::I64And, &[moved, one64], WType::I64);
-    let bit = e.op(Operator::I32WrapI64, &[masked], WType::I32);
-    let doubled = add_below_modulus(&mut e, r, r, n);
-    let added = add_below_modulus(&mut e, doubled, a_reduced, n);
-    let mut next = doubled;
-    for k in 0..LIMBS {
-        next[k] = e.select64(added[k], doubled[k], bit);
+    let mut product = [None; 2 * LIMBS];
+    for (i, &x) in a.iter().enumerate() {
+        let mut carry = None;
+        for (j, &y) in b.iter().enumerate() {
+            // The high half is at most 2^64 - 2, so adding two carries cannot
+            // wrap.
+            let (mut low, mut high) = e.mul_wide(x, y);
+            for addend in [product[i + j], carry].into_iter().flatten() {
+                low = e.op(Operator::I64Add, &[low, addend], WType::I64);
+                let carried = e.cmp64(Operator::I64LtU, low, addend);
+                let carried = e.zero_extend(carried);
+                high = e.op(Operator::I64Add, &[high, carried], WType::I64);
+            }
+            product[i + j] = Some(low);
+            carry = Some(high);
+        }
+        product[i + LIMBS] = carry;
     }
-    let args: Vec<V> = std::iter::once(index).chain(next).collect();
+    let product = product.map(|limb| limb.expect("every column has a product"));
+    let modulus_high = e.op(Operator::I64Or, &[n[1], n[2]], WType::I64);
+    let modulus_high = e.op(Operator::I64Or, &[modulus_high, n[3]], WType::I64);
+    let one_limb = e.op(Operator::I64Eqz, &[modulus_high], WType::I32);
+    let [short, long] = [(); 2].map(|_| body.add_block());
     body.set_terminator(
-        step,
-        Terminator::Br {
-            target: target(header, args),
+        work,
+        Terminator::CondBr {
+            cond: one_limb,
+            if_true: target(short),
+            if_false: target(long),
         },
     );
-
-    body.set_terminator(done, Terminator::Return { values: r.to_vec() });
+    for (block, modulus) in [(short, &n[..1]), (long, &n[..])] {
+        let (done, _, remainder) = divide_long(&mut body, block, &product, modulus);
+        body.set_terminator(
+            done,
+            Terminator::Return {
+                values: remainder.to_vec(),
+            },
+        );
+    }
     body
 }

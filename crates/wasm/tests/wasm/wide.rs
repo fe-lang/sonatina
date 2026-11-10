@@ -948,6 +948,43 @@ const CORRECTIONS: [([u64; 4], [u64; 4]); 11] = [
     ([3, 0, 1 << 63, 0], [1, 0, 1 << 61, 0]),
 ];
 
+/// Factors and moduli, limbs least significant first, whose products take
+/// the corrections the boundary values do not. For a modulus of one limb and
+/// of three, a reciprocal's digit is one or two too large. For a modulus of
+/// two, three and four limbs, a digit from the reciprocal is one too small.
+const MODULAR_CORRECTIONS: [[[u64; 4]; 3]; 6] = [
+    [
+        [0x6505_0aca_ed42_0d73, 0x1fff_ffff, 0, 0],
+        [0x2aa4_102c, 0x0001_ffff_ffff, 0, 0],
+        [0x8516_5e1f_f89b_d2bc, 0, 0, 0],
+    ],
+    [
+        [u64::MAX >> 1, 0x0377_d62c_cc8d, 0x1fff_ffff_ffff, 0],
+        [u64::MAX, 0, 0, 0],
+        [0xdc62_0d88_0d9b_f7b1, u64::MAX, 0x024d_47bc, 0],
+    ],
+    [
+        [0xec, 0, 0, 0],
+        [u64::MAX >> 1, 0x03d6_cc98_53a7, u64::MAX, 0],
+        [1 << 63, u64::MAX >> 1, 1 << 27, 0],
+    ],
+    [
+        [u64::MAX, 0x3c63_bff9_4b0d_7f01, 0, 0],
+        [1 << 38, 0, 0, 0],
+        [1 << 61, 1 << 23, 0, 0],
+    ],
+    [
+        [0x0001_ffff_ffff, 1 << 43, 0, u64::MAX],
+        [0xc067_7ac4_e994_7bda, u64::MAX >> 1, 1 << 63, u64::MAX >> 1],
+        [1 << 63, 0x78ae_d28d_c24c_dcee, 0x916f_940f_2167_eb5d, 0],
+    ],
+    [
+        [0, u64::MAX, 0x0007_ffff, 0],
+        [0, 1 << 51, u64::MAX, u64::MAX >> 1],
+        [1 << 63, 1 << 63, 1 << 63, 0x45e8_9e03_98db_453f],
+    ],
+];
+
 /// A value of up to four limbs, each a boundary pattern or random. Such
 /// operands take the corrections of long division far more often than uniform
 /// ones.
@@ -1168,6 +1205,9 @@ fn addmod_and_mulmod_match_the_reference_at_the_boundaries_and_for_mixed_lengths
                     divider.modular(a, b, n);
                 }
             }
+        }
+        for [a, b, n] in MODULAR_CORRECTIONS {
+            divider.modular(from_limbs(&a), from_limbs(&b), from_limbs(&n));
         }
         for round in 0..2000 {
             let (a, b, n) = if round % 2 == 0 {
