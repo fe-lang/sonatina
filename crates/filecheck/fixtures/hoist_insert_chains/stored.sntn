@@ -1,0 +1,113 @@
+#! An `insert_value` chain on undef whose result is only stored into an object later in its block moves down to just before the store, unless a call comes between.
+
+target = "evm-ethereum-osaka"
+
+declare external %clobber();
+
+# The slot's address comes after the chain, which moves down past it so that
+# the store's destination exists before the chain starts.
+# sameln: func private %stored_after_index(v0.objref<[[i64; 2]; 4]>, v1.i64, v2.i64) {
+# nextln: block0:
+# nextln: v5.i64 = and v1 3.i64;
+# nextln: v6.objref<[i64; 2]> = obj.index v0 v5;
+# nextln: v3.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+# nextln: v4.[i64; 2] = insert_value v3 1.i256 v2;
+# nextln: obj.store v6 v4;
+func private %stored_after_index(v0.objref<[[i64; 2]; 4]>, v1.i64, v2.i64) {
+block0:
+    v3.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+    v4.[i64; 2] = insert_value v3 1.i256 v2;
+    v5.i64 = and v1 3.i64;
+    v6.objref<[i64; 2]> = obj.index v0 v5;
+    obj.store v6 v4;
+    return;
+}
+
+# A call between them would hold the chain's inputs across it, so the chain
+# stays.
+# sameln: func private %call_between(v0.objref<[[i64; 2]; 4]>, v1.i64, v2.i64) {
+# nextln: block0:
+# nextln: v3.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+# nextln: v4.[i64; 2] = insert_value v3 1.i256 v2;
+# nextln: call %clobber;
+func private %call_between(v0.objref<[[i64; 2]; 4]>, v1.i64, v2.i64) {
+block0:
+    v3.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+    v4.[i64; 2] = insert_value v3 1.i256 v2;
+    call %clobber;
+    v5.i64 = and v1 3.i64;
+    v6.objref<[i64; 2]> = obj.index v0 v5;
+    obj.store v6 v4;
+    return;
+}
+
+# The inner chain fills a field of a chain only stored into an object, which
+# is built there from its block: the inner chain stays in that block, though
+# its input exists in block0.
+# sameln: func private %embedded_in_stored(v0.objref<[[i64; 2]; 1]>, v1.i64, v2.i1) {
+# check: block3:
+# nextln: v4.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v3;
+# nextln: v5.[i64; 2] = insert_value v4 1.i256 v1;
+# nextln: v6.[[i64; 2]; 1] = insert_value undef.[[i64; 2]; 1] 0.i256 v5;
+# nextln: obj.store v0 v6;
+func private %embedded_in_stored(v0.objref<[[i64; 2]; 1]>, v1.i64, v2.i1) {
+block0:
+    v3.i64 = add v1 1.i64;
+    br v2 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v4.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v3;
+    v5.[i64; 2] = insert_value v4 1.i256 v1;
+    v6.[[i64; 2]; 1] = insert_value undef.[[i64; 2]; 1] 0.i256 v5;
+    obj.store v0 v6;
+    return;
+}
+
+# `mem::replace(mut x, [[v1, 0], [0, v1]])`: the new value's embedded chains
+# come before the load of the old one. They move down with the stored chain,
+# so the whole value is built at `v0` after the load.
+# sameln: func private %replaced(v0.objref<[[i64; 2]; 2]>, v1.i64) -> [[i64; 2]; 2] {
+# nextln: block0:
+# nextln: v6.[[i64; 2]; 2] = obj.load v0;
+# nextln: v2.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+# nextln: v3.[i64; 2] = insert_value v2 1.i256 0.i64;
+# nextln: v4.[i64; 2] = insert_value undef.[i64; 2] 0.i256 0.i64;
+# nextln: v5.[i64; 2] = insert_value v4 1.i256 v1;
+# nextln: v7.[[i64; 2]; 2] = insert_value undef.[[i64; 2]; 2] 0.i256 v3;
+# nextln: v8.[[i64; 2]; 2] = insert_value v7 1.i256 v5;
+# nextln: obj.store v0 v8;
+func private %replaced(v0.objref<[[i64; 2]; 2]>, v1.i64) -> [[i64; 2]; 2] {
+block0:
+    v2.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+    v3.[i64; 2] = insert_value v2 1.i256 0.i64;
+    v4.[i64; 2] = insert_value undef.[i64; 2] 0.i256 0.i64;
+    v5.[i64; 2] = insert_value v4 1.i256 v1;
+    v6.[[i64; 2]; 2] = obj.load v0;
+    v7.[[i64; 2]; 2] = insert_value undef.[[i64; 2]; 2] 0.i256 v3;
+    v8.[[i64; 2]; 2] = insert_value v7 1.i256 v5;
+    obj.store v0 v8;
+    return v6;
+}
+
+# A call between the embedded chains and the store would hold their inputs
+# across it, so they stay.
+# sameln: func private %replaced_across_call(v0.objref<[[i64; 2]; 1]>, v1.i64) {
+# nextln: block0:
+# nextln: v2.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+# nextln: v3.[i64; 2] = insert_value v2 1.i256 0.i64;
+# nextln: call %clobber;
+func private %replaced_across_call(v0.objref<[[i64; 2]; 1]>, v1.i64) {
+block0:
+    v2.[i64; 2] = insert_value undef.[i64; 2] 0.i256 v1;
+    v3.[i64; 2] = insert_value v2 1.i256 0.i64;
+    call %clobber;
+    v4.[[i64; 2]; 1] = insert_value undef.[[i64; 2]; 1] 0.i256 v3;
+    obj.store v0 v4;
+    return;
+}

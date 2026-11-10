@@ -821,6 +821,64 @@ block0:
     }
 }
 
+#[test]
+fn argument_fields_pass_in_place() {
+    // `%field` passes a field of its by-reference argument on: a callee that
+    // only reads it gets the field in the argument's storage, one that may
+    // write it gets a copy.
+    let cases = [
+        ("noalias nocapture readonly", "v2.i64 = obj.load v1;", 0),
+        ("", "obj.store v1 7.i64;\n    v2.i64 = obj.load v1;", 1),
+    ];
+    let triple = native_isa(host_architecture()).triple();
+    for (marks, body, copies) in cases {
+        let source = format!(
+            "target = \"{triple}\"
+func inline(never) private %fill(v0.i64) -> [[i64; 32]; 2] {{
+block0:
+    v1.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 0.i64 undef.[i64; 32];
+    v2.[i64; 32] = insert_value undef.[i64; 32] 3.i64 v0;
+    v3.[[i64; 32]; 2] = insert_value v1 1.i64 v2;
+    return v3;
+}}
+func inline(never) private %glance({marks} v0.objref<[i64; 32]>) -> i64 {{
+block0:
+    v1.objref<i64> = obj.index v0 3.i64;
+    {body}
+    return v2;
+}}
+func inline(never) private %field(v0.[[i64; 32]; 2]) -> i64 {{
+block0:
+    v1.[i64; 32] = extract_value v0 1.i64;
+    v2.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v2 v1;
+    v3.i64 = call %glance v2;
+    return v3;
+}}
+func public %f(v0.i64) -> i64 {{
+block0:
+    v1.[[i64; 32]; 2] = call %fill v0;
+    v2.i64 = call %field v1;
+    return v2;
+}}
+"
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let artifact = CraneliftObjectBackend::new()
+                .compile_module(&module, &BackendOptions { opt_level: level })
+                .unwrap();
+            assert_eq!(
+                references(artifact.as_bytes(), "memcpy"),
+                copies,
+                "{level:?}\n{marks}"
+            );
+        }
+    }
+}
+
 #[cfg(feature = "jit")]
 #[test]
 #[ignore = "manual release-profile compile/runtime measurement; run with --release --ignored --nocapture"]

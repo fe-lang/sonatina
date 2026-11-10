@@ -8,6 +8,7 @@ pub mod checked_arith_elim;
 pub mod code_sink;
 pub mod compare_sub_fusion;
 pub mod gvn;
+pub mod hoist_insert_chains;
 pub mod if_convert;
 pub mod insn_simplify;
 pub mod jump_thread;

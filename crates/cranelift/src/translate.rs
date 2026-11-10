@@ -370,6 +370,9 @@ impl CallFacts for Calls<'_> {
     fn owns(&self, callee: FuncRef, index: usize) -> bool {
         self.ownership.owns(callee, index)
     }
+    fn owns_arg(&self, index: usize) -> bool {
+        self.ownership.owns(self.func_ref, index)
+    }
     fn may_write(&self, callee: FuncRef, index: usize) -> bool {
         self.arg_writes.may_write(callee, index)
     }
@@ -1965,7 +1968,8 @@ fn translate_function(
                     let result_addr = if frame.continues_source(inst_id, source_value) {
                         resolve_value(function, source_value, &value_map, &mut builder)?
                     } else {
-                        let address = frame.address(result, &mut builder)?;
+                        let address =
+                            storage_address(&frame, function, result, &value_map, &mut builder)?;
                         if is_undef(function, source_value) {
                             // An undef source is zero, but only the bytes no
                             // insert of the chain writes need zeroing.
@@ -2020,7 +2024,9 @@ fn translate_function(
                         ));
                     }
 
-                    if uses_indirect_value_representation(&module.ctx, value_ty) {
+                    if frame.inserts_in_place(inst_id) {
+                        // The value was built in this field.
+                    } else if uses_indirect_value_representation(&module.ctx, value_ty) {
                         let field_addr = builder.ins().iadd_imm_s(result_addr, i64::from(offset));
                         store_indirect(
                             function,
@@ -2226,12 +2232,17 @@ fn translate_function(
                 }
                 NativeInstKind::ObjAlloc(_)
                     if let Some(result) = function.dfg.inst_result(inst_id)
-                        && let Some(arg) = owned_objects
+                        && let Some((arg, offset)) = owned_objects
                             .get(&result)
-                            .copied()
+                            .map(|&arg| (arg, 0))
                             .or_else(|| frame.aliased(result)) =>
                 {
                     let storage = resolve_value(function, arg, &value_map, &mut builder)?;
+                    let storage = if offset == 0 {
+                        storage
+                    } else {
+                        builder.ins().iadd_imm_u(storage, i64::from(offset))
+                    };
                     value_map.insert(result, storage);
                 }
                 NativeInstKind::ObjAlloc(obj_alloc) => {
@@ -2374,7 +2385,8 @@ fn translate_function(
                 }
                 NativeInstKind::EnumMake(make) => {
                     if let Some(result) = function.dfg.inst_result(inst_id) {
-                        let addr = frame.address(result, &mut builder)?;
+                        let addr =
+                            storage_address(&frame, function, result, &value_map, &mut builder)?;
                         // Padding and other variants' payloads are not part
                         // of the value, so they keep whatever they hold.
                         store_variant(
@@ -2649,6 +2661,26 @@ fn translate_function(
     }
 
     Ok(ctx)
+}
+
+/// The address of the storage of the class root `value`: its frame slot, the
+/// object its class is built at, or its place in the class it is embedded
+/// in, which may itself be built at an object.
+fn storage_address(
+    frame: &FrameSlots,
+    function: &Function,
+    value: ValueId,
+    value_map: &ValueMap,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    if let Some((parent, offset)) = frame.embedded_in(value) {
+        let parent = storage_address(frame, function, parent, value_map, builder)?;
+        return Ok(builder.ins().iadd_imm_s(parent, i64::from(offset)));
+    }
+    match frame.stored_at(value) {
+        Some(object) => resolve_value(function, object, value_map, builder),
+        None => frame.address(value, builder),
+    }
 }
 
 /// The bytes of a cache line on the native hosts' cores.

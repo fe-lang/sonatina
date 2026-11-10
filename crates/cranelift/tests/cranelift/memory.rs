@@ -211,6 +211,197 @@ block0:
 }
 
 #[test]
+fn aggregates_built_in_their_fields_keep_their_values() {
+    // `v3` (a call result), `v6` (the block's one aggregate phi) and `v12`
+    // (an insert chain) each only fill a field of `v13`'s chain, so they are
+    // built in its storage; `%nest` builds its whole result in the return
+    // buffer. `v20` fills a field written twice, and `v24` a chain over a
+    // defined source, so both keep storage of their own.
+    let source = r#"
+func private %make(v0.i64) -> [i64; 6] {
+block0:
+    v1.[i64; 6] = insert_value undef.[i64; 6] 0.i64 v0;
+    v2.i64 = add v0 1.i64;
+    v3.[i64; 6] = insert_value v1 5.i64 v2;
+    return v3;
+}
+func private %nest(v0.i64, v1.i1) -> [[i64; 6]; 3] {
+block0:
+    v3.[i64; 6] = call %make v0;
+    br v1 block1 block2;
+block1:
+    v4.[i64; 6] = call %make 7.i64;
+    jump block3;
+block2:
+    v5.[i64; 6] = insert_value undef.[i64; 6] 3.i64 9.i64;
+    jump block3;
+block3:
+    v6.[i64; 6] = phi (v4 block1) (v5 block2);
+    v10.[i64; 6] = insert_value undef.[i64; 6] 1.i64 v0;
+    v11.i64 = mul v0 3.i64;
+    v12.[i64; 6] = insert_value v10 4.i64 v11;
+    v13.[[i64; 6]; 3] = insert_value undef.[[i64; 6]; 3] 2.i64 v12;
+    v14.[[i64; 6]; 3] = insert_value v13 0.i64 v3;
+    v15.[[i64; 6]; 3] = insert_value v14 1.i64 v6;
+    return v15;
+}
+func public %apply(v0.i64, v1.i1, v2.*[[i64; 6]; 3], v3.*[[i64; 6]; 2]) {
+block0:
+    v4.[[i64; 6]; 3] = call %nest v0 v1;
+    mstore v2 v4 [[i64; 6]; 3];
+    v20.[i64; 6] = call %make v0;
+    v21.[[i64; 6]; 2] = insert_value undef.[[i64; 6]; 2] 0.i64 v20;
+    v22.[i64; 6] = call %make 40.i64;
+    v23.[[i64; 6]; 2] = insert_value v21 0.i64 v22;
+    v24.[i64; 6] = call %make 50.i64;
+    v25.[[i64; 6]; 2] = insert_value v23 1.i64 v24;
+    v26.[[i64; 6]; 2] = mload v3 [[i64; 6]; 2];
+    v27.[[i64; 6]; 2] = insert_value v26 1.i64 v24;
+    v28.[i64; 6] = extract_value v27 0.i64;
+    v29.[[i64; 6]; 2] = insert_value v25 1.i64 v28;
+    mstore v3 v29 [[i64; 6]; 2];
+    return;
+}
+"#;
+    let make = |x: i64| [x, 0, 0, 0, 0, x + 1];
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let apply: unsafe extern "C" fn(i64, bool, *mut [[i64; 6]; 3], *mut [[i64; 6]; 2]) =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        for (x, flag) in [(5, true), (5, false), (-2, true), (i64::MAX - 1, false)] {
+            let mut nested = [[-1; 6]; 3];
+            let mut pair = [[61; 6], [62; 6]];
+            unsafe { apply(x, flag, &mut nested, &mut pair) };
+            let phi = if flag { make(7) } else { [0, 0, 0, 9, 0, 0] };
+            let chain = [0, x, 0, 0, x.wrapping_mul(3), 0];
+            assert_eq!(nested, [make(x), phi, chain], "{x} {flag} {level:?}");
+            assert_eq!(pair, [make(40), [61; 6]], "{x} {flag} {level:?}");
+        }
+    }
+}
+
+#[test]
+fn aggregates_built_at_their_stores_keep_earlier_reads() {
+    // `v4`'s chain is only stored into `v1`, so it is built there. `%fill`'s
+    // chain reads its object's old first field between its start and its
+    // store, so it is built elsewhere and copied.
+    let source = r#"
+func private %fill(v0.objref<[i64; 4]>, v1.i64) {
+block0:
+    v2.[i64; 4] = insert_value undef.[i64; 4] 0.i64 v1;
+    v3.objref<i64> = obj.index v0 0.i64;
+    v4.i64 = obj.load v3;
+    v5.[i64; 4] = insert_value v2 1.i64 v4;
+    obj.store v0 v5;
+    return;
+}
+func public %apply(v0.i64, v20.*[i64; 8]) {
+block0:
+    v1.objref<[i64; 4]> = obj.alloc [i64; 4];
+    v2.[i64; 4] = insert_value undef.[i64; 4] 0.i64 v0;
+    v3.i64 = add v0 1.i64;
+    v4.[i64; 4] = insert_value v2 3.i64 v3;
+    obj.store v1 v4;
+    v6.objref<[i64; 4]> = obj.alloc [i64; 4];
+    v7.objref<i64> = obj.index v6 0.i64;
+    obj.store v7 5.i64;
+    call %fill v6 v0;
+    v11.[i64; 4] = obj.load v1;
+    v12.[i64; 4] = obj.load v6;
+    v13.[[i64; 4]; 2] = insert_value undef.[[i64; 4]; 2] 0.i64 v11;
+    v14.[[i64; 4]; 2] = insert_value v13 1.i64 v12;
+    v15.[i64; 8] = bitcast v14 [i64; 8];
+    mstore v20 v15 [i64; 8];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let apply: unsafe extern "C" fn(i64, *mut [i64; 8]) =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        for x in [3, -1, i64::MAX] {
+            let mut result = [-7; 8];
+            unsafe { apply(x, &mut result) };
+            assert_eq!(
+                result,
+                [x, 0, 0, x.wrapping_add(1), x, 5, 0, 0],
+                "{x} {level:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn enums_built_at_their_stores_hold_their_variant() {
+    // `%push`'s chain, with the enum in its second field, is only stored
+    // into `v0`, so both are built there.
+    let source = r#"
+type @kind = enum {
+    #Storage(i64, i64, i64),
+    #Mark(i8),
+};
+type @change = {i64, @kind};
+
+func private %push(v0.objref<@change>, v1.i64) {
+block0:
+    v2.i64 = add v1 1.i64;
+    v3.i64 = add v1 2.i64;
+    v4.@kind = enum.make @kind #Storage (v2, v3, v1);
+    v5.@change = insert_value undef.@change 0.i64 v1;
+    v6.@change = insert_value v5 1.i64 v4;
+    obj.store v0 v6;
+    return;
+}
+func public %apply(v0.i64, v20.*[i64; 4]) {
+block0:
+    v1.objref<@change> = obj.alloc @change;
+    call %push v1 v0;
+    v2.@change = obj.load v1;
+    v3.i64 = extract_value v2 0.i64;
+    v4.@kind = extract_value v2 1.i64;
+    enum.assert_variant v4 #Storage;
+    v5.i64 = enum.extract v4 #Storage 0.i8;
+    v6.i64 = enum.extract v4 #Storage 1.i8;
+    v7.i64 = enum.extract v4 #Storage 2.i8;
+    v8.[i64; 4] = insert_value undef.[i64; 4] 0.i64 v3;
+    v9.[i64; 4] = insert_value v8 1.i64 v5;
+    v10.[i64; 4] = insert_value v9 2.i64 v6;
+    v11.[i64; 4] = insert_value v10 3.i64 v7;
+    mstore v20 v11 [i64; 4];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let apply: unsafe extern "C" fn(i64, *mut [i64; 4]) =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        for x in [3, -1, i64::MAX - 2] {
+            let mut result = [-7; 4];
+            unsafe { apply(x, &mut result) };
+            assert_eq!(result, [x, x + 1, x + 2, x], "{x} {level:?}");
+        }
+    }
+}
+
+#[test]
 fn object_and_constant_indices_zero_extend_narrow_integers() {
     let values = (0..256)
         .map(|i| (1000 + i).to_string())
@@ -2073,5 +2264,43 @@ block0:
         unsafe { undefs(out.as_mut_ptr()) };
         unsafe { compress([0; 8].as_ptr(), [0; 16].as_ptr(), zeros_out.as_mut_ptr()) };
         assert_eq!(out, zeros_out, "{level:?}");
+    }
+}
+
+#[test]
+fn nested_aggregates_build_in_their_destination_object() {
+    // The inner array's chain starts before the outer one's, and both are
+    // built in the object the outer value is stored into.
+    let source = r#"
+func public %nested(v0.i64, v1.*i8) {
+block0:
+    v2.objref<[[i64; 3]; 2]> = obj.alloc [[i64; 3]; 2];
+    v3.[i64; 3] = insert_value undef.[i64; 3] 0.i64 v0;
+    v4.i64 = add v0 1.i64;
+    v5.[i64; 3] = insert_value v3 2.i64 v4;
+    v6.[[i64; 3]; 2] = insert_value undef.[[i64; 3]; 2] 1.i64 v5;
+    v7.i64 = add v0 2.i64;
+    v8.[i64; 3] = insert_value undef.[i64; 3] 1.i64 v7;
+    v9.[[i64; 3]; 2] = insert_value v6 0.i64 v8;
+    obj.store v2 v9;
+    v10.[[i64; 3]; 2] = obj.load v2;
+    v11.*[[i64; 3]; 2] = bitcast v1 *[[i64; 3]; 2];
+    mstore v11 v10 [[i64; 3]; 2];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let nested: unsafe extern "C" fn(i64, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("nested").unwrap()) };
+        let mut out = [-1i64; 6];
+        unsafe { nested(10, out.as_mut_ptr()) };
+        assert_eq!(out, [0, 12, 0, 10, 0, 11], "{level:?}");
     }
 }

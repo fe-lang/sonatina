@@ -1,0 +1,146 @@
+#! A value stored in a later block than the one building it is built again right before each use outside its block, so that each copy has its own uses, and goes once its block has none left.
+
+target = "evm-ethereum-osaka"
+
+type @kind = enum {
+    #Storage(i64, i64),
+    #Mark(i8),
+};
+type @change = {i64, @kind};
+type @point = {i64, i64};
+type @pair = enum {
+    #Both(@point, @point),
+    #Neither,
+};
+
+declare external %grow() -> i1;
+
+func private %undo(v0.@change) {
+block0:
+    return;
+}
+
+func private %undo_pair(v0.@pair) {
+block0:
+    return;
+}
+
+# A push: the element is built before the slot's capacity is known, stored
+# on one side and handed back on the other. Each side builds its own copy,
+# enum included, and the original goes.
+# sameln: func private %push(v0.objref<@change>, v1.i64, v2.i64) {
+# nextln: block0:
+# nextln: v6.i1 = call %grow;
+# nextln: br v6 block1 block2;
+# check: block1:
+# nextln: v10.@kind = enum.make @kind #Storage v1 v2;
+# nextln: v11.@change = insert_value undef.@change 0.i256 v1;
+# nextln: v12.@change = insert_value v11 1.i256 v10;
+# nextln: obj.store v0 v12;
+# check: block2:
+# nextln: v13.@kind = enum.make @kind #Storage v1 v2;
+# nextln: v14.@change = insert_value undef.@change 0.i256 v1;
+# nextln: v15.@change = insert_value v14 1.i256 v13;
+# nextln: call %undo v15;
+func private %push(v0.objref<@change>, v1.i64, v2.i64) {
+block0:
+    v3.@kind = enum.make @kind #Storage (v1, v2);
+    v4.@change = insert_value undef.@change 0.i256 v1;
+    v5.@change = insert_value v4 1.i256 v3;
+    v6.i1 = call %grow;
+    br v6 block1 block2;
+
+block1:
+    obj.store v0 v5;
+    return;
+
+block2:
+    call %undo v5;
+    return;
+}
+
+# A use in its own block keeps the original there; the store builds a copy.
+# sameln: func private %used_in_own_block(v0.objref<@change>, v1.i64, v2.i1) {
+# nextln: block0:
+# nextln: v3.@kind = enum.make @kind #Mark 8.i8;
+# nextln: v4.@change = insert_value undef.@change 0.i256 v1;
+# nextln: v5.@change = insert_value v4 1.i256 v3;
+# nextln: call %undo v5;
+# nextln: br v2 block1 block2;
+# check: block1:
+# nextln: v10.@kind = enum.make @kind #Mark 8.i8;
+# nextln: v11.@change = insert_value undef.@change 0.i256 v1;
+# nextln: v12.@change = insert_value v11 1.i256 v10;
+# nextln: obj.store v0 v12;
+func private %used_in_own_block(v0.objref<@change>, v1.i64, v2.i1) {
+block0:
+    v3.@kind = enum.make @kind #Mark (8.i8);
+    v4.@change = insert_value undef.@change 0.i256 v1;
+    v5.@change = insert_value v4 1.i256 v3;
+    call %undo v5;
+    br v2 block1 block2;
+
+block1:
+    obj.store v0 v5;
+    return;
+
+block2:
+    return;
+}
+
+# The store is in a loop the construction is outside of, so building it
+# there would build it on every iteration: it stays.
+# sameln: func private %stored_in_loop(v0.objref<@change>, v1.i64, v2.i1) {
+# nextln: block0:
+# nextln: v3.@kind = enum.make @kind #Mark 8.i8;
+# nextln: v4.@change = insert_value undef.@change 0.i256 v1;
+# nextln: v5.@change = insert_value v4 1.i256 v3;
+# nextln: jump block1;
+# check: block1:
+# nextln: obj.store v0 v5;
+func private %stored_in_loop(v0.objref<@change>, v1.i64, v2.i1) {
+block0:
+    v3.@kind = enum.make @kind #Mark (8.i8);
+    v4.@change = insert_value undef.@change 0.i256 v1;
+    v5.@change = insert_value v4 1.i256 v3;
+    jump block1;
+
+block1:
+    obj.store v0 v5;
+    br v2 block1 block2;
+
+block2:
+    return;
+}
+
+# A construction filling two fields of an enum is built once in each copy.
+# sameln: func private %shared_payload(v0.objref<@pair>, v1.i64) {
+# nextln: block0:
+# nextln: v5.i1 = call %grow;
+# nextln: br v5 block1 block2;
+# check: block1:
+# nextln: v9.@point = insert_value undef.@point 0.i256 v1;
+# nextln: v10.@point = insert_value v9 1.i256 v1;
+# nextln: v11.@pair = enum.make @pair #Both v10 v10;
+# nextln: obj.store v0 v11;
+# check: block2:
+# nextln: v12.@point = insert_value undef.@point 0.i256 v1;
+# nextln: v13.@point = insert_value v12 1.i256 v1;
+# nextln: v14.@pair = enum.make @pair #Both v13 v13;
+# nextln: call %undo_pair v14;
+func private %shared_payload(v0.objref<@pair>, v1.i64) {
+block0:
+    v2.@point = insert_value undef.@point 0.i256 v1;
+    v3.@point = insert_value v2 1.i256 v1;
+    v4.@pair = enum.make @pair #Both (v3, v3);
+    v5.i1 = call %grow;
+    br v5 block1 block2;
+
+block1:
+    obj.store v0 v4;
+    return;
+
+block2:
+    call %undo_pair v4;
+    return;
+}

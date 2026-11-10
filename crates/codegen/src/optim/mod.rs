@@ -15,6 +15,7 @@ mod dead_malloc;
 pub mod dead_ret;
 pub mod forwarded_ret;
 pub mod gvn;
+pub mod hoist_insert_chains;
 pub mod if_convert;
 pub mod inliner;
 pub mod jump_thread;

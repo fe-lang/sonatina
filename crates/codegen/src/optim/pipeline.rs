@@ -48,6 +48,7 @@ use super::{
     dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     gvn::GvnSolver,
+    hoist_insert_chains::HoistInsertChains,
     if_convert::IfConvert,
     inliner::{Inliner, InlinerConfig},
     jump_thread::JumpThread,
@@ -130,6 +131,10 @@ pub enum Pass {
     /// array (native pipelines only).
     NarrowObjectLoads,
     IfConvert,
+    /// Move an `insert_value` chain building an aggregate from undef up to
+    /// its last input when its result fills a field of another chain or is
+    /// returned (native pipelines only).
+    HoistInsertChains,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
     /// Use after passes that can leave stale user entries
@@ -274,6 +279,11 @@ impl Pass {
             },
             Pass::IfConvert => PassInfo {
                 name: "if_convert",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
+            },
+            Pass::HoistInsertChains => PassInfo {
+                name: "hoist_insert_chains",
                 needs_func_behavior: false,
                 invalidates_func_behavior: false,
             },
@@ -627,7 +637,8 @@ impl Pipeline {
     /// too, then narrowing aggregate loads to the fields read, folding
     /// boolean phis, threading returns, forming switches from comparison
     /// trees, fusing comparisons with the subtractions they guard and
-    /// converting branches whose paths meet at once to selects.
+    /// converting branches whose paths meet at once to selects, then
+    /// hoisting aggregate construction to its inputs.
     /// Os is the size pipeline.
     pub fn native(level: OptLevel) -> Self {
         let mut pipeline = match level {
@@ -648,6 +659,7 @@ impl Pipeline {
             Pass::CompareSubFusion,
             Pass::IfConvert,
             Pass::CfgCleanup,
+            Pass::HoistInsertChains,
         ]));
         pipeline.keep_tail_callee_args = true;
         pipeline
@@ -1054,6 +1066,13 @@ fn run_pass(
         Pass::IfConvert => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.if_convert").entered();
             IfConvert.run(func)
+        }
+        Pass::HoistInsertChains => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.hoist_insert_chains").entered();
+            ctx.cfg.compute(func);
+            ctx.domtree.compute(&ctx.cfg);
+            ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
+            HoistInsertChains.run(func, &ctx.domtree, &ctx.lpt)
         }
         Pass::SwitchFormation => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.switch_formation").entered();
@@ -2873,7 +2892,8 @@ func private %entry(v0.i32, v1.i32) -> i32 {
         // Both end by narrowing aggregate loads, eliminating checked
         // arithmetic, simplifying with known bits, folding boolean phis,
         // threading returns, forming switches, fusing comparisons with
-        // subtractions and converting branches to selects.
+        // subtractions, converting branches to selects and hoisting insert
+        // chains.
         let switches = format!(
             "{:?}",
             Step::FuncPasses(vec![
@@ -2888,6 +2908,7 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 Pass::CompareSubFusion,
                 Pass::IfConvert,
                 Pass::CfgCleanup,
+                Pass::HoistInsertChains,
             ])
         );
         let mut o1 = steps(&Pipeline::native(OptLevel::O1));
