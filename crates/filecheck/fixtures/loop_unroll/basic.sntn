@@ -1,0 +1,135 @@
+target = "evm-ethereum-osaka"
+
+# A loop that runs three times: two copies of its body run before it, each
+# in its own block with its iteration's counter, and it runs the last
+# without its back edge.
+# regex: VAL=\bv\d+\b
+# sameln: func public %sum_of_squares() -> i64 {
+# check:   block0:
+# nextln:      jump block3;
+# check:   block3:
+# nextln:      $(a=$VAL).i64 = mul 0.i64 0.i64;
+# nextln:      $(s=$VAL).i64 = add 0.i64 $a;
+# nextln:      $(i=$VAL).i64 = add 0.i64 1.i64;
+# nextln:      $VAL.i1 = lt $i 3.i64;
+# nextln:      jump block4;
+# check:   block4:
+# nextln:      $(b=$VAL).i64 = mul $i $i;
+# nextln:      $(t=$VAL).i64 = add $s $b;
+# nextln:      $(j=$VAL).i64 = add $i 1.i64;
+# nextln:      $VAL.i1 = lt $j 3.i64;
+# nextln:      jump block1;
+# check:   block1:
+# nextln:      v3.i64 = mul $j $j;
+# nextln:      v4.i64 = add $t v3;
+# nextln:      v5.i64 = add $j 1.i64;
+# nextln:      v6.i1 = lt v5 3.i64;
+# nextln:      jump block2;
+func public %sum_of_squares() -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v1.i64 = phi (0.i64 block0) (v5 block1);
+    v2.i64 = phi (0.i64 block0) (v4 block1);
+    v3.i64 = mul v1 v1;
+    v4.i64 = add v2 v3;
+    v5.i64 = add v1 1.i64;
+    v6.i1 = lt v5 3.i64;
+    br v6 block1 block2;
+
+block2:
+    return v4;
+}
+
+# Side effects run in their order: the first iteration's store, then the
+# last's.
+# regex: VAL=\bv\d+\b
+# sameln: func public %stores_in_order(v0.i256) {
+# check:   block3:
+# nextln:      $(p=$VAL).i256 = add v0 0.i256;
+# nextln:      mstore $p 0.i256 i256;
+# nextln:      $(i=$VAL).i256 = add 0.i256 32.i256;
+# nextln:      $VAL.i1 = lt $i 64.i256;
+# nextln:      jump block1;
+# check:   block1:
+# nextln:      v2.i256 = add v0 $i;
+# nextln:      mstore v2 $i i256;
+func public %stores_in_order(v0.i256) {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (0.i256 block0) (v3 block1);
+    v2.i256 = add v0 v1;
+    mstore v2 v1 i256;
+    v3.i256 = add v1 32.i256;
+    v4.i1 = lt v3 64.i256;
+    br v4 block1 block2;
+
+block2:
+    return;
+}
+
+# A loop that leaves after its first iteration loses its back edge and its
+# phis, with no block for earlier iterations.
+# sameln: func public %runs_once(v0.i64) -> i64 {
+# check:   block0:
+# nextln:      jump block1;
+# check:   block1:
+# nextln:      v2.i64 = add 5.i64 v0;
+# nextln:      v3.i64 = add 5.i64 1.i64;
+# nextln:      v4.i1 = gt v3 3.i64;
+# nextln:      jump block2;
+func public %runs_once(v0.i64) -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v1.i64 = phi (5.i64 block0) (v3 block1);
+    v2.i64 = add v1 v0;
+    v3.i64 = add v1 1.i64;
+    v4.i1 = gt v3 3.i64;
+    br v4 block2 block1;
+
+block2:
+    return v2;
+}
+
+# More iterations than the unroller copies leave the loop as it is.
+# sameln: func public %too_many_trips() -> i64 {
+# check:   block1:
+# nextln:      v1.i64 = phi (0.i64 block0) (v2 block1);
+# check:       br v3 block1 block2;
+func public %too_many_trips() -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v1.i64 = phi (0.i64 block0) (v2 block1);
+    v2.i64 = add v1 1.i64;
+    v3.i1 = lt v2 100.i64;
+    br v3 block1 block2;
+
+block2:
+    return v2;
+}
+
+# An exit test that does not fold leaves the loop as it is.
+# sameln: func public %unknown_bound(v0.i64) -> i64 {
+# check:   block1:
+# nextln:      v1.i64 = phi (0.i64 block0) (v2 block1);
+# check:       br v3 block1 block2;
+func public %unknown_bound(v0.i64) -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v1.i64 = phi (0.i64 block0) (v2 block1);
+    v2.i64 = add v1 1.i64;
+    v3.i1 = lt v2 v0;
+    br v3 block1 block2;
+
+block2:
+    return v2;
+}

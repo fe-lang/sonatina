@@ -50,9 +50,11 @@ use sonatina_ir::{
     },
 };
 
-use super::simplify_expr::{ExprFactProvider, SimplifiedResult, simplify_inst_with_facts};
+use super::simplify_expr::{
+    ConstantFacts, ExprFactProvider, SimplifiedResult, simplify_inst_with_facts,
+};
 use crate::{
-    analysis::{definedness::value_may_be_undef, known_bits::KnownBits},
+    analysis::definedness::value_may_be_undef,
     cfg_edit::{CfgEditor, CleanupMode, clone_inst_before, defined_in, remove_phi_incoming_from},
     domtree::DomTree,
 };
@@ -224,7 +226,7 @@ fn incoming_cond(
     cond: ValueId,
     pred: BlockId,
 ) -> Option<Immediate> {
-    let mut facts = EdgeConstants {
+    let mut facts = ConstantFacts {
         func,
         known: FxHashMap::default(),
     };
@@ -272,36 +274,6 @@ fn incoming_cond(
         }
     }
     facts.known_imm(cond)
-}
-
-/// Values a predecessor knows as constants on its edge into a block.
-struct EdgeConstants<'a> {
-    func: &'a Function,
-    known: FxHashMap<ValueId, Immediate>,
-}
-
-impl ExprFactProvider for EdgeConstants<'_> {
-    fn known_imm(&self, value: ValueId) -> Option<Immediate> {
-        self.known
-            .get(&value)
-            .copied()
-            .or_else(|| self.func.dfg.value_imm(value))
-    }
-
-    fn known_bits(&self, func: &Function, value: ValueId) -> KnownBits {
-        self.known_imm(value).map_or_else(
-            || KnownBits::unknown(func.dfg.value_ty(value)),
-            KnownBits::from_imm,
-        )
-    }
-
-    fn same_non_undef(&self, _lhs: ValueId, _rhs: ValueId) -> bool {
-        false
-    }
-
-    fn may_be_undef(&self, value: ValueId) -> bool {
-        self.known_imm(value).is_none()
-    }
 }
 
 /// What `cond` is on the edge `from -> to`, when `from` branches on it.

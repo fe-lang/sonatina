@@ -1,3 +1,4 @@
+use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
@@ -65,6 +66,37 @@ pub(crate) trait ExprFactProvider {
     }
     fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool;
     fn may_be_undef(&self, v: ValueId) -> bool;
+}
+
+/// Facts that are only constants: values known to be `known`, and
+/// immediates.
+pub(crate) struct ConstantFacts<'a> {
+    pub(crate) func: &'a Function,
+    pub(crate) known: FxHashMap<ValueId, Immediate>,
+}
+
+impl ExprFactProvider for ConstantFacts<'_> {
+    fn known_imm(&self, value: ValueId) -> Option<Immediate> {
+        self.known
+            .get(&value)
+            .copied()
+            .or_else(|| self.func.dfg.value_imm(value))
+    }
+
+    fn known_bits(&self, func: &Function, value: ValueId) -> KnownBits {
+        self.known_imm(value).map_or_else(
+            || KnownBits::unknown(func.dfg.value_ty(value)),
+            KnownBits::from_imm,
+        )
+    }
+
+    fn same_non_undef(&self, _lhs: ValueId, _rhs: ValueId) -> bool {
+        false
+    }
+
+    fn may_be_undef(&self, value: ValueId) -> bool {
+        self.known_imm(value).is_none()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

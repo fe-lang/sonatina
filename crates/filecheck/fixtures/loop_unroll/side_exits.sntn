@@ -1,0 +1,103 @@
+target = "evm-ethereum-osaka"
+
+# A loop of two blocks whose first checks a bound, leaving to a block that
+# ends the function: each copy keeps its check.
+# regex: VAL=\bv\d+\b
+# sameln: func public %checked_sum(v0.i64) -> i64 {
+# check:   block0:
+# nextln:      jump block5;
+# check:   block5:
+# nextln:      $VAL.i1 = ge 0.i64 v0;
+# nextln:      br $VAL block3 block6;
+# check:   block6:
+# nextln:      $(s=$VAL).i64 = add 0.i64 0.i64;
+# nextln:      $(i=$VAL).i64 = add 0.i64 1.i64;
+# check:       jump block7;
+# check:   block7:
+# nextln:      $VAL.i1 = ge $i v0;
+# nextln:      br $VAL block3 block8;
+# check:   block8:
+# nextln:      $(t=$VAL).i64 = add $s $i;
+# nextln:      $(j=$VAL).i64 = add $i 1.i64;
+# check:       jump block1;
+# check:   block1:
+# nextln:      v3.i1 = ge $j v0;
+# nextln:      br v3 block3 block2;
+# check:   block2:
+# nextln:      v4.i64 = add $t $j;
+# check:       jump block4;
+func public %checked_sum(v0.i64) -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v1.i64 = phi (0.i64 block0) (v5 block2);
+    v2.i64 = phi (0.i64 block0) (v4 block2);
+    v3.i1 = ge v1 v0;
+    br v3 block3 block2;
+
+block2:
+    v4.i64 = add v2 v1;
+    v5.i64 = add v1 1.i64;
+    v6.i1 = lt v5 3.i64;
+    br v6 block1 block4;
+
+block3:
+    unreachable;
+
+block4:
+    return v4;
+}
+
+# A side exit with phis would need an input from every copy, so the loop
+# stays.
+# sameln: func public %exit_with_phi(v0.i64) -> i64 {
+# check:   block1:
+# nextln:      v1.i64 = phi (0.i64 block0) (v5 block2);
+func public %exit_with_phi(v0.i64) -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v1.i64 = phi (0.i64 block0) (v5 block2);
+    v3.i1 = ge v1 v0;
+    br v3 block3 block2;
+
+block2:
+    v5.i64 = add v1 1.i64;
+    v6.i1 = lt v5 3.i64;
+    br v6 block1 block4;
+
+block3:
+    v7.i64 = phi (v1 block1);
+    return v7;
+
+block4:
+    return v5;
+}
+
+# A side exit that uses a value of the loop, which no copy would dominate,
+# keeps the loop.
+# sameln: func public %exit_uses_loop_value(v0.i64) -> i64 {
+# check:   block1:
+# nextln:      v1.i64 = phi (0.i64 block0) (v5 block2);
+func public %exit_uses_loop_value(v0.i64) -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v1.i64 = phi (0.i64 block0) (v5 block2);
+    v3.i1 = ge v1 v0;
+    br v3 block3 block2;
+
+block2:
+    v5.i64 = add v1 1.i64;
+    v6.i1 = lt v5 3.i64;
+    br v6 block1 block4;
+
+block3:
+    return v1;
+
+block4:
+    return v5;
+}
