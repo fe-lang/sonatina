@@ -6,6 +6,7 @@ type @one = { i256 };
 type @pair_bitcast = { @one, i256 };
 type @ptr_one = { *i8 };
 type @int_one = { i256 };
+type @five = { i256, i256, i256, i256, i256 };
 # sameln: func public %scalarize_insert_extract(v0.i256, v1.i256) -> i256 {
 # check:     block0:
 # check:         add v0 v1;
@@ -367,4 +368,21 @@ func public %scalarize_loop_carried_phi(v0.i1, v1.i256) -> i256 {
 
     block3:
         return v4;
+}
+
+# The EVM promotes objects of at most four leaves.
+# sameln: func public %scalarize_keeps_five_leaf_alloca(v0.i256, v1.i256) -> i256 {
+# check:         v2.*@five = alloca @five;
+# check:         mload
+func public %scalarize_keeps_five_leaf_alloca(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*@five = alloca @five;
+        v3.*i256 = gep v2 0.i8 0.i8;
+        v4.*i256 = gep v2 0.i8 4.i8;
+        mstore v3 v0 i256;
+        mstore v4 v1 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = mload v4 i256;
+        v7.i256 = add v5 v6;
+        return v7;
 }

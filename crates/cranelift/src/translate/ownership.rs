@@ -5,9 +5,11 @@
 //! the argument's storage instead of copying the argument into a slot of its
 //! own. A function that passes its own argument on in a tail call, to an
 //! argument its callee owns, gives that storage away, so it owns the
-//! argument too. Callers pass an owned argument in storage they do not use
-//! after the call and that no other argument shares, copying it into a
-//! temporary otherwise; a tail call passes its caller's own owned argument.
+//! argument too, as it does an argument whose storage a tail call writes
+//! another argument into (`tail_call_storage`). Callers pass an owned
+//! argument in storage they do not use after the call and that no other
+//! argument shares, copying it into a temporary otherwise; a tail call passes
+//! storage its caller owns.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
@@ -16,6 +18,8 @@ use sonatina_ir::{
     isa::native::inst_set as native_inst_set,
     module::FuncRef,
 };
+
+use sonatina_codegen::analysis::tail_position::tail_call_storage;
 
 use super::{tail::TailCalls, uses_indirect_value_representation};
 
@@ -31,8 +35,9 @@ pub(super) struct OwnedArg {
 #[derive(Default)]
 pub(super) struct Ownership {
     by_func: FxHashMap<FuncRef, Vec<OwnedArg>>,
-    /// Arguments owned to pass on in tail calls, by function and index.
-    passed_on: FxHashSet<(FuncRef, usize)>,
+    /// Arguments owned for tail calls, by function and index: passed on to
+    /// an argument the callee owns, or holding another argument.
+    for_tail_calls: FxHashSet<(FuncRef, usize)>,
 }
 
 impl Ownership {
@@ -48,8 +53,25 @@ impl Ownership {
                 ownership.by_func.insert(func_ref, owned);
             }
         }
-        // Tail calls only pass the caller's own aggregate arguments on, so
-        // each owned argument they reach makes the caller own its argument.
+        // A tail call writes an argument into the storage of one of its
+        // caller's arguments, which the caller then owns.
+        for (func_ref, sites) in tail_calls.sites() {
+            module.func_store.view(func_ref, |function| {
+                for &site in sites {
+                    let NativeInstKind::Call(call) =
+                        native_inst_set().resolve_inst(function.dfg.inst(site))
+                    else {
+                        continue;
+                    };
+                    let storage = tail_call_storage(function, call.args()).unwrap_or_default();
+                    ownership
+                        .for_tail_calls
+                        .extend(storage.into_iter().flatten().map(|param| (func_ref, param)));
+                }
+            });
+        }
+        // Tail calls pass the caller's own aggregate arguments on otherwise,
+        // so each owned argument they reach makes the caller own its argument.
         let mut changed = true;
         while changed {
             changed = false;
@@ -67,7 +89,7 @@ impl Ownership {
                                     function.arg_values.iter().position(|&value| value == arg)
                                 && !ownership.owns(func_ref, own)
                             {
-                                ownership.passed_on.insert((func_ref, own));
+                                ownership.for_tail_calls.insert((func_ref, own));
                                 changed = true;
                             }
                         }
@@ -85,7 +107,7 @@ impl Ownership {
 
     /// Whether `func` owns its argument `index`.
     pub(super) fn owns(&self, func: FuncRef, index: usize) -> bool {
-        self.passed_on.contains(&(func, index))
+        self.for_tail_calls.contains(&(func, index))
             || self.owned(func).iter().any(|arg| arg.index == index)
     }
 }

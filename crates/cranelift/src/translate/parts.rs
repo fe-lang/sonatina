@@ -1,6 +1,5 @@
-//! Small aggregates held in registers. A struct, array or enum of a few
-//! integer and pointer fields is translated to one Cranelift value per scalar
-//! field, an enum's tag first, rather than to the address of storage. Storage
+//! Small aggregates held in registers (`register_parts`), translated to one
+//! Cranelift value per part rather than to the address of storage. Storage
 //! is written only where the value must be in memory: a store, a reference
 //! passed to a public or external function, a materialized object, a cast.
 
@@ -9,7 +8,11 @@ use std::ops::Range;
 use cranelift_codegen::ir::{self as clif, InstBuilder, MemFlagsData};
 use cranelift_frontend::FunctionBuilder;
 use smallvec::{SmallVec, smallvec};
-use sonatina_ir::{Function, Type, Value, ValueId, module::ModuleCtx, types::CompoundType};
+use sonatina_codegen::isa::native::MAX_PARTS;
+pub(super) use sonatina_codegen::isa::native::{
+    Parts, is_aggregate, register_parts, uses_indirect_value_representation,
+};
+use sonatina_ir::{Function, Type, Value, ValueId, module::ModuleCtx};
 
 use super::{
     LOAD_FLAGS, ValueMap, create_stack_slot_for_type, normalize_scalar, resolve_value,
@@ -17,92 +20,7 @@ use super::{
     value_storage_size,
 };
 
-/// Values held in registers have at most this many parts.
-const MAX_PARTS: usize = 4;
-
-/// A scalar field, element or enum tag of a value held in registers, at its
-/// offset in the value's storage.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Part {
-    pub offset: u32,
-    pub ty: Type,
-}
-
-pub(super) type Parts = SmallVec<[Part; MAX_PARTS]>;
 pub(super) type PartValues = SmallVec<[clif::Value; MAX_PARTS]>;
-
-/// The parts of `ty` if translation holds its values in registers: a struct,
-/// array or enum whose scalar fields are at most `MAX_PARTS` integers and
-/// pointers of at most a word, of which only one enum variant has any.
-pub(super) fn register_parts(ctx: &ModuleCtx, ty: Type) -> Option<Parts> {
-    let mut parts = Parts::new();
-    (is_aggregate(ctx, ty) && collect_parts(ctx, ty, 0, &mut parts) && !parts.is_empty())
-        .then_some(parts)
-}
-
-/// Whether `ty` is a struct, array or enum.
-pub(super) fn is_aggregate(ctx: &ModuleCtx, ty: Type) -> bool {
-    matches!(
-        ty.resolve_compound(ctx),
-        Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_))
-    )
-}
-
-fn collect_parts(ctx: &ModuleCtx, ty: Type, base: u32, parts: &mut Parts) -> bool {
-    match ty.resolve_compound(ctx) {
-        Some(CompoundType::Struct(data)) => {
-            !data.packed
-                && (0..data.fields.len()).all(|idx| {
-                    ctx.aggregate_elem_offset(ty, idx)
-                        .is_some_and(|(offset, field)| {
-                            collect_parts(ctx, field, base + offset as u32, parts)
-                        })
-                })
-        }
-        Some(CompoundType::Array { elem, len }) => {
-            len <= MAX_PARTS
-                && ctx.size_of(elem).is_ok_and(|stride| {
-                    (0..len).all(|index| {
-                        collect_parts(ctx, elem, base + (index * stride) as u32, parts)
-                    })
-                })
-        }
-        Some(CompoundType::Enum(data)) => {
-            let mut with_fields = data
-                .variants
-                .iter()
-                .enumerate()
-                .filter(|(_, variant)| !variant.fields.is_empty());
-            let fields = with_fields.next();
-            with_fields.next().is_none()
-                && push_part(parts, base, data.tag_ty())
-                && fields.is_none_or(|(variant, variant_data)| {
-                    (0..variant_data.fields.len()).all(|field| {
-                        ctx.enum_variant_field_offset(ty, variant, field)
-                            .is_some_and(|(offset, field_ty)| {
-                                collect_parts(ctx, field_ty, base + offset as u32, parts)
-                            })
-                    })
-                })
-        }
-        Some(CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_)) => {
-            push_part(parts, base, ty)
-        }
-        Some(CompoundType::Func { .. }) => false,
-        None => push_part(parts, base, ty),
-    }
-}
-
-fn push_part(parts: &mut Parts, offset: u32, ty: Type) -> bool {
-    let scalar = matches!(
-        ty,
-        Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::Compound(_)
-    );
-    scalar && parts.len() < MAX_PARTS && {
-        parts.push(Part { offset, ty });
-        true
-    }
-}
 
 /// The Cranelift type of the target's pointers.
 pub(super) fn pointer_clif_type(ctx: &ModuleCtx) -> Result<clif::Type, String> {
