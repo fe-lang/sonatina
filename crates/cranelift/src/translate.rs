@@ -316,6 +316,30 @@ fn shift_count_in_range(
         .fits_in_low_bits(function, count, log2_width)
 }
 
+/// The Cranelift value of `value`; an i128 whose high 64 bits are known to be
+/// zero as the zero extension of its low limb, so that unsigned products
+/// take it as one limb.
+fn word_operand(
+    function: &Function,
+    value: ValueId,
+    value_map: &ValueMap,
+    known_bits: &mut Option<KnownBitsQuery>,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    let resolved = resolve_value(function, value, value_map, builder)?;
+    Ok(
+        if function.dfg.value_ty(value) == Type::I128
+            && known_bits
+                .get_or_insert_with(|| KnownBitsQuery::new(function))
+                .fits_in_low_bits(function, value, 64)
+        {
+            narrow_i128(resolved, builder)
+        } else {
+            resolved
+        },
+    )
+}
+
 fn emit_trap(builder: &mut FunctionBuilder, code: TrapCode) {
     builder.ins().trap(code);
 }
@@ -1630,8 +1654,10 @@ fn translate_function(
                     insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
                 }
                 NativeInstKind::Umulo(umulo) => {
-                    let lhs = resolve_value(function, *umulo.lhs(), &value_map, &mut builder)?;
-                    let rhs = resolve_value(function, *umulo.rhs(), &value_map, &mut builder)?;
+                    let [lhs, rhs] = [*umulo.lhs(), *umulo.rhs()].map(|value| {
+                        word_operand(function, value, &value_map, &mut known_bits, &mut builder)
+                    });
+                    let (lhs, rhs) = (lhs?, rhs?);
                     let (result_val, overflow) = emit_scalar_overflow(
                         lhs,
                         rhs,
@@ -1721,8 +1747,10 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::Umulsat(umulsat) => {
-                    let lhs = resolve_value(function, *umulsat.lhs(), &value_map, &mut builder)?;
-                    let rhs = resolve_value(function, *umulsat.rhs(), &value_map, &mut builder)?;
+                    let [lhs, rhs] = [*umulsat.lhs(), *umulsat.rhs()].map(|value| {
+                        word_operand(function, value, &value_map, &mut known_bits, &mut builder)
+                    });
+                    let (lhs, rhs) = (lhs?, rhs?);
                     let (raw, overflow) = emit_scalar_mul_overflow(lhs, rhs, false, &mut builder);
                     let max = unsigned_max_value(builder.func.dfg.value_type(lhs), &mut builder);
                     let result_val = builder.ins().select(overflow, max, raw);
