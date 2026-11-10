@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use cranelift_codegen::ir::{self as clif, InstBuilder, InstructionData, Opcode, condcodes::IntCC};
 use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Immediate, Type, U256};
@@ -49,6 +51,57 @@ pub(super) fn compare_disjunction(
     };
     let [lhs, rhs] = binary(unmasked(value), Opcode::Bor)?;
     Some([compare(lhs)?, compare(rhs)?])
+}
+
+/// Replaces each `isplit` of an `iconcat` with the concatenated words, and
+/// makes each repeated `isplit` of a value in a block take the first one's
+/// words. An i128 built from words and split again kept the words' other
+/// uses alive in Cranelift, which keeps multi-result instructions: a borrow
+/// that also fed a dead high word fell out of the flags of its `sbb` chain.
+/// The low and the high word of a product are extracted apart, and
+/// Cranelift neither merges the splits nor folds a load into an instruction
+/// whose result two instructions use: a 64-bit product split twice read its
+/// operand into a register instead of from memory.
+pub(super) fn simplify_isplits(func: &mut clif::Function) {
+    for block in func.layout.blocks().collect::<Vec<_>>() {
+        let mut first = HashMap::<clif::Value, clif::Inst>::new();
+        let mut inst = func.layout.first_inst(block);
+        while let Some(current) = inst {
+            inst = func.layout.next_inst(current);
+            let InstructionData::Unary {
+                opcode: Opcode::Isplit,
+                arg,
+            } = func.dfg.insts[current]
+            else {
+                continue;
+            };
+            let arg = func.dfg.resolve_aliases(arg);
+            let words = match func
+                .dfg
+                .value_def(arg)
+                .inst()
+                .map(|def| func.dfg.insts[def])
+            {
+                Some(InstructionData::Binary {
+                    opcode: Opcode::Iconcat,
+                    args,
+                }) => args.to_vec(),
+                _ => match first.get(&arg) {
+                    Some(&kept) => func.dfg.inst_results(kept).to_vec(),
+                    None => {
+                        first.insert(arg, current);
+                        continue;
+                    }
+                },
+            };
+            let split = func.dfg.inst_results(current).to_vec();
+            func.dfg.detach_inst_results(current);
+            for (value, word) in split.into_iter().zip(words) {
+                func.dfg.change_to_alias(value, word);
+            }
+            func.layout.remove_inst(current);
+        }
+    }
 }
 
 /// The low `to_ty` bits of an i128 value, from its low word: the `iconcat`
@@ -346,4 +399,87 @@ pub(super) fn emit_scalar_mul_overflow(
         raw
     };
     (result, overflow)
+}
+
+#[cfg(test)]
+mod tests {
+    use cranelift_codegen::{
+        cursor::{Cursor, FuncCursor},
+        ir::{AbiParam, InstBuilder, InstructionData, Opcode, Signature, UserFuncName, types},
+        isa::CallConv,
+    };
+
+    use super::{clif, simplify_isplits};
+
+    #[test]
+    fn repeated_isplits_take_the_first_words() {
+        let mut signature = Signature::new(CallConv::SystemV);
+        signature.params.push(AbiParam::new(types::I128));
+        signature.returns.extend([AbiParam::new(types::I64); 2]);
+        let mut func = clif::Function::with_name_signature(UserFuncName::default(), signature);
+        let block = func.dfg.make_block();
+        let value = func.dfg.append_block_param(block, types::I128);
+        func.layout.append_block(block);
+        let mut cursor = FuncCursor::new(&mut func).at_bottom(block);
+        // A product's low word, then its high word, each split apart.
+        let (low, _) = cursor.ins().isplit(value);
+        let (_, high) = cursor.ins().isplit(value);
+        cursor.ins().return_(&[low, high]);
+
+        simplify_isplits(&mut func);
+
+        let splits: Vec<_> = func
+            .layout
+            .block_insts(block)
+            .filter(|&inst| func.dfg.insts[inst].opcode() == Opcode::Isplit)
+            .collect();
+        assert_eq!(splits.len(), 1, "{}", func.display());
+        let words = func.dfg.inst_results(splits[0]).to_vec();
+        let ret = func.layout.last_inst(block).unwrap();
+        let InstructionData::MultiAry { args, .. } = func.dfg.insts[ret] else {
+            panic!("{}", func.display());
+        };
+        let returned: Vec<_> = args
+            .as_slice(&func.dfg.value_lists)
+            .iter()
+            .map(|&value| func.dfg.resolve_aliases(value))
+            .collect();
+        assert_eq!(returned, words, "{}", func.display());
+    }
+
+    #[test]
+    fn isplits_of_iconcats_take_the_words() {
+        let mut signature = Signature::new(CallConv::SystemV);
+        signature.params.extend([AbiParam::new(types::I64); 2]);
+        signature.returns.extend([AbiParam::new(types::I64); 2]);
+        let mut func = clif::Function::with_name_signature(UserFuncName::default(), signature);
+        let block = func.dfg.make_block();
+        let low = func.dfg.append_block_param(block, types::I64);
+        let high = func.dfg.append_block_param(block, types::I64);
+        func.layout.append_block(block);
+        let mut cursor = FuncCursor::new(&mut func).at_bottom(block);
+        let value = cursor.ins().iconcat(low, high);
+        let (split_low, split_high) = cursor.ins().isplit(value);
+        cursor.ins().return_(&[split_low, split_high]);
+
+        simplify_isplits(&mut func);
+
+        assert!(
+            func.layout
+                .block_insts(block)
+                .all(|inst| func.dfg.insts[inst].opcode() != Opcode::Isplit),
+            "{}",
+            func.display()
+        );
+        let ret = func.layout.last_inst(block).unwrap();
+        let InstructionData::MultiAry { args, .. } = func.dfg.insts[ret] else {
+            panic!("{}", func.display());
+        };
+        let returned: Vec<_> = args
+            .as_slice(&func.dfg.value_lists)
+            .iter()
+            .map(|&value| func.dfg.resolve_aliases(value))
+            .collect();
+        assert_eq!(returned, [low, high], "{}", func.display());
+    }
 }

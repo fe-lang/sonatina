@@ -1527,6 +1527,18 @@ pub(crate) fn simplify_cast(
         }
     }
 
+    // An integer no wider than a pointer that becomes a pointer and back is
+    // itself; a wider one loses its high bits. (A pointer that becomes an
+    // integer and back keeps no provenance, so it stays.)
+    if matches!(kind, CastInstKind::PtrToInt)
+        && let Some((inst, _)) = func.dfg.value_inst_result(from)
+        && let Some(int_to_ptr) = func.dfg.downcast::<&cast::IntToPtr>(inst)
+        && func.dfg.value_ty(*int_to_ptr.from()) == ty
+        && ty <= func.ctx().type_layout.pointer_repl()
+    {
+        return SimplifiedResult::Copy(*int_to_ptr.from());
+    }
+
     SimplifiedResult::NoChange
 }
 

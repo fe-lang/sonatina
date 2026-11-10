@@ -573,7 +573,7 @@ pub(super) fn split_displacement(
 }
 
 /// The value of an `iconst`.
-fn iconst_value(value: clif::Value, dfg: &clif::DataFlowGraph) -> Option<i64> {
+pub(super) fn iconst_value(value: clif::Value, dfg: &clif::DataFlowGraph) -> Option<i64> {
     match dfg.insts[dfg.value_def(value).inst()?] {
         InstructionData::UnaryImm {
             opcode: Opcode::Iconst,

@@ -4,7 +4,7 @@
 use std::{cmp::Ordering, collections::HashMap};
 
 use cranelift_codegen::ir::{
-    self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
+    self as clif, BlockArg, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
     condcodes::{CondCode, IntCC},
     types::{I64, I128},
 };
@@ -17,8 +17,9 @@ use sonatina_ir::{
     },
     isa::native::inst_set as native_inst_set,
 };
+use sonatina_triple::TargetTriple;
 
-use super::{LOAD_FLAGS, ValueMap, resolve_i256, resolve_value};
+use super::{LOAD_FLAGS, ValueMap, iconst_value, resolve_i256, resolve_value};
 
 pub(super) const LIMBS: usize = 4;
 pub(super) type Limbs = [clif::Value; LIMBS];
@@ -39,6 +40,10 @@ pub(super) struct I256Storage {
 
 impl I256Storage {
     /// Records the caller's storage of argument `value` and loads its limbs.
+    /// That storage stays valid and unchanged while the function runs, so
+    /// the loads are `readonly` and `can_move`: Cranelift's egraph treats them
+    /// as pure, dropping those of limbs the function never reads, as when it
+    /// narrows an i256 argument to an index.
     pub fn incoming(
         &mut self,
         value: ValueId,
@@ -46,7 +51,12 @@ impl I256Storage {
         builder: &mut FunctionBuilder,
     ) -> Limbs {
         self.incoming.insert(value, address);
-        load_limbs(address, 0, LOAD_FLAGS, builder)
+        load_limbs(
+            address,
+            0,
+            LOAD_FLAGS.with_readonly().with_can_move(),
+            builder,
+        )
     }
 
     /// The address of storage holding `value` for the `index`th i256
@@ -85,6 +95,16 @@ fn i256_slot(builder: &mut FunctionBuilder) -> clif::StackSlot {
         32,
         I256_ALIGN_SHIFT,
     ))
+}
+
+/// The constant values of limbs `lhs` and `rhs`, where they are `iconst`s.
+fn limb_constants(
+    lhs: clif::Value,
+    rhs: clif::Value,
+    builder: &FunctionBuilder,
+) -> (Option<i64>, Option<i64>) {
+    let dfg = &builder.func.dfg;
+    (iconst_value(lhs, dfg), iconst_value(rhs, dfg))
 }
 
 pub(super) fn constant_limbs(value: U256, builder: &mut FunctionBuilder) -> Limbs {
@@ -430,12 +450,27 @@ pub(super) fn mul_limbs<const N: usize>(
     rhs: &[clif::Value],
     builder: &mut FunctionBuilder,
 ) -> [clif::Value; N] {
+    // Zero limbs add nothing: a zero `lhs` limb's row is skipped, and `rhs`
+    // ends after its last limb that is not zero. A zero-extended operand,
+    // such as a gas amount, has one limb.
+    let zero = |limb| iconst_value(limb, &builder.func.dfg) == Some(0);
+    let lhs: Vec<_> = lhs
+        .iter()
+        .map(|&limb| (!zero(limb)).then_some(limb))
+        .collect();
+    let rhs = &rhs[..rhs
+        .iter()
+        .rposition(|&limb| !zero(limb))
+        .map_or(0, |last| last + 1)];
     // Schoolbook rows. Each partial sum `lhs[i] * rhs[j] + result + carry`
     // fits in 128 bits; when the product is truncated, the top limb needs
     // only the low halves of its partial products.
     let truncated = N < lhs.len() + rhs.len();
     let mut result: [Option<clif::Value>; N] = [None; N];
-    for (i, &lhs_limb) in lhs.iter().enumerate() {
+    for (i, lhs_limb) in lhs.into_iter().enumerate() {
+        let Some(lhs_limb) = lhs_limb else {
+            continue;
+        };
         let mut carry = None;
         for (j, &rhs_limb) in rhs.iter().enumerate().take(N.saturating_sub(i)) {
             let k = i + j;
@@ -820,24 +855,39 @@ pub(super) fn translate_i256_op(
         NativeInstKind::Sar(op) if wide(op.value()) => {
             shift_op(op.value(), op.bits(), ShiftKind::Sar, value_map, builder)?
         }
+        // Limbs of masks and zero-extended words are often constant zeros or
+        // ones; the result limb is then one of the operands, so `mul_limbs`
+        // and comparisons see its zeros.
         NativeInstKind::And(op) if wide(op.lhs()) => bitwise(
             op.lhs(),
             op.rhs(),
-            |builder, lhs, rhs| builder.ins().band(lhs, rhs),
+            |builder, lhs, rhs| match limb_constants(lhs, rhs, builder) {
+                (Some(0), _) | (_, Some(-1)) => lhs,
+                (_, Some(0)) | (Some(-1), _) => rhs,
+                _ => builder.ins().band(lhs, rhs),
+            },
             value_map,
             builder,
         )?,
         NativeInstKind::Or(op) if wide(op.lhs()) => bitwise(
             op.lhs(),
             op.rhs(),
-            |builder, lhs, rhs| builder.ins().bor(lhs, rhs),
+            |builder, lhs, rhs| match limb_constants(lhs, rhs, builder) {
+                (Some(-1), _) | (_, Some(0)) => lhs,
+                (Some(0), _) | (_, Some(-1)) => rhs,
+                _ => builder.ins().bor(lhs, rhs),
+            },
             value_map,
             builder,
         )?,
         NativeInstKind::Xor(op) if wide(op.lhs()) => bitwise(
             op.lhs(),
             op.rhs(),
-            |builder, lhs, rhs| builder.ins().bxor(lhs, rhs),
+            |builder, lhs, rhs| match limb_constants(lhs, rhs, builder) {
+                (_, Some(0)) => lhs,
+                (Some(0), _) => rhs,
+                _ => builder.ins().bxor(lhs, rhs),
+            },
             value_map,
             builder,
         )?,
@@ -861,23 +911,55 @@ pub(super) fn translate_i256_op(
             }))
         }
         // The leading zeros of the most significant nonzero limb, plus 64 for
-        // each limb above it; zero gives the low limb's 64 plus 192. One `clz`
-        // keeps targets without a count instruction, like SP1's, to one loop.
+        // each limb above it; zero gives the low limb's 64 plus 192.
         NativeInstKind::Clz(op) if wide(op.arg()) => {
-            let [low, rest @ ..] = resolve_i256(function, *op.arg(), value_map, builder)?;
-            let start = (low, builder.ins().iconst(I64, 192));
-            let (top, above) =
-                rest.into_iter()
-                    .zip([128, 64, 0])
-                    .fold(start, |(top, above), (limb, bits)| {
-                        let bits = builder.ins().iconst(I64, bits);
-                        (
-                            builder.ins().select(limb, limb, top),
-                            builder.ins().select(limb, bits, above),
-                        )
-                    });
-            let zeros = builder.ins().clz(top);
-            let count = builder.ins().iadd(above, zeros);
+            let limbs = resolve_i256(function, *op.arg(), value_map, builder)?;
+            let count = if function.ctx().triple == TargetTriple::SP1 {
+                // One `clz` keeps a target without a count instruction to one
+                // loop: the limb and its offset are chosen first.
+                let [low, rest @ ..] = limbs;
+                let start = (low, builder.ins().iconst(I64, 192));
+                let (top, above) =
+                    rest.into_iter()
+                        .zip([128, 64, 0])
+                        .fold(start, |(top, above), (limb, bits)| {
+                            let bits = builder.ins().iconst(I64, bits);
+                            (
+                                builder.ins().select(limb, limb, top),
+                                builder.ins().select(limb, bits, above),
+                            )
+                        });
+                let zeros = builder.ins().clz(top);
+                builder.ins().iadd(above, zeros)
+            } else {
+                // From the top limb down, the first nonzero limb's count:
+                // leading zeros of words come in runs, random words with a
+                // nonzero top limb or small values whose high limbs stay
+                // zero, which branches predict, and the usual case counts
+                // one limb.
+                let [l0, l1, l2, l3] = limbs;
+                let done = builder.create_block();
+                let count = builder.append_block_param(done, I64);
+                for (limb, above) in [(l3, 0), (l2, 64), (l1, 128)] {
+                    let found = builder.create_block();
+                    let below = builder.create_block();
+                    builder.ins().brif(limb, found, &[], below, &[]);
+                    builder.switch_to_block(found);
+                    let zeros = builder.ins().clz(limb);
+                    let zeros = if above == 0 {
+                        zeros
+                    } else {
+                        builder.ins().iadd_imm_u(zeros, above)
+                    };
+                    builder.ins().jump(done, &[BlockArg::Value(zeros)]);
+                    builder.switch_to_block(below);
+                }
+                let zeros = builder.ins().clz(l0);
+                let zeros = builder.ins().iadd_imm_u(zeros, 192);
+                builder.ins().jump(done, &[BlockArg::Value(zeros)]);
+                builder.switch_to_block(done);
+                count
+            };
             let zero = builder.ins().iconst(I64, 0);
             Output::Limbs([count, zero, zero, zero])
         }
