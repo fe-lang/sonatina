@@ -1,5 +1,6 @@
 #! An instruction that may fault stays under its guard: a division whose
-#! divisor may be zero, and a constant load at an unchecked index.
+#! divisor may be zero, and a constant load at an unchecked index. An address
+#! made from an integer wider than a pointer is in `faulting_narrow.sntn`.
 
 target = "x86_64-unknown-native"
 

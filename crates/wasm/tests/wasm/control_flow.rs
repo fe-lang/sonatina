@@ -392,8 +392,44 @@ func public %pick(v0.i32, v1.i64) -> i64 {
     block4:
         return v9;
 }";
+    // An index of 64 bits that does not fit in an address traps too.
+    let source = &format!(
+        "{source}
+func public %element(v0.i64, v1.i64) -> i64 {{
+    block0:
+        v2.*[i64; 4] = alloca [i64; 4];
+        v12.*i64 = gep v2 0.i32 1.i32;
+        mstore v12 7.i64 i64;
+        jump block1;
+    block1:
+        v3.i64 = phi (0.i64 block0) (v9 block3);
+        v4.i64 = phi (0.i64 block0) (v10 block3);
+        v5.i1 = lt v0 4.i64;
+        br v5 block2 block3;
+    block2:
+        v6.*i64 = gep v2 0.i32 v0;
+        v7.i64 = mload v6 i64;
+        v8.i64 = add v3 v7;
+        jump block3;
+    block3:
+        v9.i64 = phi (v3 block1) (v8 block2);
+        v10.i64 = add v4 1.i64;
+        v11.i1 = lt v10 v1;
+        br v11 block1 block4;
+    block4:
+        return v9;
+}}"
+    );
     for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
         let mut machine = Machine::new(&build_at(source, level));
+        let element = machine.func("element");
+        for (index, want) in [(1, 21), (4, 0), (1 << 40, 0), (-1, 0)] {
+            assert_eq!(
+                machine.call(&element, &[Val::I64(index), Val::I64(3)])[0].unwrap_i64(),
+                want,
+                "{level:?}: element({index}, 3)"
+            );
+        }
         for name in ["divide", "divide_wide"] {
             let func = machine.func(name);
             for (value, divisor, want) in [(7, 0, 0), (7, 2, if name == "divide" { 9 } else { 3 })]

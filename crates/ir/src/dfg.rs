@@ -15,8 +15,9 @@ use crate::{
     inst::{
         InstId,
         arith::{Sdiv, Smod, Udiv, Umod},
+        cast::IntToPtr,
         control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
-        data::{ConstIndex, ConstLoad, ConstProj, ConstRef, EnumExtract},
+        data::{ConstIndex, ConstLoad, ConstProj, ConstRef, EnumExtract, Gep, ObjIndex},
         downcast,
     },
     ir_writer::{FuncWriteCtx, IrWrite},
@@ -764,10 +765,36 @@ impl DataFlowGraph {
     }
 
     /// Whether `inst_id` is undefined for some values of its operands: a
-    /// division or remainder whose divisor may be zero, or a `const.load`
-    /// that may read outside its constant. Backends may trap on these.
+    /// division or remainder whose divisor may be zero, a `const.load` that
+    /// may read outside its constant, or an address made from an integer
+    /// wider than a pointer, which may not fit. Backends may trap on these.
     fn may_fault(&self, inst_id: InstId) -> bool {
         let (is, inst) = (self.inst_set(), self.inst(inst_id));
+        let narrowed: &[ValueId] = if let Some(gep) = downcast::<&Gep>(is, inst) {
+            &gep.values()[1..]
+        } else if let Some(cast) = downcast::<&IntToPtr>(is, inst) {
+            std::slice::from_ref(cast.from())
+        } else if let Some(index) = downcast::<&ObjIndex>(is, inst) {
+            std::slice::from_ref(index.index())
+        } else if let Some(index) = downcast::<&ConstIndex>(is, inst) {
+            std::slice::from_ref(index.index())
+        } else {
+            &[]
+        };
+        let pointer_bytes = self
+            .ctx
+            .size_of_unchecked(self.ctx.type_layout.pointer_repl());
+        // A constant that fits in 31 bits is an address on every target.
+        let fits = |value| {
+            let imm = self
+                .value_imm(value)
+                .and_then(Immediate::to_nonnegative_usize);
+            self.ctx.size_of_unchecked(self.value_ty(value)) <= pointer_bytes
+                || imm.is_some_and(|imm| imm <= i32::MAX as usize)
+        };
+        if !narrowed.iter().all(|&value| fits(value)) {
+            return true;
+        }
         let divisor = downcast::<&Udiv>(is, inst)
             .map(|inst| *inst.rhs())
             .or_else(|| downcast::<&Sdiv>(is, inst).map(|inst| *inst.rhs()))
