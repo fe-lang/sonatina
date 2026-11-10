@@ -402,6 +402,39 @@ block0:
 }
 
 #[test]
+fn zero_constants_store_as_zeros_and_others_copy() {
+    // `$zeros` stores as zeros over the old contents; `$values` copies.
+    let source = r#"
+global private const [i64; 4] $zeros = [0, 0, 0, 0];
+global private const [i64; 4] $values = [3, 0, 9, -1];
+func public %apply(v0.*[i64; 4], v1.*[i64; 4]) {
+block0:
+    v2.constref<[i64; 4]> = const.ref $zeros;
+    v3.[i64; 4] = const.load v2;
+    mstore v0 v3 [i64; 4];
+    v4.constref<[i64; 4]> = const.ref $values;
+    v5.[i64; 4] = const.load v4;
+    mstore v1 v5 [i64; 4];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let apply: unsafe extern "C" fn(*mut [i64; 4], *mut [i64; 4]) =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        let (mut zeros, mut values) = ([7; 4], [7; 4]);
+        unsafe { apply(&mut zeros, &mut values) };
+        assert_eq!((zeros, values), ([0; 4], [3, 0, 9, -1]), "{level:?}");
+    }
+}
+
+#[test]
 fn object_and_constant_indices_zero_extend_narrow_integers() {
     let values = (0..256)
         .map(|i| (1000 + i).to_string())
@@ -2302,5 +2335,60 @@ block0:
         let mut out = [-1i64; 6];
         unsafe { nested(10, out.as_mut_ptr()) };
         assert_eq!(out, [0, 12, 0, 10, 0, 11], "{level:?}");
+    }
+}
+
+#[test]
+fn words_with_zero_limbs_store_at_any_eight_byte_address() {
+    // A byte, an address-sized value, zero, and a word whose middle limbs
+    // are zero: the stores pair zero limbs into 16-byte vectors, which must
+    // not assume 16-byte alignment.
+    let source = r#"
+func public %store(v0.*i8, v1.i64) {
+block0:
+    v2.*i256 = bitcast v0 *i256;
+    v3.i256 = zext v1 i256;
+    mstore v2 v3 i256;
+    v4.*i8 = gep v0 32.i64;
+    v5.*i256 = bitcast v4 *i256;
+    v6.i256 = shl 160.i256 v3;
+    v7.i256 = or v6 v3;
+    mstore v5 v7 i256;
+    v8.*i8 = gep v0 64.i64;
+    v9.*i256 = bitcast v8 *i256;
+    mstore v9 0.i256 i256;
+    v10.*i8 = gep v0 96.i64;
+    v11.*i256 = bitcast v10 *i256;
+    v12.i256 = shl 192.i256 v3;
+    v13.i256 = or v12 v3;
+    mstore v11 v13 i256;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let store: unsafe extern "C" fn(*mut u8, u64) =
+            unsafe { std::mem::transmute(artifact.function_address("store").unwrap()) };
+        // 17 words, starting one word into a 16-byte aligned buffer.
+        let mut buffer = [u64::MAX; 18];
+        let base = buffer.as_mut_ptr();
+        let start = if (base as usize).is_multiple_of(16) {
+            1
+        } else {
+            0
+        };
+        unsafe { store(base.add(start).cast(), 0xabcd) };
+        let words = &buffer[start..start + 16];
+        let x = 0xabcd;
+        assert_eq!(&words[0..4], &[x, 0, 0, 0], "{level:?}");
+        assert_eq!(&words[4..8], &[x, 0, x << 32, 0], "{level:?}");
+        assert_eq!(&words[8..12], &[0, 0, 0, 0], "{level:?}");
+        assert_eq!(&words[12..16], &[x, 0, 0, x], "{level:?}");
     }
 }

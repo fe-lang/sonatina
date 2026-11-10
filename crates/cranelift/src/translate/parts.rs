@@ -15,7 +15,7 @@ pub(super) use sonatina_codegen::isa::native::{
 use sonatina_ir::{Function, Type, Value, ValueId, module::ModuleCtx};
 
 use super::{
-    LOAD_FLAGS, ValueMap, create_stack_slot_for_type, normalize_scalar, resolve_value,
+    ValueMap, create_stack_slot_for_type, normalize_scalar, resolve_value,
     sonatina_scalar_type_to_clif_or_err, sonatina_type_to_clif_or_err,
 };
 
@@ -81,6 +81,7 @@ pub(super) fn load_parts(
     parts: &Parts,
     src: clif::Value,
     offset: i32,
+    flags: MemFlagsData,
     builder: &mut FunctionBuilder,
 ) -> Result<PartValues, String> {
     let pointer_type = pointer_clif_type(ctx)?;
@@ -90,7 +91,7 @@ pub(super) fn load_parts(
             let ty = sonatina_type_to_clif_or_err(part.ty, pointer_type)?;
             let value = builder
                 .ins()
-                .load(ty, LOAD_FLAGS, src, offset + part.offset as i32);
+                .load(ty, flags, src, offset + part.offset as i32);
             Ok(normalize_scalar(value, part.ty, builder))
         })
         .collect()

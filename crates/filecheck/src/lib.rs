@@ -5,6 +5,7 @@ pub mod bool_phi_fold;
 pub mod branch_canonicalize;
 pub mod cfg_cleanup;
 pub mod checked_arith_elim;
+pub mod coalesce_object_copies;
 pub mod code_sink;
 pub mod compare_sub_fusion;
 pub mod gvn;

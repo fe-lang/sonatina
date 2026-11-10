@@ -1,0 +1,132 @@
+#! A local object that is a whole copy of another, written only by that copy, reads the original when nothing writes the original after the copy.
+
+target = "evm-ethereum-osaka"
+
+declare external %poke();
+
+func private %stash(v0.objref<[i256; 4]>) {
+block0:
+    return;
+}
+
+# `v1` is built, copied into `v2`, and `v2` is only read: reads of `v2` read `v1`.
+# sameln: func private %coalesced(v0.i64) -> i256 {
+# nextln: block0:
+# nextln: v1.objref<[i256; 4]> = obj.alloc [i256; 4];
+# nextln: v3.objref<i256> = obj.index v1 1.i256;
+# nextln: obj.store v3 7.i256;
+# nextln: v6.objref<i256> = obj.index v1 v0;
+# nextln: v7.i256 = obj.load v6;
+# nextln: return v7;
+func private %coalesced(v0.i64) -> i256 {
+block0:
+    v1.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v2.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v3.objref<i256> = obj.index v1 1.i256;
+    obj.store v3 7.i256;
+    v4.[i256; 4] = obj.load v1;
+    obj.store v2 v4;
+    v6.objref<i256> = obj.index v2 v0;
+    v7.i256 = obj.load v6;
+    return v7;
+}
+
+# The original is written after the copy, the copy is written after the
+# store, the original is written between the load and the store, or a loop
+# writes the original again after the copy: each copy stays.
+# sameln: func private %kept(v0.i64, v1.i1) -> i256 {
+# check: obj.store v3 v5;
+# check: obj.store v7 v9;
+# check: obj.store v12 v14;
+# check: obj.store v17 v18;
+func private %kept(v0.i64, v1.i1) -> i256 {
+block0:
+    v2.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v3.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v5.[i256; 4] = obj.load v2;
+    obj.store v3 v5;
+    v4.objref<i256> = obj.index v2 0.i256;
+    obj.store v4 1.i256;
+    v6.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v7.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v9.[i256; 4] = obj.load v6;
+    obj.store v7 v9;
+    v8.objref<i256> = obj.index v7 0.i256;
+    obj.store v8 2.i256;
+    v11.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v12.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v14.[i256; 4] = obj.load v11;
+    v13.objref<i256> = obj.index v11 0.i256;
+    obj.store v13 3.i256;
+    obj.store v12 v14;
+    v16.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v17.objref<[i256; 4]> = obj.alloc [i256; 4];
+    jump block1;
+
+block1:
+    v18.[i256; 4] = obj.load v16;
+    obj.store v17 v18;
+    v19.objref<i256> = obj.index v16 0.i256;
+    obj.store v19 4.i256;
+    br v1 block1 block2;
+
+block2:
+    v20.objref<i256> = obj.index v3 v0;
+    v21.i256 = obj.load v20;
+    v22.objref<i256> = obj.index v7 v0;
+    v23.i256 = obj.load v22;
+    v24.objref<i256> = obj.index v12 v0;
+    v25.i256 = obj.load v24;
+    v26.objref<i256> = obj.index v17 v0;
+    v27.i256 = obj.load v26;
+    v28.i256 = add v21 v23;
+    v29.i256 = add v25 v27;
+    v30.i256 = add v28 v29;
+    return v30;
+}
+
+# A pointer to the original, or the original handed to a call, made before
+# the copy can write the original after it: each copy stays.
+# sameln: func private %escaped(v0.i64) -> i256 {
+# check: obj.store v2 v5;
+# check: obj.store v10 v13;
+func private %escaped(v0.i64) -> i256 {
+block0:
+    v1.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v2.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v3.objref<i256> = obj.index v1 0.i256;
+    obj.store v3 1.i256;
+    v4.*[i256; 4] = obj.materialize.stack v1;
+    v5.[i256; 4] = obj.load v1;
+    obj.store v2 v5;
+    mstore v4 2.i256 i256;
+    v6.objref<i256> = obj.index v2 v0;
+    v7.i256 = obj.load v6;
+    v9.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v10.objref<[i256; 4]> = obj.alloc [i256; 4];
+    call %stash v9;
+    v13.[i256; 4] = obj.load v9;
+    obj.store v10 v13;
+    call %poke;
+    v14.objref<i256> = obj.index v10 v0;
+    v15.i256 = obj.load v14;
+    v16.i256 = add v7 v15;
+    return v16;
+}
+
+# The copy is indexed before the original is allocated, so the index cannot
+# read the original: the copy stays.
+# sameln: func private %used_before_original(v0.i64) -> i256 {
+# check: obj.store v1 v5;
+func private %used_before_original(v0.i64) -> i256 {
+block0:
+    v1.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v2.objref<i256> = obj.index v1 v0;
+    v3.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v4.objref<i256> = obj.index v3 1.i256;
+    obj.store v4 7.i256;
+    v5.[i256; 4] = obj.load v3;
+    obj.store v1 v5;
+    v6.i256 = obj.load v2;
+    return v6;
+}

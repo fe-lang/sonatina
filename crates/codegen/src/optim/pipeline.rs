@@ -43,6 +43,7 @@ use super::{
     branch_canonicalize::BranchCanonicalize,
     cfg_cleanup::CfgCleanup,
     checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
+    coalesce_object_copies::CoalesceObjectCopies,
     code_sink::CodeSink,
     compare_sub_fusion::CompareSubFusion,
     dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
@@ -131,6 +132,9 @@ pub enum Pass {
     /// array (native pipelines only).
     NarrowObjectLoads,
     IfConvert,
+    /// Read a local object instead of a whole copy of it that nothing else
+    /// writes, when nothing writes it after the copy (native pipelines only).
+    CoalesceObjectCopies,
     /// Move an `insert_value` chain building an aggregate from undef up to
     /// its last input when its result fills a field of another chain or is
     /// returned (native pipelines only).
@@ -279,6 +283,11 @@ impl Pass {
             },
             Pass::IfConvert => PassInfo {
                 name: "if_convert",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
+            },
+            Pass::CoalesceObjectCopies => PassInfo {
+                name: "coalesce_object_copies",
                 needs_func_behavior: false,
                 invalidates_func_behavior: false,
             },
@@ -634,11 +643,11 @@ impl Pipeline {
     /// overflow paths it leaves unreachable, and simplifying with known bits
     /// and ranges again, so code inlined after the first round has its
     /// provably safe overflow checks removed and bounded shift counts masked
-    /// too, then narrowing aggregate loads to the fields read, folding
-    /// boolean phis, threading returns, forming switches from comparison
-    /// trees, fusing comparisons with the subtractions they guard and
-    /// converting branches whose paths meet at once to selects, then
-    /// hoisting aggregate construction to its inputs.
+    /// too, then coalescing local object copies, narrowing aggregate loads to
+    /// the fields read, folding boolean phis, threading returns, forming
+    /// switches from comparison trees, fusing comparisons with the
+    /// subtractions they guard and converting branches whose paths meet at
+    /// once to selects, then hoisting aggregate construction to its inputs.
     /// Os is the size pipeline.
     pub fn native(level: OptLevel) -> Self {
         let mut pipeline = match level {
@@ -648,6 +657,7 @@ impl Pipeline {
             OptLevel::O2 => Self::optimized(native_inliner_config(), Loops::Unroll, true),
         };
         pipeline.add_step(Step::FuncPasses(vec![
+            Pass::CoalesceObjectCopies,
             Pass::NarrowObjectLoads,
             Pass::CheckedArithElim,
             Pass::Sccp,
@@ -1066,6 +1076,13 @@ fn run_pass(
         Pass::IfConvert => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.if_convert").entered();
             IfConvert.run(func)
+        }
+        Pass::CoalesceObjectCopies => {
+            let _span =
+                trace_span!("sonatina.optim.pipeline.pass.coalesce_object_copies").entered();
+            ctx.cfg.compute(func);
+            ctx.domtree.compute(&ctx.cfg);
+            CoalesceObjectCopies.run(func, &ctx.cfg, &ctx.domtree)
         }
         Pass::HoistInsertChains => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.hoist_insert_chains").entered();
@@ -2889,14 +2906,15 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 .map(|step| format!("{step:?}"))
                 .collect()
         };
-        // Both end by narrowing aggregate loads, eliminating checked
-        // arithmetic, simplifying with known bits, folding boolean phis,
-        // threading returns, forming switches, fusing comparisons with
-        // subtractions, converting branches to selects and hoisting insert
+        // Both end by coalescing object copies, narrowing aggregate loads,
+        // eliminating checked arithmetic, simplifying with known bits, folding
+        // boolean phis, threading returns, forming switches, fusing comparisons
+        // with subtractions, converting branches to selects and hoisting insert
         // chains.
         let switches = format!(
             "{:?}",
             Step::FuncPasses(vec![
+                Pass::CoalesceObjectCopies,
                 Pass::NarrowObjectLoads,
                 Pass::CheckedArithElim,
                 Pass::Sccp,
