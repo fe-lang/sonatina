@@ -323,6 +323,137 @@ fn the_optimizer_does_not_change_results() {
 }
 
 #[test]
+fn the_optimizer_keeps_faulting_instructions_under_their_guards() {
+    // A division by zero and a load outside a constant trap, so neither may
+    // move above the test that guards it, at 64 and at 256 bits.
+    let source = "global private const [i64; 4] $table = [11, 22, 33, 44];
+func public %divide(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+    block1:
+        v3.i64 = phi (0.i64 block0) (v8 block3);
+        v4.i64 = phi (0.i64 block0) (v9 block3);
+        v5.i1 = ne v1 0.i64;
+        br v5 block2 block3;
+    block2:
+        v6.i64 = udiv v0 v1;
+        v7.i64 = add v3 v6;
+        jump block3;
+    block3:
+        v8.i64 = phi (v3 block1) (v7 block2);
+        v9.i64 = add v4 1.i64;
+        v10.i1 = lt v9 v2;
+        br v10 block1 block4;
+    block4:
+        return v8;
+}
+func public %divide_wide(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        v11.i256 = zext v0 i256;
+        v12.i256 = zext v1 i256;
+        jump block1;
+    block1:
+        v3.i256 = phi (0.i256 block0) (v8 block3);
+        v4.i64 = phi (0.i64 block0) (v9 block3);
+        v5.i1 = ne v1 0.i64;
+        br v5 block2 block3;
+    block2:
+        v6.i256 = umod v11 v12;
+        v7.i256 = add v3 v6;
+        jump block3;
+    block3:
+        v8.i256 = phi (v3 block1) (v7 block2);
+        v9.i64 = add v4 1.i64;
+        v10.i1 = lt v9 v2;
+        br v10 block1 block4;
+    block4:
+        v13.i64 = trunc v8 i64;
+        return v13;
+}
+func public %pick(v0.i32, v1.i64) -> i64 {
+    block0:
+        v2.constref<[i64; 4]> = const.ref $table;
+        jump block1;
+    block1:
+        v3.i64 = phi (0.i64 block0) (v9 block3);
+        v4.i64 = phi (0.i64 block0) (v10 block3);
+        v5.i1 = lt v0 4.i32;
+        br v5 block2 block3;
+    block2:
+        v6.constref<i64> = const.index v2 v0;
+        v7.i64 = const.load v6;
+        v8.i64 = add v3 v7;
+        jump block3;
+    block3:
+        v9.i64 = phi (v3 block1) (v8 block2);
+        v10.i64 = add v4 1.i64;
+        v11.i1 = lt v10 v1;
+        br v11 block1 block4;
+    block4:
+        return v9;
+}";
+    // An index of 64 bits that does not fit in an address traps too.
+    let source = &format!(
+        "{source}
+func public %element(v0.i64, v1.i64) -> i64 {{
+    block0:
+        v2.*[i64; 4] = alloca [i64; 4];
+        v12.*i64 = gep v2 0.i32 1.i32;
+        mstore v12 7.i64 i64;
+        jump block1;
+    block1:
+        v3.i64 = phi (0.i64 block0) (v9 block3);
+        v4.i64 = phi (0.i64 block0) (v10 block3);
+        v5.i1 = lt v0 4.i64;
+        br v5 block2 block3;
+    block2:
+        v6.*i64 = gep v2 0.i32 v0;
+        v7.i64 = mload v6 i64;
+        v8.i64 = add v3 v7;
+        jump block3;
+    block3:
+        v9.i64 = phi (v3 block1) (v8 block2);
+        v10.i64 = add v4 1.i64;
+        v11.i1 = lt v10 v1;
+        br v11 block1 block4;
+    block4:
+        return v9;
+}}"
+    );
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let mut machine = Machine::new(&build_at(source, level));
+        let element = machine.func("element");
+        for (index, want) in [(1, 21), (4, 0), (1 << 40, 0), (-1, 0)] {
+            assert_eq!(
+                machine.call(&element, &[Val::I64(index), Val::I64(3)])[0].unwrap_i64(),
+                want,
+                "{level:?}: element({index}, 3)"
+            );
+        }
+        for name in ["divide", "divide_wide"] {
+            let func = machine.func(name);
+            for (value, divisor, want) in [(7, 0, 0), (7, 2, if name == "divide" { 9 } else { 3 })]
+            {
+                let args = [Val::I64(value), Val::I64(divisor), Val::I64(3)];
+                assert_eq!(
+                    machine.call(&func, &args)[0].unwrap_i64(),
+                    want,
+                    "{level:?}: {name}({value}, {divisor}, 3)"
+                );
+            }
+        }
+        let pick = machine.func("pick");
+        for (index, want) in [(1, 66), (4, 0), (1 << 28, 0), (-1, 0)] {
+            assert_eq!(
+                machine.call(&pick, &[Val::I32(index), Val::I64(3)])[0].unwrap_i64(),
+                want,
+                "{level:?}: pick({index}, 3)"
+            );
+        }
+    }
+}
+
+#[test]
 fn irreducible_control_flow_is_structured() {
     // Blocks 1 and 2 form a loop that can be entered at either block. Each
     // adds to its own counter in memory until it reaches a limit and then
