@@ -599,5 +599,23 @@ mod tests {
         builder.ctx.clear_inline_hint(func_ref);
         assert_eq!(builder.ctx.inline_hint(func_ref), InlineHint::Auto);
         assert_eq!(builder.ctx.func_hints(func_ref), FuncHints::empty());
+
+        builder.ctx.set_func_hints(func_ref, FuncHints::COLD);
+        builder.ctx.set_inline_hint(func_ref, InlineHint::Always);
+        assert_eq!(
+            builder.ctx.func_hints(func_ref),
+            FuncHints::ALWAYSINLINE | FuncHints::COLD
+        );
+
+        builder.ctx.set_inline_hint(func_ref, InlineHint::Inline);
+        assert_eq!(
+            builder.ctx.func_hints(func_ref),
+            FuncHints::INLINEHINT | FuncHints::COLD
+        );
+
+        builder.ctx.clear_inline_hint(func_ref);
+        assert_eq!(builder.ctx.inline_hint(func_ref), InlineHint::Auto);
+        assert_eq!(builder.ctx.func_hints(func_ref), FuncHints::COLD);
+        assert!(builder.ctx.has_func_hints(func_ref));
     }
 }

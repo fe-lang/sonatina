@@ -351,6 +351,7 @@ Module {
             signature: FuncSignature {
                 linkage: Public,
                 inline_hint: Auto,
+                cold: false,
                 name: FunctionName {
                     name: "main",
                     ..

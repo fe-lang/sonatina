@@ -10,7 +10,7 @@ use ir::{
     global_variable::GvInitializer,
     ir_writer::{DebugProvider, IrWrite},
     isa::evm::Evm,
-    module::{FuncRef, Module, ModuleCtx},
+    module::{FuncHints, FuncRef, Module, ModuleCtx},
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::SmallVec;
@@ -134,6 +134,9 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
             // Safe to unwrap: function name checked for duplicate above
             let func_ref = builder.declare_function(sig).unwrap();
             builder.ctx.set_inline_hint(func_ref, func.inline_hint);
+            if func.cold {
+                builder.ctx.set_func_hints(func_ref, FuncHints::COLD);
+            }
         }
     }
 
@@ -170,6 +173,9 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
                 builder
                     .ctx
                     .set_inline_hint(func_ref, func.signature.inline_hint);
+                if func.signature.cold {
+                    builder.ctx.set_func_hints(func_ref, FuncHints::COLD);
+                }
                 Some(func_ref)
             })
             .collect::<Vec<_>>()
@@ -1192,6 +1198,69 @@ func inline(never) private %never(v0.i32) -> i32 {
         assert_eq!(reparsed_hint_for("hint"), ir::InlineHint::Inline);
         assert_eq!(reparsed_hint_for("always"), ir::InlineHint::Always);
         assert_eq!(reparsed_hint_for("never"), ir::InlineHint::Never);
+    }
+
+    #[test]
+    fn test_cold_hint_roundtrip() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+declare cold external %fail(i32);
+declare inline(never) cold private %decl(i32);
+
+func cold private %slow(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func inline(always) cold private %forced(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func private %plain(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+"#;
+        let hints_of = |module: &Module| {
+            let mut hints: Vec<_> = module
+                .ctx
+                .declared_funcs
+                .iter()
+                .map(|entry| {
+                    let func_ref = *entry.key();
+                    (
+                        entry.value().name().to_string(),
+                        module.ctx.func_hints(func_ref),
+                        module.ctx.has_func_hints(func_ref),
+                    )
+                })
+                .collect();
+            hints.sort_by(|a, b| a.0.cmp(&b.0));
+            hints
+        };
+        let expected = |name: &str, hints| (name.to_string(), hints, hints != FuncHints::empty());
+        let expected = vec![
+            expected("decl", FuncHints::NOINLINE | FuncHints::COLD),
+            expected("fail", FuncHints::COLD),
+            expected("forced", FuncHints::ALWAYSINLINE | FuncHints::COLD),
+            expected("plain", FuncHints::empty()),
+            expected("slow", FuncHints::COLD),
+        ];
+
+        let parsed = parse_module(s).unwrap();
+        assert_eq!(hints_of(&parsed.module), expected);
+
+        let mut w = ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let printed = w.dump_string();
+        assert!(printed.contains("declare cold external %fail(i32);"));
+        assert!(printed.contains("declare inline(never) cold private %decl(i32);"));
+        assert!(printed.contains("func cold private %slow(v0.i32) -> i32 {"));
+        assert!(printed.contains("func inline(always) cold private %forced(v0.i32) -> i32 {"));
+        assert!(printed.contains("func private %plain(v0.i32) -> i32 {"));
+
+        assert_eq!(hints_of(&parse_module(&printed).unwrap().module), expected);
     }
 
     #[test]

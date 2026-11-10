@@ -161,6 +161,7 @@ impl FromSyntax<Error> for SmolStr {
 pub struct FuncDeclaration {
     pub linkage: Linkage,
     pub inline_hint: InlineHint,
+    pub cold: bool,
     pub name: FunctionName,
     pub params: Vec<FuncParamType>,
     pub ret_types: Vec<Type>,
@@ -190,6 +191,7 @@ impl FromSyntax<Error> for FuncDeclaration {
         FuncDeclaration {
             linkage,
             inline_hint: node.single_opt(Rule::inline_hint).unwrap_or_default(),
+            cold: node.get_opt(Rule::cold).is_some(),
             name: node.single(Rule::function_identifier),
             params: node.descend_into(Rule::function_param_type_list, |n| {
                 n.multi(Rule::function_param_type)
@@ -382,6 +384,7 @@ impl FromSyntax<Error> for Func {
 pub struct FuncSignature {
     pub linkage: Linkage,
     pub inline_hint: InlineHint,
+    pub cold: bool,
     pub name: FunctionName,
     pub params: Vec<FuncParam>,
     pub ret_types: Vec<Type>,
@@ -413,6 +416,7 @@ impl FromSyntax<Error> for FuncSignature {
         FuncSignature {
             linkage,
             inline_hint: node.single_opt(Rule::inline_hint).unwrap_or_default(),
+            cold: node.get_opt(Rule::cold).is_some(),
             name: node.single(Rule::function_identifier),
             params: node.descend_into(Rule::function_params, |n| n.multi(Rule::function_param)),
             ret_types: node

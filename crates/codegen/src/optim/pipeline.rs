@@ -2925,6 +2925,50 @@ func public %caller(v0.i32) -> i32 {
     }
 
     #[test]
+    fn optimized_pipelines_keep_cold_callees_out_of_line() {
+        let body = r#"
+func cold private %id(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %id v0;
+        return v1;
+}
+"#;
+
+        for (name, target, pipeline) in [
+            ("size", "evm-ethereum-london", Pipeline::size()),
+            ("speed", "evm-ethereum-london", Pipeline::speed()),
+            (
+                "native",
+                "x86_64-unknown-native",
+                Pipeline::native(OptLevel::O2),
+            ),
+        ] {
+            let source = format!("target = \"{target}\"\n{body}");
+            let mut module = parse_module(&source).expect("parse should succeed").module;
+            let caller = module
+                .funcs()
+                .into_iter()
+                .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == "caller"))
+                .expect("caller function should exist");
+
+            pipeline.run(&mut module);
+
+            module.func_store.view(caller, |func| {
+                let dumped = FuncWriter::new(caller, func).dump_string();
+                assert!(
+                    dumped.contains("call %id"),
+                    "the {name} pipeline should keep a cold callee out of line:\n{dumped}"
+                );
+            });
+        }
+    }
+
+    #[test]
     fn optimized_pipelines_treat_inline_hint_as_strong_preference() {
         let source = r#"
 target = "evm-ethereum-london"

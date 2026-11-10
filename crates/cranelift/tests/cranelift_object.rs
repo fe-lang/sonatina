@@ -495,6 +495,11 @@ block0:
 /// an import through a `.refptr.` stub, and an aarch64 GOT load takes a page
 /// relocation and a page-offset one, of which only the page one counts.
 fn references(bytes: &[u8], name: &str) -> usize {
+    reference_offsets(bytes, name).len()
+}
+
+/// The text offsets of the relocations against `name`.
+fn reference_offsets(bytes: &[u8], name: &str) -> Vec<u64> {
     let object = object::File::parse(bytes).unwrap();
     let aarch64 = object.architecture() == object::Architecture::Aarch64;
     object
@@ -523,7 +528,8 @@ fn references(bytes: &[u8], name: &str) -> usize {
                 }),
             _ => false,
         })
-        .count()
+        .map(|(offset, _)| offset)
+        .collect()
 }
 
 #[test]
@@ -919,6 +925,95 @@ block0:
     for function in functions {
         assert_eq!(function.address() % 32, 0, "{:?}", function.name());
     }
+}
+
+#[test]
+fn cold_functions_follow_the_others() {
+    let triple = native_isa(host_architecture()).triple();
+    let source = r#"
+func cold public %first(v0.i64) -> i64 {
+block0:
+    v1.i64 = add v0 1.i64;
+    return v1;
+}
+
+func public %second(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    return v1;
+}
+
+func cold public %third(v0.i64) -> i64 {
+block0:
+    v1.i64 = sub v0 7.i64;
+    return v1;
+}
+
+func public %fourth(v0.i64) -> i64 {
+block0:
+    v1.i64 = xor v0 5.i64;
+    return v1;
+}
+"#;
+    let module = sonatina_parser::parse_module(&format!("target = \"{triple}\"\n{source}"))
+        .unwrap()
+        .module;
+    let artifact = Compile::new(module, CraneliftObjectBackend::new())
+        .with_opt_level(OptLevel::O0)
+        .compile()
+        .unwrap();
+    let object = object::File::parse(artifact.as_bytes()).unwrap();
+    let mut functions: Vec<_> = object
+        .symbols()
+        .filter(|symbol| symbol.kind() == object::SymbolKind::Text)
+        .map(|symbol| {
+            let name = symbol.name().unwrap().trim_start_matches('_').to_string();
+            (symbol.address(), name)
+        })
+        .collect();
+    functions.sort();
+    let names: Vec<_> = functions.iter().map(|(_, name)| name.as_str()).collect();
+    assert_eq!(names, ["second", "fourth", "first", "third"]);
+}
+
+#[test]
+fn a_call_to_a_cold_function_leaves_the_hot_path() {
+    // With no evidence, the branch keeps its false side, the call, next.
+    // When the callee is cold, the call moves after the other side.
+    let triple = native_isa(host_architecture()).triple();
+    let call_offset = |hint: &str| {
+        let source = format!(
+            r#"target = "{triple}"
+declare {hint}external %slow(i64) -> i64;
+
+func public %f(v0.i1, v1.i64) -> i64 {{
+block0:
+    br v0 block2 block1;
+block1:
+    v2.i64 = call %slow v1;
+    return v2;
+block2:
+    v3.i64 = mul v1 3.i64;
+    v4.i64 = add v3 7.i64;
+    return v4;
+}}
+"#
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let artifact = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(OptLevel::O2)
+            .compile()
+            .unwrap();
+        reference_offsets(artifact.as_bytes(), "slow")
+            .into_iter()
+            .min()
+            .expect("f should call slow")
+    };
+    let (plain, cold) = (call_offset(""), call_offset("cold "));
+    assert!(
+        plain < cold,
+        "the call should move later when its callee is cold: {plain} vs {cold}"
+    );
 }
 
 #[test]

@@ -3,10 +3,10 @@
 //! Cranelift emits a branch's last target right after the branch when nothing
 //! else claims that place, and moves cold blocks to the end of the function.
 //! With no profile, the likely paths come from what a block does (Ball and
-//! Larus, "Branch Prediction for Free", 1993). Code that ends in a panic is
-//! cold, and so is any arm of a loop that can reach a call its cheapest path
-//! around the loop avoids. A branch then prefers its side that isn't cold, and
-//! its side that stays in the loop.
+//! Larus, "Branch Prediction for Free", 1993). Code that ends in a panic or
+//! calls a function marked cold is cold, and so is any arm of a loop that can
+//! reach a call its cheapest path around the loop avoids. A branch then
+//! prefers its side that isn't cold, and its side that stays in the loop.
 
 use std::{
     cmp::Reverse,
@@ -18,7 +18,7 @@ use sonatina_codegen::{
     domtree::DomTree,
     loop_analysis::{Loop, LoopTree},
 };
-use sonatina_ir::{BlockId, ControlFlowGraph, Function, inst::control_flow};
+use sonatina_ir::{BlockId, ControlFlowGraph, Function, inst::control_flow, module::FuncHints};
 
 pub(super) struct BranchPrediction {
     cold: HashSet<BlockId>,
@@ -36,7 +36,7 @@ impl BranchPrediction {
         let mut cold: HashSet<_> = rpo
             .iter()
             .copied()
-            .filter(|&block| ends_in_unreachable(function, block))
+            .filter(|&block| ends_in_unreachable(function, block) || calls_cold(function, block))
             .collect();
         for lp in loops.loops() {
             cold.extend(cold_arms(function, cfg, &loops, lp));
@@ -110,8 +110,20 @@ fn has_call(function: &Function, block: BlockId) -> bool {
         .any(|inst| function.dfg.is_call(inst))
 }
 
-/// The blocks of `lp` on its cheapest path around, by fewest calls and then
-/// fewest instructions.
+/// Whether `block` calls, or tail-calls, a function marked cold.
+fn calls_cold(function: &Function, block: BlockId) -> bool {
+    function.layout.iter_inst(block).any(|inst| {
+        function.dfg.call_info(inst).is_some_and(|call| {
+            function
+                .ctx()
+                .func_hints(call.callee())
+                .contains(FuncHints::COLD)
+        })
+    })
+}
+
+/// The blocks of `lp` on its cheapest path around, by fewest calls of cold
+/// functions, then fewest calls, then fewest instructions.
 fn hot_trace(
     function: &Function,
     cfg: &ControlFlowGraph,
@@ -119,8 +131,11 @@ fn hot_trace(
     lp: Loop,
 ) -> HashSet<BlockId> {
     let cost = |block| {
-        let insts = function.layout.iter_inst(block).count();
-        (usize::from(has_call(function, block)), insts)
+        (
+            usize::from(calls_cold(function, block)),
+            usize::from(has_call(function, block)),
+            function.layout.iter_inst(block).count(),
+        )
     };
     let header = loops.loop_header(lp);
     let mut best = HashMap::from([(header, (cost(header), header))]);
@@ -136,8 +151,8 @@ fn hot_trace(
                 break 'search;
             }
             if loops.is_in_loop(succ, lp) {
-                let (calls, insts) = cost(succ);
-                let total = (reached.0 + calls, reached.1 + insts);
+                let (cold_calls, calls, insts) = cost(succ);
+                let total = (reached.0 + cold_calls, reached.1 + calls, reached.2 + insts);
                 if best.get(&succ).is_none_or(|&(known, _)| total < known) {
                     best.insert(succ, (total, block));
                     queue.push(Reverse((total, succ)));
@@ -310,6 +325,95 @@ block6:
         // The arm is cold, so the branch keeps its false side next; the latch
         // stays in the loop, whose exit is the false side.
         assert_eq!(prefers, [false, true]);
+    }
+
+    #[test]
+    fn a_call_to_a_cold_function_is_cold() {
+        let (cold, prefers) = predict(
+            r#"
+func cold private %slow(v0.i64) -> i64 {
+block0:
+    return v0;
+}
+
+func public %f(v0.i1, v1.i64) -> i64 {
+block0:
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    v2.i64 = call %slow v1;
+    jump block3;
+block3:
+    v3.i64 = phi (v1 block1) (v2 block2);
+    return v3;
+}
+"#,
+            &[(0, 1, 2)],
+        );
+        assert_eq!(cold, HashSet::from([2]));
+        assert_eq!(prefers, [true]);
+    }
+
+    #[test]
+    fn a_tail_call_to_a_cold_function_is_cold() {
+        let (cold, prefers) = predict(
+            r#"
+declare cold external %fault(i64) -> i64;
+
+func public %f(v0.i1, v1.i64) -> i64 {
+block0:
+    br v0 block1 block2;
+block1:
+    return v1;
+block2:
+    v2.i64 = call %fault v1;
+    return v2;
+}
+"#,
+            &[(0, 1, 2)],
+        );
+        assert_eq!(cold, HashSet::from([2]));
+        assert_eq!(prefers, [true]);
+    }
+
+    #[test]
+    fn a_loop_goes_around_past_a_call_to_a_cold_function() {
+        // Both arms call and are the same size. The hot trace takes block3,
+        // whose callee is not cold, so only block2 is cold.
+        let (cold, prefers) = predict(
+            r#"
+func private %g() {
+block0:
+    return;
+}
+
+func cold private %h() {
+block0:
+    return;
+}
+
+func public %f(v0.i1, v1.i1) -> i64 {
+block0:
+    jump block1;
+block1:
+    br v0 block2 block3;
+block2:
+    call %h;
+    jump block4;
+block3:
+    call %g;
+    jump block4;
+block4:
+    br v1 block1 block5;
+block5:
+    return 1.i64;
+}
+"#,
+            &[(1, 2, 3)],
+        );
+        assert_eq!(cold, HashSet::from([2]));
+        assert_eq!(prefers, [false]);
     }
 
     #[test]
