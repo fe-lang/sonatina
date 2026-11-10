@@ -1,8 +1,8 @@
 //! 256-bit integers, compared with `U256` and `I256` arithmetic.
 
 use sonatina_codegen::OptLevel;
-use sonatina_ir::{I256, Immediate, U256};
-use wasmtime::Val;
+use sonatina_ir::{I256, Immediate, Type, U256};
+use wasmtime::{Func, Val};
 
 use super::{aggregates::build_at, harness::Machine};
 use crate::Lcg;
@@ -140,8 +140,10 @@ fn signed(value: U256) -> I256 {
     I256::from_u256(value)
 }
 
+type Reference = fn(Immediate, Immediate) -> Immediate;
+
 /// The interpreter's result of a 256-bit operation.
-fn interpret(op: fn(Immediate, Immediate) -> Immediate, a: U256, b: U256) -> U256 {
+fn interpret(op: Reference, a: U256, b: U256) -> U256 {
     op(Immediate::I256(signed(a)), Immediate::I256(signed(b)))
         .as_i256()
         .to_u256()
@@ -849,6 +851,335 @@ fn addmod_and_mulmod_match_the_exact_result() {
                 modular_reference(true, a, b, n),
                 "mulmod {what}"
             );
+        }
+    }
+}
+
+/// Divisors at the boundaries of the division paths: one limb with and
+/// without a top half, each number of limbs, top bits set and clear, and a
+/// top limb of 2^63 over limbs of ones, whose digit estimates are too large.
+fn boundary_divisors() -> Vec<U256> {
+    let one = U256::one();
+    let mut values = vec![one, U256::from(2), U256::from(3), U256::exp10(18)];
+    for bits in [32, 63, 64, 127, 128, 191, 192, 255] {
+        let power = one << bits;
+        values.extend([power - 1, power, power + 1]);
+    }
+    values.push(U256::MAX);
+    for limbs in 2..=4 {
+        values.push((one << (64 * limbs - 1)) + (one << (64 * (limbs - 1))) - 1);
+    }
+    values
+}
+
+/// Dividends around `divisor`, around its multiples by whole limbs, and with
+/// each number of limbs: the top limb full, its top bit alone and its low bit
+/// alone.
+fn boundary_dividends(divisor: U256) -> Vec<U256> {
+    let one = U256::one();
+    let around = |value: U256| {
+        [
+            value.overflowing_sub(one).0,
+            value,
+            value.overflowing_add(one).0,
+        ]
+    };
+    let mut values = vec![U256::zero(), U256::MAX, U256::MAX - divisor];
+    values.extend(around(divisor));
+    for limbs in 1..=4 {
+        let (top, low) = (one << (64 * limbs - 1), one << (64 * (limbs - 1)));
+        values.extend([top - 1, top, top + low - 1, low, low + 1]);
+    }
+    for shift in [64, 128, 192] {
+        let multiple = divisor << shift;
+        if !multiple.is_zero() {
+            values.extend(around(multiple));
+        }
+    }
+    values
+}
+
+/// Dividends and divisors, limbs least significant first, that take the
+/// corrections the boundary values do not. A reciprocal's digit is one or two
+/// too large in its 64-bit division, a digit from the reciprocal is one too
+/// small, and a digit of a four-limb divisor is two too large.
+const CORRECTIONS: [([u64; 4], [u64; 4]); 11] = [
+    // One-limb divisors: the reciprocal's digit one and two too large, and
+    // the digit one too small.
+    ([1 << 63, 0x7f, 0, 0], [0x0869_76fa_fb17_ff72, 0, 0, 0]),
+    (
+        [
+            u64::MAX,
+            u64::MAX,
+            0x0000_000c_5617_6cc7,
+            0x4bca_5383_6843_83c7,
+        ],
+        [0x214a_dd5c_fd1c_fa70, 0, 0, 0],
+    ),
+    (
+        [u64::MAX >> 1, u64::MAX >> 1, 0, 0],
+        [0x0455_4a0d_4be2, 0, 0, 0],
+    ),
+    // Longer divisors: the same corrections.
+    (
+        [u64::MAX, u64::MAX >> 1, 0, 0],
+        [1 << 63, 0x1f83_cce4_5314_83bb, 0, 0],
+    ),
+    (
+        [0x1af2_2353_ecfb, 0, 0x1c72_a2a6_ddd7_0e78, 0x0001_960f_d2b9],
+        [1 << 42, u64::MAX, 0x02d4, 0],
+    ),
+    (
+        [u64::MAX >> 1, u64::MAX >> 2, 0x001f_ffff_ffff, 0],
+        [1 << 63, 1 << 33, 0, 0],
+    ),
+    ([1 << 63, u64::MAX, u64::MAX, 0], [0x003f_ffff, 0x40, 1, 0]),
+    (
+        [0, u64::MAX, u64::MAX, u64::MAX >> 1],
+        [0x0001_a6d7_29e6, 0x0001_dd3c, 0x0200_0000, 0x40],
+    ),
+    // A four-limb divisor's digit two too large.
+    (
+        [u64::MAX >> 1, 0x1f, 1 << 41, u64::MAX],
+        [u64::MAX >> 1, u64::MAX, 0x0fff_ffff, 1],
+    ),
+    // Knuth's cases for the step that adds the divisor back, at 64-bit digits.
+    ([0, u64::MAX - 1, 1 << 63, 0], [u64::MAX, 1 << 63, 0, 0]),
+    ([3, 0, 1 << 63, 0], [1, 0, 1 << 61, 0]),
+];
+
+/// A value of up to four limbs, each a boundary pattern or random. Such
+/// operands take the corrections of long division far more often than uniform
+/// ones.
+fn patterned(rng: &mut Lcg) -> U256 {
+    let mut limbs = [0u64; 4];
+    let count = (rng.next() % 5) as usize;
+    for limb in &mut limbs[..count] {
+        let bit = 1u64 << (rng.next() % 64);
+        *limb = match rng.next() % 8 {
+            0 => 0,
+            1 => u64::MAX,
+            2 => 1 << 63,
+            3 => u64::MAX >> 1,
+            4 => bit,
+            5 => bit - 1,
+            6 => rng.next() >> (rng.next() % 64),
+            _ => rng.next(),
+        };
+    }
+    from_limbs(&limbs)
+}
+
+/// A module that divides and reduces values of `ty`, an instance of it, and
+/// the reference results. The operands are the low bits of 256-bit values and
+/// the results are zero-extended.
+struct Divider {
+    machine: Machine,
+    divide: Func,
+    modular: Func,
+    ty: Type,
+    level: OptLevel,
+}
+
+impl Divider {
+    fn new(ty: Type, level: OptLevel) -> Self {
+        let (name, narrow, widen) = match ty {
+            Type::I128 => (
+                "i128",
+                "v1.i128 = trunc v0 i128;\n        return v1;",
+                "v1.i256 = zext v0 i256;\n        (v2.i64, v3.i64, v4.i64, v5.i64) = call %unpack v1;",
+            ),
+            _ => (
+                "i256",
+                "return v0;",
+                "(v2.i64, v3.i64, v4.i64, v5.i64) = call %unpack v0;",
+            ),
+        };
+        let source = format!(
+            "{PRELUDE}func private %narrow(v0.i256) -> {name} {{
+    block0:
+        {narrow}
+}}
+func private %out(v0.{name}) -> (i64, i64, i64, i64) {{
+    block0:
+        {widen}
+        return (v2, v3, v4, v5);
+}}
+func public %divide(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) {{
+    block0:
+        v8.i256 = call %pack v0 v1 v2 v3;
+        v9.i256 = call %pack v4 v5 v6 v7;
+        v10.{name} = call %narrow v8;
+        v11.{name} = call %narrow v9;
+        v12.{name} = udiv v10 v11;
+        v13.{name} = umod v10 v11;
+        v14.{name} = sdiv v10 v11;
+        v15.{name} = smod v10 v11;
+        (v16.i64, v17.i64, v18.i64, v19.i64) = call %out v12;
+        (v20.i64, v21.i64, v22.i64, v23.i64) = call %out v13;
+        (v24.i64, v25.i64, v26.i64, v27.i64) = call %out v14;
+        (v28.i64, v29.i64, v30.i64, v31.i64) = call %out v15;
+        return (v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31);
+}}
+func public %modular(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64, v8.i64, v9.i64, v10.i64, v11.i64) -> (i64, i64, i64, i64, i64, i64, i64, i64) {{
+    block0:
+        v12.i256 = call %pack v0 v1 v2 v3;
+        v13.i256 = call %pack v4 v5 v6 v7;
+        v14.i256 = call %pack v8 v9 v10 v11;
+        v15.{name} = call %narrow v12;
+        v16.{name} = call %narrow v13;
+        v17.{name} = call %narrow v14;
+        v18.{name} = evm_add_mod v15 v16 v17;
+        v19.{name} = evm_mul_mod v15 v16 v17;
+        (v20.i64, v21.i64, v22.i64, v23.i64) = call %out v18;
+        (v24.i64, v25.i64, v26.i64, v27.i64) = call %out v19;
+        return (v20, v21, v22, v23, v24, v25, v26, v27);
+}}"
+        );
+        let mut machine = Machine::new(&build_at(&source, level));
+        let (divide, modular) = (machine.func("divide"), machine.func("modular"));
+        Self {
+            machine,
+            divide,
+            modular,
+            ty,
+            level,
+        }
+    }
+
+    fn immediate(&self, value: U256) -> Immediate {
+        Immediate::from_i256(signed(value), self.ty)
+    }
+
+    fn call(&mut self, func: Func, operands: &[U256]) -> Vec<U256> {
+        let arguments: Vec<Val> = operands
+            .iter()
+            .flat_map(|&operand| limbs(operand))
+            .map(|limb| Val::I64(limb as i64))
+            .collect();
+        let limbs: Vec<u64> = self
+            .machine
+            .call(&func, &arguments)
+            .iter()
+            .map(|value| value.unwrap_i64() as u64)
+            .collect();
+        limbs.chunks(4).map(from_limbs).collect()
+    }
+
+    /// `udiv`, `umod`, `sdiv` and `smod`, unless the divisor is zero.
+    fn division(&mut self, a: U256, b: U256) {
+        let (x, y) = (self.immediate(a), self.immediate(b));
+        if y.is_zero() {
+            return;
+        }
+        let got = self.call(self.divide, &[a, b]);
+        let references: [(&str, Reference); 4] = [
+            ("udiv", Immediate::udiv),
+            ("umod", Immediate::urem),
+            ("sdiv", Immediate::sdiv),
+            ("smod", Immediate::srem),
+        ];
+        for ((name, reference), got) in references.into_iter().zip(got) {
+            let want = reference(x, y).zext(Type::I256).as_i256().to_u256();
+            let (ty, level) = (self.ty, self.level);
+            assert_eq!(got, want, "{name} {ty:?} {level:?} a={a:#x} b={b:#x}");
+        }
+    }
+
+    /// `evm_add_mod` and `evm_mul_mod`.
+    fn modular(&mut self, a: U256, b: U256, n: U256) {
+        let got = self.call(self.modular, &[a, b, n]);
+        let [x, y, m] =
+            [a, b, n].map(|value| self.immediate(value).zext(Type::I256).as_i256().to_u256());
+        for (product, got) in [false, true].into_iter().zip(got) {
+            let name = if product { "mulmod" } else { "addmod" };
+            let (ty, level) = (self.ty, self.level);
+            assert_eq!(
+                got,
+                modular_reference(product, x, y, m),
+                "{name} {ty:?} {level:?} a={a:#x} b={b:#x} n={n:#x}"
+            );
+        }
+    }
+}
+
+fn dividers() -> impl Iterator<Item = Divider> {
+    [Type::I256, Type::I128]
+        .into_iter()
+        .flat_map(|ty| [OptLevel::O0, OptLevel::O2].map(|level| Divider::new(ty, level)))
+}
+
+#[test]
+fn division_matches_the_reference_at_the_boundaries_of_its_paths() {
+    for mut divider in dividers() {
+        for divisor in boundary_divisors() {
+            for dividend in boundary_dividends(divisor) {
+                divider.division(dividend, divisor);
+                // Signed division divides the magnitudes.
+                divider.division(negate(dividend), divisor);
+                divider.division(dividend, negate(divisor));
+            }
+        }
+        for (dividend, divisor) in CORRECTIONS {
+            divider.division(from_limbs(&dividend), from_limbs(&divisor));
+        }
+    }
+}
+
+#[test]
+fn division_matches_the_reference_for_operands_of_mixed_lengths() {
+    let mut rng = Lcg(0x5eed_d1f1);
+    for mut divider in dividers() {
+        for round in 0..3000 {
+            let (a, mut b) = if round % 2 == 0 {
+                (patterned(&mut rng), patterned(&mut rng))
+            } else {
+                (operand(&mut rng), operand(&mut rng))
+            };
+            if round % 16 == 0 {
+                // A divisor next to the dividend.
+                b = a.overflowing_add(U256::from(rng.next() % 3)).0;
+            }
+            divider.division(a, b);
+        }
+    }
+}
+
+#[test]
+fn addmod_and_mulmod_match_the_reference_at_the_boundaries_and_for_mixed_lengths() {
+    let mut rng = Lcg(0x5eed_30d5);
+    let one = U256::one();
+    for mut divider in dividers() {
+        for n in boundary_divisors().into_iter().chain([U256::zero()]) {
+            let operands = [
+                U256::zero(),
+                one,
+                n.overflowing_sub(one).0,
+                n,
+                n.overflowing_add(one).0,
+                U256::MAX - n,
+                U256::MAX,
+                one << 255,
+                (one << 128) + 1,
+                U256::from(u64::MAX),
+            ];
+            for a in operands {
+                for b in operands {
+                    divider.modular(a, b, n);
+                }
+            }
+        }
+        for round in 0..2000 {
+            let (a, b, n) = if round % 2 == 0 {
+                (
+                    patterned(&mut rng),
+                    patterned(&mut rng),
+                    patterned(&mut rng),
+                )
+            } else {
+                (operand(&mut rng), operand(&mut rng), modulus(&mut rng))
+            };
+            divider.modular(a, b, n);
         }
     }
 }

@@ -304,9 +304,14 @@ in place, and so is a product with at most three limb products that are not
 zero: any 128-bit product, and a 256-bit product of values extended from 64
 bits. Limbs that are constants, such as the zero high limbs of a value
 extended from 64 or 128 bits, are folded out of additions, subtractions,
-comparisons and bitwise operations. Division traps on a zero divisor. It is one 64-bit
-division when both operands fit in 64 bits, no step when the dividend is below
-the divisor, and otherwise one step per bit of the dividend.
+comparisons and bitwise operations.
+
+Division traps on a zero divisor. It is one 64-bit division when both operands
+fit in 64 bits, and no step when the dividend is below the divisor. Otherwise
+it is long division on 64-bit digits: one step per limb of the dividend for a
+divisor of one limb, and at most three steps for a longer divisor. A step
+multiplies by the reciprocal of the divisor's top limb, which takes two 64-bit
+divisions to compute.
 
 ## Instruction semantics
 

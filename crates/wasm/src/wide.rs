@@ -500,6 +500,119 @@ impl Emit<'_> {
         (low, high)
     }
 
+    /// The quotient and remainder of `(high, low)` by `divisor`, for a divisor
+    /// with its top bit set and `high` below it (Warren, Hacker's Delight,
+    /// `divlu`): two digits of 32 bits, each from a 64-bit division by the
+    /// divisor's top half.
+    fn div_wide(&mut self, high: V, low: V, divisor: V) -> (V, V) {
+        let mask = self.c64(0xffff_ffff);
+        let shift = self.c64(32);
+        let one = self.c64(1);
+        let d1 = self.op(Operator::I64ShrU, &[divisor, shift], WType::I64);
+        let d0 = self.op(Operator::I64And, &[divisor, mask], WType::I64);
+        let low_high = self.op(Operator::I64ShrU, &[low, shift], WType::I64);
+        let low_low = self.op(Operator::I64And, &[low, mask], WType::I64);
+        let mut quotient = self.c64(0);
+        let mut remainder = high;
+        for part in [low_high, low_low] {
+            // The digit of `remainder * 2^32 + part`. The estimate from the
+            // divisor's top half leaves `rest` and is at most two too large.
+            // An estimate is too large if it has more than 32 bits or its
+            // product with the low half exceeds what is left, `rest * 2^32 +
+            // part`, which a `rest` of more than 32 bits is always above.
+            // The estimate less one leaves `rest` and the top half.
+            let digit = self.op(Operator::I64DivU, &[remainder, d1], WType::I64);
+            let product = self.op(Operator::I64Mul, &[digit, d1], WType::I64);
+            let rest = self.op(Operator::I64Sub, &[remainder, product], WType::I64);
+            let less = self.op(Operator::I64Sub, &[digit, one], WType::I64);
+            let more = self.op(Operator::I64Add, &[rest, d1], WType::I64);
+            let [over, again] = [(digit, rest), (less, more)].map(|(digit, rest)| {
+                let long = self.cmp64(Operator::I64GtU, digit, mask);
+                let product = self.op(Operator::I64Mul, &[digit, d0], WType::I64);
+                let left = self.op(Operator::I64Shl, &[rest, shift], WType::I64);
+                let left = self.op(Operator::I64Or, &[left, part], WType::I64);
+                let exceeds = self.cmp64(Operator::I64GtU, product, left);
+                let large = self.op(Operator::I32Or, &[long, exceeds], WType::I32);
+                let fits = self.cmp64(Operator::I64LeU, rest, mask);
+                self.op(Operator::I32And, &[large, fits], WType::I32)
+            });
+            let again = self.op(Operator::I32And, &[over, again], WType::I32);
+            let excess = self.op(Operator::I32Add, &[over, again], WType::I32);
+            let excess = self.zero_extend(excess);
+            let digit = self.op(Operator::I64Sub, &[digit, excess], WType::I64);
+            // The remainder fits in 64 bits, so the bits above cancel.
+            let up = self.op(Operator::I64Shl, &[remainder, shift], WType::I64);
+            let whole = self.op(Operator::I64Or, &[up, part], WType::I64);
+            let product = self.op(Operator::I64Mul, &[digit, divisor], WType::I64);
+            remainder = self.op(Operator::I64Sub, &[whole, product], WType::I64);
+            let up = self.op(Operator::I64Shl, &[quotient, shift], WType::I64);
+            quotient = self.op(Operator::I64Or, &[up, digit], WType::I64);
+        }
+        (quotient, remainder)
+    }
+
+    /// The reciprocal of a divisor with its top bit set:
+    /// `(2^128 - 1) / divisor - 2^64`.
+    fn reciprocal(&mut self, divisor: V) -> V {
+        let ones = self.c64(u64::MAX);
+        let high = self.op(Operator::I64Xor, &[divisor, ones], WType::I64);
+        self.div_wide(high, ones, divisor).0
+    }
+
+    /// The quotient and remainder of `(high, low)` by `divisor`, for a divisor
+    /// with its top bit set and `high` below it, from the divisor's
+    /// reciprocal (Möller and Granlund, "Improved division by invariant
+    /// integers", algorithm 4).
+    fn div_by_reciprocal(&mut self, high: V, low: V, divisor: V, reciprocal: V) -> (V, V) {
+        let zero = self.c64(0);
+        let one = self.c64(1);
+        // `(q1, q0) = reciprocal * high + (high, low)`, and `q1 + 1` is the
+        // quotient or one off either way.
+        let (q0, q1) = self.mul_wide(reciprocal, high);
+        let q0 = self.op(Operator::I64Add, &[q0, low], WType::I64);
+        let carry = self.cmp64(Operator::I64LtU, q0, low);
+        let carry = self.zero_extend(carry);
+        let q1 = self.op(Operator::I64Add, &[q1, high], WType::I64);
+        let q1 = self.op(Operator::I64Add, &[q1, carry], WType::I64);
+        let q1 = self.op(Operator::I64Add, &[q1, one], WType::I64);
+        let product = self.op(Operator::I64Mul, &[q1, divisor], WType::I64);
+        let r = self.op(Operator::I64Sub, &[low, product], WType::I64);
+        // Too large: the remainder wrapped below zero.
+        let over = self.cmp64(Operator::I64GtU, r, q0);
+        let back = self.select64(divisor, zero, over);
+        let r = self.op(Operator::I64Add, &[r, back], WType::I64);
+        let over = self.zero_extend(over);
+        let q1 = self.op(Operator::I64Sub, &[q1, over], WType::I64);
+        // Too small: the remainder reaches the divisor.
+        let under = self.cmp64(Operator::I64GeU, r, divisor);
+        let off = self.select64(divisor, zero, under);
+        let r = self.op(Operator::I64Sub, &[r, off], WType::I64);
+        let under = self.zero_extend(under);
+        let q1 = self.op(Operator::I64Add, &[q1, under], WType::I64);
+        (q1, r)
+    }
+
+    /// Limb `index` of `limbs` shifted left by `shift` bits (0 to 63), given
+    /// `back`, which is `63 - shift`. One past the top limb, it is the bits
+    /// shifted out.
+    fn shl_limb(&mut self, limbs: &[V], index: usize, shift: V, back: V) -> V {
+        let high = limbs
+            .get(index)
+            .map(|&limb| self.op(Operator::I64Shl, &[limb, shift], WType::I64));
+        // A shift right by `64 - shift` in two steps: one by 64 would be a
+        // shift by 0.
+        let low = index.checked_sub(1).map(|below| {
+            let one = self.c64(1);
+            let half = self.op(Operator::I64ShrU, &[limbs[below], one], WType::I64);
+            self.op(Operator::I64ShrU, &[half, back], WType::I64)
+        });
+        match (high, low) {
+            (Some(high), Some(low)) => self.op(Operator::I64Or, &[high, low], WType::I64),
+            (Some(limb), None) | (None, Some(limb)) => limb,
+            (None, None) => self.c64(0),
+        }
+    }
+
     /// The low 256 bits of the product and whether the product has more.
     // The column of a partial product is the sum of two indices.
     #[allow(clippy::needless_range_loop)]
@@ -690,10 +803,206 @@ pub(super) fn build_shift(
     body
 }
 
+/// Divides `dividend`, limbs least significant first, by a nonzero `divisor`
+/// of one limb or four, from `block`. Returns the block that follows, the low
+/// four digits of the quotient and the remainder.
+///
+/// This is long division on 64-bit digits (Knuth, 4.3.1, algorithm D). Both
+/// operands are shifted left until the divisor's top bit is set, which moves
+/// a divisor of four limbs up by whole limbs too: the dividend gets as many
+/// zero limbs below it. The remainder so far has as many limbs as the divisor
+/// and is below it. Each step takes one more limb of the dividend below the
+/// remainder and subtracts the divisor times the next digit of the quotient.
+fn divide_long(
+    body: &mut waffle::FunctionBody,
+    block: waffle::Block,
+    dividend: &[V],
+    divisor: &[V],
+) -> (waffle::Block, Limbs, Limbs) {
+    use waffle::{BlockTarget, Terminator};
+    let target = |block, args: Vec<V>| BlockTarget { block, args };
+    let [head, full, next, done] = [(); 4].map(|_| body.add_block());
+    let wide = divisor.len() == LIMBS;
+    let top = divisor.len() - 1;
+
+    let mut e = Emit { body, block };
+    let zero = e.c64(0);
+    // Move the divisor up a limb while its top limb is zero.
+    let mut d = divisor.to_vec();
+    let mut moved = Vec::new();
+    for _ in 0..top {
+        let empty = e.op(Operator::I64Eqz, &[d[top]], WType::I32);
+        let mut below = zero;
+        for limb in &mut d {
+            let up = e.select64(below, *limb, empty);
+            below = std::mem::replace(limb, up);
+        }
+        moved.push(empty);
+    }
+    let shift = e.op(Operator::I64Clz, &[d[top]], WType::I64);
+    let sixty_three = e.c64(63);
+    let back = e.op(Operator::I64Xor, &[shift, sixty_three], WType::I64);
+    let d: Vec<V> = (0..d.len())
+        .map(|index| e.shl_limb(&d, index, shift, back))
+        .collect();
+    let reciprocal = e.reciprocal(d[top]);
+    let u: Vec<V> = (0..=dividend.len())
+        .map(|index| e.shl_limb(dividend, index, shift, back))
+        .collect();
+    // The remainder starts as the top limbs, which are below the divisor: the
+    // top one holds only the bits shifted out. The limbs below them and the
+    // zero limbs below the dividend each take a step.
+    let (low, high) = u.split_at(u.len() - d.len());
+    let mut steps = e.c64(low.len() as u64);
+    for &empty in &moved {
+        let empty = e.zero_extend(empty);
+        steps = e.op(Operator::I64Add, &[steps, empty], WType::I64);
+    }
+    let start: Vec<V> = std::iter::once(steps)
+        .chain(high.iter().copied())
+        .chain(low.iter().rev().copied())
+        .chain([zero; LIMBS])
+        .collect();
+    body.set_terminator(
+        block,
+        Terminator::Br {
+            target: target(head, start),
+        },
+    );
+
+    // The loop: the steps left, the remainder, the limbs of the dividend still
+    // to take, from the top, and the quotient.
+    let steps = body.add_blockparam(head, WType::I64);
+    let mut params = |count: usize| -> Vec<V> {
+        (0..count)
+            .map(|_| body.add_blockparam(head, WType::I64))
+            .collect()
+    };
+    let (r, pending, q) = (params(d.len()), params(low.len()), params(LIMBS));
+    // The remainder with the next limb below it. Its two top limbs give the
+    // digit.
+    let window: Vec<V> = std::iter::once(pending[0])
+        .chain(r[..top].iter().copied())
+        .collect();
+    // The digit is zero if the window is below the divisor, as when its top
+    // limb is zero and the next is below the divisor's top limb.
+    let mut e = Emit { body, block: head };
+    let top_zero = e.op(Operator::I64Eqz, &[r[top]], WType::I32);
+    let next_below = e.op(Operator::I64LtU, &[window[top], d[top]], WType::I32);
+    let skip = e.op(Operator::I32And, &[top_zero, next_below], WType::I32);
+    let args: Vec<V> = std::iter::once(zero)
+        .chain(window.iter().copied())
+        .collect();
+    body.set_terminator(
+        head,
+        Terminator::CondBr {
+            cond: skip,
+            if_true: target(next, args),
+            if_false: target(full, vec![]),
+        },
+    );
+
+    let mut e = Emit { body, block: full };
+    let (mut digit, remainder) = e.div_by_reciprocal(r[top], window[top], d[top], reciprocal);
+    let rest = if wide {
+        // The two top limbs divided by the divisor's top limb, or the largest
+        // digit when the top limbs are equal, is the digit or at most two
+        // more (Knuth, 4.3.1, theorem B).
+        let ones = e.c64(u64::MAX);
+        let largest = e.op(Operator::I64GeU, &[r[top], d[top]], WType::I32);
+        digit = e.select64(ones, digit, largest);
+        // Subtract the divisor times the estimate. `carry` is what the next
+        // limb still owes: the high half of the product and the borrow.
+        let mut rest = limbs_at(&window, 0);
+        let mut carry = zero;
+        for (limb, &factor) in rest.iter_mut().zip(&d) {
+            let (low, high) = e.mul_wide(digit, factor);
+            let low = e.op(Operator::I64Add, &[low, carry], WType::I64);
+            let carried = e.cmp64(Operator::I64LtU, low, carry);
+            let borrow = e.cmp64(Operator::I64LtU, *limb, low);
+            *limb = e.op(Operator::I64Sub, &[*limb, low], WType::I64);
+            let carried = e.zero_extend(carried);
+            let borrow = e.zero_extend(borrow);
+            let high = e.op(Operator::I64Add, &[high, carried], WType::I64);
+            carry = e.op(Operator::I64Add, &[high, borrow], WType::I64);
+        }
+        // The difference is at least minus twice the divisor, so its limb
+        // above the remainder is zero unless it is negative. Add the divisor
+        // back for each unit that the estimate is too large.
+        let mut above = e.op(Operator::I64Sub, &[r[top], carry], WType::I64);
+        for _ in 0..2 {
+            let negative = e.op(Operator::I64Ne, &[above, zero], WType::I32);
+            let addend = limbs_at(&d, 0).map(|limb| e.select64(limb, zero, negative));
+            let (sum, carry) = e.wide_add(rest, addend);
+            rest = sum;
+            let carry = e.zero_extend(carry);
+            above = e.op(Operator::I64Add, &[above, carry], WType::I64);
+            let negative = e.zero_extend(negative);
+            digit = e.op(Operator::I64Sub, &[digit, negative], WType::I64);
+        }
+        rest.to_vec()
+    } else {
+        vec![remainder]
+    };
+    let args: Vec<V> = std::iter::once(digit).chain(rest).collect();
+    body.set_terminator(
+        full,
+        Terminator::Br {
+            target: target(next, args),
+        },
+    );
+
+    let digit = body.add_blockparam(next, WType::I64);
+    let rest: Vec<V> = d
+        .iter()
+        .map(|_| body.add_blockparam(next, WType::I64))
+        .collect();
+    let quotient = [digit, q[0], q[1], q[2]];
+    let mut e = Emit { body, block: next };
+    let one = e.c64(1);
+    let steps = e.op(Operator::I64Sub, &[steps, one], WType::I64);
+    let finished = e.op(Operator::I64Eqz, &[steps], WType::I32);
+    let args: Vec<V> = std::iter::once(steps)
+        .chain(rest.iter().copied())
+        .chain(pending[1..].iter().copied())
+        .chain([zero])
+        .chain(quotient)
+        .collect();
+    body.set_terminator(
+        next,
+        Terminator::CondBr {
+            cond: finished,
+            if_true: target(done, vec![]),
+            if_false: target(head, args),
+        },
+    );
+
+    // The remainder is shifted as the divisor was.
+    let mut e = Emit { body, block: done };
+    let one = e.c64(1);
+    let mut remainder = [zero; LIMBS];
+    for (index, &limb) in rest.iter().enumerate() {
+        remainder[index] = e.op(Operator::I64ShrU, &[limb, shift], WType::I64);
+        if let Some(&above) = rest.get(index + 1) {
+            let twice = e.op(Operator::I64Shl, &[above, one], WType::I64);
+            let high = e.op(Operator::I64Shl, &[twice, back], WType::I64);
+            remainder[index] = e.op(Operator::I64Or, &[remainder[index], high], WType::I64);
+        }
+    }
+    for empty in moved {
+        let mut above = zero;
+        for limb in remainder.iter_mut().rev() {
+            let down = e.select64(above, *limb, empty);
+            above = std::mem::replace(limb, down);
+        }
+    }
+    (done, quotient, remainder)
+}
+
 /// `udivrem(a, b)` returns the quotient and the remainder of unsigned
 /// division, and traps if `b` is zero. Values that fit in 64 bits take one
 /// division, and a dividend below the divisor is the remainder. Others take
-/// one step per bit of `a`.
+/// [`divide_long`], by the divisor's low limb if its other limbs are zero.
 pub(super) fn build_udivrem(
     wmod: &waffle::Module<'static>,
     sig: waffle::Signature,
@@ -708,14 +1017,7 @@ pub(super) fn build_udivrem(
 
     let trap = body.add_block();
     body.set_terminator(trap, Terminator::Unreachable);
-    let checked = body.add_block();
-    let fast = body.add_block();
-    let compare = body.add_block();
-    let below = body.add_block();
-    let setup = body.add_block();
-    let header = body.add_block();
-    let step = body.add_block();
-    let done = body.add_block();
+    let [checked, fast, wide, short, compare, below, long] = [(); 7].map(|_| body.add_block());
 
     let divisor_zero = Emit {
         body: &mut body,
@@ -736,8 +1038,10 @@ pub(super) fn build_udivrem(
         body: &mut body,
         block: checked,
     };
-    let mut high = a[1];
-    for &limb in [a[2], a[3], b[1], b[2], b[3]].iter() {
+    let divisor_high = e.op(Operator::I64Or, &[b[1], b[2]], WType::I64);
+    let divisor_high = e.op(Operator::I64Or, &[divisor_high, b[3]], WType::I64);
+    let mut high = divisor_high;
+    for &limb in &a[1..] {
         high = e.op(Operator::I64Or, &[high, limb], WType::I64);
     }
     let small = e.op(Operator::I64Eqz, &[high], WType::I32);
@@ -746,7 +1050,7 @@ pub(super) fn build_udivrem(
         Terminator::CondBr {
             cond: small,
             if_true: target(fast, vec![]),
-            if_false: target(compare, vec![]),
+            if_false: target(wide, vec![]),
         },
     );
     let mut e = Emit {
@@ -763,6 +1067,20 @@ pub(super) fn build_udivrem(
         },
     );
 
+    let one_limb = Emit {
+        body: &mut body,
+        block: wide,
+    }
+    .op(Operator::I64Eqz, &[divisor_high], WType::I32);
+    body.set_terminator(
+        wide,
+        Terminator::CondBr {
+            cond: one_limb,
+            if_true: target(short, vec![]),
+            if_false: target(compare, vec![]),
+        },
+    );
+
     // A dividend below the divisor is the remainder, and the quotient is zero.
     let less = Emit {
         body: &mut body,
@@ -774,7 +1092,7 @@ pub(super) fn build_udivrem(
         Terminator::CondBr {
             cond: less,
             if_true: target(below, vec![]),
-            if_false: target(setup, vec![]),
+            if_false: target(long, vec![]),
         },
     );
     let zero = Emit {
@@ -789,113 +1107,15 @@ pub(super) fn build_udivrem(
         },
     );
 
-    // The number of bits of `a`.
-    let mut e = Emit {
-        body: &mut body,
-        block: setup,
-    };
-    let zero = e.c64(0);
-    let mut leading = e.c64(256);
-    for (k, &limb) in a.iter().enumerate() {
-        let clz = e.op(Operator::I64Clz, &[limb], WType::I64);
-        let offset = e.c64(64 * (LIMBS - 1 - k) as u64);
-        let count = e.op(Operator::I64Add, &[clz, offset], WType::I64);
-        let nonzero = e.op(Operator::I64Ne, &[limb, zero], WType::I32);
-        leading = e.select64(count, leading, nonzero);
+    for (block, divisor) in [(short, &b[..1]), (long, &b[..])] {
+        let (done, quotient, remainder) = divide_long(&mut body, block, &a, divisor);
+        body.set_terminator(
+            done,
+            Terminator::Return {
+                values: quotient.into_iter().chain(remainder).collect(),
+            },
+        );
     }
-    let bits64 = {
-        let total = e.c64(256);
-        e.op(Operator::I64Sub, &[total, leading], WType::I64)
-    };
-    let bits = e.op(Operator::I32WrapI64, &[bits64], WType::I32);
-    let start: Vec<V> = std::iter::once(bits)
-        .chain(std::iter::repeat_n(zero, 2 * LIMBS))
-        .collect();
-    body.set_terminator(
-        setup,
-        Terminator::Br {
-            target: target(header, start),
-        },
-    );
-
-    // The loop: `remaining` bits of `a` are still to be taken from the top.
-    let remaining = body.add_blockparam(header, WType::I32);
-    let q: Vec<V> = (0..LIMBS)
-        .map(|_| body.add_blockparam(header, WType::I64))
-        .collect();
-    let r: Vec<V> = (0..LIMBS)
-        .map(|_| body.add_blockparam(header, WType::I64))
-        .collect();
-    let (q, r) = (limbs_at(&q, 0), limbs_at(&r, 0));
-    let finished = Emit {
-        body: &mut body,
-        block: header,
-    }
-    .op(Operator::I32Eqz, &[remaining], WType::I32);
-    body.set_terminator(
-        header,
-        Terminator::CondBr {
-            cond: finished,
-            if_true: target(done, vec![]),
-            if_false: target(step, vec![]),
-        },
-    );
-
-    let mut e = Emit {
-        body: &mut body,
-        block: step,
-    };
-    let one = e.c32(1);
-    let index = e.op(Operator::I32Sub, &[remaining, one], WType::I32);
-    let six = e.c32(6);
-    let limb_index = e.op(Operator::I32ShrU, &[index, six], WType::I32);
-    let sixty_three = e.c32(63);
-    let bit_index32 = e.op(Operator::I32And, &[index, sixty_three], WType::I32);
-    let bit_index = e.op(Operator::I64ExtendI32U, &[bit_index32], WType::I64);
-    let source = e.pick_limb(a, limb_index);
-    let moved = e.op(Operator::I64ShrU, &[source, bit_index], WType::I64);
-    let one64 = e.c64(1);
-    let bit = e.op(Operator::I64And, &[moved, one64], WType::I64);
-    // r = (r << 1) | bit
-    let sixty_three64 = e.c64(63);
-    let mut shifted = r;
-    for k in 0..LIMBS {
-        let up = e.op(Operator::I64Shl, &[r[k], one64], WType::I64);
-        let carry = if k == 0 {
-            bit
-        } else {
-            e.op(Operator::I64ShrU, &[r[k - 1], sixty_three64], WType::I64)
-        };
-        shifted[k] = e.op(Operator::I64Or, &[up, carry], WType::I64);
-    }
-    let at_least = e.wide_compare(Cmp::Ge, false, shifted, b);
-    let (reduced, _) = e.wide_sub(shifted, b);
-    let mut next_r = shifted;
-    let mut next_q = q;
-    let place = e.op(Operator::I64Shl, &[one64, bit_index], WType::I64);
-    let zero64 = e.c64(0);
-    for k in 0..LIMBS {
-        next_r[k] = e.select64(reduced[k], shifted[k], at_least);
-        let kk = e.c32(k as u32);
-        let in_limb = e.op(Operator::I32Eq, &[limb_index, kk], WType::I32);
-        let chosen = e.op(Operator::I32And, &[in_limb, at_least], WType::I32);
-        let bits = e.select64(place, zero64, chosen);
-        next_q[k] = e.op(Operator::I64Or, &[q[k], bits], WType::I64);
-    }
-    let args: Vec<V> = std::iter::once(index).chain(next_q).chain(next_r).collect();
-    body.set_terminator(
-        step,
-        Terminator::Br {
-            target: target(header, args),
-        },
-    );
-
-    body.set_terminator(
-        done,
-        Terminator::Return {
-            values: q.into_iter().chain(r).collect(),
-        },
-    );
     body
 }
 
