@@ -26,6 +26,8 @@
 //! mutable stack pointer exists, so a trap leaves nothing to repair. An exported
 //! function is a thin wrapper that starts the stack at the `stack_top` global.
 
+use std::collections::hash_map::Entry;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 use waffle::{
     BlockTarget, ExportKind, Func, FuncDecl, FunctionBody, MemoryArg, Module as WaffleModule,
@@ -1823,6 +1825,110 @@ impl<'a> FunctionTranslator<'a> {
         block
     }
 
+    /// The lowest case of a `br_table` and each case's distance above it, if
+    /// a table over that range is no larger than the chain of comparisons: a
+    /// comparison takes about eight bytes and an entry one. Distances are
+    /// modulo the width, from the lowest signed or unsigned case, whichever
+    /// range is shorter, so cases on both sides of zero are close.
+    fn dense_cases(
+        &self,
+        int: Int,
+        scrutinee_ty: Type,
+        table: &[(ValueId, BlockId)],
+    ) -> Option<(u64, Vec<(u64, BlockId)>)> {
+        let mask = u64::MAX >> (64 - int.bits());
+        let keys: Vec<u64> = table
+            .iter()
+            .map(|&(case, _)| {
+                let imm = self.function.dfg.value_imm(case)?;
+                (imm.ty() == scrutinee_ty).then(|| imm.as_i256().to_u256().low_u64() & mask)
+            })
+            .collect::<Option<_>>()?;
+        let sign = 1 << (int.bits() - 1);
+        let span = |base: u64| keys.iter().map(|key| key.wrapping_sub(base) & mask).max();
+        let unsigned = *keys.iter().min()?;
+        let signed = *keys.iter().min_by_key(|&&key| key ^ sign)?;
+        let base = if span(signed) < span(unsigned) {
+            signed
+        } else {
+            unsigned
+        };
+        (keys.len() >= 3 && span(base)? < 8 * keys.len() as u64).then(|| {
+            let distances = keys.iter().map(|key| key.wrapping_sub(base) & mask);
+            (
+                base,
+                distances.zip(table.iter().map(|&(_, dest)| dest)).collect(),
+            )
+        })
+    }
+
+    /// End `wb` with a WebAssembly `br_table` over `cases`, which are
+    /// distances above `base`, indexed by the scrutinee's distance. One past
+    /// the table takes the default, as does a gap between cases.
+    fn jump_table(
+        &mut self,
+        block: BlockId,
+        wb: waffle::Block,
+        (int, scrutinee): (Int, V),
+        (base, cases): (u64, &[(u64, BlockId)]),
+        default: Option<BlockId>,
+    ) -> Result<(), WasmError> {
+        let entries = cases
+            .iter()
+            .map(|&(distance, _)| distance)
+            .max()
+            .unwrap_or_default()
+            + 1;
+        let mut emit = self.emit(wb);
+        let index = if int.carrier() == WType::I64 {
+            let base = emit.c64(base);
+            let distance = emit.op(Operator::I64Sub, &[scrutinee, base], WType::I64);
+            let limit = emit.c64(entries);
+            let inside = emit.op(Operator::I64LtU, &[distance, limit], WType::I32);
+            let narrow = emit.op(Operator::I32WrapI64, &[distance], WType::I32);
+            let past = emit.c32(entries as u32);
+            emit.op(Operator::Select, &[narrow, past, inside], WType::I32)
+        } else if base == 0 {
+            scrutinee
+        } else {
+            let base = emit.c32(base as u32);
+            let distance = emit.op(Operator::I32Sub, &[scrutinee, base], WType::I32);
+            emit.canonicalize(int, distance)
+        };
+        let default = match default {
+            Some(default) => self.edge(block, default, wb)?,
+            None => BlockTarget {
+                block: self.trap_block(),
+                args: vec![],
+            },
+        };
+        // The first case with a constant is the one a chain would take.
+        let mut edges: FxHashMap<BlockId, BlockTarget> = FxHashMap::default();
+        let mut targets = vec![None; entries as usize];
+        for &(distance, dest) in cases {
+            let target = &mut targets[distance as usize];
+            if target.is_none() {
+                *target = Some(match edges.entry(dest) {
+                    Entry::Occupied(edge) => edge.get().clone(),
+                    Entry::Vacant(edge) => edge.insert(self.edge(block, dest, wb)?).clone(),
+                });
+            }
+        }
+        let targets = targets
+            .into_iter()
+            .map(|target| target.unwrap_or_else(|| default.clone()))
+            .collect();
+        self.body.set_terminator(
+            wb,
+            Terminator::Select {
+                value: index,
+                targets,
+                default,
+            },
+        );
+        Ok(())
+    }
+
     /// Trap if `cond` (an `i32`) is non-zero; the rest of the block continues
     /// in a new WAFFLE block, which becomes `wb`.
     fn trap_if(&mut self, wb: &mut waffle::Block, cond: V) {
@@ -2376,6 +2482,11 @@ impl<'a> FunctionTranslator<'a> {
                     Scrutinee::Int(int, self.operand(*wb, *table.scrutinee())?)
                 };
                 let default = *table.default();
+                if let Scrutinee::Int(int, value) = scrutinee
+                    && let Some((base, cases)) = self.dense_cases(int, scrutinee_ty, table.table())
+                {
+                    return self.jump_table(block, *wb, (int, value), (base, &cases), default);
+                }
 
                 // Each case is tested in turn; the edge arguments are
                 // materialized in the block that takes the edge.

@@ -2,6 +2,7 @@
 
 use sonatina_codegen::{Compile, OptLevel};
 use sonatina_wasm::WasmBackend;
+use wasmparser::{Operator, Parser, Payload};
 use wasmtime::Val;
 
 use crate::{
@@ -243,6 +244,117 @@ func public %narrow(v0.i8) -> i32 {
                 i32s(&machine.call(&narrow, &[Val::I32(input)])),
                 [want],
                 "{level:?} narrow({input:#x})"
+            );
+        }
+    }
+}
+
+#[test]
+fn dense_constant_cases_are_one_jump_table() {
+    // Cases close together index a WebAssembly `br_table`; the scrutinee may
+    // be below the lowest case, in a gap, or far above, at each width. The
+    // first of two equal cases wins, and without a default no match traps.
+    let source = "func public %narrow(v0.i8) -> i32 {
+    block0:
+        br_table v0 block9 (-2.i8 block1) (-1.i8 block2) (1.i8 block3) (2.i8 block4) (1.i8 block4);
+    block1:
+        return 1.i32;
+    block2:
+        return 2.i32;
+    block3:
+        return 3.i32;
+    block4:
+        return 4.i32;
+    block9:
+        return 9.i32;
+}
+func public %word(v0.i32) -> i32 {
+    block0:
+        br_table v0 (10.i32 block1) (11.i32 block2) (13.i32 block3) (17.i32 block1);
+    block1:
+        return 1.i32;
+    block2:
+        return 2.i32;
+    block3:
+        return 3.i32;
+}
+func public %long(v0.i64) -> i32 {
+    block0:
+        br_table v0 block9 (-1.i64 block1) (-2.i64 block2) (-4.i64 block3);
+    block1:
+        return 1.i32;
+    block2:
+        return 2.i32;
+    block3:
+        return 3.i32;
+    block9:
+        return 9.i32;
+}";
+    let tables = |bytes: &[u8]| {
+        let mut count = 0;
+        for payload in Parser::new(0).parse_all(bytes) {
+            if let Payload::CodeSectionEntry(body) = payload.unwrap() {
+                let operators = body.get_operators_reader().unwrap();
+                count += operators
+                    .into_iter()
+                    .filter(|operator| matches!(operator, Ok(Operator::BrTable { .. })))
+                    .count();
+            }
+        }
+        count
+    };
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let bytes = build_at(source, level);
+        assert_eq!(tables(&bytes), 3, "{level:?}");
+        let mut machine = Machine::new(&bytes);
+        let narrow = machine.func("narrow");
+        for (input, want) in [
+            (-2, 1),
+            (-1, 2),
+            (1, 3),
+            (2, 4),
+            (0, 9),
+            (-3, 9),
+            (3, 9),
+            (127, 9),
+        ] {
+            // The host may pass any bits above the eight.
+            for bits in [input, input & 0xff] {
+                assert_eq!(
+                    i32s(&machine.call(&narrow, &[Val::I32(bits)])),
+                    [want],
+                    "{input}"
+                );
+            }
+        }
+        let word = machine.func("word");
+        for (input, want) in [(10, Some(1)), (11, Some(2)), (13, Some(3)), (17, Some(1))]
+            .into_iter()
+            .chain([9, 12, 16, 18, -1, i32::MIN, 10 + (1 << 31)].map(|input| (input, None)))
+        {
+            let got = machine.try_call(&word, &[Val::I32(input)]).ok();
+            assert_eq!(
+                got.map(|values| i32s(&values)),
+                want.map(|want| vec![want]),
+                "{input}"
+            );
+        }
+        let long = machine.func("long");
+        for (input, want) in [
+            (-1, 1),
+            (-2, 2),
+            (-4, 3),
+            (-3, 9),
+            (-5, 9),
+            (0, 9),
+            (-4 + (1 << 32), 9),
+            (i64::MAX, 9),
+            (i64::MIN, 9),
+        ] {
+            assert_eq!(
+                i32s(&machine.call(&long, &[Val::I64(input)])),
+                [want],
+                "{input}"
             );
         }
     }

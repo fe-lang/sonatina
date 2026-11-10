@@ -320,8 +320,10 @@ native backend:
   and aggregates. An access outside the memory traps. Natural alignment is only
   a hint, so unaligned addresses are valid. An `i1` load keeps the low bit of the
   byte.
-- `br_table` compares the scrutinee with each case in order and traps if no
-  case matches and there is no default.
+- `br_table` takes the first case equal to the scrutinee and traps if no case
+  matches and there is no default. Constant cases of at most 64 bits that lie
+  close together index a WebAssembly `br_table`; other cases are compared in
+  order.
 - `unreachable` traps.
 - An `undef` operand is materialized as zero.
 
