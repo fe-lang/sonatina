@@ -1419,6 +1419,126 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 }
 
 #[test]
+fn cold_callees_inline_only_into_cold_callers() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func cold private %id(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func cold private %slow(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func public %hot(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %id v1;
+        v3.i32 = call %slow v0 v2;
+        return v3;
+}
+
+func cold public %fail(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %id v1;
+        v3.i32 = call %slow v0 v2;
+        return v3;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let stats = Inliner::new(full_inliner_test_config()).run(module);
+    assert_module_verified(module);
+
+    let dump = |name| {
+        let func_ref = find_func(module, name);
+        module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        })
+    };
+    let hot = dump("hot");
+    assert!(
+        hot.contains("call %id") && hot.contains("call %slow"),
+        "cold callees should stay out of a caller that is not cold:\n{hot}"
+    );
+    let fail = dump("fail");
+    assert!(
+        !fail.contains("call"),
+        "a cold caller should inline cold callees:\n{fail}"
+    );
+    assert!(stats.skipped_cold_callee > 0);
+    assert!(stats.full_calls_inlined > 0);
+}
+
+#[test]
+fn alwaysinline_overrides_cold_and_cold_overrides_inlinehint() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func inline(always) cold private %forced(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func inline cold private %hinted(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = sub v1 1.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %forced v0 v1;
+        v3.i32 = call %hinted v0 v2;
+        return v3;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let stats = Inliner::new(full_inliner_test_config()).run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %forced"),
+        "an alwaysinline cold callee should be inlined:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("call %hinted"),
+        "an inline hint should not inline a cold callee:\n{dumped}"
+    );
+    assert!(stats.skipped_cold_callee > 0);
+}
+
+#[test]
 fn full_inliner_keeps_outer_alwaysinline_callee_verifier_clean_after_nested_inline() {
     let source = r#"
 target = "evm-ethereum-london"

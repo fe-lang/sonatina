@@ -244,6 +244,8 @@ pub struct InlineStats {
     pub skipped_budget: usize,
     pub skipped_cost: usize,
     pub skipped_noinline_hint: usize,
+    /// Calls from a caller that is not cold to a cold callee.
+    pub skipped_cold_callee: usize,
     pub skipped_sig_mismatch: usize,
     pub skipped_callsite_unreachable: usize,
 }
@@ -324,6 +326,7 @@ impl Inliner {
 
             let mut changed = false;
             for caller_ref in caller_order {
+                let caller_cold = module.ctx.func_hints(caller_ref).contains(FuncHints::COLD);
                 let mut reachable_blocks: Option<FxHashSet<BlockId>> = None;
                 let mut taint: Option<UndefTaint> = None;
                 let mut forced_recursive_inline_succeeded = false;
@@ -346,10 +349,16 @@ impl Inliner {
                         stats.skipped_noinline_hint += 1;
                         continue;
                     }
+                    let always_inline = hints.contains(FuncHints::ALWAYSINLINE);
+                    // A cold callee stays out of line, where its call keeps
+                    // marking the path to it unlikely.
+                    if hints.contains(FuncHints::COLD) && !caller_cold && !always_inline {
+                        stats.skipped_cold_callee += 1;
+                        continue;
+                    }
 
                     let recursive_callsite =
                         is_recursive_callsite(&analysis, caller_ref, site.callee);
-                    let always_inline = hints.contains(FuncHints::ALWAYSINLINE);
                     if recursive_callsite
                         && always_inline
                         && forced_recursive_callers.contains(&caller_ref)
