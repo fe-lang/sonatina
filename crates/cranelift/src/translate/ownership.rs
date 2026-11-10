@@ -64,16 +64,9 @@ impl Ownership {
                         continue;
                     };
                     let storage = tail_call_storage(function, call.args()).unwrap_or_default();
-                    for (&arg, param) in call.args().iter().zip(storage) {
-                        if let Some(param) = param
-                            && uses_indirect_value_representation(
-                                function.ctx(),
-                                function.dfg.value_ty(arg),
-                            )
-                        {
-                            ownership.for_tail_calls.insert((func_ref, param));
-                        }
-                    }
+                    ownership
+                        .for_tail_calls
+                        .extend(storage.into_iter().flatten().map(|param| (func_ref, param)));
                 }
             });
         }

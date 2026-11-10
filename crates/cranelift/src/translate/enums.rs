@@ -9,11 +9,12 @@ use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Function, Type, ValueId, module::ModuleCtx, types::EnumVariantRef};
 
 use super::{
-    abi::{sonatina_scalar_type_to_clif_or_err, uses_indirect_value_representation},
+    abi::sonatina_scalar_type_to_clif_or_err,
     field_part_values,
     memory::{
         INLINE_MEMORY_BYTES, Piece, store_indirect, store_value, value_pieces, value_storage_size,
     },
+    uses_indirect_value_representation,
     values::ValueMap,
 };
 

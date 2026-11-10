@@ -412,6 +412,78 @@ func private %wide(v0.[i64; 64], v1.i64) -> i64 {
     }
 
     #[test]
+    fn aggregates_held_in_registers_pass_as_parts() {
+        // `%start` dispatches a frame it builds, held in registers, with no
+        // argument of its type to hold it, and `%twice` passes one twice. A
+        // frame of six fields passes in storage, which `%start_wide` has no
+        // argument to give.
+        let (module, tail_calls) = tail_calls(
+            r#"
+type @frame = {*i8, i64, i64, *i8, i64};
+type @wide = {*i8, i64, i64, *i8, i64, i64};
+
+func private %start(v0.*i8, v1.i64) {
+    block0:
+        v2.@frame = insert_value undef.@frame 0.i64 v0;
+        v3.@frame = insert_value v2 2.i64 v1;
+        v4.i8 = mload v0 i8;
+        br_table v4 block1 (1.i8 block2);
+    block1:
+        call %stop v3;
+        return;
+    block2:
+        call %twice v3;
+        return;
+}
+
+func private %stop(v0.@frame) {
+    block0:
+        return;
+}
+
+func private %twice(v0.@frame) {
+    block0:
+        call %pair v0 v0;
+        return;
+}
+
+func private %pair(v0.@frame, v1.@frame) {
+    block0:
+        v2.*i8 = extract_value v1 0.i64;
+        v3.i64 = extract_value v1 2.i64;
+        call %start v2 v3;
+        return;
+}
+
+func private %start_wide(v0.*i8, v1.i64) {
+    block0:
+        v2.@wide = insert_value undef.@wide 0.i64 v0;
+        v3.@wide = insert_value v2 2.i64 v1;
+        call %wide v3;
+        return;
+}
+
+func private %wide(v0.@wide) {
+    block0:
+        v1.*i8 = extract_value v0 0.i64;
+        v2.i64 = extract_value v0 2.i64;
+        call %start_wide v1 v2;
+        return;
+}
+"#,
+        );
+        assert_eq!(tail_call_count(&module, &tail_calls, "start"), 2);
+        assert_eq!(tail_call_count(&module, &tail_calls, "twice"), 1);
+        assert_eq!(tail_call_count(&module, &tail_calls, "start_wide"), 0);
+        let start = lookup_func(&module, "start");
+        let br_table = module.func_store.view(start, |function| {
+            let entry = function.layout.entry_block().unwrap();
+            function.layout.last_inst_of(entry).unwrap()
+        });
+        assert!(tail_calls.tail_switch(start, br_table).is_some());
+    }
+
+    #[test]
     fn constrefs_pass_on() {
         let (module, tail_calls) = tail_calls(
             r#"

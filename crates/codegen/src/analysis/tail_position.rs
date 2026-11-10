@@ -7,11 +7,13 @@ use sonatina_ir::{
     BlockId, Function, Module, Type, ValueId,
     inst::{InstId, control_flow, data},
     module::FuncRef,
-    types::CompoundType,
 };
 use sonatina_triple::TargetTriple;
 
-use crate::{analysis::known_bits::KnownBitsQuery, module_analysis::analyze_module};
+use crate::{
+    analysis::known_bits::KnownBitsQuery, isa::native::uses_indirect_value_representation,
+    module_analysis::analyze_module,
+};
 
 /// The functions that make tail calls: the private functions in a recursive
 /// cycle. Only recursion needs a call to replace its caller's frame. Every
@@ -145,9 +147,9 @@ fn returns_at_once(function: &Function, block: BlockId, last: InstId, results: &
 
 /// The call ending `block` and its callee, if it is a tail call: the block
 /// returns the call's results right after it, and the callee is a private
-/// function returning the same types. Its arguments pass in storage outside
-/// the caller's frame ([`tail_call_storage`]), and an indirect result passes
-/// the caller's own result buffer on.
+/// function returning the same types. Its arguments pass in registers or in
+/// storage outside the caller's frame ([`tail_call_storage`]), and an
+/// indirect result passes the caller's own result buffer on.
 fn tail_call(func_ref: FuncRef, function: &Function, block: BlockId) -> Option<(InstId, FuncRef)> {
     let last = function.layout.last_inst_of(block)?;
     let call_inst = function.layout.prev_inst_of(last)?;
@@ -165,17 +167,21 @@ fn tail_call(func_ref: FuncRef, function: &Function, block: BlockId) -> Option<(
 }
 
 /// The storage outside `function`'s frame that each argument of a tail call
-/// passes in, if every argument can pass: none for a scalar, or for one of
-/// the function's own aggregate arguments, which passes on in place, and for
-/// any other aggregate a distinct argument of the function of the same type,
-/// whose storage the tail call writes the aggregate into. No storage passes
-/// twice, since a callee may own and overwrite it. An i256 cannot pass: a
-/// call passes it through the frame's outgoing storage.
+/// passes in, if every argument can pass: none for a scalar or an aggregate
+/// held in registers, which passes as its parts, or for one of the
+/// function's own aggregate arguments in storage, which passes on in place,
+/// and for any other aggregate in storage a distinct argument of the
+/// function of the same type, whose storage the tail call writes the
+/// aggregate into. No storage passes twice, since a callee may own and
+/// overwrite it. An i256 cannot pass: a call passes it through the frame's
+/// outgoing storage.
 pub fn tail_call_storage(function: &Function, args: &[ValueId]) -> Option<Vec<Option<usize>>> {
+    let in_storage =
+        |value| uses_indirect_value_representation(function.ctx(), function.dfg.value_ty(value));
     let params = &function.arg_values;
     let mut taken = vec![false; params.len()];
     for &arg in args {
-        if is_aggregate(function, arg)
+        if in_storage(arg)
             && let Some(index) = params.iter().position(|&param| param == arg)
         {
             if taken[index] {
@@ -190,7 +196,7 @@ pub fn tail_call_storage(function: &Function, args: &[ValueId]) -> Option<Vec<Op
             if ty == Type::I256 {
                 return None;
             }
-            if !is_aggregate(function, arg) || params.contains(&arg) {
+            if !in_storage(arg) || params.contains(&arg) {
                 return Some(None);
             }
             let index = params
@@ -254,16 +260,6 @@ fn tail_switch(
         call,
         bits,
     })
-}
-
-fn is_aggregate(function: &Function, value: ValueId) -> bool {
-    matches!(
-        function
-            .dfg
-            .value_ty(value)
-            .resolve_compound(function.ctx()),
-        Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_))
-    )
 }
 
 /// Whether a callee could reach storage in this function's frame: an

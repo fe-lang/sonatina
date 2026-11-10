@@ -530,6 +530,131 @@ block0:
 }
 
 #[test]
+fn handlers_resume_through_a_dispatch_that_builds_their_frame() {
+    // `%start` builds the interpreter's frame from scalars and tail-calls
+    // the handler of its first opcode with it, through a table. `%op_loop`
+    // resumes through `%start`, so the stack overflows unless `%start`'s
+    // calls are tail calls. The code `[1, 2, 0]` counts to `DEPTH`.
+    let source = format!(
+        r#"
+type @Frame = {{*i8, i64, i64, *i8, i64}};
+func inline(never) private %start(v0.*i64, v1.*i8, v2.i64, v3.*i8, v4.i64) {{
+block0:
+    v5.@Frame = insert_value undef.@Frame 0.i64 v1;
+    v6.@Frame = insert_value v5 1.i64 0.i64;
+    v7.@Frame = insert_value v6 2.i64 v2;
+    v8.@Frame = insert_value v7 3.i64 v3;
+    v9.@Frame = insert_value v8 4.i64 v4;
+    v10.i8 = mload v1 i8;
+    br_table v10 block1 (1.i8 block2) (2.i8 block3);
+block1:
+    call %op_stop v0 v9;
+    return;
+block2:
+    call %op_count v0 v9;
+    return;
+block3:
+    call %op_loop v0 v9;
+    return;
+}}
+
+func private %next(v0.*i64, v1.@Frame) {{
+block0:
+    v2.*i8 = extract_value v1 0.i64;
+    v3.i64 = extract_value v1 1.i64;
+    v4.*i8 = gep v2 v3;
+    v5.i8 = mload v4 i8;
+    br_table v5 block1 (1.i8 block2) (2.i8 block3);
+block1:
+    call %op_stop v0 v1;
+    return;
+block2:
+    call %op_count v0 v1;
+    return;
+block3:
+    call %op_loop v0 v1;
+    return;
+}}
+
+func inline(never) private %op_stop(v0.*i64, v1.@Frame) {{
+block0:
+    v2.i64 = extract_value v1 2.i64;
+    v3.*i8 = extract_value v1 3.i64;
+    v4.i64 = extract_value v1 4.i64;
+    v5.i64 = ptr_to_int v3 i64;
+    mstore v0 v2 i64;
+    v6.*i64 = gep v0 1.i64;
+    mstore v6 v4 i64;
+    v7.*i64 = gep v0 2.i64;
+    mstore v7 v5 i64;
+    return;
+}}
+
+func private %op_count(v0.*i64, v1.@Frame) {{
+block0:
+    v2.i64 = extract_value v1 1.i64;
+    v3.i64 = add v2 1.i64;
+    v4.i64 = extract_value v1 2.i64;
+    v5.i64 = add v4 1.i64;
+    v6.*i8 = extract_value v1 3.i64;
+    v7.*i8 = gep v6 8.i64;
+    v8.i64 = extract_value v1 4.i64;
+    v9.i64 = add v8 1.i64;
+    v10.@Frame = insert_value v1 1.i64 v3;
+    v11.@Frame = insert_value v10 2.i64 v5;
+    v12.@Frame = insert_value v11 3.i64 v7;
+    v13.@Frame = insert_value v12 4.i64 v9;
+    call %next v0 v13;
+    return;
+}}
+
+func private %op_loop(v0.*i64, v1.@Frame) {{
+block0:
+    v2.i64 = extract_value v1 2.i64;
+    v3.i64 = extract_value v1 4.i64;
+    v4.i64 = add v3 2.i64;
+    v5.i1 = lt v2 {DEPTH}.i64;
+    br v5 block1 block2;
+block1:
+    v6.*i8 = extract_value v1 0.i64;
+    v7.*i8 = extract_value v1 3.i64;
+    call %start v0 v6 v2 v7 v4;
+    return;
+block2:
+    v8.i64 = extract_value v1 1.i64;
+    v9.i64 = add v8 1.i64;
+    v10.@Frame = insert_value v1 1.i64 v9;
+    v11.@Frame = insert_value v10 4.i64 v4;
+    call %next v0 v11;
+    return;
+}}
+
+func public %run(v0.*i8, v1.*i8, v2.*i64) {{
+block0:
+    call %start v2 v0 0.i64 v1 0.i64;
+    return;
+}}
+"#
+    );
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let run: unsafe extern "C" fn(*const u8, *const u8, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        let code = [1u8, 2, 0];
+        let top = 4096usize as *const u8;
+        let mut status = [-1i64; 3];
+        unsafe { run(code.as_ptr(), top, status.as_mut_ptr()) };
+        assert_eq!(status, [DEPTH, 3 * DEPTH, 4096 + 8 * DEPTH], "{level:?}");
+    }
+}
+
+#[test]
 fn tail_calls_read_arguments_before_writing_their_storage() {
     // `%rotate`'s tail call writes a new `@Holder` into its first
     // argument's storage and passes the old first field, a view of that

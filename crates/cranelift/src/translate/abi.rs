@@ -5,13 +5,6 @@ use sonatina_triple::TargetTriple;
 
 use super::{Parts, is_aggregate, register_parts};
 
-/// Whether translated values of `ty` are addresses of their storage.
-/// i256 values are four limbs instead, though passed by reference, and
-/// small aggregates their parts (`register_parts`).
-pub(super) fn uses_indirect_value_representation(ctx: &ModuleCtx, ty: Type) -> bool {
-    is_aggregate(ctx, ty) && register_parts(ctx, ty).is_none()
-}
-
 /// The parts in which a function of `linkage` passes and returns `ty`
 /// values: private functions pass aggregates held in registers as their
 /// parts, while public and external ones keep the platform's references.
