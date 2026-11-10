@@ -11,6 +11,7 @@ mod parts;
 mod phi;
 mod prediction;
 mod scalar;
+mod sha256;
 mod tail;
 mod values;
 
@@ -785,6 +786,34 @@ fn translate_function(
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }
+                }
+                NativeInstKind::Sha256Compress(op) => {
+                    let result = function
+                        .dfg
+                        .inst_result(inst_id)
+                        .ok_or("sha256_compress has no result")?;
+                    let state = resolve_operand(
+                        function,
+                        *op.state(),
+                        &value_map,
+                        target_config,
+                        &mut builder,
+                    )?;
+                    let block = resolve_operand(
+                        function,
+                        *op.block(),
+                        &value_map,
+                        target_config,
+                        &mut builder,
+                    )?;
+                    let dst = frame.address(result, &mut builder)?;
+                    let hardware = clif_module
+                        .isa()
+                        .isa_flags()
+                        .iter()
+                        .any(|flag| flag.name == "has_sha" && flag.as_bool() == Some(true));
+                    sha256::compress(state, block, dst, hardware, &mut builder);
+                    value_map.insert(result, dst);
                 }
                 NativeInstKind::BlackBox(op) => {
                     let arg = *op.arg();

@@ -1990,3 +1990,88 @@ block0:
         }
     }
 }
+
+#[test]
+fn sha256_compress_hashes_a_block() {
+    // The padded message "abc" is one block; its digest is the state after it.
+    let source = r#"
+func public %compress(v0.*i8, v1.*i8, v2.*i8) {
+block0:
+    v3.*[i32; 8] = bitcast v0 *[i32; 8];
+    v4.*[i32; 16] = bitcast v1 *[i32; 16];
+    v5.*[i32; 8] = bitcast v2 *[i32; 8];
+    v6.[i32; 8] = mload v3 [i32; 8];
+    v7.[i32; 16] = mload v4 [i32; 16];
+    v8.[i32; 8] = sha256_compress v6 v7;
+    mstore v5 v8 [i32; 8];
+    return;
+}
+"#;
+    let iv: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    let mut block = [0u32; 16];
+    block[0] = 0x6162_6380;
+    block[15] = 24;
+    let digest: [u32; 8] = [
+        0xba7816bf, 0x8f01cfea, 0x414140de, 0x5dae2223, 0xb00361a3, 0x96177a9c, 0xb410ff61,
+        0xf20015ad,
+    ];
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let compress: unsafe extern "C" fn(*const u32, *const u32, *mut u32) =
+            unsafe { std::mem::transmute(artifact.function_address("compress").unwrap()) };
+        let mut out = [0u32; 8];
+        unsafe { compress(iv.as_ptr(), block.as_ptr(), out.as_mut_ptr()) };
+        assert_eq!(out, digest, "{level:?}");
+    }
+}
+
+#[test]
+fn sha256_compress_takes_undef_operands() {
+    // An undef state or block reads as zeros, as from a zeroed slot.
+    let source = r#"
+func public %undefs(v0.*i8) {
+block0:
+    v1.*[i32; 8] = bitcast v0 *[i32; 8];
+    v2.[i32; 8] = sha256_compress undef.[i32; 8] undef.[i32; 16];
+    mstore v1 v2 [i32; 8];
+    return;
+}
+func public %compress(v0.*i8, v1.*i8, v2.*i8) {
+block0:
+    v3.*[i32; 8] = bitcast v0 *[i32; 8];
+    v4.*[i32; 16] = bitcast v1 *[i32; 16];
+    v5.*[i32; 8] = bitcast v2 *[i32; 8];
+    v6.[i32; 8] = mload v3 [i32; 8];
+    v7.[i32; 16] = mload v4 [i32; 16];
+    v8.[i32; 8] = sha256_compress v6 v7;
+    mstore v5 v8 [i32; 8];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let undefs: unsafe extern "C" fn(*mut u32) =
+            unsafe { std::mem::transmute(artifact.function_address("undefs").unwrap()) };
+        let compress: unsafe extern "C" fn(*const u32, *const u32, *mut u32) =
+            unsafe { std::mem::transmute(artifact.function_address("compress").unwrap()) };
+        let (mut out, mut zeros_out) = ([0xa5a5_a5a5u32; 8], [0u32; 8]);
+        unsafe { undefs(out.as_mut_ptr()) };
+        unsafe { compress([0; 8].as_ptr(), [0; 16].as_ptr(), zeros_out.as_mut_ptr()) };
+        assert_eq!(out, zeros_out, "{level:?}");
+    }
+}

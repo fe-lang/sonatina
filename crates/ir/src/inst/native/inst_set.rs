@@ -60,6 +60,7 @@ pub struct NativeInstSet(
     data::Memzero,
     data::Memcopy,
     data::BlackBox,
+    data::Sha256Compress,
     data::Freeze,
     data::Gep,
     data::GetFunctionPtr,

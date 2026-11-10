@@ -48,6 +48,36 @@ impl_unary_integral_same_rule!(
     data::BlackBox => "black_box",
 );
 
+impl VerifyInst for data::Sha256Compress {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let words = |verifier: &FunctionVerifier<'_>, ty: Option<Type>, len: usize| {
+            ty.is_some_and(|ty| {
+                matches!(
+                    ty.resolve_compound(verifier.ctx),
+                    Some(CompoundType::Array { elem: Type::I32, len: found }) if found == len
+                )
+            })
+        };
+        for (value, len, what) in [(*self.state(), 8, "state"), (*self.block(), 16, "block")] {
+            if !words(verifier, verifier.value_ty(value), len) {
+                verifier.emit(Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    format!("sha256_compress {what} must be [i32; {len}]"),
+                    location.clone(),
+                ));
+            }
+        }
+        if !words(verifier, verifier.inst_result_ty(inst_id), 8) {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstResultTypeMismatch,
+                "sha256_compress result must be [i32; 8]",
+                location,
+            ));
+        }
+    }
+}
+
 impl VerifyInst for data::Freeze {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         verifier.verify_freeze(inst_id, *self.arg());
