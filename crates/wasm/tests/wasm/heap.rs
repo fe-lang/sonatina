@@ -168,6 +168,31 @@ fn blocks_of_different_classes_use_different_lists() {
 }
 
 #[test]
+fn free_may_be_declared_with_a_unit_result() {
+    let source = "declare external %malloc(i32) -> *i8;
+declare external %free(*i8) -> unit;
+func public %cycle(v0.i32) -> i32 {
+    block0:
+        v1.*i8 = call %malloc v0;
+        v2.i32 = ptr_to_int v1 i32;
+        call %free v1;
+        v3.*i8 = call %malloc v0;
+        v4.i32 = ptr_to_int v3 i32;
+        v5.i1 = eq v2 v4;
+        v6.i32 = zext v5 i32;
+        return v6;
+}";
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let mut machine = Limited::new(&build_with(source, level, WasmBackend::new()), usize::MAX);
+        // The freed block is the one the second call gets.
+        assert_eq!(
+            machine.call("cycle", &[Val::I32(40)]).unwrap()[0].unwrap_i32(),
+            1
+        );
+    }
+}
+
+#[test]
 fn free_of_null_does_nothing() {
     let mut machine = machine(OptLevel::O2, usize::MAX);
     let before = mark(&mut machine);
