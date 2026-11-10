@@ -469,34 +469,33 @@ impl Emit<'_> {
         self.fold(Operator::I64ExtendI32U, &[flag], WType::I64)
     }
 
+    /// The low 32 bits of a 64-bit value.
+    fn low_half(&mut self, value: V) -> V {
+        let low = self.op(Operator::I32WrapI64, &[value], WType::I32);
+        self.zero_extend(low)
+    }
+
     /// The 128-bit product of two 64-bit values, as (low, high).
     fn mul_wide(&mut self, x: V, y: V) -> (V, V) {
-        let mask = self.c64(0xffff_ffff);
         let shift = self.c64(32);
-        let x0 = self.op(Operator::I64And, &[x, mask], WType::I64);
+        let [x0, y0] = [x, y].map(|value| self.low_half(value));
         let x1 = self.op(Operator::I64ShrU, &[x, shift], WType::I64);
-        let y0 = self.op(Operator::I64And, &[y, mask], WType::I64);
         let y1 = self.op(Operator::I64ShrU, &[y, shift], WType::I64);
+        // A product of halves is at most (2^32 - 1)^2, so adding two halves
+        // to it does not wrap.
         let p00 = self.op(Operator::I64Mul, &[x0, y0], WType::I64);
-        let p01 = self.op(Operator::I64Mul, &[x0, y1], WType::I64);
         let p10 = self.op(Operator::I64Mul, &[x1, y0], WType::I64);
+        let p01 = self.op(Operator::I64Mul, &[x0, y1], WType::I64);
         let p11 = self.op(Operator::I64Mul, &[x1, y1], WType::I64);
-        // The middle column holds three values below 2^32 plus a carry, which
-        // fits in 64 bits.
-        let p00_high = self.op(Operator::I64ShrU, &[p00, shift], WType::I64);
-        let p01_low = self.op(Operator::I64And, &[p01, mask], WType::I64);
-        let p10_low = self.op(Operator::I64And, &[p10, mask], WType::I64);
-        let mid = self.op(Operator::I64Add, &[p00_high, p01_low], WType::I64);
-        let mid = self.op(Operator::I64Add, &[mid, p10_low], WType::I64);
-        let p00_low = self.op(Operator::I64And, &[p00, mask], WType::I64);
-        let mid_low = self.op(Operator::I64Shl, &[mid, shift], WType::I64);
-        let low = self.op(Operator::I64Or, &[p00_low, mid_low], WType::I64);
-        let p01_high = self.op(Operator::I64ShrU, &[p01, shift], WType::I64);
-        let p10_high = self.op(Operator::I64ShrU, &[p10, shift], WType::I64);
+        let carry = self.op(Operator::I64ShrU, &[p00, shift], WType::I64);
+        let mid = self.op(Operator::I64Add, &[p10, carry], WType::I64);
+        let mid_low = self.low_half(mid);
+        let cross = self.op(Operator::I64Add, &[p01, mid_low], WType::I64);
         let mid_high = self.op(Operator::I64ShrU, &[mid, shift], WType::I64);
-        let high = self.op(Operator::I64Add, &[p11, p01_high], WType::I64);
-        let high = self.op(Operator::I64Add, &[high, p10_high], WType::I64);
-        let high = self.op(Operator::I64Add, &[high, mid_high], WType::I64);
+        let cross_high = self.op(Operator::I64ShrU, &[cross, shift], WType::I64);
+        let high = self.op(Operator::I64Add, &[p11, mid_high], WType::I64);
+        let high = self.op(Operator::I64Add, &[high, cross_high], WType::I64);
+        let low = self.op(Operator::I64Mul, &[x, y], WType::I64);
         (low, high)
     }
 
@@ -509,9 +508,9 @@ impl Emit<'_> {
         let shift = self.c64(32);
         let one = self.c64(1);
         let d1 = self.op(Operator::I64ShrU, &[divisor, shift], WType::I64);
-        let d0 = self.op(Operator::I64And, &[divisor, mask], WType::I64);
+        let d0 = self.low_half(divisor);
         let low_high = self.op(Operator::I64ShrU, &[low, shift], WType::I64);
-        let low_low = self.op(Operator::I64And, &[low, mask], WType::I64);
+        let low_low = self.low_half(low);
         let mut quotient = self.c64(0);
         let mut remainder = high;
         for part in [low_high, low_low] {
