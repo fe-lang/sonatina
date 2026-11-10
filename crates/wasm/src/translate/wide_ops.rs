@@ -4,7 +4,7 @@
 
 use waffle::{Func, Operator, Type as WType};
 
-use sonatina_ir::{InstId, Type, ValueId};
+use sonatina_ir::{Function, InstId, Type, ValueId};
 
 use super::{FunctionTranslator, V, invalid};
 use crate::{
@@ -300,7 +300,10 @@ impl FunctionTranslator<'_> {
         let helpers = self.wide_helpers;
         match op {
             WideOp::Mul => {
-                let (result, _) = self.unsigned_mulo(wb, helpers.mulo, a, b)?;
+                let result = match self.emit(wb).wide_mul_short(wide.limbs(), a, b) {
+                    Some(result) => result,
+                    None => self.unsigned_mulo(wb, helpers.mulo, a, b)?.0,
+                };
                 self.define_wide(wb, inst_id, 0, wide, result)
             }
             WideOp::Umulo | WideOp::Smulo => {
@@ -345,6 +348,13 @@ impl FunctionTranslator<'_> {
             // A 128-bit shift by 128 to 255 bits leaves zero in the low 128
             // bits, as a shift by at least the width does.
             WideOp::Shl | WideOp::Shr => {
+                // A constant count shifts in place.
+                if let Some(count) = constant_shift(self.function, rhs) {
+                    let shifted = self
+                        .emit(wb)
+                        .wide_shift_by(op == WideOp::Shl, a, count, None);
+                    return self.define_wide(wb, inst_id, 0, wide, shifted);
+                }
                 let func = if op == WideOp::Shl {
                     self.helper(helpers.shl, "shift")?
                 } else {
@@ -358,6 +368,12 @@ impl FunctionTranslator<'_> {
                 // For a negative value, shift the complement and complement the
                 // result, so the vacated bits are ones. The count is unsigned.
                 let a = self.emit(wb).wide_sign_extend(wide, a);
+                // A constant count shifts in place, with the sign beyond the top.
+                if let Some(count) = constant_shift(self.function, rhs) {
+                    let fill = self.emit(wb).sign_fill(a[LIMBS - 1]);
+                    let shifted = self.emit(wb).wide_shift_by(false, a, count, Some(fill));
+                    return self.define_wide(wb, inst_id, 0, wide, shifted);
+                }
                 let func = self.helper(helpers.shr, "shift")?;
                 let sign = self.sign_of(wb, a);
                 let flipped = self.emit(wb).wide_not(a);
@@ -383,6 +399,12 @@ impl FunctionTranslator<'_> {
             }
         }
     }
+}
+
+/// The count of a wide shift when it is a constant, which the shift is then
+/// built for, without the helper function.
+pub(super) fn constant_shift(function: &Function, count: ValueId) -> Option<usize> {
+    function.dfg.value_imm(count)?.to_nonnegative_usize()
 }
 
 impl FunctionTranslator<'_> {

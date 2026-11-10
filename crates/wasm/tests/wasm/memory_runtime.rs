@@ -67,6 +67,11 @@ impl Limited {
         Ok(results)
     }
 
+    /// The exported `stack_top` global, if the module has one.
+    fn stack_top(&mut self) -> Option<wasmtime::Global> {
+        self.instance.get_global(&mut self.store, "stack_top")
+    }
+
     pub(crate) fn alloc(&mut self, size: u32) -> Result<u32, wasmtime::Error> {
         Ok(self.call("alloc", &[Val::I32(size as i32)])?[0].unwrap_i32() as u32)
     }
@@ -473,6 +478,111 @@ func public %run(v0.i32) -> i32 {
         let got = machine.call("run", &[Val::I32(5)]).unwrap()[0].unwrap_i32();
         assert_eq!(got, 20 + 1 + 1005, "{level:?}");
     }
+}
+
+#[test]
+fn a_host_restores_the_stack_after_an_import_fails() {
+    // `go` recurses with a 1 KiB frame per call and calls the host at the
+    // bottom. When the host fails, the module never runs the code that puts
+    // `stack_top` back, so the next call would start above 20 dead frames; in
+    // a stack of 64 KiB the fourth such call would not fit. The host writes
+    // the global back, as the README asks.
+    let source = "declare external %host(i32) -> i32;
+func public %go(v0.i32) -> i32 {
+    block0:
+        v1.*[i8; 1024] = alloca [i8; 1024];
+        v2.*i8 = gep v1 0.i32 0.i32;
+        mstore v2 1.i8 i8;
+        v3.i1 = eq v0 0.i32;
+        br v3 block1 block2;
+    block1:
+        v4.i32 = call %host v0;
+        return v4;
+    block2:
+        v5.i32 = sub v0 1.i32;
+        v6.i32 = call %go v5;
+        v7.i8 = mload v2 i8;
+        v8.i32 = zext v7 i32;
+        v9.i32 = add v6 v8;
+        return v9;
+}";
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let bytes = build_with(source, level, WasmBackend::new().with_stack_size(1 << 16));
+        let mut machine = Limited::with_imports(&bytes, usize::MAX, |linker| {
+            linker
+                .func_wrap("env", "host", |_: i32| -> Result<i32, wasmtime::Error> {
+                    Err(wasmtime::Error::msg("the host failed"))
+                })
+                .unwrap();
+        });
+        let stack_top = machine.stack_top().expect("a module with imports");
+        let start = stack_top.get(&mut machine.store).unwrap_i32();
+        for round in 0..50 {
+            let error = machine.call("go", &[Val::I32(20)]).unwrap_err();
+            assert!(
+                format!("{error:?}").contains("the host failed"),
+                "{level:?}: round {round}: {error:?}"
+            );
+            let left = stack_top.get(&mut machine.store).unwrap_i32();
+            assert!(left >= start + 20 * 1024, "{level:?}: {left} after {start}");
+            stack_top.set(&mut machine.store, Val::I32(start)).unwrap();
+        }
+    }
+}
+
+#[test]
+fn stack_top_is_exported_only_with_frames_and_imports() {
+    let frames = "func public %run(v0.i32) -> i32 {
+    block0:
+        v1.*i32 = alloca i32;
+        mstore v1 v0 i32;
+        v2.i32 = mload v1 i32;
+        return v2;
+}";
+    let declaration = "declare external %host(i32) -> i32;";
+    let call = "func public %call(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %host v0;
+        return v1;
+}";
+    let host = |linker: &mut Linker<StoreLimits>| {
+        linker.func_wrap("env", "host", |x: i32| x).unwrap();
+    };
+    let bytes = build_with(frames, OptLevel::O0, WasmBackend::new());
+    assert!(Limited::new(&bytes, usize::MAX).stack_top().is_none());
+    let import = format!("{declaration}\n{call}");
+    let bytes = build_with(&import, OptLevel::O0, WasmBackend::new());
+    assert!(
+        Limited::with_imports(&bytes, usize::MAX, host)
+            .stack_top()
+            .is_none()
+    );
+    let both = format!("{declaration}\n{frames}\n{call}");
+    let bytes = build_with(&both, OptLevel::O0, WasmBackend::new());
+    assert!(
+        Limited::with_imports(&bytes, usize::MAX, host)
+            .stack_top()
+            .is_some()
+    );
+
+    // The name is an ordinary export unless the module exports the global.
+    let named = "func public %stack_top(v0.i32) -> i32 {
+    block0:
+        v1.*i32 = alloca i32;
+        mstore v1 v0 i32;
+        v2.i32 = mload v1 i32;
+        return v2;
+}";
+    build_with(named, OptLevel::O0, WasmBackend::new());
+    let source = format!("{declaration}\n{named}\n{call}");
+    let errors = Compile::new(parse(&source), WasmBackend::new())
+        .compile()
+        .expect_err("the name is reserved");
+    let message = format!("{errors:?}");
+    assert!(
+        message.contains("`stack_top` is reserved for the stack of a module with imports"),
+        "{message}"
+    );
 }
 
 #[test]

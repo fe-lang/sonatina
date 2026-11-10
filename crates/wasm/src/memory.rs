@@ -22,7 +22,7 @@
 
 use waffle::{
     FunctionBody, Global, GlobalData, MemorySegment, Module as WModule, Operator, Signature,
-    Terminator, Type as WType,
+    SignatureData, Terminator, Type as WType,
 };
 
 use rustc_hash::FxHashMap;
@@ -255,6 +255,15 @@ pub(super) struct RuntimeGlobals {
     pub(super) arena_top: Option<Global>,
     /// The header of the last block cut from the top, 0 when there is none.
     pub(super) arena_last: Option<Global>,
+}
+
+/// The signature `data` of the module: one entry for every function of a type.
+pub(super) fn signature(wmod: &mut WModule<'static>, data: SignatureData) -> Signature {
+    let known = wmod.signatures.entries().find(|(_, known)| **known == data);
+    match known {
+        Some((signature, _)) => signature,
+        None => wmod.signatures.push(data),
+    }
 }
 
 pub(super) fn declare_runtime_globals(

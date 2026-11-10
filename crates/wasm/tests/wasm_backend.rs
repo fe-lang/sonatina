@@ -31,6 +31,8 @@ mod memory_runtime;
 mod operands;
 #[path = "wasm/shared_oracles.rs"]
 mod shared_oracles;
+#[path = "wasm/tail_calls.rs"]
+mod tail_calls;
 #[path = "wasm/wide.rs"]
 mod wide;
 

@@ -26,35 +26,39 @@
 //! mutable stack pointer exists, so a trap leaves nothing to repair. An exported
 //! function is a thin wrapper that starts the stack at the `stack_top` global.
 
+use std::collections::hash_map::Entry;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 use waffle::{
     BlockTarget, ExportKind, Func, FuncDecl, FunctionBody, MemoryArg, Module as WaffleModule,
-    Operator, Signature, SignatureData, Terminator, Type as WType, ValueDef,
+    Operator, Signature, SignatureData, Terminator, Type as WType, ValueDef, entity::EntityRef,
 };
 
+use sonatina_codegen::analysis::tail_position::{tail_callers, tail_position_calls};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Inst, InstId, Linkage, Module, Type, Value,
     ValueId,
-    inst::{inst_set::InstSetExt, native::inst_set::NativeInstKind},
+    inst::{control_flow::Call, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
     module::{FuncRef, ModuleCtx},
     types::CompoundType,
 };
 
 use super::{
-    HOST_ALLOCATOR_EXPORTS, WasmError,
+    HOST_ALLOCATOR_EXPORTS, STACK_TOP_EXPORT, WasmError,
     arith::{Arith, Cmp, DivRem, Emit, Int, Shift},
     heap::{self, Mode},
     memory::{
         self, ALIGN, MemoryPlan, RuntimeGlobals, align_up, build_arena_mark,
         declare_runtime_globals,
     },
+    tail::TailCallSites,
     wide::{self, LIMBS, Limbs, Wide},
 };
 mod aggregate;
 mod wide_ops;
 
-use wide_ops::{WideHelpers, WideOp};
+use wide_ops::{WideHelpers, WideOp, constant_shift};
 
 type V = waffle::Value;
 
@@ -62,6 +66,8 @@ pub(super) struct Translated {
     pub(super) module: WaffleModule<'static>,
     /// Exported function names, in module order.
     pub(super) exports: Vec<String>,
+    /// The functions that make tail calls, with the callees of those calls.
+    pub(super) tail_calls: TailCallSites,
 }
 
 fn unsupported(message: String) -> WasmError {
@@ -285,8 +291,13 @@ fn scan_module(module: &Module) -> Scan {
                     if matches!(kind, NativeInstKind::MemAllocDynamic(_)) {
                         arena = true;
                     }
-                    if let Some((op, lhs, _)) = wide_op_of(&kind)
-                        && Wide::from_type(function.dfg.value_ty(lhs)).is_some()
+                    // A shift by a constant and a 128-bit product are built
+                    // in place.
+                    if let Some((op, lhs, rhs)) = wide_op_of(&kind)
+                        && let Some(wide) = Wide::from_type(function.dfg.value_ty(lhs))
+                        && !(matches!(op, WideOp::Shl | WideOp::Shr | WideOp::Sar)
+                            && constant_shift(function, rhs).is_some())
+                        && !(op == WideOp::Mul && wide == Wide::I128)
                     {
                         let (mulo, divrem, shl, shr) = op.needs();
                         helpers.0 |= mulo;
@@ -300,10 +311,7 @@ fn scan_module(module: &Module) -> Scan {
                             helpers.1 = true;
                             helpers.4 = true;
                         }
-                        NativeInstKind::EvmMulMod(_) => {
-                            helpers.1 = true;
-                            helpers.5 = true;
-                        }
+                        NativeInstKind::EvmMulMod(_) => helpers.5 = true,
                         _ => {}
                     }
                 }
@@ -421,7 +429,7 @@ pub(super) fn translate_module(
             }
             (Linkage::External, false) => {
                 let signature = declared_signature(module, func_ref, &name, &plan, true)?;
-                let wsig = wmod.signatures.push(signature.wasm);
+                let wsig = memory::signature(&mut wmod, signature.wasm);
                 let func = wmod.funcs.push(FuncDecl::Import(wsig, name.clone()));
                 wmod.imports.push(waffle::Import {
                     module: import_module.to_string(),
@@ -456,12 +464,27 @@ pub(super) fn translate_module(
         }
     }
 
+    // An import that throws never returns to the call that moved `stack_top`,
+    // so the host puts the global back; see "Frames" in the README.
+    let stack_top_export = globals.filter(|_| !wmod.imports.is_empty());
+    if let Some(globals) = stack_top_export {
+        wmod.exports.push(waffle::Export {
+            name: STACK_TOP_EXPORT.to_string(),
+            kind: ExportKind::Global(globals.stack_top),
+        });
+    }
+
     // Declare every defined function before translating bodies so calls
     // resolve regardless of definition order.
     let mut pending = Vec::new();
     let mut wrappers = Vec::new();
     for (func_ref, name, linkage) in definitions {
         let public = linkage == Linkage::Public;
+        if public && stack_top_export.is_some() && name == STACK_TOP_EXPORT {
+            return Err(invalid(format!(
+                "export name `{name}` is reserved for the stack of a module with imports"
+            )));
+        }
         if public && host_allocator && HOST_ALLOCATOR_EXPORTS.contains(&name.as_str()) {
             return Err(invalid(format!(
                 "export name `{name}` is reserved for the host allocator"
@@ -483,7 +506,7 @@ pub(super) fn translate_module(
         }
         let stack_param = plan.runtime;
         let sret = inner.sret;
-        let wsig = wmod.signatures.push(inner.wasm);
+        let wsig = memory::signature(&mut wmod, inner.wasm);
         let placeholder = FunctionBody::new(&wmod, wsig);
         let inner_name = if public && plan.runtime {
             format!("{name}$body")
@@ -495,7 +518,7 @@ pub(super) fn translate_module(
             .push(FuncDecl::Body(wsig, inner_name.clone(), placeholder));
         if public && plan.runtime {
             let exported = declared_signature(module, func_ref, &name, &plan, true)?;
-            let export_sig = wmod.signatures.push(exported.wasm);
+            let export_sig = memory::signature(&mut wmod, exported.wasm);
             let placeholder = FunctionBody::new(&wmod, export_sig);
             let wrapper = wmod
                 .funcs
@@ -631,10 +654,20 @@ pub(super) fn translate_module(
         ));
     }
 
+    let tail_callers: FxHashSet<FuncRef> = tail_callers(module).into_iter().collect();
+    let mut tail_calls = TailCallSites::default();
     for (func_ref, func, wsig, name, canonicalize_params) in pending {
         let body = module
             .func_store
             .try_view(func_ref, |function| {
+                let sites = if tail_callers.contains(&func_ref) {
+                    tail_call_sites(module, func_ref, function, &callees)
+                } else {
+                    FxHashMap::default()
+                };
+                if !sites.is_empty() {
+                    tail_calls.insert(func.index() as u32, sites.values().copied().collect());
+                }
                 FunctionTranslator::new(
                     module,
                     function,
@@ -649,6 +682,7 @@ pub(super) fn translate_module(
                     arena_func.map(|(func, _)| func),
                     free_func.map(|(func, _)| func),
                     helpers,
+                    sites.into_keys().collect(),
                 )
                 .translate(canonicalize_params)
             })
@@ -671,11 +705,12 @@ pub(super) fn translate_module(
             HelperKind::Mulo => wide::build_mulo(&wmod, sig),
             HelperKind::DivRem => wide::build_udivrem(&wmod, sig),
             HelperKind::Shift { left } => wide::build_shift(&wmod, sig, left),
-            HelperKind::Modular { product } => {
+            HelperKind::Modular { product: true } => wide::build_mulmod(&wmod, sig),
+            HelperKind::Modular { product: false } => {
                 let udivrem = helpers
                     .udivrem
-                    .expect("modular helpers are declared with the division helper");
-                wide::build_modular(&wmod, sig, udivrem, product)
+                    .expect("modular addition is declared with the division helper");
+                wide::build_addmod(&wmod, sig, udivrem)
             }
         };
         wmod.funcs[func] = FuncDecl::Body(sig, name, body);
@@ -730,19 +765,25 @@ pub(super) fn translate_module(
             let host_func = wmod
                 .funcs
                 .push(FuncDecl::Body(host_sig, alloc.to_string(), host_body));
-            let mark_sig = wmod.signatures.push(SignatureData {
-                params: vec![],
-                returns: vec![WType::I32],
-            });
+            let mark_sig = memory::signature(
+                &mut wmod,
+                SignatureData {
+                    params: vec![],
+                    returns: vec![WType::I32],
+                },
+            );
             let mark_func = wmod.funcs.push(FuncDecl::Body(
                 mark_sig,
                 mark.to_string(),
                 build_arena_mark(&wmod, mark_sig, arena_top),
             ));
-            let release_sig = wmod.signatures.push(SignatureData {
-                params: vec![WType::I32],
-                returns: vec![],
-            });
+            let release_sig = memory::signature(
+                &mut wmod,
+                SignatureData {
+                    params: vec![WType::I32],
+                    returns: vec![],
+                },
+            );
             let release_func = wmod.funcs.push(FuncDecl::Body(
                 release_sig,
                 release.to_string(),
@@ -773,7 +814,37 @@ pub(super) fn translate_module(
     Ok(Translated {
         module: wmod,
         exports,
+        tail_calls,
     })
+}
+
+/// The tail calls of `function`, one of the functions in a recursive cycle,
+/// with the WebAssembly index of each callee. The callee takes the caller's
+/// stack top, so its frame replaces the caller's: an aggregate argument must
+/// be one the caller received, whose storage is below both frames, and the
+/// result must not come back through a buffer in the caller's frame.
+fn tail_call_sites(
+    module: &Module,
+    func_ref: FuncRef,
+    function: &Function,
+    callees: &FxHashMap<FuncRef, Callee>,
+) -> FxHashMap<InstId, u32> {
+    tail_position_calls(func_ref, function)
+        .into_iter()
+        .filter_map(|(inst, callee)| {
+            let callee = callees.get(&callee)?;
+            let CallTarget::Func(func) = callee.target else {
+                return None;
+            };
+            let call = function.dfg.downcast::<&Call>(inst)?;
+            let passes = |&arg: &ValueId| {
+                repr(&module.ctx, function.dfg.value_ty(arg)) != Some(Repr::Aggregate)
+                    || function.arg_values.contains(&arg)
+            };
+            (callee.sret.is_none() && call.args().iter().all(passes))
+                .then_some((inst, func.index() as u32))
+        })
+        .collect()
 }
 
 /// Which 256-bit helper function a declaration is for.
@@ -1080,6 +1151,8 @@ struct FunctionTranslator<'a> {
     edge_slots: FxHashMap<(BlockId, BlockId, InstId), u32>,
     /// Frame offsets of the zero-filled storage of aggregate `undef` operands.
     undef_slots: FxHashMap<ValueId, u32>,
+    /// The calls that end their block as tail calls.
+    tail_calls: FxHashSet<InstId>,
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -1098,6 +1171,7 @@ impl<'a> FunctionTranslator<'a> {
         arena: Option<Func>,
         free: Option<Func>,
         wide_helpers: WideHelpers,
+        tail_calls: FxHashSet<InstId>,
     ) -> Self {
         Self {
             module,
@@ -1125,6 +1199,7 @@ impl<'a> FunctionTranslator<'a> {
             phi_slots: FxHashMap::default(),
             edge_slots: FxHashMap::default(),
             undef_slots: FxHashMap::default(),
+            tail_calls,
         }
     }
 
@@ -1287,10 +1362,6 @@ impl<'a> FunctionTranslator<'a> {
             self.body.set_terminator(prologue, terminator);
         }
 
-        // WAFFLE may recompute a pure value at each use in another block.
-        // Sonatina values can depend on memory, so make every cross-block use
-        // an explicit block parameter to keep the definition-time snapshot.
-        self.body.convert_to_max_ssa(None);
         Ok(self.body)
     }
 
@@ -1748,8 +1819,10 @@ impl<'a> FunctionTranslator<'a> {
         kind: Shift,
     ) -> Result<(), WasmError> {
         // The count has the type of the value.
+        let known = self.function.dfg.value_imm(bits);
+        let known = known.and_then(Immediate::to_nonnegative_usize);
         self.binary(wb, inst_id, (value, bits), |emit, int, value, bits| {
-            emit.shift(int, kind, value, bits)
+            emit.shift(int, kind, value, bits, known.map(|count| count as u64))
         })
     }
 
@@ -1761,6 +1834,110 @@ impl<'a> FunctionTranslator<'a> {
         self.body.set_terminator(block, Terminator::Unreachable);
         self.trap = Some(block);
         block
+    }
+
+    /// The lowest case of a `br_table` and each case's distance above it, if
+    /// a table over that range is no larger than the chain of comparisons: a
+    /// comparison takes about eight bytes and an entry one. Distances are
+    /// modulo the width, from the lowest signed or unsigned case, whichever
+    /// range is shorter, so cases on both sides of zero are close.
+    fn dense_cases(
+        &self,
+        int: Int,
+        scrutinee_ty: Type,
+        table: &[(ValueId, BlockId)],
+    ) -> Option<(u64, Vec<(u64, BlockId)>)> {
+        let mask = u64::MAX >> (64 - int.bits());
+        let keys: Vec<u64> = table
+            .iter()
+            .map(|&(case, _)| {
+                let imm = self.function.dfg.value_imm(case)?;
+                (imm.ty() == scrutinee_ty).then(|| imm.as_i256().to_u256().low_u64() & mask)
+            })
+            .collect::<Option<_>>()?;
+        let sign = 1 << (int.bits() - 1);
+        let span = |base: u64| keys.iter().map(|key| key.wrapping_sub(base) & mask).max();
+        let unsigned = *keys.iter().min()?;
+        let signed = *keys.iter().min_by_key(|&&key| key ^ sign)?;
+        let base = if span(signed) < span(unsigned) {
+            signed
+        } else {
+            unsigned
+        };
+        (keys.len() >= 3 && span(base)? < 8 * keys.len() as u64).then(|| {
+            let distances = keys.iter().map(|key| key.wrapping_sub(base) & mask);
+            (
+                base,
+                distances.zip(table.iter().map(|&(_, dest)| dest)).collect(),
+            )
+        })
+    }
+
+    /// End `wb` with a WebAssembly `br_table` over `cases`, which are
+    /// distances above `base`, indexed by the scrutinee's distance. One past
+    /// the table takes the default, as does a gap between cases.
+    fn jump_table(
+        &mut self,
+        block: BlockId,
+        wb: waffle::Block,
+        (int, scrutinee): (Int, V),
+        (base, cases): (u64, &[(u64, BlockId)]),
+        default: Option<BlockId>,
+    ) -> Result<(), WasmError> {
+        let entries = cases
+            .iter()
+            .map(|&(distance, _)| distance)
+            .max()
+            .unwrap_or_default()
+            + 1;
+        let mut emit = self.emit(wb);
+        let index = if int.carrier() == WType::I64 {
+            let base = emit.c64(base);
+            let distance = emit.op(Operator::I64Sub, &[scrutinee, base], WType::I64);
+            let limit = emit.c64(entries);
+            let inside = emit.op(Operator::I64LtU, &[distance, limit], WType::I32);
+            let narrow = emit.op(Operator::I32WrapI64, &[distance], WType::I32);
+            let past = emit.c32(entries as u32);
+            emit.op(Operator::Select, &[narrow, past, inside], WType::I32)
+        } else if base == 0 {
+            scrutinee
+        } else {
+            let base = emit.c32(base as u32);
+            let distance = emit.op(Operator::I32Sub, &[scrutinee, base], WType::I32);
+            emit.canonicalize(int, distance)
+        };
+        let default = match default {
+            Some(default) => self.edge(block, default, wb)?,
+            None => BlockTarget {
+                block: self.trap_block(),
+                args: vec![],
+            },
+        };
+        // The first case with a constant is the one a chain would take.
+        let mut edges: FxHashMap<BlockId, BlockTarget> = FxHashMap::default();
+        let mut targets = vec![None; entries as usize];
+        for &(distance, dest) in cases {
+            let target = &mut targets[distance as usize];
+            if target.is_none() {
+                *target = Some(match edges.entry(dest) {
+                    Entry::Occupied(edge) => edge.get().clone(),
+                    Entry::Vacant(edge) => edge.insert(self.edge(block, dest, wb)?).clone(),
+                });
+            }
+        }
+        let targets = targets
+            .into_iter()
+            .map(|target| target.unwrap_or_else(|| default.clone()))
+            .collect();
+        self.body.set_terminator(
+            wb,
+            Terminator::Select {
+                value: index,
+                targets,
+                default,
+            },
+        );
+        Ok(())
     }
 
     /// Trap if `cond` (an `i32`) is non-zero; the rest of the block continues
@@ -1904,7 +2081,8 @@ impl<'a> FunctionTranslator<'a> {
         for inst_id in function.layout.iter_inst(block) {
             let inst = function.dfg.inst(inst_id);
             self.translate_inst(block, &mut wb, inst_id, inst)?;
-            if inst.is_terminator() {
+            // A tail call returns its results itself.
+            if inst.is_terminator() || self.tail_calls.contains(&inst_id) {
                 return Ok(());
             }
         }
@@ -2315,6 +2493,11 @@ impl<'a> FunctionTranslator<'a> {
                     Scrutinee::Int(int, self.operand(*wb, *table.scrutinee())?)
                 };
                 let default = *table.default();
+                if let Scrutinee::Int(int, value) = scrutinee
+                    && let Some((base, cases)) = self.dense_cases(int, scrutinee_ty, table.table())
+                {
+                    return self.jump_table(block, *wb, (int, value), (base, &cases), default);
+                }
 
                 // Each case is tested in turn; the edge arguments are
                 // materialized in the block that takes the edge.
@@ -2552,8 +2735,13 @@ impl<'a> FunctionTranslator<'a> {
         let mut args = Vec::with_capacity(call_args.len() + 2);
         // The value of `stack_top` that the call to an import must put back.
         let mut stack_top_before = None;
+        let tail = self.tail_calls.contains(&inst_id);
         if callee.stack_param {
-            args.push(self.frame_top()?);
+            // The frame of a tail call's callee replaces this one.
+            args.push(match (tail, self.sp) {
+                (true, Some(sp)) => sp,
+                _ => self.frame_top()?,
+            });
         } else if callee.is_import
             && let (Some(globals), Some(top)) = (self.globals, self.top)
         {
@@ -2605,6 +2793,11 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
         let values = emit_call(&mut self.body, wb, func, &args, &carriers);
+        if tail {
+            // `tail::rewrite` makes the call and this return a `return_call`.
+            self.body.set_terminator(wb, Terminator::Return { values });
+            return Ok(());
+        }
         if let (Some(before), Some(globals)) = (stack_top_before, self.globals) {
             self.body.add_op(
                 wb,

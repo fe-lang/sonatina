@@ -28,8 +28,9 @@ fn compile_wasm(module: Module) -> Vec<u8> {
 Compiling the same module twice produces identical bytes.
 
 The module uses the multi-value, sign-extension and bulk-memory
-(`memory.copy`, `memory.fill`) extensions of WebAssembly, which every current
-engine enables.
+(`memory.copy`, `memory.fill`) extensions of WebAssembly and, when a recursive
+cycle makes a call in tail position, the tail-call extension. Every current
+engine enables them.
 
 ## Target and layout
 
@@ -78,6 +79,9 @@ are canonical: an `i8` holding -1 is returned as 255.
   `WasmBackend::with_import_module` selects another. Imports take the same
   kinds of parameters as exports.
 - Functions may return several values (WebAssembly multi-value).
+- The module has a name section with the names of its functions, so an engine
+  names them in the stack of a trap. The function behind an export `f` of a
+  module with frames is `f$body`.
 
 ## Linear memory
 
@@ -121,15 +125,32 @@ A call to an import first stores the end of its caller's frame in that global, s
 that an export that the host calls back runs above the caller's frames, and puts
 the global back when the import returns. The wrapper of an export also restores
 it when the export returns. A trap in the module therefore leaves the global as
-it was, except a trap during the call to an import: when the host throws an
-error or a callback traps, the module does not run again before the host call
-ends, and the frame of the caller stays reserved. Each such error costs the
-frame of one function.
+it was, except during the call to an import: when the host throws an error or a
+callback traps, the module does not run again before the host call ends, and
+the global stays at the end of the caller's frame. Every frame that was active
+then stays reserved for later calls.
 
-There are no tail calls: WAFFLE 0.3.3 has no `return_call`. The native backend
-makes the calls of a recursive cycle tail calls, so a deep tail recursion that
-runs in constant stack there takes a frame per call here and traps when the
-stack is full.
+The host repairs this. A module with frames and at least one import exports the
+global as `stack_top` (a mutable `i32`; no function of the module may have the
+name). A host reads it before it calls an export and, if the call ends with an
+error, writes that value back. Calls that the host makes from inside an import do
+the same, so nested calls restore in order. A module with no imports does not
+export the global and needs no repair.
+
+### Tail calls
+
+A private function in a recursive cycle makes tail calls, as on the native
+target: a call whose results the function returns at once is a `return_call`,
+so a deep tail recursion runs in constant stack. The callee starts its frame
+where the caller's started. That needs the caller's frame to be dead: no
+`alloca`, no reference to an `obj.alloc` that outlives a call, every struct,
+array or enum argument one that the caller itself received, and no aggregate
+result. A call in tail position that passes an aggregate built in the caller's
+frame is still a `return_call`, with a frame above the caller's, so only the
+stack of the module grows.
+
+WAFFLE 0.3.3 has no `return_call`. The backend emits the call followed by a
+return of its results and rewrites that sequence in the encoded module.
 
 ### The heap
 
@@ -277,10 +298,20 @@ Calls, returns, phis and memory carry only its two limbs.
 operands are zero-extended, as on the native target, so the sum or product
 does not wrap.
 
-Multiplication, division and variable shifts are functions of the module,
-emitted only when used. Division traps on a zero divisor. It is one 64-bit
-division when both operands fit in 64 bits, no step when the dividend is below
-the divisor, and otherwise one step per bit of the dividend.
+Multiplication, division and shifts by a count that is not a constant are
+functions of the module, emitted only when used. A shift by a constant, `sar`
+included, is built in place, and so is a product with at most three limb products that are not
+zero: any 128-bit product, and a 256-bit product of values extended from 64
+bits. Limbs that are constants, such as the zero high limbs of a value
+extended from 64 or 128 bits, are folded out of additions, subtractions,
+comparisons and bitwise operations.
+
+Division traps on a zero divisor. It is one 64-bit division when both operands
+fit in 64 bits, and no step when the dividend is below the divisor. Otherwise
+it is long division on 64-bit digits: one step per limb of the dividend for a
+divisor of one limb, and at most three steps for a longer divisor. A step
+multiplies by the reciprocal of the divisor's top limb, which takes two 64-bit
+divisions to compute. `evm_mul_mod` divides the 512-bit product the same way.
 
 ## Instruction semantics
 
@@ -299,8 +330,10 @@ native backend:
   and aggregates. An access outside the memory traps. Natural alignment is only
   a hint, so unaligned addresses are valid. An `i1` load keeps the low bit of the
   byte.
-- `br_table` compares the scrutinee with each case in order and traps if no
-  case matches and there is no default.
+- `br_table` takes the first case equal to the scrutinee and traps if no case
+  matches and there is no default. Constant cases of at most 64 bits that lie
+  close together index a WebAssembly `br_table`; other cases are compared in
+  order.
 - `unreachable` traps.
 - An `undef` operand is materialized as zero.
 

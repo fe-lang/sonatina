@@ -175,6 +175,28 @@ fn function(index: usize, instruction: &str, returns: &str, tail: &str) -> Strin
 }
 
 #[test]
+fn a_128_bit_product_needs_no_multiplication_function() {
+    // The product is at most three limb products, built in place; only the
+    // checked product calls `i256.mulo`. The name section lists the functions.
+    let module = |instruction: &str| {
+        let source = format!(
+            "{PRELUDE}func public %f(v0.i64, v1.i64, v2.i64, v3.i64) -> (i64, i64) {{
+    block0:
+        v4.i128 = call %pack v0 v1;
+        v5.i128 = call %pack v2 v3;
+        {instruction}
+        (v8.i64, v9.i64) = call %unpack v6;
+        return (v8, v9);
+}}"
+        );
+        build_at(&source, OptLevel::O2)
+    };
+    let has_helper = |bytes: &[u8]| bytes.windows(9).any(|name| name == b"i256.mulo");
+    assert!(!has_helper(&module("v6.i128 = mul v4 v5;")));
+    assert!(has_helper(&module("(v6.i128, v7.i1) = umulo v4 v5;")));
+}
+
+#[test]
 fn every_128_bit_operation_matches_the_reference() {
     // The halves of v6, and v12: whether v6 extended to 256 bits has no bits
     // above 128.
