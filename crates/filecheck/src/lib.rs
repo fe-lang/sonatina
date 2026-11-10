@@ -15,6 +15,7 @@ pub mod licm;
 pub mod load_store;
 pub mod loop_rotate;
 pub mod loop_strength_reduce;
+pub mod narrow_object_loads;
 pub mod range_branch_simplify;
 pub mod return_thread;
 pub mod sccp;

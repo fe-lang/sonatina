@@ -1,0 +1,72 @@
+#! A loaded struct or array read only through constant `extract_value`s becomes loads of the fields read, where the whole load was.
+
+target = "evm-ethereum-osaka"
+
+type @entry = {i8, i256, i256, i256, i1};
+type @outer = {i64, @entry};
+
+declare external %fx();
+
+# The fields load before the call, as the whole entry did.
+# sameln: func private %kind_and_address(v0.objref<@entry>) -> i256 {
+# nextln: block0:
+# nextln: obj.proj v0 0.i256;
+# nextln: obj.load
+# nextln: obj.proj v0 1.i256;
+# nextln: obj.load
+# nextln: call %fx;
+# not: obj.load v0;
+# not: extract_value
+func private %kind_and_address(v0.objref<@entry>) -> i256 {
+block0:
+    v1.@entry = obj.load v0;
+    call %fx;
+    v2.i8 = extract_value v1 0.i256;
+    v3.i256 = extract_value v1 1.i256;
+    v4.i1 = eq v2 8.i8;
+    br v4 block1 block2;
+
+block1:
+    return v3;
+
+block2:
+    v5.i256 = extract_value v1 1.i256;
+    return v5;
+}
+
+# A field that is a struct narrows in turn.
+# sameln: func private %nested(v0.objref<@outer>) -> i256 {
+# check: obj.proj v0 1.i256;
+# check: obj.proj
+# check: 2.i256;
+# not: extract_value
+func private %nested(v0.objref<@outer>) -> i256 {
+block0:
+    v1.@outer = obj.load v0;
+    v2.@entry = extract_value v1 1.i256;
+    v3.i256 = extract_value v2 2.i256;
+    return v3;
+}
+
+# Array elements narrow through `obj.index`.
+# sameln: func private %element(v0.objref<[i256; 4]>) -> i256 {
+# check: obj.index v0 3.i256;
+# not: extract_value
+func private %element(v0.objref<[i256; 4]>) -> i256 {
+block0:
+    v1.[i256; 4] = obj.load v0;
+    v2.i256 = extract_value v1 3.i256;
+    return v2;
+}
+
+# A loaded value used whole stays a whole load.
+# sameln: func private %whole(v0.objref<@entry>, v1.objref<@entry>) -> i8 {
+# check: v2.@entry = obj.load v0;
+# check: extract_value v2 0.i256;
+func private %whole(v0.objref<@entry>, v1.objref<@entry>) -> i8 {
+block0:
+    v2.@entry = obj.load v0;
+    obj.store v1 v2;
+    v3.i8 = extract_value v2 0.i256;
+    return v3;
+}
