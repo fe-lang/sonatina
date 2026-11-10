@@ -34,7 +34,7 @@ use sonatina_ir::{
     Value, ValueId,
     inst::{InstId, control_flow, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
-    module::FuncRef,
+    module::{FuncHints, FuncRef},
     parallel,
 };
 use sonatina_triple::TargetTriple;
@@ -150,6 +150,7 @@ pub(super) fn translate_module(
     }
 
     let mut translated = Vec::new();
+    let mut cold = Vec::new();
     for &func_ref in &funcs {
         let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
         let ctx =
@@ -188,7 +189,12 @@ pub(super) fn translate_module(
                 if !tail_calls.uses_tail_convention(func_ref) {
                     defined_func_map.insert(name.clone(), func_id);
                 }
-                translated.push((format!("function {name}"), func_id, ctx));
+                let function = (format!("function {name}"), func_id, ctx);
+                if module.ctx.func_hints(func_ref).contains(FuncHints::COLD) {
+                    cold.push(function);
+                } else {
+                    translated.push(function);
+                }
             }
             Some(Ok(None)) | None => {}
             Some(Err(error)) => {
@@ -208,6 +214,8 @@ pub(super) fn translate_module(
             .into_iter()
             .map(|(func_id, ctx)| ("the black box".to_string(), func_id, ctx)),
     );
+    // Cold functions go last, so the rest of the code stays together.
+    translated.extend(cold);
 
     // Functions compile independently; defining them in order keeps the
     // output deterministic.
