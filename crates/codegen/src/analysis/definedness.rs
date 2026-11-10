@@ -138,13 +138,15 @@ pub(crate) fn is_defined_source(func: &Function, value: ValueId) -> bool {
     }
 }
 
-/// Whether a value of `ty` holds data: a reference or the unit value holds
-/// none, so no part of it is ever undef.
+/// Whether a value of `ty` holds data: a reference, the unit value or a
+/// zero-sized aggregate such as `{}` holds none, so no part of it is ever
+/// undef.
 fn holds_data(func: &Function, ty: Type) -> bool {
     !ty.is_unit()
         && func.ctx().with_ty_store(|store| {
             !(store.is_obj_ref(ty) || store.is_const_ref(ty) || store.is_func(ty))
         })
+        && !func.ctx().size_of(ty).is_ok_and(|size| size == 0)
 }
 
 /// The field types of a struct or array type.
@@ -645,6 +647,12 @@ type @opt = enum {
     #None,
     #Some(i256),
 };
+type @empty = {};
+type @empties = {@empty, [i8; 0]};
+type @result = enum {
+    #Ok(@empties),
+    #Err(i256),
+};
 
 func private %source() -> @pair {
 block0:
@@ -666,6 +674,8 @@ block0:
     v13.@opt = enum.make @opt #Some (v0);
     v14.@opt = enum.make @opt #Some (undef.i256);
     v15.@nested = insert_value v6 1.i8 v3;
+    v20.@result = enum.make @result #Ok (undef.@empties);
+    v21.@empty = extract_value undef.@empties 0.i8;
     br v2 block1 block2;
 
 block1:
@@ -715,10 +725,12 @@ block5:
                 (17, false),
                 (18, false),
                 (19, false),
+                (20, false),
+                (21, false),
             ] {
                 assert_eq!(taint.holds_undef(func, v(n)), holds, "v{n}");
             }
-            for n in [3, 5, 12, 15] {
+            for n in [3, 5, 12, 15, 20] {
                 assert!(taint.can_define(func, v(n)), "v{n}");
             }
             assert!(!taint.can_define(func, v(14)));
