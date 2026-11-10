@@ -82,6 +82,28 @@ fn explicit_traps_are_four_byte_ebreaks() {
 }
 
 #[test]
+fn text_has_no_padding_between_functions() {
+    // SP1 decodes every word of executable text as an instruction, and zero
+    // is not one. The object writer pads a function's alignment gap with
+    // zeros, and the linker pads before a section aligned past four bytes.
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let module = parse(include_str!("../test_files/linked_abi.sntn"));
+        let artifact = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+        let object = object::File::parse(artifact.as_bytes()).unwrap();
+        let text = object
+            .sections()
+            .find(|section| section.kind() == SectionKind::Text)
+            .unwrap();
+        assert_eq!(text.align(), 4, "{level:?}");
+        let (words, rest) = text.data().unwrap().as_chunks::<4>();
+        assert!(rest.is_empty() && !words.contains(&[0; 4]), "{level:?}");
+    }
+}
+
+#[test]
 fn wide_divisions_call_a_local_divider() {
     let source = r#"
 func public %divide(v0.*i256, v1.*i256, v2.*i128) {
