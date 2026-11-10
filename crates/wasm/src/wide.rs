@@ -317,6 +317,32 @@ impl Emit<'_> {
         result
     }
 
+    /// The low `limbs` limbs of `a * b` when at most three products of their
+    /// limbs are not zero, as for values extended from 64 bits and for any
+    /// 128-bit values. A longer product calls the multiplication function.
+    pub(super) fn wide_mul_short(&mut self, limbs: usize, a: Limbs, b: Limbs) -> Option<Limbs> {
+        let is_zero = |limb: V| self.constant_of(limb) == Some(0);
+        let products: Vec<(usize, usize)> = (0..limbs)
+            .flat_map(|i| (0..limbs - i).map(move |j| (i, j)))
+            .filter(|&(i, j)| !is_zero(a[i]) && !is_zero(b[j]))
+            .collect();
+        if products.len() > 3 {
+            return None;
+        }
+        let mut result = self.wide_zero();
+        for (i, j) in products {
+            let mut term = self.wide_zero();
+            // The high half of a product in the top limb is not part of the result.
+            if i + j + 1 < limbs {
+                (term[i + j], term[i + j + 1]) = self.mul_wide(a[i], b[j]);
+            } else {
+                term[i + j] = self.op(Operator::I64Mul, &[a[i], b[j]], WType::I64);
+            }
+            result = self.wide_add(result, term).0;
+        }
+        Some(result)
+    }
+
     /// Signed overflow of `lhs + rhs` (when `sub` is false) or `lhs - rhs`.
     pub(super) fn wide_signed_overflow(
         &mut self,

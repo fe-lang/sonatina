@@ -127,7 +127,7 @@ impl Emit<'_> {
     }
 
     /// The value of an integer constant.
-    fn constant_of(&self, value: V) -> Option<u64> {
+    pub(super) fn constant_of(&self, value: V) -> Option<u64> {
         match self.body.values[value] {
             ValueDef::Operator(Operator::I64Const { value }, ..) => Some(value),
             ValueDef::Operator(Operator::I32Const { value }, ..) => Some(u64::from(value)),
@@ -142,6 +142,8 @@ impl Emit<'_> {
         let flag = |this: &mut Self, value: bool| this.c32(u32::from(value));
         let known = |index: usize| args.get(index).and_then(|&arg| self.constant_of(arg));
         match (op, known(0), known(1)) {
+            // Nothing is below itself.
+            (Operator::I64LtU, ..) if args[0] == args[1] => flag(self, false),
             (Operator::I64Add, Some(a), Some(b)) => self.c64(a.wrapping_add(b)),
             (Operator::I64Sub, Some(a), Some(b)) => self.c64(a.wrapping_sub(b)),
             (Operator::I64Or, Some(a), Some(b)) => self.c64(a | b),

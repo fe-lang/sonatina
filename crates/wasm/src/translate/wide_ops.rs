@@ -300,7 +300,10 @@ impl FunctionTranslator<'_> {
         let helpers = self.wide_helpers;
         match op {
             WideOp::Mul => {
-                let (result, _) = self.unsigned_mulo(wb, helpers.mulo, a, b)?;
+                let result = match self.emit(wb).wide_mul_short(wide.limbs(), a, b) {
+                    Some(result) => result,
+                    None => self.unsigned_mulo(wb, helpers.mulo, a, b)?.0,
+                };
                 self.define_wide(wb, inst_id, 0, wide, result)
             }
             WideOp::Umulo | WideOp::Smulo => {

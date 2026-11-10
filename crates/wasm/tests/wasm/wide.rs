@@ -592,6 +592,55 @@ fn run_case(case: &Case, level: OptLevel, rng: &mut Lcg, count: usize) {
 }
 
 #[test]
+fn products_of_extended_values_match_the_reference() {
+    // Values extended from 64 bits have one limb that is not zero, so their
+    // product is built in place; `wide` mixes in a full value, which calls
+    // the multiplication function.
+    let source = format!(
+        "{PRELUDE}func public %narrow(v0.i64, v1.i64) -> (i64, i64, i64, i64) {{
+    block0:
+        v2.i256 = zext v0 i256;
+        v3.i256 = zext v1 i256;
+        v4.i256 = mul v2 v3;
+        (v5.i64, v6.i64, v7.i64, v8.i64) = call %unpack v4;
+        return (v5, v6, v7, v8);
+}}
+func public %wide(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64) -> (i64, i64, i64, i64) {{
+    block0:
+        v5.i256 = call %pack v0 v1 v2 v3;
+        v6.i256 = zext v4 i256;
+        v7.i256 = mul v5 v6;
+        (v8.i64, v9.i64, v10.i64, v11.i64) = call %unpack v7;
+        return (v8, v9, v10, v11);
+}}"
+    );
+    let mut rng = Lcg(0x5eed_3013);
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let mut machine = Machine::new(&build_at(&source, level));
+        let (narrow, wide) = (machine.func("narrow"), machine.func("wide"));
+        let result = |values: Vec<Val>| {
+            let limbs: Vec<u64> = values.iter().map(|v| v.unwrap_i64() as u64).collect();
+            from_limbs(&limbs)
+        };
+        for _ in 0..400 {
+            let (a, b) = (operand(&mut rng), operand(&mut rng).low_u64());
+            let low = a.low_u64();
+            let got = machine.call(&narrow, &[Val::I64(low as i64), Val::I64(b as i64)]);
+            let want = U256::from(low) * U256::from(b);
+            assert_eq!(result(got), want, "{level:?}: {low:#x} * {b:#x}");
+            let mut args: Vec<Val> = limbs(a).map(|limb| Val::I64(limb as i64)).into();
+            args.push(Val::I64(b as i64));
+            let want = a.overflowing_mul(U256::from(b)).0;
+            assert_eq!(
+                result(machine.call(&wide, &args)),
+                want,
+                "{level:?}: {a:#x} * {b:#x}"
+            );
+        }
+    }
+}
+
+#[test]
 fn shifts_by_a_constant_match_the_reference() {
     // A constant count is shifted in place, limb by limb, at 256 bits and at
     // 128 bits, where the low half of the wider shift is the result.

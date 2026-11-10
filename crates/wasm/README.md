@@ -300,7 +300,9 @@ does not wrap.
 
 Multiplication, division and shifts by a count that is not a constant are
 functions of the module, emitted only when used. A shift by a constant is built
-in place. Limbs that are constants, such as the zero high limbs of a value
+in place, and so is a product with at most three limb products that are not
+zero: any 128-bit product, and a 256-bit product of values extended from 64
+bits. Limbs that are constants, such as the zero high limbs of a value
 extended from 64 or 128 bits, are folded out of additions, subtractions,
 comparisons and bitwise operations. Division traps on a zero divisor. It is one 64-bit
 division when both operands fit in 64 bits, no step when the dividend is below
