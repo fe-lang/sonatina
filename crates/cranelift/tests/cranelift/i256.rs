@@ -731,6 +731,45 @@ fn i256_division_by_powers_of_two_and_one_limb_divisors() {
     }
 }
 
+#[test]
+fn i256_division_by_two_limbs_matches_reference() {
+    // Divisors of 65 to 128 bits divide in registers with a 3-by-2 division
+    // per numerator limb. Boundary limbs reach its rare last step, which
+    // leaves the remainder at least the divisor.
+    let mut state = 0x6a09_e667_f3bc_c909u64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let boundaries = [0, u64::MAX, 1 << 63, (1 << 63) - 1, 1];
+    let mut cases = Vec::new();
+    let mut last_steps = 0;
+    for _ in 0..20_000 {
+        let mut limb = || {
+            let choice = next();
+            if choice % 5 < 3 {
+                boundaries[(choice >> 3) as usize % boundaries.len()]
+            } else {
+                next()
+            }
+        };
+        let numerator = word([limb(), limb(), limb(), limb()]);
+        let high = limb().max(1);
+        let divisor = word([limb(), high, 0, 0]);
+        let takes = two_limb_last_step(&numerator.0, divisor);
+        if takes || cases.len() < 2000 {
+            last_steps += usize::from(takes);
+            cases.push([numerator, divisor, U256::zero()]);
+        }
+    }
+    assert!(last_steps > 0, "no case takes the last step");
+    for op in ["udiv", "umod", "sdiv", "smod"] {
+        check(&binary(op), &cases, |[a, b, _]| (divided(op, a, b), false));
+    }
+}
+
 /// `(a op b) % m` at full precision; a zero modulus gives zero.
 fn modular(a: U256, b: U256, m: U256, multiply: bool) -> U256 {
     if m.is_zero() {
@@ -756,6 +795,12 @@ fn moduli() -> Vec<U256> {
     moduli.extend([
         U256::one() << 64,
         (U256::one() << 64) + 1,
+        // Two limbs divide in registers, normalized by shifts from 0 to 63.
+        (U256::one() << 65) + 3,
+        (U256::one() << 64) + (U256::one() << 63),
+        (U256::one() << 127) - 1,
+        (U256::one() << 128) - 1,
+        U256::from_str_radix("1f00000000000000c3", 16).unwrap(),
         (U256::one() << 128) + 1,
         (U256::one() << 192) - 1,
         // The secp256k1 field prime and the BN254 scalar field order.
@@ -797,6 +842,92 @@ fn i256_modular_arithmetic_matches_reference() {
             |[a, b, m]| (modular(a, b, m, multiply), false),
         );
     }
+}
+
+#[test]
+fn i256_modular_arithmetic_by_short_moduli_matches_reference() {
+    // Sums and products by moduli of one or two limbs, which divide in
+    // registers with a division by reciprocal per numerator limb. Boundary
+    // limbs reach the 3-by-2 division's rare last step, which leaves the
+    // remainder at least the modulus.
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let boundaries = [0, u64::MAX, 1 << 63, (1 << 63) - 1, 1];
+    let mut cases = Vec::new();
+    let mut last_steps = 0;
+    for _ in 0..20_000 {
+        let one_limb = next() % 3 == 0;
+        let mut limb = || {
+            let choice = next();
+            if choice % 5 < 3 {
+                boundaries[(choice >> 3) as usize % boundaries.len()]
+            } else {
+                next()
+            }
+        };
+        let [a, b] = [(); 2].map(|()| word([limb(), limb(), limb(), limb()]));
+        let high = if one_limb { 0 } else { limb().max(1) };
+        let m = word([limb(), high, 0, 0]);
+        let multiply = cases.len() % 2 == 1;
+        let takes = high != 0
+            && if multiply {
+                two_limb_last_step(&a.full_mul(b).0, m)
+            } else {
+                two_limb_last_step(
+                    &(a.full_mul(U256::one()) + b.full_mul(U256::one())).0[..5],
+                    m,
+                )
+            };
+        if takes || cases.len() < 2000 {
+            last_steps += usize::from(takes);
+            cases.push(([a, b, m], multiply));
+        }
+    }
+    assert!(last_steps > 0, "no case takes the last step");
+    for (op, multiply) in [("evm_add_mod", false), ("evm_mul_mod", true)] {
+        let cases: Vec<_> = cases
+            .iter()
+            .filter(|&&(_, product)| product == multiply)
+            .map(|&(case, _)| case)
+            .collect();
+        check(
+            &format!("    v7.i256 = {op} v4 v5 v6;\n    mstore v3 v7 i256;\n    return 0.i8;"),
+            &cases,
+            |[a, b, m]| (modular(a, b, m, multiply), false),
+        );
+    }
+}
+
+/// Whether some 3-by-2 division of the `numerator` limbs by the two-limb
+/// `m`, one per normalized numerator limb below the top two, takes the last
+/// step.
+fn two_limb_last_step(numerator: &[u64], m: U256) -> bool {
+    let shift = m.low_u128().leading_zeros();
+    let divisor = m.low_u128() << shift;
+    let (d0, d1) = (divisor as u64, (divisor >> 64) as u64);
+    let reciprocal = (((U256::one() << 192) - 1) / U256::from(divisor)).low_u64();
+    let limb = |index: usize| numerator.get(index).map_or(0, |&limb| u128::from(limb));
+    let normalized = |index: usize| {
+        let below = index.checked_sub(1).map_or(0, limb);
+        ((((limb(index) << 64) | below) << shift) >> 64) as u64
+    };
+    let limbs = numerator.len();
+    let top = (u128::from(normalized(limbs)) << 64) | u128::from(normalized(limbs - 1));
+    let (_, takes) = (0..limbs - 1)
+        .rev()
+        .fold((top, false), |(remainder, takes), index| {
+            let low = normalized(index);
+            let (r0, r1) = (remainder as u64, (remainder >> 64) as u64);
+            let takes = takes || takes_last_step([low, r0, r1], [d0, d1], reciprocal);
+            let window = (U256::from(remainder) << 64) | U256::from(low);
+            ((window % U256::from(divisor)).low_u128(), takes)
+        });
+    takes
 }
 
 /// A rare correction of a quotient digit: the largest digit, the 3-by-2
