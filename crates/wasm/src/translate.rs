@@ -291,10 +291,13 @@ fn scan_module(module: &Module) -> Scan {
                     if matches!(kind, NativeInstKind::MemAllocDynamic(_)) {
                         arena = true;
                     }
+                    // A shift by a constant and a 128-bit product are built
+                    // in place.
                     if let Some((op, lhs, rhs)) = wide_op_of(&kind)
-                        && Wide::from_type(function.dfg.value_ty(lhs)).is_some()
+                        && let Some(wide) = Wide::from_type(function.dfg.value_ty(lhs))
                         && !(matches!(op, WideOp::Shl | WideOp::Shr)
                             && constant_shift(function, rhs).is_some())
+                        && !(op == WideOp::Mul && wide == Wide::I128)
                     {
                         let (mulo, divrem, shl, shr) = op.needs();
                         helpers.0 |= mulo;
