@@ -872,6 +872,216 @@ block2:
 }
 
 #[test]
+fn stores_of_parts_keep_the_fields_of_byte_arrays() {
+    // A byte array is one copy piece, but its elements are separate parts.
+    // Stores of the parts write every element and leave the padding after
+    // the array, which is not part of the value: `mstore`, an `enum.make`
+    // and a bitcast through storage.
+    let source = r#"
+type @Bytes = { [i8; 2], i32 };
+type @Tagged = enum { #None, #Some([i8; 2], i32) };
+func public %store(v0.*i8, v1.*i8, v2.i8, v3.i32) -> i64 {
+block0:
+    v4.*@Bytes = bitcast v0 *@Bytes;
+    v5.*@Tagged = bitcast v1 *@Tagged;
+    v6.[i8; 2] = insert_value undef.[i8; 2] 0.i64 v2;
+    v7.[i8; 2] = insert_value v6 1.i64 v2;
+    v8.@Bytes = insert_value undef.@Bytes 0.i64 v7;
+    v9.@Bytes = insert_value v8 1.i64 v3;
+    mstore v4 v9 @Bytes;
+    v10.@Tagged = enum.make @Tagged #Some (v7, v3);
+    mstore v5 v10 @Tagged;
+    v11.i64 = bitcast v9 i64;
+    return v11;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let store: unsafe extern "C" fn(*mut u8, *mut u8, i8, i32) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("store").unwrap()) };
+        let (mut bytes, mut tagged) = ([0xa5u8; 8], [0xa5u8; 12]);
+        let cast = unsafe { store(bytes.as_mut_ptr(), tagged.as_mut_ptr(), 7, 0x0102_0304) };
+        // `@Bytes`: the array at 0, the i32 at 4. `@Tagged`: its tag, the
+        // array at 4, the i32 at 8.
+        let expected = [7, 7, 0, 0, 4, 3, 2, 1];
+        assert_fields_eq(&bytes, &expected, Some(2..4), format!("{level:?}"));
+        assert_fields_eq(
+            &cast.to_le_bytes(),
+            &expected,
+            Some(2..4),
+            format!("{level:?}"),
+        );
+        assert_fields_eq(
+            &tagged,
+            &[1, 0, 0, 0, 7, 7, 0, 0, 4, 3, 2, 1],
+            [1..4, 6..8],
+            format!("{level:?}"),
+        );
+    }
+}
+
+#[test]
+fn copies_keep_the_fields_of_every_variant_of_an_enum() {
+    // fevm's journal entry: variants whose u256 fields share words with
+    // other variants' narrow fields, and a nested enum. `%build` makes each
+    // variant and returns it in a struct; `%copy` passes an entry through
+    // `mload`, phis, an object, a return and `mstore`. Copies split at
+    // field bounds only within each word.
+    let source = r#"
+type @Field = enum { #Balance, #Nonce };
+type @Opt = enum { #None, #Some(i256) };
+type @Kind = enum { #Account(@Field, i256, i1), #Storage(i256, i256, i1), #Delegation(@Opt, i1) };
+type @Change = { i256, @Kind };
+func inline(never) private %pass(v0.@Change) -> @Change {
+block0:
+    return v0;
+}
+func inline(never) private %make(v0.i64, v1.i256, v2.i256, v3.i256, v4.i1) -> @Change {
+block0:
+    br_table v0 block3 (0.i64 block1) (1.i64 block2);
+block1:
+    v5.@Field = enum.make @Field #Nonce ();
+    v6.@Kind = enum.make @Kind #Account (v5, v2, v4);
+    jump block4;
+block2:
+    v7.@Kind = enum.make @Kind #Storage (v2, v3, v4);
+    jump block4;
+block3:
+    v8.@Opt = enum.make @Opt #Some (v3);
+    v9.@Kind = enum.make @Kind #Delegation (v8, v4);
+    jump block4;
+block4:
+    v10.@Kind = phi (v6 block1) (v7 block2) (v9 block3);
+    v11.@Change = insert_value undef.@Change 0.i64 v1;
+    v12.@Change = insert_value v11 1.i64 v10;
+    return v12;
+}
+func public %build(v0.i64, v1.*i256, v2.*i256, v3.*i256, v4.i8, v50.*i8) {
+block0:
+    v5.*@Change = bitcast v50 *@Change;
+    v6.i256 = mload v1 i256;
+    v7.i256 = mload v2 i256;
+    v8.i256 = mload v3 i256;
+    v9.i1 = ne v4 0.i8;
+    v10.@Change = call %make v0 v6 v7 v8 v9;
+    mstore v5 v10 @Change;
+    return;
+}
+func public %copy(v20.*i8, v30.*i8, v2.i64) {
+block0:
+    v0.*@Change = bitcast v20 *@Change;
+    v1.*@Change = bitcast v30 *@Change;
+    v3.@Change = mload v0 @Change;
+    jump block1;
+block1:
+    v4.@Change = phi (v3 block0) (v7 block1);
+    v5.i64 = phi (v2 block0) (v8 block1);
+    v6.objref<@Change> = obj.alloc @Change;
+    obj.store v6 v4;
+    v10.@Change = obj.load v6;
+    v7.@Change = call %pass v10;
+    v8.i64 = sub v5 1.i64;
+    v9.i1 = gt v8 0.i64;
+    br v9 block1 block2;
+block2:
+    mstore v1 v7 @Change;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let build: unsafe extern "C" fn(i64, *const u8, *const u8, *const u8, u8, *mut u8) =
+            unsafe { std::mem::transmute(artifact.function_address("build").unwrap()) };
+        let copy: unsafe extern "C" fn(*const u8, *mut u8, i64) =
+            unsafe { std::mem::transmute(artifact.function_address("copy").unwrap()) };
+        // The address at 0 and `@Kind` at 32: its tag, then payloads from 48.
+        // `#Account`: `@Field`'s tag at 48, an i256 at 64, the i1 at 96.
+        // `#Storage`: i256s at 48 and 80, the i1 at 112. `#Delegation`:
+        // `@Opt`'s tag at 48 and its i256 at 64, the i1 at 96.
+        let address: [u8; 32] = std::array::from_fn(|i| (i * 3 + 1) as u8);
+        let a: [u8; 32] = std::array::from_fn(|i| (i * 7 + 3) as u8);
+        let b: [u8; 32] = std::array::from_fn(|i| (i * 11 + 5) as u8);
+        for (variant, flag) in [(0u8, 1u8), (1, 1), (2, 1), (0, 0), (1, 0), (2, 0)] {
+            let mut expected = [0u8; 128];
+            expected[..32].copy_from_slice(&address);
+            expected[32] = variant;
+            match variant {
+                0 => {
+                    expected[48] = 1;
+                    expected[64..96].copy_from_slice(&a);
+                    expected[96] = flag;
+                }
+                1 => {
+                    expected[48..80].copy_from_slice(&a);
+                    expected[80..112].copy_from_slice(&b);
+                    expected[112] = flag;
+                }
+                _ => {
+                    expected[48] = 1;
+                    expected[64..96].copy_from_slice(&b);
+                    expected[96] = flag;
+                }
+            }
+            let mut built = [0xa5u8; 128];
+            unsafe {
+                build(
+                    i64::from(variant),
+                    address.as_ptr(),
+                    a.as_ptr(),
+                    b.as_ptr(),
+                    flag,
+                    built.as_mut_ptr(),
+                )
+            };
+            // Padding, and the payload bytes no field of the variant lies
+            // in, are not part of the value.
+            let unused = if variant == 1 {
+                vec![33..48, 113..128]
+            } else {
+                vec![33..48, 49..64, 97..128]
+            };
+            assert_fields_eq(
+                &built,
+                &expected,
+                unused,
+                format!("{level:?} {variant} {flag}"),
+            );
+            // A copy keeps every byte some variant has a field in, whatever
+            // the variant.
+            let mut entry: [u8; 128] = std::array::from_fn(|i| (i * 37 + 11) as u8);
+            entry[32] = variant;
+            entry[48] = 1;
+            entry[96] = flag;
+            entry[112] = flag;
+            for rounds in [1, 3] {
+                for input in [&built, &entry] {
+                    let mut output = [0xa5u8; 128];
+                    unsafe { copy(input.as_ptr(), output.as_mut_ptr(), rounds) };
+                    assert_fields_eq(
+                        &output,
+                        input,
+                        [33..48, 113..128],
+                        format!("{level:?} {variant} {flag} {rounds}"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn narrow_enum_fields_fill_the_piece_a_wider_variant_shares() {
     // `#Flag`, `#Wrapped` and `#Pair`'s i32 fill the word `#Word` holds at 8, so
     // a word load forwards from their stores. `#Two` has two fields in the word
