@@ -10,7 +10,7 @@ use sonatina_ir::{
         cmp::{IsZero, Lt},
         control_flow::{Br, BrTable, BranchKind, Jump, Phi, Return},
         data::Alloca,
-        evm::{EvmMload, EvmMstore},
+        evm::{EvmMload, EvmMstore, EvmMstore8},
         logic::And,
     },
     ir_writer::FuncWriter,
@@ -447,6 +447,109 @@ fn machine_gvn_folds_word_bool_constant_without_zext() {
     module.func_store.view(func_ref, |function| {
         let dumped = FuncWriter::new(func_ref, function).dump_string();
         assert!(dumped.contains("return 1.i256;"), "{dumped}");
+        assert!(!dumped.contains(" and "), "{dumped}");
+    });
+}
+
+#[test]
+fn machine_known_bits_drops_mask_on_mstore8_value() {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new(
+            "machine_mstore8_mask",
+            Linkage::Public,
+            &[Type::I256, Type::I256],
+            &[],
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let block = builder.append_block();
+    builder.switch_to_block(block);
+    let addr = builder.func.arg_values[0];
+    let value = builder.func.arg_values[1];
+    let byte = builder.make_imm_value(Immediate::from_i256(I256::from(255), Type::I256));
+    let masked = builder.insert_inst(And::new(is, value, byte), Type::I256);
+    builder.insert_inst_no_result(EvmMstore8::new(is, addr, masked));
+    builder.insert_inst_no_result(Return::new_unit(is));
+    builder.seal_all();
+    builder.finish();
+
+    let module = mb.build();
+    run_machine_opt_pipeline(
+        &module,
+        &[func_ref],
+        LateCleanupProfile::Speed,
+        SwitchLoweringStrategy::Auto,
+        16,
+    )
+    .expect("machine pipeline should run");
+    module.func_store.view(func_ref, |function| {
+        let dumped = FuncWriter::new(func_ref, function).dump_string();
+        assert!(!dumped.contains(" and "), "{dumped}");
+    });
+}
+
+#[test]
+fn machine_known_bits_drops_mask_on_mstore8_value_in_loop() {
+    // for i in 0..n { mstore8(dst + i, mload(src + i) & 0xff) }: the mask
+    // depends on the loop counter, which no undef reaches.
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new(
+            "machine_mstore8_mask_loop",
+            Linkage::Public,
+            &[Type::I256, Type::I256, Type::I256],
+            &[],
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let entry = builder.append_block();
+    let body = builder.append_block();
+    let exit = builder.append_block();
+    let [src, dst, n] = builder.func.arg_values[..] else {
+        unreachable!()
+    };
+    let zero = builder.make_imm_value(Immediate::from_i256(I256::from(0), Type::I256));
+    let one = builder.make_imm_value(Immediate::from_i256(I256::from(1), Type::I256));
+    let byte = builder.make_imm_value(Immediate::from_i256(I256::from(255), Type::I256));
+
+    builder.switch_to_block(entry);
+    builder.insert_inst_no_result(Jump::new(is, body));
+
+    builder.switch_to_block(body);
+    let i = builder.insert_inst(Phi::new(is, vec![(zero, entry)].into()), Type::I256);
+    let from = builder.insert_inst(Add::new(is, src, i), Type::I256);
+    let loaded = builder.insert_inst(EvmMload::new(is, from), Type::I256);
+    let masked = builder.insert_inst(And::new(is, loaded, byte), Type::I256);
+    let to = builder.insert_inst(Add::new(is, dst, i), Type::I256);
+    builder.insert_inst_no_result(EvmMstore8::new(is, to, masked));
+    let next = builder.insert_inst(Add::new(is, i, one), Type::I256);
+    builder.append_phi_arg(i, next, body);
+    let more = builder.insert_inst(Lt::new(is, next, n), Type::I256);
+    builder.insert_inst_no_result(Br::new(is, more, body, exit));
+
+    builder.switch_to_block(exit);
+    builder.insert_inst_no_result(Return::new_unit(is));
+    builder.seal_all();
+    builder.finish();
+
+    let module = mb.build();
+    run_machine_opt_pipeline(
+        &module,
+        &[func_ref],
+        LateCleanupProfile::Speed,
+        SwitchLoweringStrategy::Auto,
+        16,
+    )
+    .expect("machine pipeline should run");
+    module.func_store.view(func_ref, |function| {
+        let dumped = FuncWriter::new(func_ref, function).dump_string();
         assert!(!dumped.contains(" and "), "{dumped}");
     });
 }
