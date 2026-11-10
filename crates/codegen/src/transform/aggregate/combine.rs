@@ -326,6 +326,12 @@ impl AggregateCombine {
             self.try_rewrite_enum_tag(func, inst)
         } else if func.dfg.downcast::<&data::EnumIsVariant>(inst).is_some() {
             self.try_rewrite_enum_is_variant(func, inst)
+        } else if func
+            .dfg
+            .downcast::<&data::EnumAssertVariant>(inst)
+            .is_some()
+        {
+            self.try_remove_enum_assert_variant(func, inst)
         } else if func.dfg.downcast::<&data::EnumExtract>(inst).is_some() {
             self.try_rewrite_enum_extract(func, inst)
         } else if func.dfg.downcast::<&data::ExtractValue>(inst).is_some() {
@@ -371,6 +377,26 @@ impl AggregateCombine {
             .dfg
             .make_imm_value(*enum_make.variant() == *enum_is_variant.variant());
         self.replace_with_alias(func, inst, result, folded);
+        true
+    }
+
+    /// Removes an assertion that an enum made of a variant is that variant,
+    /// as `unwrap` makes of an `Option` it just built, once the assertion is
+    /// the enum's only use, which kept the payload copied into it. The
+    /// assertion also certifies the payload readable, which a later use of
+    /// the enum may rely on, so it stays while the enum has another use.
+    fn try_remove_enum_assert_variant(&mut self, func: &mut Function, inst: InstId) -> bool {
+        let Some(assertion) = func.dfg.downcast::<&data::EnumAssertVariant>(inst) else {
+            return false;
+        };
+        let value = *assertion.value();
+        let Some(enum_make) = enum_make_of_value(func, value) else {
+            return false;
+        };
+        if *enum_make.variant() != *assertion.variant() || func.dfg.users_num(value) != 1 {
+            return false;
+        }
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
         true
     }
 
