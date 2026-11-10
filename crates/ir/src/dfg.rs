@@ -14,12 +14,14 @@ use crate::{
     effects::{classify_inst_effects, summarize_inst_effects},
     inst::{
         InstId,
+        arith::{Sdiv, Smod, Udiv, Umod},
         control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
-        data::EnumExtract,
+        data::{ConstIndex, ConstLoad, ConstProj, ConstRef, EnumExtract},
         downcast,
     },
     ir_writer::{FuncWriteCtx, IrWrite},
     module::ModuleCtx,
+    types::CompoundType,
 };
 
 type UserSet = VecSet<[InstId; 2]>;
@@ -758,6 +760,57 @@ impl DataFlowGraph {
         // its use site, which hoisting above a branch or assumption can lose.
         self.has_value_semantics(inst_id)
             && downcast::<&EnumExtract>(self.inst_set(), self.inst(inst_id)).is_none()
+            && !self.may_fault(inst_id)
+    }
+
+    /// Whether `inst_id` is undefined for some values of its operands: a
+    /// division or remainder whose divisor may be zero, or a `const.load`
+    /// that may read outside its constant. Backends may trap on these.
+    fn may_fault(&self, inst_id: InstId) -> bool {
+        let (is, inst) = (self.inst_set(), self.inst(inst_id));
+        let divisor = downcast::<&Udiv>(is, inst)
+            .map(|inst| *inst.rhs())
+            .or_else(|| downcast::<&Sdiv>(is, inst).map(|inst| *inst.rhs()))
+            .or_else(|| downcast::<&Umod>(is, inst).map(|inst| *inst.rhs()))
+            .or_else(|| downcast::<&Smod>(is, inst).map(|inst| *inst.rhs()));
+        if let Some(divisor) = divisor {
+            return self.value_imm(divisor).is_none_or(Immediate::is_zero);
+        }
+        downcast::<&ConstLoad>(is, inst)
+            .is_some_and(|load| !self.const_ref_is_in_bounds(*load.object()))
+    }
+
+    /// Whether `object` is a `const.ref` or a part of one that field
+    /// projections and constant indices below the array length select.
+    fn const_ref_is_in_bounds(&self, mut object: ValueId) -> bool {
+        let is = self.inst_set();
+        loop {
+            let Some(inst) = self.value_inst(object).map(|inst_id| self.inst(inst_id)) else {
+                return false;
+            };
+            if let Some(proj) = downcast::<&ConstProj>(is, inst) {
+                object = proj.values()[0];
+            } else if let Some(index) = downcast::<&ConstIndex>(is, inst) {
+                let len = self.ctx.with_ty_store(|store| {
+                    let Type::Compound(reference) = self.value_ty(*index.object()) else {
+                        return None;
+                    };
+                    let CompoundType::ConstRef(array) = store.get_compound(reference)? else {
+                        return None;
+                    };
+                    store.array_def(*array).map(|(_, len)| len)
+                });
+                let index_imm = self
+                    .value_imm(*index.index())
+                    .and_then(Immediate::to_nonnegative_usize);
+                if index_imm.zip(len).is_none_or(|(index, len)| index >= len) {
+                    return false;
+                }
+                object = *index.object();
+            } else {
+                return downcast::<&ConstRef>(is, inst).is_some();
+            }
+        }
     }
 
     pub fn effect_cost_class(&self, inst_id: InstId) -> EffectCostClass {

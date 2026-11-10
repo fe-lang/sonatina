@@ -1,0 +1,92 @@
+#! An instruction that may fault stays under its guard: a division whose
+#! divisor may be zero, and a constant load at an unchecked index.
+
+target = "x86_64-unknown-native"
+
+global private const [i64; 4] $table = [11, 22, 33, 44];
+
+# check:  block0:
+# nextln:      v5.i1 = ne v1 0.i64;
+# nextln:      jump block1;
+# check:  block2:
+# nextln:      v6.i64 = udiv v0 v1;
+func public %guarded_division(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i64 = phi (0.i64 block0) (v8 block3);
+        v4.i64 = phi (0.i64 block0) (v9 block3);
+        v5.i1 = ne v1 0.i64;
+        br v5 block2 block3;
+
+    block2:
+        v6.i64 = udiv v0 v1;
+        v7.i64 = add v3 v6;
+        jump block3;
+
+    block3:
+        v8.i64 = phi (v3 block1) (v7 block2);
+        v9.i64 = add v4 1.i64;
+        v10.i1 = lt v9 v2;
+        br v10 block1 block4;
+
+    block4:
+        return v8;
+}
+
+# check:  block0:
+# nextln:      v5.i64 = udiv v0 3.i64;
+# nextln:      jump block1;
+func public %constant_divisor(v0.i64, v1.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i64 = phi (0.i64 block0) (v6 block1);
+        v3.i64 = phi (0.i64 block0) (v7 block1);
+        v5.i64 = udiv v0 3.i64;
+        v6.i64 = add v2 v5;
+        v7.i64 = add v3 1.i64;
+        v8.i1 = lt v7 v1;
+        br v8 block1 block2;
+
+    block2:
+        return v6;
+}
+
+# check:       v6.constref<i64> = const.index v2 v0;
+# nextln:      v12.constref<i64> = const.index v2 3.i64;
+# nextln:      v13.i64 = const.load v12;
+# nextln:      jump block1;
+# check:  block2:
+# nextln:      v7.i64 = const.load v6;
+func public %guarded_table_load(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.constref<[i64; 4]> = const.ref $table;
+        jump block1;
+
+    block1:
+        v3.i64 = phi (0.i64 block0) (v9 block3);
+        v4.i64 = phi (0.i64 block0) (v10 block3);
+        v5.i1 = lt v0 4.i64;
+        br v5 block2 block3;
+
+    block2:
+        v6.constref<i64> = const.index v2 v0;
+        v7.i64 = const.load v6;
+        v8.i64 = add v3 v7;
+        jump block3;
+
+    block3:
+        v9.i64 = phi (v3 block1) (v8 block2);
+        v12.constref<i64> = const.index v2 3.i64;
+        v13.i64 = const.load v12;
+        v14.i64 = add v4 v13;
+        v10.i64 = add v14 1.i64;
+        v11.i1 = lt v10 v1;
+        br v11 block1 block4;
+
+    block4:
+        return v9;
+}
