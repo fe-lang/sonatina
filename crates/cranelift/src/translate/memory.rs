@@ -156,10 +156,11 @@ pub(super) fn value_pieces(ty: Type, size: u32, ctx: &ModuleCtx) -> Result<Vec<P
 /// Pushes the byte ranges, from `base`, of the scalar fields of a `ty` value.
 /// An array of scalars narrower than a word counts as one field: such arrays
 /// are mostly written whole, and splitting them would multiply the pieces.
-/// Enum variants share payload bytes. Fields of different variants that overlap
-/// count as one, so a narrow field does not split a wider one, whose reads
-/// would span several stores; `store_variant` stores the narrow field whole.
-/// They stay apart where a variant has several fields, each with its own store.
+/// Enum variants share payload bytes. Within each word, fields of different
+/// variants that overlap count as one, so a narrow field does not split a
+/// wider one, whose reads would span several stores; `store_variant` stores
+/// the narrow field whole. They stay apart where a variant has several fields
+/// in the word, each with its own store.
 fn field_ranges(
     ty: Type,
     base: u32,
@@ -192,7 +193,12 @@ fn field_ranges(
                         .ok_or_else(|| format!("cannot lay out field {field} of {ty:?}"))?;
                     field_ranges(field_ty, base + offset as u32, ctx, &mut leaves)?;
                 }
-                variants.push(leaves);
+                // Each field's part in each word it spans.
+                let words = |(start, end): (u32, u32)| {
+                    (start / 8..end.div_ceil(8))
+                        .map(move |word| (start.max(word * 8), end.min(word * 8 + 8)))
+                };
+                variants.push(leaves.into_iter().flat_map(words).collect::<Vec<_>>());
             }
             let mut leaves: Vec<_> = variants.iter().flatten().copied().collect();
             leaves.sort_unstable();
@@ -803,7 +809,46 @@ mod tests {
     }
 
     #[test]
-    fn variants_with_several_fields_in_a_range_split_it() {
+    fn fields_of_a_variant_in_other_words_do_not_split_a_word() {
+        // fevm's journal entry: `#Account`'s three fields lie in different
+        // words, each of which every variant fills with one field, so the
+        // u256 fields copy as whole words.
+        assert_eq!(
+            pieces(
+                "type @Field = enum { #Balance, #Nonce };
+type @Opt = enum { #None, #Some(i256) };
+type @Kind = enum { #Account(@Field, i256, i1), #Storage(i256, i256, i1), #Delegation(@Opt, i1) };
+type @T = { i256, @Kind };"
+            ),
+            [
+                Field(0, I64),
+                Field(8, I64),
+                Field(16, I64),
+                Field(24, I64),
+                Field(32, I8),
+                Padding(33, I8),
+                Padding(34, I16),
+                Padding(36, I32),
+                Padding(40, I64),
+                Field(48, I64),
+                Field(56, I64),
+                Field(64, I64),
+                Field(72, I64),
+                Field(80, I64),
+                Field(88, I64),
+                Field(96, I64),
+                Field(104, I64),
+                Field(112, I8),
+                Padding(113, I8),
+                Padding(114, I16),
+                Padding(116, I32),
+                Padding(120, I64)
+            ]
+        );
+    }
+
+    #[test]
+    fn variants_with_several_fields_in_a_word_split_it() {
         // A word load would span the stores of `#Two`'s fields.
         assert_eq!(
             pieces("type @T = enum { #Two(i8, i8), #Word(i64) };"),
