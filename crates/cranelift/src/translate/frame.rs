@@ -471,7 +471,8 @@ impl Plan {
                     NativeInstKind::Mload(_)
                     | NativeInstKind::ObjLoad(_)
                     | NativeInstKind::Call(_)
-                    | NativeInstKind::EnumMake(_) => Some(position[inst]),
+                    | NativeInstKind::EnumMake(_)
+                    | NativeInstKind::Sha256Compress(_) => Some(position[inst]),
                     NativeInstKind::InsertValue(insert) => {
                         let source = *insert.dest();
                         let continues = dfg.value_inst(source).is_some_and(|source_inst| {

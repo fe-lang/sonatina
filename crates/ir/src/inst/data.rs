@@ -141,6 +141,15 @@ pub struct BlackBox {
     arg: ValueId,
 }
 
+/// One SHA-256 compression: the state words `state`, an `[i32; 8]`, after
+/// the 64 rounds of the message words `block`, an `[i32; 16]`. Words are
+/// values, so the caller has read the message big-endian. Native only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct Sha256Compress {
+    state: ValueId,
+    block: ValueId,
+}
+
 /// Returns `arg` with one fixed value: where `arg` is undefined, every use of
 /// the result still sees the same, arbitrary value. Memory reads, call results
 /// and parameters are never undefined, so a transform that replaces one with

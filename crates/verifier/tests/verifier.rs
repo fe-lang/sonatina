@@ -3476,3 +3476,48 @@ func public %mixed(v0.i1, v1.i8, v2.i16) -> unit {
         "expected the type rejection, got {report}"
     );
 }
+
+#[test]
+fn sha256_compress_takes_eight_and_sixteen_words() {
+    let src = r#"
+target = "x86_64-unknown-native"
+
+func public %good(v0.*[i32; 8], v1.*[i32; 16]) -> unit {
+    block0:
+        v2.[i32; 8] = mload v0 [i32; 8];
+        v3.[i32; 16] = mload v1 [i32; 16];
+        v4.[i32; 8] = sha256_compress v2 v3;
+        return;
+}
+
+func public %bad(v0.*[i32; 8], v1.*[i64; 8]) -> unit {
+    block0:
+        v2.[i32; 8] = mload v0 [i32; 8];
+        v3.[i64; 8] = mload v1 [i64; 8];
+        v4.[i32; 16] = sha256_compress v2 v3;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(&report, "sha256_compress block must be [i32; 16]"),
+        "expected the block rejection, got {report}"
+    );
+    assert!(
+        has_message(&report, "sha256_compress result must be [i32; 8]"),
+        "expected the result rejection, got {report}"
+    );
+    assert!(
+        !has_message(&report, "sha256_compress state must be [i32; 8]"),
+        "the state is well typed, got {report}"
+    );
+    assert_eq!(
+        report.diagnostics.len(),
+        2,
+        "only %bad's operands are wrong, got {report}"
+    );
+}

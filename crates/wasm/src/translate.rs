@@ -2242,6 +2242,12 @@ impl<'a> FunctionTranslator<'a> {
             // Sonatina's passes keep it in place. WebAssembly has no way to hide
             // a value from the engine, so the module passes it on unchanged.
             NativeInstKind::BlackBox(i) => self.copy_value(*wb, inst_id, *i.arg())?,
+            NativeInstKind::Sha256Compress(_) => {
+                return Err(unsupported(format!(
+                    "function `{}`: sha256_compress is not supported on WebAssembly",
+                    self.name
+                )));
+            }
             NativeInstKind::Gep(i) => self.gep(wb, inst_id, op, i.values())?,
             NativeInstKind::Alloca(i) => self.alloca(*wb, inst_id, *i.ty())?,
             NativeInstKind::MemAllocDynamic(i) => {

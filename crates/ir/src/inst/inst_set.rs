@@ -69,6 +69,7 @@ define_inst_set_base! {
         data::Memzero,
         data::Memcopy,
         data::BlackBox,
+        data::Sha256Compress,
         data::Freeze,
         data::Gep,
         data::GetFunctionPtr,
