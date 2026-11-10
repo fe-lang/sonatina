@@ -2017,6 +2017,58 @@ block0:
     }
 
     #[test]
+    fn unresolved_callee_reads_miss_unreached_locals() {
+        // `%read` reads through a reference that is its argument or one
+        // loaded from it: its reads have unresolved provenance. They reach
+        // only what its argument does, so `v1`, which nothing reads, needs
+        // no store.
+        let module = parse_test_module(
+            r#"
+target = "x86_64-unknown-native"
+
+type @Cell = { i64 };
+type @Holder = { objref<@Cell> };
+
+func private %read(v0.objref<@Holder>, v1.i1) -> i64 {
+block0:
+    v2.objref<objref<@Cell>> = obj.proj v0 0.i8;
+    v3.objref<@Cell> = obj.load v2;
+    br v1 block1 block2;
+block1:
+    jump block2;
+block2:
+    v4.objref<@Holder> = phi (v0 block0) (v0 block1);
+    v5.objref<@Cell> = phi (v3 block0) (v3 block1);
+    v6.objref<i64> = obj.proj v5 0.i8;
+    v7.i64 = obj.load v6;
+    return v7;
+}
+
+func private %f(v0.objref<@Holder>, v1.i64, v2.i1) -> i64 {
+block0:
+    v3.objref<@Cell> = obj.alloc @Cell;
+    v4.objref<i64> = obj.proj v3 0.i8;
+    obj.store v4 v1;
+    v5.i64 = call %read v0 v2;
+    return v5;
+}
+"#,
+        );
+        let object_effects = compute_object_effect_summaries(&module);
+        let read = object_effects
+            .get(&lookup_func(&module, "read"))
+            .expect("read has a summary");
+        assert!(read.non_arg.unknown.reads, "{read:?}");
+        let func_ref = lookup_func(&module, "f");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(!dumped.contains("obj.store"), "{dumped}");
+        });
+    }
+
+    #[test]
     fn forwards_store_into_successor_block() {
         let module = parse_test_module(
             r#"

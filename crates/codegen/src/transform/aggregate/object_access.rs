@@ -1,6 +1,8 @@
 //! Access facts cover all operands, independently of optimization eligibility.
 //! Exposure is a whole-function may fixed point; it never proves an overwrite.
 
+use std::iter;
+
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
@@ -620,15 +622,29 @@ impl ObjectAccessFacts {
                     ));
                 }
             }
-            for (location, effect) in [
-                (ObjectAccess::External, summary.non_arg.external),
-                (ObjectAccess::Unknown, summary.non_arg.unknown),
-            ] {
-                if effect.reads {
-                    effects.reads.push(location);
+            if summary.non_arg.external.reads {
+                effects.reads.push(ObjectAccess::External);
+            }
+            if summary.non_arg.external.writes {
+                effects.writes.push(ObjectAccess::External);
+            }
+            // References of unresolved provenance in the callee come from its
+            // arguments, what they reach, or memory published outside: objects
+            // of this function reachable from no argument stay private to it.
+            let unknown = summary.non_arg.unknown;
+            if unknown.reads || unknown.writes {
+                let reachable: AccessSet = iter::once(ObjectAccess::External)
+                    .chain(
+                        call.args()
+                            .iter()
+                            .flat_map(|&arg| self.reachable_access(arg)),
+                    )
+                    .collect();
+                if unknown.reads {
+                    effects.reads.extend(reachable.iter().copied());
                 }
-                if effect.writes {
-                    effects.writes.push(location);
+                if unknown.writes {
+                    effects.writes.extend(reachable);
                 }
             }
         } else if let Some(mat) = func.dfg.downcast::<&data::ObjMaterializeStack>(inst) {
