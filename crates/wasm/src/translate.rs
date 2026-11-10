@@ -1302,10 +1302,6 @@ impl<'a> FunctionTranslator<'a> {
             self.body.set_terminator(prologue, terminator);
         }
 
-        // WAFFLE may recompute a pure value at each use in another block.
-        // Sonatina values can depend on memory, so make every cross-block use
-        // an explicit block parameter to keep the definition-time snapshot.
-        self.body.convert_to_max_ssa(None);
         Ok(self.body)
     }
 

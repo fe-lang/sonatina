@@ -589,7 +589,6 @@ pub(super) fn build_mulo(
     let mut values = limbs.to_vec();
     values.push(overflow);
     body.set_terminator(entry, waffle::Terminator::Return { values });
-    body.convert_to_max_ssa(None);
     body
 }
 
@@ -627,7 +626,6 @@ pub(super) fn build_shift(
             values: result.to_vec(),
         },
     );
-    body.convert_to_max_ssa(None);
     body
 }
 
@@ -837,7 +835,6 @@ pub(super) fn build_udivrem(
             values: q.into_iter().chain(r).collect(),
         },
     );
-    body.convert_to_max_ssa(None);
     body
 }
 
@@ -933,7 +930,6 @@ pub(super) fn build_modular(
                 values: sum.to_vec(),
             },
         );
-        body.convert_to_max_ssa(None);
         return body;
     }
 
@@ -1009,6 +1005,5 @@ pub(super) fn build_modular(
     );
 
     body.set_terminator(done, Terminator::Return { values: r.to_vec() });
-    body.convert_to_max_ssa(None);
     body
 }

@@ -372,7 +372,6 @@ pub(super) fn build_malloc(
             values: vec![payload_address],
         },
     );
-    body.convert_to_max_ssa(None);
     body
 }
 
@@ -538,7 +537,6 @@ pub(super) fn build_free(
         &[],
     );
     body.set_terminator(release, Terminator::Return { values: vec![] });
-    body.convert_to_max_ssa(None);
     body
 }
 
@@ -943,6 +941,5 @@ pub(super) fn build_release(
         &[],
     );
     body.set_terminator(clear, Terminator::Return { values: vec![] });
-    body.convert_to_max_ssa(None);
     body
 }
