@@ -28,8 +28,9 @@ fn compile_wasm(module: Module) -> Vec<u8> {
 Compiling the same module twice produces identical bytes.
 
 The module uses the multi-value, sign-extension and bulk-memory
-(`memory.copy`, `memory.fill`) extensions of WebAssembly, which every current
-engine enables.
+(`memory.copy`, `memory.fill`) extensions of WebAssembly and, when a recursive
+cycle makes a call in tail position, the tail-call extension. Every current
+engine enables them.
 
 ## Target and layout
 
@@ -136,10 +137,20 @@ error, writes that value back. Calls that the host makes from inside an import d
 the same, so nested calls restore in order. A module with no imports does not
 export the global and needs no repair.
 
-There are no tail calls: WAFFLE 0.3.3 has no `return_call`. The native backend
-makes the calls of a recursive cycle tail calls, so a deep tail recursion that
-runs in constant stack there takes a frame per call here and traps when the
-stack is full.
+### Tail calls
+
+A private function in a recursive cycle makes tail calls, as on the native
+target: a call whose results the function returns at once is a `return_call`,
+so a deep tail recursion runs in constant stack. The callee starts its frame
+where the caller's started. That needs the caller's frame to be dead: no
+`alloca`, no reference to an `obj.alloc` that outlives a call, every struct,
+array or enum argument one that the caller itself received, and no aggregate
+result. A call in tail position that passes an aggregate built in the caller's
+frame is still a `return_call`, with a frame above the caller's, so only the
+stack of the module grows.
+
+WAFFLE 0.3.3 has no `return_call`. The backend emits the call followed by a
+return of its results and rewrites that sequence in the encoded module.
 
 ### The heap
 

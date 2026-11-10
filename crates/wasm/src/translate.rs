@@ -29,13 +29,14 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use waffle::{
     BlockTarget, ExportKind, Func, FuncDecl, FunctionBody, MemoryArg, Module as WaffleModule,
-    Operator, Signature, SignatureData, Terminator, Type as WType, ValueDef,
+    Operator, Signature, SignatureData, Terminator, Type as WType, ValueDef, entity::EntityRef,
 };
 
+use sonatina_codegen::analysis::tail_position::{tail_callers, tail_position_calls};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Inst, InstId, Linkage, Module, Type, Value,
     ValueId,
-    inst::{inst_set::InstSetExt, native::inst_set::NativeInstKind},
+    inst::{control_flow::Call, inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
     module::{FuncRef, ModuleCtx},
     types::CompoundType,
@@ -49,6 +50,7 @@ use super::{
         self, ALIGN, MemoryPlan, RuntimeGlobals, align_up, build_arena_mark,
         declare_runtime_globals,
     },
+    tail::TailCallSites,
     wide::{self, LIMBS, Limbs, Wide},
 };
 mod aggregate;
@@ -62,6 +64,8 @@ pub(super) struct Translated {
     pub(super) module: WaffleModule<'static>,
     /// Exported function names, in module order.
     pub(super) exports: Vec<String>,
+    /// The functions that make tail calls, with the callees of those calls.
+    pub(super) tail_calls: TailCallSites,
 }
 
 fn unsupported(message: String) -> WasmError {
@@ -646,10 +650,20 @@ pub(super) fn translate_module(
         ));
     }
 
+    let tail_callers: FxHashSet<FuncRef> = tail_callers(module).into_iter().collect();
+    let mut tail_calls = TailCallSites::default();
     for (func_ref, func, wsig, name, canonicalize_params) in pending {
         let body = module
             .func_store
             .try_view(func_ref, |function| {
+                let sites = if tail_callers.contains(&func_ref) {
+                    tail_call_sites(module, func_ref, function, &callees)
+                } else {
+                    FxHashMap::default()
+                };
+                if !sites.is_empty() {
+                    tail_calls.insert(func.index() as u32, sites.values().copied().collect());
+                }
                 FunctionTranslator::new(
                     module,
                     function,
@@ -664,6 +678,7 @@ pub(super) fn translate_module(
                     arena_func.map(|(func, _)| func),
                     free_func.map(|(func, _)| func),
                     helpers,
+                    sites.into_keys().collect(),
                 )
                 .translate(canonicalize_params)
             })
@@ -788,7 +803,37 @@ pub(super) fn translate_module(
     Ok(Translated {
         module: wmod,
         exports,
+        tail_calls,
     })
+}
+
+/// The tail calls of `function`, one of the functions in a recursive cycle,
+/// with the WebAssembly index of each callee. The callee takes the caller's
+/// stack top, so its frame replaces the caller's: an aggregate argument must
+/// be one the caller received, whose storage is below both frames, and the
+/// result must not come back through a buffer in the caller's frame.
+fn tail_call_sites(
+    module: &Module,
+    func_ref: FuncRef,
+    function: &Function,
+    callees: &FxHashMap<FuncRef, Callee>,
+) -> FxHashMap<InstId, u32> {
+    tail_position_calls(func_ref, function)
+        .into_iter()
+        .filter_map(|(inst, callee)| {
+            let callee = callees.get(&callee)?;
+            let CallTarget::Func(func) = callee.target else {
+                return None;
+            };
+            let call = function.dfg.downcast::<&Call>(inst)?;
+            let passes = |&arg: &ValueId| {
+                repr(&module.ctx, function.dfg.value_ty(arg)) != Some(Repr::Aggregate)
+                    || function.arg_values.contains(&arg)
+            };
+            (callee.sret.is_none() && call.args().iter().all(passes))
+                .then_some((inst, func.index() as u32))
+        })
+        .collect()
 }
 
 /// Which 256-bit helper function a declaration is for.
@@ -1095,6 +1140,8 @@ struct FunctionTranslator<'a> {
     edge_slots: FxHashMap<(BlockId, BlockId, InstId), u32>,
     /// Frame offsets of the zero-filled storage of aggregate `undef` operands.
     undef_slots: FxHashMap<ValueId, u32>,
+    /// The calls that end their block as tail calls.
+    tail_calls: FxHashSet<InstId>,
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -1113,6 +1160,7 @@ impl<'a> FunctionTranslator<'a> {
         arena: Option<Func>,
         free: Option<Func>,
         wide_helpers: WideHelpers,
+        tail_calls: FxHashSet<InstId>,
     ) -> Self {
         Self {
             module,
@@ -1140,6 +1188,7 @@ impl<'a> FunctionTranslator<'a> {
             phi_slots: FxHashMap::default(),
             edge_slots: FxHashMap::default(),
             undef_slots: FxHashMap::default(),
+            tail_calls,
         }
     }
 
@@ -1915,7 +1964,8 @@ impl<'a> FunctionTranslator<'a> {
         for inst_id in function.layout.iter_inst(block) {
             let inst = function.dfg.inst(inst_id);
             self.translate_inst(block, &mut wb, inst_id, inst)?;
-            if inst.is_terminator() {
+            // A tail call returns its results itself.
+            if inst.is_terminator() || self.tail_calls.contains(&inst_id) {
                 return Ok(());
             }
         }
@@ -2563,8 +2613,13 @@ impl<'a> FunctionTranslator<'a> {
         let mut args = Vec::with_capacity(call_args.len() + 2);
         // The value of `stack_top` that the call to an import must put back.
         let mut stack_top_before = None;
+        let tail = self.tail_calls.contains(&inst_id);
         if callee.stack_param {
-            args.push(self.frame_top()?);
+            // The frame of a tail call's callee replaces this one.
+            args.push(match (tail, self.sp) {
+                (true, Some(sp)) => sp,
+                _ => self.frame_top()?,
+            });
         } else if callee.is_import
             && let (Some(globals), Some(top)) = (self.globals, self.top)
         {
@@ -2616,6 +2671,11 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
         let values = emit_call(&mut self.body, wb, func, &args, &carriers);
+        if tail {
+            // `tail::rewrite` makes the call and this return a `return_call`.
+            self.body.set_terminator(wb, Terminator::Return { values });
+            return Ok(());
+        }
         if let (Some(before), Some(globals)) = (stack_top_before, self.globals) {
             self.body.add_op(
                 wb,

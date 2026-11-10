@@ -67,10 +67,23 @@ fn recursive_functions(module: &Module) -> Vec<FuncRef> {
 }
 
 /// The tail calls of `function`, one of the [`tail_callers`], with their
-/// callees. A tail call's callee runs once the frame is gone, so there are
-/// none when a reference to storage in the frame could outlive a call, and
-/// no tail call passes one.
+/// callees: its [`tail_position_calls`] whose arguments pass in registers or
+/// in storage outside its frame ([`tail_call_storage`]).
 pub fn tail_calls(func_ref: FuncRef, function: &Function) -> Vec<(InstId, FuncRef)> {
+    let mut calls = tail_position_calls(func_ref, function);
+    calls.retain(|&(call, _)| {
+        let call = function.dfg.downcast::<&control_flow::Call>(call).unwrap();
+        tail_call_storage(function, call.args()).is_some()
+    });
+    calls
+}
+
+/// The calls of `function` in tail position whose callee cannot reach the
+/// frame, with their callees. A tail call's callee runs once the frame is
+/// gone, so there are none when a reference to storage in the frame could
+/// outlive a call, and none passes one. A backend still decides whether
+/// each argument can pass.
+pub fn tail_position_calls(func_ref: FuncRef, function: &Function) -> Vec<(InstId, FuncRef)> {
     let Some(frame_references) = frame_references(function) else {
         return Vec::new();
     };
@@ -147,12 +160,11 @@ fn returns_at_once(function: &Function, block: BlockId, last: InstId, results: &
             })
 }
 
-/// The call ending `block` and its callee, if it is a tail call: the block
-/// returns the call's results right after it, and the callee is a private
-/// function returning the same types. Its arguments pass in registers or in
-/// storage outside the caller's frame ([`tail_call_storage`]), none of them
-/// one of the `frame_references`, and an indirect result passes the caller's
-/// own result buffer on.
+/// The call ending `block` and its callee, if it is in tail position: the
+/// block returns the call's results right after it, and the callee is a
+/// private function returning the same types. None of its arguments is one
+/// of the `frame_references`, and an indirect result passes the caller's own
+/// result buffer on.
 fn tail_call(
     func_ref: FuncRef,
     function: &Function,
@@ -170,8 +182,7 @@ fn tail_call(
     (ctx.func_linkage(callee).is_private()
         && returns_at_once(function, block, last, function.dfg.inst_results(call_inst))
         && same_returns
-        && !call.args().iter().any(|arg| frame_references.contains(arg))
-        && tail_call_storage(function, call.args()).is_some())
+        && !call.args().iter().any(|arg| frame_references.contains(arg)))
     .then_some((call_inst, callee))
 }
 

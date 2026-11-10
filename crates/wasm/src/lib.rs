@@ -3,6 +3,7 @@
 mod arith;
 mod heap;
 mod memory;
+mod tail;
 mod translate;
 mod wide;
 
@@ -185,10 +186,13 @@ impl Backend for WasmBackend {
             self.heap_poison,
         )
         .map_err(|error| vec![error])?;
+        let imported = translated.module.imports.len() as u32;
         let bytes = translated
             .module
             .to_wasm_bytes()
-            .map_err(|error| vec![WasmError::Emission(error.to_string())])?;
+            .map_err(|error| WasmError::Emission(error.to_string()))
+            .and_then(|bytes| tail::rewrite(bytes, imported, &translated.tail_calls))
+            .map_err(|error| vec![error])?;
 
         Ok(WasmArtifact {
             bytes,
