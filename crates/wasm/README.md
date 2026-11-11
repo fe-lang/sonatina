@@ -89,7 +89,8 @@ A module that uses `alloca`, `obj.alloc`, struct or array values, constants,
 global variables, `mem.alloc_dynamic` or the external `malloc` or `free` has this
 layout, from the lowest address:
 
-1. A reserved block of 16 bytes, so that address 0 is never an object.
+1. A reserved block of 1 KiB, so that address 0 is never an object, and a null
+   pointer plus an offset below 1 KiB does not reach a global variable.
 2. The global variables, each at its alignment, in declaration order. Their
    initial contents are data segments of the module (all-zero data is not
    emitted). `const.ref` and the address of a global variable are these
