@@ -2160,6 +2160,96 @@ block2:
 }
 
 #[test]
+fn chains_build_in_local_objects_across_calls_and_other_stores() {
+    // `%across` builds `v1`'s value in `v1` itself: nothing between the
+    // chains and the store, a call and a store to memory, can reach `v1`,
+    // and `v8` reads `v2`, which it still holds. `%swapped`'s chain inserts
+    // a load that reads `v1` itself where it is inserted, after the chain
+    // would have written `v1`'s second field, so it is built aside.
+    let source = r#"
+func inline(never) private %noise(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    return v1;
+}
+func public %across(v0.i64, v20.*i64, v22.*[[i64; 8]; 2]) {
+block0:
+    v1.objref<[[i64; 8]; 2]> = obj.alloc [[i64; 8]; 2];
+    v2.objref<[i64; 8]> = obj.alloc [i64; 8];
+    v30.[i64; 8] = insert_value undef.[i64; 8] 2.i64 v0;
+    obj.store v2 v30;
+    v8.[i64; 8] = obj.load v2;
+    v3.[i64; 8] = insert_value undef.[i64; 8] 0.i64 v0;
+    v4.i64 = call %noise v0;
+    mstore v20 v4 i64;
+    v5.[i64; 8] = insert_value v3 3.i64 v4;
+    v6.[[i64; 8]; 2] = insert_value undef.[[i64; 8]; 2] 1.i64 v5;
+    v7.[[i64; 8]; 2] = insert_value v6 0.i64 v8;
+    obj.store v1 v7;
+    v21.objref<i64> = obj.index v2 2.i64;
+    obj.store v21 77.i64;
+    v9.[[i64; 8]; 2] = obj.load v1;
+    mstore v22 v9 [[i64; 8]; 2];
+    return;
+}
+func public %swapped(v0.i64, v22.*[[i64; 8]; 2]) {
+block0:
+    v1.objref<[[i64; 8]; 2]> = obj.alloc [[i64; 8]; 2];
+    v2.[i64; 8] = insert_value undef.[i64; 8] 0.i64 v0;
+    v3.[[i64; 8]; 2] = insert_value undef.[[i64; 8]; 2] 1.i64 v2;
+    obj.store v1 v3;
+    v4.objref<[i64; 8]> = obj.index v1 1.i64;
+    v5.[i64; 8] = obj.load v4;
+    v6.i64 = add v0 1.i64;
+    v7.[i64; 8] = insert_value undef.[i64; 8] 1.i64 v6;
+    v8.[[i64; 8]; 2] = insert_value undef.[[i64; 8]; 2] 1.i64 v7;
+    v9.[[i64; 8]; 2] = insert_value v8 0.i64 v5;
+    obj.store v1 v9;
+    v10.[[i64; 8]; 2] = obj.load v1;
+    mstore v22 v10 [[i64; 8]; 2];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let across: unsafe extern "C" fn(i64, *mut i64, *mut [[i64; 8]; 2]) =
+            unsafe { std::mem::transmute(artifact.function_address("across").unwrap()) };
+        let swapped: unsafe extern "C" fn(i64, *mut [[i64; 8]; 2]) =
+            unsafe { std::mem::transmute(artifact.function_address("swapped").unwrap()) };
+        for value in [5, -7, 1000] {
+            let mut noise = -1;
+            let mut out = [[-1; 8]; 2];
+            unsafe { across(value, &mut noise, &mut out) };
+            assert_eq!(noise, 3 * value, "{level:?}");
+            assert_eq!(
+                out,
+                [
+                    [0, 0, value, 0, 0, 0, 0, 0],
+                    [value, 0, 0, 3 * value, 0, 0, 0, 0]
+                ],
+                "{level:?}"
+            );
+            let mut out = [[-1; 8]; 2];
+            unsafe { swapped(value, &mut out) };
+            assert_eq!(
+                out,
+                [
+                    [value, 0, 0, 0, 0, 0, 0, 0],
+                    [0, value + 1, 0, 0, 0, 0, 0, 0]
+                ],
+                "{level:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn read_only_objects_share_storage_until_a_callee_may_write() {
     // `%reader` only reads through its argument and `%writer` writes
     // element 0. `%read_only`'s object never changes, so it lives in its

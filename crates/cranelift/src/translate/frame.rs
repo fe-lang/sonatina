@@ -658,7 +658,7 @@ impl Plan {
         }
 
         plan.embed(function, &class_of)?;
-        plan.store_in_place(function, &position);
+        plan.store_in_place(function, &position, &local);
 
         // Owned arguments the caller cannot give away go through temporaries.
         for &block in block_order {
@@ -719,13 +719,23 @@ impl Plan {
     /// Builds each `insert_value` chain on undef whose last value is only
     /// stored into an object at that object, with the classes embedded in
     /// it, when the object's address is defined before the first of them
-    /// starts and everything from there to the store is free of effects and
-    /// uses no forwarded load, which reads memory where it is used. No other
-    /// class lives inside such a chain, and none of the values it inserts is
-    /// a forwarded load. Every class embedded in it must be such a chain or
-    /// an `enum.make` in its block too, so that all of them write the object
-    /// only there.
-    fn store_in_place(&mut self, function: &Function, position: &SecondaryMap<InstId, u32>) {
+    /// starts and nothing from there to the store may read or write the
+    /// object, which would see it written early. Every class embedded in it
+    /// must be such a chain or an `enum.make` in its block too, so that all
+    /// of them write the object only there.
+    ///
+    /// Only the function's own uses of its addresses reach a local object,
+    /// so the instructions in between may be anything else, and a forwarded
+    /// load, which reads its source where it is used, reaches the object
+    /// only if that source is one of its addresses. Any other object may be
+    /// reached through memory, so everything in between must be free of
+    /// effects, and no forwarded load may be used there or inserted.
+    fn store_in_place(
+        &mut self,
+        function: &Function,
+        position: &SecondaryMap<InstId, u32>,
+        local: &FxHashMap<ValueId, ValueId>,
+    ) {
         let dfg = &function.dfg;
         // The classes embedded in each class, directly or not.
         let mut descendants = FxHashMap::<usize, Vec<usize>>::default();
@@ -753,23 +763,19 @@ impl Plan {
             )
             .collect();
             let chain = chain?;
-            (is_undef(function, chain[0].1)
-                && chain
-                    .iter()
-                    .all(|(_, _, value)| !self.forwarded.contains(value)))
-            .then(|| {
+            is_undef(function, chain[0].1).then(|| {
                 chain
                     .into_iter()
                     .map(|(inst, _, value)| (inst, value))
                     .collect()
             })
         };
-        // The instructions that write a class embedded in such a chain: its
-        // own chain, or an `enum.make`, which writes the tag and the
-        // variant's fields. Neither may write a forwarded load.
-        let writes_of = |class: usize| -> Option<Vec<InstId>> {
+        // The instructions that write a class embedded in such a chain, with
+        // the values they read: its own chain, or an `enum.make`, which
+        // writes the tag and the variant's fields.
+        let writes_of = |class: usize| -> Option<Vec<(InstId, ValueId)>> {
             if let Some(chain) = chain_of(class) {
-                return Some(chain.into_iter().map(|(inst, _)| inst).collect());
+                return Some(chain);
             }
             let [root] = self.members[class][..] else {
                 return None;
@@ -779,10 +785,7 @@ impl Plan {
             else {
                 return None;
             };
-            make.values()
-                .iter()
-                .all(|value| !self.forwarded.contains(value))
-                .then(|| vec![inst])
+            Some(make.values().iter().map(|&value| (inst, value)).collect())
         };
         'classes: for class in 0..self.classes.len() {
             if self.embedded.contains_key(&class) {
@@ -807,39 +810,58 @@ impl Plan {
             if *info.value() != tail || function.layout.inst_block(store) != block {
                 continue;
             }
-            let mut builders: FxHashSet<InstId> = chain.iter().map(|&(inst, _)| inst).collect();
+            let object = *info.object();
+            let root = local.get(&object).copied();
+            // Whether the forwarded load `value` may read the object.
+            let reads_object = |value: ValueId| {
+                let source = dfg.value_inst(value).and_then(|load| {
+                    match native_inst_set().resolve_inst(dfg.inst(load)) {
+                        NativeInstKind::ObjLoad(load) => local.get(load.object()),
+                        _ => None,
+                    }
+                });
+                self.forwarded.contains(&value) && root.is_none_or(|root| source == Some(&root))
+            };
+            let mut writes = chain.clone();
             for &child in descendants.get(&class).into_iter().flatten() {
-                let Some(writes) = writes_of(child) else {
+                let Some(child_writes) = writes_of(child) else {
                     continue 'classes;
                 };
-                if writes
+                if child_writes
                     .iter()
-                    .any(|&inst| function.layout.inst_block(inst) != block)
+                    .any(|&(inst, _)| function.layout.inst_block(inst) != block)
                 {
                     continue 'classes;
                 }
-                builders.extend(writes);
+                writes.extend(child_writes);
             }
+            if writes.iter().any(|&(_, value)| reads_object(value)) {
+                continue;
+            }
+            let builders: FxHashSet<InstId> = writes.iter().map(|&(inst, _)| inst).collect();
             let Some(&first) = builders.iter().min_by_key(|&&inst| position[inst]) else {
                 continue;
             };
-            let object = *info.object();
             let defined_before = dfg.value_inst(object).is_none_or(|def| {
                 function.layout.inst_block(def) != block || position[def] < position[first]
             });
+            let touches_object = |inst: InstId| {
+                let operands = dfg.inst(inst).collect_values();
+                match root {
+                    Some(root) => operands
+                        .iter()
+                        .any(|&value| local.get(&value) == Some(&root) || reads_object(value)),
+                    None => {
+                        !dfg.has_value_semantics(inst)
+                            || operands.iter().any(|value| self.forwarded.contains(value))
+                    }
+                }
+            };
             let untouched = std::iter::successors(function.layout.next_inst_of(first), |&next| {
                 function.layout.next_inst_of(next)
             })
             .take_while(|&next| next != store)
-            .all(|next| {
-                builders.contains(&next)
-                    || (dfg.has_value_semantics(next)
-                        && !dfg
-                            .inst(next)
-                            .collect_values()
-                            .iter()
-                            .any(|value| self.forwarded.contains(value)))
-            });
+            .all(|next| builders.contains(&next) || !touches_object(next));
             if defined_before && untouched {
                 self.stored.insert(class, (object, store));
             }
@@ -1520,25 +1542,100 @@ block0:
 
     #[test]
     fn stored_chains_are_built_at_their_destination() {
-        // `v2`'s chain is only stored into `v1`; `v5`'s store follows a load
-        // of memory, so it is built in a slot and copied.
+        // `v2`'s chain is only stored into `v1`; `v5`'s store into memory
+        // follows a load of memory, which may read it, so it is built in a
+        // slot and copied.
         let sizes = slot_sizes(
             r#"
-func public %f(v0.i64, v4.*i64) {
+func public %f(v0.i64, v4.*i64, v7.*[i64; 32]) {
 block0:
     v1.objref<[i64; 32]> = obj.alloc [i64; 32];
     v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
     v3.[i64; 32] = insert_value v2 1.i64 v0;
     obj.store v1 v3;
+    v8.objref<[i64; 32]> = obj.from_ptr v7;
     v5.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
     v6.i64 = mload v4 i64;
-    obj.store v1 v5;
+    obj.store v8 v5;
     mstore v4 v6 i64;
     return;
 }
 "#,
         );
         assert_eq!(sizes, [256]);
+    }
+
+    #[test]
+    fn chains_stored_into_local_objects_are_built_there_across_other_effects() {
+        // Nothing but its own uses reaches `v1`, so neither the store to
+        // memory nor the call between `v2`'s chain and `v1`'s store sees `v1`
+        // written early.
+        let sizes = slot_sizes(
+            r#"
+declare external %g(i64) -> i64;
+func public %f(v0.i64, v7.*i64) {
+block0:
+    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    mstore v7 v0 i64;
+    v3.i64 = call %g v0;
+    v4.[i64; 32] = insert_value undef.[i64; 32] 5.i64 v3;
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
+    v6.[[i64; 32]; 2] = insert_value v5 0.i64 v4;
+    obj.store v1 v6;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [0u32; 0]);
+    }
+
+    #[test]
+    fn chains_stored_into_local_objects_keep_storage_when_the_object_is_read_between() {
+        // `v4` reads `v1`'s second field after `v2` would have written it.
+        // (Built there, the chains would need no slot.)
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v10.*i64) {
+block0:
+    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v14.objref<[i64; 32]> = obj.index v1 1.i64;
+    v3.objref<i64> = obj.index v14 2.i64;
+    obj.store v3 v0;
+    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v4.i64 = obj.load v3;
+    mstore v10 v4 i64;
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
+    obj.store v1 v5;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [512]);
+    }
+
+    #[test]
+    fn chains_stored_into_local_objects_keep_storage_when_they_insert_its_loads() {
+        // `v4` reads `v1`'s first field in place where `v6` inserts it,
+        // after `v5` would have written the second.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64) {
+block0:
+    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v2.objref<[i64; 32]> = obj.index v1 0.i64;
+    v7.objref<i64> = obj.index v2 3.i64;
+    obj.store v7 v0;
+    v4.[i64; 32] = obj.load v2;
+    v3.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v3;
+    v6.[[i64; 32]; 2] = insert_value v5 0.i64 v4;
+    obj.store v1 v6;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [512]);
     }
 
     #[test]
@@ -1592,12 +1689,13 @@ block0:
     #[test]
     fn stored_chains_keep_storage_when_a_store_comes_between_their_parts() {
         // `v2`'s chain is embedded but a store comes between it and the store
-        // of its parent, which may read what the chain would overwrite.
+        // of its parent into memory, which may be what the chain would
+        // overwrite.
         let sizes = slot_sizes(
             r#"
-func public %f(v0.i64, v7.*i64) {
+func public %f(v0.i64, v7.*i64, v8.*[[i64; 32]; 2]) {
 block0:
-    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v1.objref<[[i64; 32]; 2]> = obj.from_ptr v8;
     v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
     mstore v7 v0 i64;
     v4.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
