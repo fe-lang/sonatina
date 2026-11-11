@@ -1080,6 +1080,8 @@ fn object_written_while_read(
 /// its addresses, or a call its storage may be given to. That is a call
 /// passed a load of the object in place (`passed_once`) for an argument its
 /// callee owns, when the object is an `obj.alloc` not used after the call.
+/// A call whose result a store copies into the object may also write it
+/// there itself (`result_destination`), at the call.
 fn object_writes<'a>(
     function: &'a Function,
     cfg: &'a ControlFlowGraph,
@@ -1089,32 +1091,45 @@ fn object_writes<'a>(
     calls: &'a impl CallFacts,
 ) -> impl Iterator<Item = InstId> + 'a {
     let dfg = &function.dfg;
-    object_uses(function, local, object).filter_map(move |user| {
-        match native_inst_set().resolve_inst(dfg.inst(user)) {
-            NativeInstKind::ObjStore(_) => Some(user),
-            NativeInstKind::Call(call) => call
-                .args()
-                .iter()
-                .enumerate()
-                .any(|(index, arg)| {
-                    local.get(arg) == Some(&object) && calls.may_write(*call.callee(), index)
-                })
-                .then_some(user),
-            NativeInstKind::ObjLoad(_) => {
-                let loaded = dfg.inst_result(user)?;
-                let (call, info) = passed_once(function, user, loaded, object, local, calls)?;
-                (dfg.value_inst(object).is_some()
-                    && info
-                        .args()
-                        .iter()
-                        .enumerate()
-                        .any(|(index, &arg)| arg == loaded && calls.owns(*info.callee(), index))
-                    && !object_used_after(function, cfg, position, local, object, call))
-                .then_some(call)
+    let writes =
+        object_uses(function, local, object).filter_map(move |user| {
+            match native_inst_set().resolve_inst(dfg.inst(user)) {
+                NativeInstKind::ObjStore(_) => Some(user),
+                NativeInstKind::Call(call) => call
+                    .args()
+                    .iter()
+                    .enumerate()
+                    .any(|(index, arg)| {
+                        local.get(arg) == Some(&object) && calls.may_write(*call.callee(), index)
+                    })
+                    .then_some(user),
+                NativeInstKind::ObjLoad(_) => {
+                    let loaded = dfg.inst_result(user)?;
+                    let (call, info) = passed_once(function, user, loaded, object, local, calls)?;
+                    (dfg.value_inst(object).is_some()
+                        && info.args().iter().enumerate().any(|(index, &arg)| {
+                            arg == loaded && calls.owns(*info.callee(), index)
+                        })
+                        && !object_used_after(function, cfg, position, local, object, call))
+                    .then_some(call)
+                }
+                _ => None,
             }
-            _ => None,
-        }
-    })
+        });
+    // Without the plan's forwarded loads, `result_destination` accepts every
+    // call the plan does, so no write at a call is missed.
+    let results_in_place = object_uses(function, local, object).filter_map(move |user| {
+        let NativeInstKind::ObjStore(store) = native_inst_set().resolve_inst(dfg.inst(user)) else {
+            return None;
+        };
+        let value = *store.value();
+        let call = dfg.value_inst(value)?;
+        let no_forwarded_loads = FxHashMap::default();
+        result_destination(function, position, call, value, local, &no_forwarded_loads)
+            .is_some_and(|(_, at)| at == user)
+            .then_some(call)
+    });
+    writes.chain(results_in_place)
 }
 
 /// The instructions reading the aggregate `value` where they run, when it

@@ -2042,7 +2042,9 @@ fn loads_read_local_objects_in_place_until_a_write_precedes_a_read() {
     // `core::mem::replace` moves a value out before the new one goes in.
     // `%late` may write `v2` before it reads its load, and `%looped` reads
     // its load in each pass after the last one wrote the object, so both
-    // loads keep their snapshots.
+    // loads keep their snapshots. `%overwritten` reads its load of `v1` after
+    // `%fill`, whose result the store copies into `v1`: the callee writes it
+    // there, at the call, so that load keeps its snapshot too.
     let source = r#"
 func inline(never) private %fill(v0.i64) -> [i64; 32] {
 block0:
@@ -2054,6 +2056,21 @@ func inline(never) private %noise(v0.i64) -> i64 {
 block0:
     v1.i64 = mul v0 3.i64;
     return v1;
+}
+func inline(never) private %init(noalias nocapture v0.objref<[i64; 32]>, v1.i64) {
+block0:
+    v2.objref<i64> = obj.index v0 31.i64;
+    obj.store v2 v1;
+    v3.objref<i64> = obj.index v0 0.i64;
+    obj.store v3 v1;
+    return;
+}
+func inline(never) private %read(noalias nocapture readonly v0.objref<[[i64; 32]; 2]>) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.index v0 0.i64;
+    v2.objref<i64> = obj.index v1 31.i64;
+    v3.i64 = obj.load v2;
+    return v3;
 }
 func public %moved(v0.i64) -> i64 {
 block0:
@@ -2125,6 +2142,24 @@ block1:
 block2:
     return v8;
 }
+func public %overwritten(v0.i64) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    call %init v1 v0;
+    v2.[i64; 32] = obj.load v1;
+    v3.i64 = add v0 1.i64;
+    v4.[i64; 32] = call %fill v3;
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 0.i64 v2;
+    obj.store v1 v4;
+    v6.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    obj.store v6 v5;
+    v7.i64 = call %read v6;
+    v8.objref<i64> = obj.index v1 0.i64;
+    v9.i64 = obj.load v8;
+    v10.i64 = mul v9 1000.i64;
+    v11.i64 = add v7 v10;
+    return v11;
+}
 "#;
     for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
         let artifact = Compile::new(
@@ -2140,6 +2175,8 @@ block2:
             unsafe { std::mem::transmute(artifact.function_address("late").unwrap()) };
         let looped: unsafe extern "C" fn(i64) -> i64 =
             unsafe { std::mem::transmute(artifact.function_address("looped").unwrap()) };
+        let overwritten: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("overwritten").unwrap()) };
         for value in [5, -7, 1000] {
             assert_eq!(
                 unsafe { moved(value) },
@@ -2155,6 +2192,11 @@ block2:
                 );
             }
             assert_eq!(unsafe { looped(value) }, 3 * value, "{level:?}");
+            assert_eq!(
+                unsafe { overwritten(value) },
+                value + (value + 1) * 1000,
+                "{level:?}"
+            );
         }
     }
 }
