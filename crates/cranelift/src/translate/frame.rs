@@ -828,17 +828,23 @@ impl Plan {
             let object = *info.object();
             let root = local.get(&object).copied();
             // Whether `value` is a forwarded load that may read the object, or
-            // a view of one, which reads it where it is used too.
+            // a view of one, which reads it where it is used too. Only a load
+            // of one of a local object's addresses may read it; any may read
+            // another object.
             let reads_object = |mut value: ValueId| loop {
                 let Some(inst) = dfg.value_inst(value) else {
                     return false;
                 };
+                let kind = native_inst_set().resolve_inst(dfg.inst(inst));
+                if self.forwarded.contains(&value) {
+                    let source = match kind {
+                        NativeInstKind::ObjLoad(load) => local.get(load.object()),
+                        _ => None,
+                    };
+                    return root.is_none_or(|root| source == Some(&root));
+                }
                 let view = uses_indirect_value_representation(function.ctx(), dfg.value_ty(value));
-                value = match native_inst_set().resolve_inst(dfg.inst(inst)) {
-                    NativeInstKind::ObjLoad(load) if self.forwarded.contains(&value) => {
-                        let source = local.get(load.object());
-                        return root.is_none_or(|root| source == Some(&root));
-                    }
+                value = match kind {
                     NativeInstKind::ExtractValue(extract) if view => *extract.dest(),
                     NativeInstKind::EnumExtract(extract) if view => *extract.value(),
                     _ => return false,

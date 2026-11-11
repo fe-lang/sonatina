@@ -2407,6 +2407,53 @@ block0:
 }
 
 #[test]
+fn chains_into_raw_objects_come_after_raw_loads_of_them() {
+    // `v2` lives behind a pointer, and `v4` reads its first array where
+    // `v5` inserts it, from memory: built in `v2`, the chain would write
+    // its first array before the insert reads it. `%shift_view` reads it
+    // through a view of a raw load of the whole object.
+    let source = r#"
+func public %shift(v0.*i8) {
+block0:
+    v1.*[[i64; 32]; 2] = bitcast v0 *[[i64; 32]; 2];
+    v2.objref<[[i64; 32]; 2]> = obj.from_ptr v1;
+    v3.*[i64; 32] = bitcast v0 *[i64; 32];
+    v4.[i64; 32] = mload v3 [i64; 32];
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v4;
+    obj.store v2 v5;
+    return;
+}
+func public %shift_view(v0.*i8) {
+block0:
+    v1.*[[i64; 32]; 2] = bitcast v0 *[[i64; 32]; 2];
+    v2.objref<[[i64; 32]; 2]> = obj.from_ptr v1;
+    v3.[[i64; 32]; 2] = mload v1 [[i64; 32]; 2];
+    v4.[i64; 32] = extract_value v3 0.i64;
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v4;
+    obj.store v2 v5;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        for name in ["shift", "shift_view"] {
+            let shift: unsafe extern "C" fn(*mut [[i64; 32]; 2]) =
+                unsafe { std::mem::transmute(artifact.function_address(name).unwrap()) };
+            let first: [i64; 32] = std::array::from_fn(|index| index as i64 * 3 - 7);
+            let mut object = [first, [-1; 32]];
+            unsafe { shift(&mut object) };
+            assert_eq!(object[1], first, "{name} {level:?}");
+        }
+    }
+}
+
+#[test]
 fn payload_free_variants_in_chains_are_built_after_their_object() {
     // `v1`, a variant without a payload of an enum kept in memory, is made
     // before `v2`, the object `v4`'s chain is stored into. Making it writes
