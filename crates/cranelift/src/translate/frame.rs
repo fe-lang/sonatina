@@ -79,16 +79,17 @@ use super::{
 /// later in its block, with no state change in between, is written there
 /// by the callee, unless an argument reaches the object or an instruction in
 /// between reads it. Any other load of such an object reads it in place
-/// when nothing reachable after the load writes it: no store into it, no
-/// call that may write through one of its addresses (`ArgWrites`), and no
-/// call that may be given its storage, as below.
+/// when no write of it can come between the load and a read of the loaded
+/// value or of a view of it: no store into it, no call that may write
+/// through one of its addresses (`ArgWrites`), and no call that may be given
+/// its storage, as below, runs after the load and before or at such a read.
 ///
 /// A callee may own a by-reference argument (`Ownership`), building an
 /// object in its storage. The caller then passes storage it does not use
 /// after the call and no other argument shares: a forwarded load of a local
 /// object in its own slot that it no longer uses, or a value whose range
-/// ends at the call. The call writes an object it is given, so no load of
-/// the object reads it in place across the call.
+/// ends at the call. The call writes an object it is given, so a load of
+/// the object read after the call does not read it in place.
 /// Otherwise it copies the argument into a temporary, a class live only at
 /// the call.
 pub(super) struct FrameSlots {
@@ -525,8 +526,8 @@ impl Plan {
                     }
                     NativeInstKind::ObjLoad(load)
                         if let Some(&object) = local.get(load.object())
-                            && !object_written_after(
-                                function, cfg, &position, &local, object, inst, calls,
+                            && !object_written_while_read(
+                                function, cfg, &position, &local, object, inst, result, calls,
                             ) =>
                     {
                         plan.forwarded.insert(result);
@@ -959,12 +960,6 @@ fn object_used_after(
     object_uses(function, local, object).any(runs_after(function, cfg, position, call))
 }
 
-/// Whether anything after `inst` may write the local object `object`: a
-/// store into it, a call that may write through one of its addresses, or a
-/// call its storage may be given to. That is a call passed a load of the
-/// object in place (`passed_once`) for an argument its callee owns, when the
-/// object is an `obj.alloc` not used after the call; the load itself may
-/// come before `inst`.
 /// The by-reference argument whose storage holds `value`, with `value`'s
 /// offset there: the argument itself, or a projection of it by constant
 /// indices that the function cannot write, as it neither owns the argument
@@ -994,6 +989,7 @@ fn argument_storage(
     }
 }
 
+/// Whether anything after `inst` may write the local object `object`.
 fn object_written_after(
     function: &Function,
     cfg: &ControlFlowGraph,
@@ -1003,32 +999,103 @@ fn object_written_after(
     inst: InstId,
     calls: &impl CallFacts,
 ) -> bool {
-    let dfg = &function.dfg;
-    let after = runs_after(function, cfg, position, inst);
-    object_uses(function, local, object).any(|user| {
-        match native_inst_set().resolve_inst(dfg.inst(user)) {
-            NativeInstKind::ObjStore(_) => after(user),
-            NativeInstKind::Call(call) => {
-                after(user)
-                    && call.args().iter().enumerate().any(|(index, arg)| {
-                        local.get(arg) == Some(&object) && calls.may_write(*call.callee(), index)
-                    })
-            }
-            NativeInstKind::ObjLoad(_) => dfg.inst_result(user).is_some_and(|loaded| {
-                passed_once(function, user, loaded, object, local, calls).is_some_and(
-                    |(call, info)| {
-                        after(call)
-                            && dfg.value_inst(object).is_some()
-                            && info.args().iter().enumerate().any(|(index, &arg)| {
-                                arg == loaded && calls.owns(*info.callee(), index)
-                            })
-                            && !object_used_after(function, cfg, position, local, object, call)
-                    },
-                )
-            }),
-            _ => false,
+    object_writes(function, cfg, position, local, object, calls)
+        .any(runs_after(function, cfg, position, inst))
+}
+
+/// Whether something may write the local object `object` after the load
+/// `inst` of it and before, or at, a read of its result `result` or of a
+/// view of that result, which reads the object in place.
+#[allow(clippy::too_many_arguments)]
+fn object_written_while_read(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    position: &SecondaryMap<InstId, u32>,
+    local: &FxHashMap<ValueId, ValueId>,
+    object: ValueId,
+    inst: InstId,
+    result: ValueId,
+    calls: &impl CallFacts,
+) -> bool {
+    let reads = value_reads(function, result);
+    let after_load = runs_after(function, cfg, position, inst);
+    object_writes(function, cfg, position, local, object, calls).any(|write| {
+        after_load(write) && {
+            let after_write = runs_after(function, cfg, position, write);
+            reads.iter().any(|&read| read == write || after_write(read))
         }
     })
+}
+
+/// The instructions that may write the local object `object`, each where
+/// the write happens: a store into it, a call that may write through one of
+/// its addresses, or a call its storage may be given to. That is a call
+/// passed a load of the object in place (`passed_once`) for an argument its
+/// callee owns, when the object is an `obj.alloc` not used after the call.
+fn object_writes<'a>(
+    function: &'a Function,
+    cfg: &'a ControlFlowGraph,
+    position: &'a SecondaryMap<InstId, u32>,
+    local: &'a FxHashMap<ValueId, ValueId>,
+    object: ValueId,
+    calls: &'a impl CallFacts,
+) -> impl Iterator<Item = InstId> + 'a {
+    let dfg = &function.dfg;
+    object_uses(function, local, object).filter_map(move |user| {
+        match native_inst_set().resolve_inst(dfg.inst(user)) {
+            NativeInstKind::ObjStore(_) => Some(user),
+            NativeInstKind::Call(call) => call
+                .args()
+                .iter()
+                .enumerate()
+                .any(|(index, arg)| {
+                    local.get(arg) == Some(&object) && calls.may_write(*call.callee(), index)
+                })
+                .then_some(user),
+            NativeInstKind::ObjLoad(_) => {
+                let loaded = dfg.inst_result(user)?;
+                let (call, info) = passed_once(function, user, loaded, object, local, calls)?;
+                (dfg.value_inst(object).is_some()
+                    && info
+                        .args()
+                        .iter()
+                        .enumerate()
+                        .any(|(index, &arg)| arg == loaded && calls.owns(*info.callee(), index))
+                    && !object_used_after(function, cfg, position, local, object, call))
+                .then_some(call)
+            }
+            _ => None,
+        }
+    })
+}
+
+/// The instructions reading the aggregate `value` where they run, when it
+/// is left in its source's storage: its users, and those of the views
+/// `extract_value` and `enum.extract` take of it.
+fn value_reads(function: &Function, value: ValueId) -> Vec<InstId> {
+    let dfg = &function.dfg;
+    let mut reads = Vec::new();
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        for &user in dfg.users(value) {
+            reads.push(user);
+            let view = match native_inst_set().resolve_inst(dfg.inst(user)) {
+                NativeInstKind::ExtractValue(extract) if *extract.dest() == value => {
+                    dfg.inst_result(user)
+                }
+                NativeInstKind::EnumExtract(extract) if *extract.value() == value => {
+                    dfg.inst_result(user)
+                }
+                _ => None,
+            };
+            if let Some(view) = view
+                && uses_indirect_value_representation(function.ctx(), dfg.value_ty(view))
+            {
+                pending.push(view);
+            }
+        }
+    }
+    reads
 }
 
 /// The uses of addresses of the local object `object`.

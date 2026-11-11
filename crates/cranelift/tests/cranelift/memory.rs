@@ -2036,6 +2036,130 @@ block0:
 }
 
 #[test]
+fn loads_read_local_objects_in_place_until_a_write_precedes_a_read() {
+    // `%moved` reads its load of `v1` only before it writes `v1`, so the load
+    // reads `v1` in place and moves the old value into `v6`, as
+    // `core::mem::replace` moves a value out before the new one goes in.
+    // `%late` may write `v2` before it reads its load, and `%looped` reads
+    // its load in each pass after the last one wrote the object, so both
+    // loads keep their snapshots.
+    let source = r#"
+func inline(never) private %fill(v0.i64) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.[i64; 32] = insert_value v1 31.i64 v0;
+    return v2;
+}
+func inline(never) private %noise(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    return v1;
+}
+func public %moved(v0.i64) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.[i64; 32] = call %fill v0;
+    obj.store v1 v2;
+    v3.[i64; 32] = obj.load v1;
+    v4.i64 = extract_value v3 31.i64;
+    v5.i64 = call %noise v4;
+    v6.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v7.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v5;
+    v8.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 0.i64 v3;
+    v9.[[i64; 32]; 2] = insert_value v8 1.i64 v7;
+    obj.store v6 v9;
+    v10.i64 = add v0 1.i64;
+    v11.[i64; 32] = call %fill v10;
+    obj.store v1 v11;
+    v12.objref<[i64; 32]> = obj.index v6 0.i64;
+    v13.objref<i64> = obj.index v12 31.i64;
+    v14.i64 = obj.load v13;
+    v15.objref<[i64; 32]> = obj.index v6 1.i64;
+    v16.objref<i64> = obj.index v15 0.i64;
+    v17.i64 = obj.load v16;
+    v18.objref<i64> = obj.index v1 0.i64;
+    v19.i64 = obj.load v18;
+    v20.i64 = mul v17 1000.i64;
+    v21.i64 = mul v19 1000000.i64;
+    v22.i64 = add v14 v20;
+    v23.i64 = add v22 v21;
+    return v23;
+}
+func public %late(v0.i64, v1.i1) -> i64 {
+block0:
+    v2.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v3.[i64; 32] = call %fill v0;
+    obj.store v2 v3;
+    v4.[i64; 32] = obj.load v2;
+    br v1 block1 block2;
+block1:
+    v5.i64 = add v0 1.i64;
+    v6.[i64; 32] = call %fill v5;
+    obj.store v2 v6;
+    jump block2;
+block2:
+    v7.i64 = extract_value v4 31.i64;
+    v8.objref<i64> = obj.index v2 0.i64;
+    v9.i64 = obj.load v8;
+    v10.i64 = mul v9 1000.i64;
+    v11.i64 = add v7 v10;
+    return v11;
+}
+func public %looped(v0.i64) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.[i64; 32] = call %fill v0;
+    obj.store v1 v2;
+    v3.[i64; 32] = obj.load v1;
+    jump block1;
+block1:
+    v4.i64 = phi (0.i64 block0) (v9 block1);
+    v5.i64 = phi (0.i64 block0) (v8 block1);
+    v6.i64 = extract_value v3 31.i64;
+    v7.[i64; 32] = call %fill v4;
+    obj.store v1 v7;
+    v8.i64 = add v5 v6;
+    v9.i64 = add v4 1.i64;
+    v10.i1 = lt v9 3.i64;
+    br v10 block1 block2;
+block2:
+    return v8;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let moved: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("moved").unwrap()) };
+        let late: unsafe extern "C" fn(i64, bool) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("late").unwrap()) };
+        let looped: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("looped").unwrap()) };
+        for value in [5, -7, 1000] {
+            assert_eq!(
+                unsafe { moved(value) },
+                value + 3 * value * 1000 + (value + 1) * 1_000_000,
+                "{level:?}"
+            );
+            for written in [false, true] {
+                let first = if written { value + 1 } else { value };
+                assert_eq!(
+                    unsafe { late(value, written) },
+                    value + first * 1000,
+                    "{level:?} {written}"
+                );
+            }
+            assert_eq!(unsafe { looped(value) }, 3 * value, "{level:?}");
+        }
+    }
+}
+
+#[test]
 fn read_only_objects_share_storage_until_a_callee_may_write() {
     // `%reader` only reads through its argument and `%writer` writes
     // element 0. `%read_only`'s object never changes, so it lives in its
