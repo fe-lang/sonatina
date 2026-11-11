@@ -2360,6 +2360,99 @@ block0:
 }
 
 #[test]
+fn chains_built_in_local_objects_come_after_reads_of_load_views() {
+    // `v4` reads `v1` in place, and `v8` reads its second array through the
+    // view `v5` after `v9`'s chain starts: built in `v1`, the chain would
+    // overwrite element 31 before `v8` reads it.
+    let source = r#"
+func public %viewed(v0.i64) -> i64 {
+block0:
+    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v2.[i64; 32] = insert_value undef.[i64; 32] 31.i64 v0;
+    v3.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
+    obj.store v1 v3;
+    v4.[[i64; 32]; 2] = obj.load v1;
+    v5.[i64; 32] = extract_value v4 1.i64;
+    v6.i64 = add v0 1.i64;
+    v7.[i64; 32] = insert_value undef.[i64; 32] 31.i64 v6;
+    v8.i64 = extract_value v5 31.i64;
+    v9.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v7;
+    obj.store v1 v9;
+    v10.objref<[i64; 32]> = obj.index v1 1.i64;
+    v14.objref<i64> = obj.index v10 31.i64;
+    v11.i64 = obj.load v14;
+    v12.i64 = mul v11 1000.i64;
+    v13.i64 = add v8 v12;
+    return v13;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let viewed: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("viewed").unwrap()) };
+        for value in [5, -7, 1000] {
+            assert_eq!(
+                unsafe { viewed(value) },
+                value + (value + 1) * 1000,
+                "{level:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn payload_free_variants_in_chains_are_built_after_their_object() {
+    // `v1`, a variant without a payload of an enum kept in memory, is made
+    // before `v2`, the object `v4`'s chain is stored into. Making it writes
+    // its tag, so the chain cannot be built in `v2` from there.
+    let source = r#"
+type @kind = enum {
+    #Storage(i64, i64, i64),
+    #Mark(i8),
+    #Empty,
+};
+type @change = {i64, @kind};
+
+func public %apply(v0.i64) -> i64 {
+block0:
+    v1.@kind = enum.make @kind #Empty ();
+    v2.objref<@change> = obj.alloc @change;
+    v3.@change = insert_value undef.@change 0.i64 v0;
+    v4.@change = insert_value v3 1.i64 v1;
+    obj.store v2 v4;
+    v5.@change = obj.load v2;
+    v6.i64 = extract_value v5 0.i64;
+    v7.@kind = extract_value v5 1.i64;
+    v8.i1 = enum.is_variant v7 #Empty;
+    v9.i64 = zext v8 i64;
+    v10.i64 = mul v9 1000.i64;
+    v11.i64 = add v6 v10;
+    return v11;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let apply: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        for value in [5, -7, 1000] {
+            assert_eq!(unsafe { apply(value) }, value + 1000, "{level:?}");
+        }
+    }
+}
+
+#[test]
 fn read_only_objects_share_storage_until_a_callee_may_write() {
     // `%reader` only reads through its argument and `%writer` writes
     // element 0. `%read_only`'s object never changes, so it lives in its

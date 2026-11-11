@@ -768,34 +768,27 @@ impl Plan {
                 outer = parent;
             }
         }
-        // The `insert_value` chain of a class on undef, if it is one: each
-        // insert with the value it inserts.
-        let chain_of = |class: usize| -> Option<Vec<(InstId, ValueId)>> {
+        // The `insert_value` chain of a class on undef, if it is one.
+        let chain_of = |class: usize| -> Option<Vec<InstId>> {
             let head = dfg.value_inst(*self.members[class].first()?)?;
             let chain: Option<Vec<_>> = std::iter::successors(Some(head), |&inst| {
                 self.continuation.get(&dfg.inst_result(inst)?).copied()
             })
             .map(
                 |inst| match native_inst_set().resolve_inst(dfg.inst(inst)) {
-                    NativeInstKind::InsertValue(insert) => {
-                        Some((inst, *insert.dest(), *insert.value()))
-                    }
+                    NativeInstKind::InsertValue(insert) => Some((inst, *insert.dest())),
                     _ => None,
                 },
             )
             .collect();
             let chain = chain?;
-            is_undef(function, chain[0].1).then(|| {
-                chain
-                    .into_iter()
-                    .map(|(inst, _, value)| (inst, value))
-                    .collect()
-            })
+            is_undef(function, chain[0].1)
+                .then(|| chain.into_iter().map(|(inst, _)| inst).collect())
         };
-        // The instructions that write a class embedded in such a chain, with
-        // the values they read: its own chain, or an `enum.make`, which
-        // writes the tag and the variant's fields.
-        let writes_of = |class: usize| -> Option<Vec<(InstId, ValueId)>> {
+        // The instructions that write a class embedded in such a chain: its
+        // own chain, or an `enum.make`, which writes the tag and the
+        // variant's fields, if any.
+        let writes_of = |class: usize| -> Option<Vec<InstId>> {
             if let Some(chain) = chain_of(class) {
                 return Some(chain);
             }
@@ -803,11 +796,11 @@ impl Plan {
                 return None;
             };
             let inst = dfg.value_inst(root)?;
-            let NativeInstKind::EnumMake(make) = native_inst_set().resolve_inst(dfg.inst(inst))
-            else {
-                return None;
-            };
-            Some(make.values().iter().map(|&value| (inst, value)).collect())
+            matches!(
+                native_inst_set().resolve_inst(dfg.inst(inst)),
+                NativeInstKind::EnumMake(_)
+            )
+            .then(|| vec![inst])
         };
         'classes: for class in 0..self.classes.len() {
             if self.embedded.contains_key(&class) {
@@ -816,8 +809,8 @@ impl Plan {
             let Some(chain) = chain_of(class) else {
                 continue;
             };
-            let (head, _) = chain[0];
-            let Some(tail) = chain.last().and_then(|&(inst, _)| dfg.inst_result(inst)) else {
+            let head = chain[0];
+            let Some(tail) = chain.last().and_then(|&inst| dfg.inst_result(inst)) else {
                 continue;
             };
             let mut users = dfg.users(tail).copied();
@@ -834,33 +827,45 @@ impl Plan {
             }
             let object = *info.object();
             let root = local.get(&object).copied();
-            // Whether the forwarded load `value` may read the object.
-            let reads_object = |value: ValueId| {
-                let source = dfg.value_inst(value).and_then(|load| {
-                    match native_inst_set().resolve_inst(dfg.inst(load)) {
-                        NativeInstKind::ObjLoad(load) => local.get(load.object()),
-                        _ => None,
+            // Whether `value` is a forwarded load that may read the object, or
+            // a view of one, which reads it where it is used too.
+            let reads_object = |mut value: ValueId| loop {
+                let Some(inst) = dfg.value_inst(value) else {
+                    return false;
+                };
+                let view = uses_indirect_value_representation(function.ctx(), dfg.value_ty(value));
+                value = match native_inst_set().resolve_inst(dfg.inst(inst)) {
+                    NativeInstKind::ObjLoad(load) if self.forwarded.contains(&value) => {
+                        let source = local.get(load.object());
+                        return root.is_none_or(|root| source == Some(&root));
                     }
-                });
-                self.forwarded.contains(&value) && root.is_none_or(|root| source == Some(&root))
+                    NativeInstKind::ExtractValue(extract) if view => *extract.dest(),
+                    NativeInstKind::EnumExtract(extract) if view => *extract.value(),
+                    _ => return false,
+                };
             };
-            let mut writes = chain.clone();
+            let mut builders = chain;
             for &child in descendants.get(&class).into_iter().flatten() {
-                let Some(child_writes) = writes_of(child) else {
+                let Some(writes) = writes_of(child) else {
                     continue 'classes;
                 };
-                if child_writes
+                if writes
                     .iter()
-                    .any(|&(inst, _)| function.layout.inst_block(inst) != block)
+                    .any(|&inst| function.layout.inst_block(inst) != block)
                 {
                     continue 'classes;
                 }
-                writes.extend(child_writes);
+                builders.extend(writes);
             }
-            if writes.iter().any(|&(_, value)| reads_object(value)) {
+            if builders.iter().any(|&inst| {
+                dfg.inst(inst)
+                    .collect_values()
+                    .into_iter()
+                    .any(reads_object)
+            }) {
                 continue;
             }
-            let builders: FxHashSet<InstId> = writes.iter().map(|&(inst, _)| inst).collect();
+            let builders: FxHashSet<InstId> = builders.into_iter().collect();
             let Some(&first) = builders.iter().min_by_key(|&&inst| position[inst]) else {
                 continue;
             };
@@ -878,8 +883,7 @@ impl Plan {
                         .iter()
                         .any(|&value| local.get(&value) == Some(&root) || reads_object(value)),
                     None => {
-                        !dfg.has_value_semantics(inst)
-                            || operands.iter().any(|value| self.forwarded.contains(value))
+                        !dfg.has_value_semantics(inst) || operands.into_iter().any(reads_object)
                     }
                 }
             };
