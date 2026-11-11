@@ -9,10 +9,22 @@ pub struct LoopUnrollTransform;
 
 impl FuncTransform for LoopUnrollTransform {
     fn transform(&mut self, func: &mut Function) {
-        LoopUnroll.run(func);
+        LoopUnroll::default().run(func);
     }
 
     fn test_root(&self) -> PathBuf {
         Path::new(FIXTURE_ROOT).join("loop_unroll")
+    }
+}
+
+pub struct LoopUnrollSmallTransform;
+
+impl FuncTransform for LoopUnrollSmallTransform {
+    fn transform(&mut self, func: &mut Function) {
+        LoopUnroll::small().run(func);
+    }
+
+    fn test_root(&self) -> PathBuf {
+        Path::new(FIXTURE_ROOT).join("loop_unroll_small")
     }
 }
