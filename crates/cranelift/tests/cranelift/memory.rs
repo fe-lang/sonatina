@@ -2036,6 +2036,470 @@ block0:
 }
 
 #[test]
+fn loads_read_local_objects_in_place_until_a_write_precedes_a_read() {
+    // `%moved` reads its load of `v1` only before it writes `v1`, so the load
+    // reads `v1` in place and moves the old value into `v6`, as
+    // `core::mem::replace` moves a value out before the new one goes in.
+    // `%late` may write `v2` before it reads its load, and `%looped` reads
+    // its load in each pass after the last one wrote the object, so both
+    // loads keep their snapshots. `%overwritten` reads its load of `v1` after
+    // `%fill`, whose result the store copies into `v1`: the callee writes it
+    // there, at the call, so that load keeps its snapshot too.
+    let source = r#"
+func inline(never) private %fill(v0.i64) -> [i64; 32] {
+block0:
+    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.[i64; 32] = insert_value v1 31.i64 v0;
+    return v2;
+}
+func inline(never) private %noise(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    return v1;
+}
+func inline(never) private %init(noalias nocapture v0.objref<[i64; 32]>, v1.i64) {
+block0:
+    v2.objref<i64> = obj.index v0 31.i64;
+    obj.store v2 v1;
+    v3.objref<i64> = obj.index v0 0.i64;
+    obj.store v3 v1;
+    return;
+}
+func inline(never) private %read(noalias nocapture readonly v0.objref<[[i64; 32]; 2]>) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.index v0 0.i64;
+    v2.objref<i64> = obj.index v1 31.i64;
+    v3.i64 = obj.load v2;
+    return v3;
+}
+func public %moved(v0.i64) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.[i64; 32] = call %fill v0;
+    obj.store v1 v2;
+    v3.[i64; 32] = obj.load v1;
+    v4.i64 = extract_value v3 31.i64;
+    v5.i64 = call %noise v4;
+    v6.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v7.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v5;
+    v8.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 0.i64 v3;
+    v9.[[i64; 32]; 2] = insert_value v8 1.i64 v7;
+    obj.store v6 v9;
+    v10.i64 = add v0 1.i64;
+    v11.[i64; 32] = call %fill v10;
+    obj.store v1 v11;
+    v12.objref<[i64; 32]> = obj.index v6 0.i64;
+    v13.objref<i64> = obj.index v12 31.i64;
+    v14.i64 = obj.load v13;
+    v15.objref<[i64; 32]> = obj.index v6 1.i64;
+    v16.objref<i64> = obj.index v15 0.i64;
+    v17.i64 = obj.load v16;
+    v18.objref<i64> = obj.index v1 0.i64;
+    v19.i64 = obj.load v18;
+    v20.i64 = mul v17 1000.i64;
+    v21.i64 = mul v19 1000000.i64;
+    v22.i64 = add v14 v20;
+    v23.i64 = add v22 v21;
+    return v23;
+}
+func public %late(v0.i64, v1.i1) -> i64 {
+block0:
+    v2.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v3.[i64; 32] = call %fill v0;
+    obj.store v2 v3;
+    v4.[i64; 32] = obj.load v2;
+    br v1 block1 block2;
+block1:
+    v5.i64 = add v0 1.i64;
+    v6.[i64; 32] = call %fill v5;
+    obj.store v2 v6;
+    jump block2;
+block2:
+    v7.i64 = extract_value v4 31.i64;
+    v8.objref<i64> = obj.index v2 0.i64;
+    v9.i64 = obj.load v8;
+    v10.i64 = mul v9 1000.i64;
+    v11.i64 = add v7 v10;
+    return v11;
+}
+func public %looped(v0.i64) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.[i64; 32] = call %fill v0;
+    obj.store v1 v2;
+    v3.[i64; 32] = obj.load v1;
+    jump block1;
+block1:
+    v4.i64 = phi (0.i64 block0) (v9 block1);
+    v5.i64 = phi (0.i64 block0) (v8 block1);
+    v6.i64 = extract_value v3 31.i64;
+    v7.[i64; 32] = call %fill v4;
+    obj.store v1 v7;
+    v8.i64 = add v5 v6;
+    v9.i64 = add v4 1.i64;
+    v10.i1 = lt v9 3.i64;
+    br v10 block1 block2;
+block2:
+    return v8;
+}
+func public %overwritten(v0.i64) -> i64 {
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    call %init v1 v0;
+    v2.[i64; 32] = obj.load v1;
+    v3.i64 = add v0 1.i64;
+    v4.[i64; 32] = call %fill v3;
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 0.i64 v2;
+    obj.store v1 v4;
+    v6.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    obj.store v6 v5;
+    v7.i64 = call %read v6;
+    v8.objref<i64> = obj.index v1 0.i64;
+    v9.i64 = obj.load v8;
+    v10.i64 = mul v9 1000.i64;
+    v11.i64 = add v7 v10;
+    return v11;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let moved: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("moved").unwrap()) };
+        let late: unsafe extern "C" fn(i64, bool) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("late").unwrap()) };
+        let looped: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("looped").unwrap()) };
+        let overwritten: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("overwritten").unwrap()) };
+        for value in [5, -7, 1000] {
+            assert_eq!(
+                unsafe { moved(value) },
+                value + 3 * value * 1000 + (value + 1) * 1_000_000,
+                "{level:?}"
+            );
+            for written in [false, true] {
+                let first = if written { value + 1 } else { value };
+                assert_eq!(
+                    unsafe { late(value, written) },
+                    value + first * 1000,
+                    "{level:?} {written}"
+                );
+            }
+            assert_eq!(unsafe { looped(value) }, 3 * value, "{level:?}");
+            assert_eq!(
+                unsafe { overwritten(value) },
+                value + (value + 1) * 1000,
+                "{level:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn chains_build_in_local_objects_across_calls_and_other_stores() {
+    // `%across` builds `v1`'s value in `v1` itself: nothing between the
+    // chains and the store, a call and a store to memory, can reach `v1`,
+    // and `v8` reads `v2`, which it still holds. `%swapped`'s chain inserts
+    // a load that reads `v1` itself where it is inserted, after the chain
+    // would have written `v1`'s second field, so it is built aside.
+    let source = r#"
+func inline(never) private %noise(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    return v1;
+}
+func public %across(v0.i64, v20.*i64, v22.*[[i64; 8]; 2]) {
+block0:
+    v1.objref<[[i64; 8]; 2]> = obj.alloc [[i64; 8]; 2];
+    v2.objref<[i64; 8]> = obj.alloc [i64; 8];
+    v30.[i64; 8] = insert_value undef.[i64; 8] 2.i64 v0;
+    obj.store v2 v30;
+    v8.[i64; 8] = obj.load v2;
+    v3.[i64; 8] = insert_value undef.[i64; 8] 0.i64 v0;
+    v4.i64 = call %noise v0;
+    mstore v20 v4 i64;
+    v5.[i64; 8] = insert_value v3 3.i64 v4;
+    v6.[[i64; 8]; 2] = insert_value undef.[[i64; 8]; 2] 1.i64 v5;
+    v7.[[i64; 8]; 2] = insert_value v6 0.i64 v8;
+    obj.store v1 v7;
+    v21.objref<i64> = obj.index v2 2.i64;
+    obj.store v21 77.i64;
+    v9.[[i64; 8]; 2] = obj.load v1;
+    mstore v22 v9 [[i64; 8]; 2];
+    return;
+}
+func public %swapped(v0.i64, v22.*[[i64; 8]; 2]) {
+block0:
+    v1.objref<[[i64; 8]; 2]> = obj.alloc [[i64; 8]; 2];
+    v2.[i64; 8] = insert_value undef.[i64; 8] 0.i64 v0;
+    v3.[[i64; 8]; 2] = insert_value undef.[[i64; 8]; 2] 1.i64 v2;
+    obj.store v1 v3;
+    v4.objref<[i64; 8]> = obj.index v1 1.i64;
+    v5.[i64; 8] = obj.load v4;
+    v6.i64 = add v0 1.i64;
+    v7.[i64; 8] = insert_value undef.[i64; 8] 1.i64 v6;
+    v8.[[i64; 8]; 2] = insert_value undef.[[i64; 8]; 2] 1.i64 v7;
+    v9.[[i64; 8]; 2] = insert_value v8 0.i64 v5;
+    obj.store v1 v9;
+    v10.[[i64; 8]; 2] = obj.load v1;
+    mstore v22 v10 [[i64; 8]; 2];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let across: unsafe extern "C" fn(i64, *mut i64, *mut [[i64; 8]; 2]) =
+            unsafe { std::mem::transmute(artifact.function_address("across").unwrap()) };
+        let swapped: unsafe extern "C" fn(i64, *mut [[i64; 8]; 2]) =
+            unsafe { std::mem::transmute(artifact.function_address("swapped").unwrap()) };
+        for value in [5, -7, 1000] {
+            let mut noise = -1;
+            let mut out = [[-1; 8]; 2];
+            unsafe { across(value, &mut noise, &mut out) };
+            assert_eq!(noise, 3 * value, "{level:?}");
+            assert_eq!(
+                out,
+                [
+                    [0, 0, value, 0, 0, 0, 0, 0],
+                    [value, 0, 0, 3 * value, 0, 0, 0, 0]
+                ],
+                "{level:?}"
+            );
+            let mut out = [[-1; 8]; 2];
+            unsafe { swapped(value, &mut out) };
+            assert_eq!(
+                out,
+                [
+                    [value, 0, 0, 0, 0, 0, 0, 0],
+                    [0, value + 1, 0, 0, 0, 0, 0, 0]
+                ],
+                "{level:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn chains_built_in_owned_arguments_come_after_reads_of_them() {
+    // `%first` and `%across` own their argument, so `v1` lives in its
+    // storage, and they read its first field after `v1`'s chain starts:
+    // built in `v1`, the chain would overwrite the field first. `%across`
+    // calls a function between the read and the store.
+    let source = r#"
+func inline(never) private %noise(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    return v1;
+}
+func inline(never) private %first(v0.[i64; 8]) -> i64 {
+block0:
+    v1.objref<[i64; 8]> = obj.alloc [i64; 8];
+    obj.store v1 v0;
+    v2.[i64; 8] = insert_value undef.[i64; 8] 0.i64 7.i64;
+    v3.i64 = extract_value v0 0.i64;
+    v4.[i64; 8] = insert_value v2 1.i64 v3;
+    obj.store v1 v4;
+    v5.objref<i64> = obj.index v1 1.i64;
+    v6.i64 = obj.load v5;
+    return v6;
+}
+func inline(never) private %across(v0.[i64; 8]) -> i64 {
+block0:
+    v1.objref<[i64; 8]> = obj.alloc [i64; 8];
+    obj.store v1 v0;
+    v2.[i64; 8] = insert_value undef.[i64; 8] 0.i64 7.i64;
+    v3.i64 = extract_value v0 0.i64;
+    v7.i64 = call %noise v3;
+    v4.[i64; 8] = insert_value v2 1.i64 v7;
+    obj.store v1 v4;
+    v5.objref<i64> = obj.index v1 1.i64;
+    v6.i64 = obj.load v5;
+    return v6;
+}
+func public %sums(v0.i64) -> i64 {
+block0:
+    v1.[i64; 8] = insert_value undef.[i64; 8] 0.i64 v0;
+    v2.i64 = call %first v1;
+    v3.[i64; 8] = insert_value undef.[i64; 8] 0.i64 v0;
+    v4.i64 = call %across v3;
+    v5.i64 = mul v4 1000.i64;
+    v6.i64 = add v2 v5;
+    return v6;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let sums: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("sums").unwrap()) };
+        for value in [5, -7, 1000] {
+            assert_eq!(
+                unsafe { sums(value) },
+                value + 3 * value * 1000,
+                "{level:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn chains_built_in_local_objects_come_after_reads_of_load_views() {
+    // `v4` reads `v1` in place, and `v8` reads its second array through the
+    // view `v5` after `v9`'s chain starts: built in `v1`, the chain would
+    // overwrite element 31 before `v8` reads it.
+    let source = r#"
+func public %viewed(v0.i64) -> i64 {
+block0:
+    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v2.[i64; 32] = insert_value undef.[i64; 32] 31.i64 v0;
+    v3.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
+    obj.store v1 v3;
+    v4.[[i64; 32]; 2] = obj.load v1;
+    v5.[i64; 32] = extract_value v4 1.i64;
+    v6.i64 = add v0 1.i64;
+    v7.[i64; 32] = insert_value undef.[i64; 32] 31.i64 v6;
+    v8.i64 = extract_value v5 31.i64;
+    v9.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v7;
+    obj.store v1 v9;
+    v10.objref<[i64; 32]> = obj.index v1 1.i64;
+    v14.objref<i64> = obj.index v10 31.i64;
+    v11.i64 = obj.load v14;
+    v12.i64 = mul v11 1000.i64;
+    v13.i64 = add v8 v12;
+    return v13;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let viewed: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("viewed").unwrap()) };
+        for value in [5, -7, 1000] {
+            assert_eq!(
+                unsafe { viewed(value) },
+                value + (value + 1) * 1000,
+                "{level:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn chains_into_raw_objects_come_after_raw_loads_of_them() {
+    // `v2` lives behind a pointer, and `v4` reads its first array where
+    // `v5` inserts it, from memory: built in `v2`, the chain would write
+    // its first array before the insert reads it. `%shift_view` reads it
+    // through a view of a raw load of the whole object.
+    let source = r#"
+func public %shift(v0.*i8) {
+block0:
+    v1.*[[i64; 32]; 2] = bitcast v0 *[[i64; 32]; 2];
+    v2.objref<[[i64; 32]; 2]> = obj.from_ptr v1;
+    v3.*[i64; 32] = bitcast v0 *[i64; 32];
+    v4.[i64; 32] = mload v3 [i64; 32];
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v4;
+    obj.store v2 v5;
+    return;
+}
+func public %shift_view(v0.*i8) {
+block0:
+    v1.*[[i64; 32]; 2] = bitcast v0 *[[i64; 32]; 2];
+    v2.objref<[[i64; 32]; 2]> = obj.from_ptr v1;
+    v3.[[i64; 32]; 2] = mload v1 [[i64; 32]; 2];
+    v4.[i64; 32] = extract_value v3 0.i64;
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v4;
+    obj.store v2 v5;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        for name in ["shift", "shift_view"] {
+            let shift: unsafe extern "C" fn(*mut [[i64; 32]; 2]) =
+                unsafe { std::mem::transmute(artifact.function_address(name).unwrap()) };
+            let first: [i64; 32] = std::array::from_fn(|index| index as i64 * 3 - 7);
+            let mut object = [first, [-1; 32]];
+            unsafe { shift(&mut object) };
+            assert_eq!(object[1], first, "{name} {level:?}");
+        }
+    }
+}
+
+#[test]
+fn payload_free_variants_in_chains_are_built_after_their_object() {
+    // `v1`, a variant without a payload of an enum kept in memory, is made
+    // before `v2`, the object `v4`'s chain is stored into. Making it writes
+    // its tag, so the chain cannot be built in `v2` from there.
+    let source = r#"
+type @kind = enum {
+    #Storage(i64, i64, i64),
+    #Mark(i8),
+    #Empty,
+};
+type @change = {i64, @kind};
+
+func public %apply(v0.i64) -> i64 {
+block0:
+    v1.@kind = enum.make @kind #Empty ();
+    v2.objref<@change> = obj.alloc @change;
+    v3.@change = insert_value undef.@change 0.i64 v0;
+    v4.@change = insert_value v3 1.i64 v1;
+    obj.store v2 v4;
+    v5.@change = obj.load v2;
+    v6.i64 = extract_value v5 0.i64;
+    v7.@kind = extract_value v5 1.i64;
+    v8.i1 = enum.is_variant v7 #Empty;
+    v9.i64 = zext v8 i64;
+    v10.i64 = mul v9 1000.i64;
+    v11.i64 = add v6 v10;
+    return v11;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let apply: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        for value in [5, -7, 1000] {
+            assert_eq!(unsafe { apply(value) }, value + 1000, "{level:?}");
+        }
+    }
+}
+
+#[test]
 fn read_only_objects_share_storage_until_a_callee_may_write() {
     // `%reader` only reads through its argument and `%writer` writes
     // element 0. `%read_only`'s object never changes, so it lives in its

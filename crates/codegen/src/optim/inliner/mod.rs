@@ -319,8 +319,7 @@ impl Inliner {
                 }
             }
             let depth_at_iter_start = inline_depth_by_func.clone();
-            let mut inlinee_summaries: FxHashMap<cost::SummaryKey, cost::InlineeSummary> =
-                FxHashMap::default();
+            let mut inlinee_summaries = cost::SummaryCache::default();
             // Recursive snapshots are taken afresh each iteration.
             validated_callees.retain(|key| matches!(key, cost::SummaryKey::Live(_)));
 
@@ -389,9 +388,13 @@ impl Inliner {
                     });
 
                     let callee_calls = call_counts.get(&site.callee).copied().unwrap_or(0);
-                    let known_arg_mask = module.func_store.view(caller_ref, |caller| {
-                        callsite_known_arg_mask(caller, site.call_inst)
-                    });
+                    let (known_arg_mask, known_args) =
+                        module.func_store.view(caller_ref, |caller| {
+                            (
+                                callsite_known_arg_mask(caller, site.call_inst),
+                                callsite_known_args(caller, site.call_inst),
+                            )
+                        });
 
                     // Caller uses and callee definitions constrain each other:
                     // a second, non-scalarizable result can keep a shared use alive.
@@ -477,7 +480,7 @@ impl Inliner {
                                 before,
                             );
                         }
-                        inlinee_summaries.remove(&cost::SummaryKey::Live(caller_ref));
+                        inlinee_summaries.invalidate(cost::SummaryKey::Live(caller_ref));
                         validated_callees.remove(&cost::SummaryKey::Live(caller_ref));
                         forced_recursive_inline_succeeded |= recursive_callsite && always_inline;
                         // Most trivial plans don't change CFG reachability.
@@ -506,6 +509,7 @@ impl Inliner {
                             module_info: &analysis,
                             local_object_args: local_object_args.as_ref(),
                             object_effects: object_effects.as_ref(),
+                            known_args: &known_args,
                         },
                         cost::InlineRequest {
                             callee_ref: site.callee,
@@ -603,7 +607,7 @@ impl Inliner {
                                     before,
                                 );
                             }
-                            inlinee_summaries.remove(&cost::SummaryKey::Live(caller_ref));
+                            inlinee_summaries.invalidate(cost::SummaryKey::Live(caller_ref));
                             validated_callees.remove(&cost::SummaryKey::Live(caller_ref));
                             forced_recursive_inline_succeeded |=
                                 recursive_callsite && always_inline;
@@ -764,6 +768,21 @@ fn callsite_known_arg_mask(func: &Function, call_inst: InstId) -> u128 {
                 mask
             }
         })
+}
+
+/// The call's immediate arguments, by index.
+fn callsite_known_args(func: &Function, call_inst: InstId) -> cost::KnownArgs {
+    let Some(call) = func.dfg.cast_call(call_inst) else {
+        return cost::KnownArgs::new();
+    };
+    call.args()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &arg)| match func.dfg.value(arg) {
+            Value::Immediate { imm, .. } => Some((index, *imm)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn compute_reachable_blocks(func: &Function) -> FxHashSet<BlockId> {

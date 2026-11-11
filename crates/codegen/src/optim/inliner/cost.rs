@@ -1,6 +1,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, Linkage, Module,
+    BlockId, ControlFlowGraph, Function, Immediate, Linkage, Module,
     inst::{control_flow, data},
     module::{FuncHints, FuncRef},
 };
@@ -12,7 +13,10 @@ use crate::{
 };
 
 use super::{
-    super::aggregate::{LocalObjectArgMap, ObjectEffectSummaryMap, ObjectReturnEffect},
+    super::{
+        aggregate::{LocalObjectArgMap, ObjectEffectSummaryMap, ObjectReturnEffect},
+        sccp::SccpSolver,
+    },
     InlinerConfig,
 };
 
@@ -116,6 +120,8 @@ pub(super) struct InlineDecisionContext<'a> {
     pub module_info: &'a ModuleInfo,
     pub local_object_args: Option<&'a LocalObjectArgMap>,
     pub object_effects: Option<&'a ObjectEffectSummaryMap>,
+    /// The call's immediate arguments, by index.
+    pub known_args: &'a [(usize, Immediate)],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -124,9 +130,28 @@ pub(super) enum SummaryKey {
     Snapshot(FuncRef),
 }
 
+/// A call's immediate arguments, by index.
+pub(super) type KnownArgs = SmallVec<[(usize, Immediate); 4]>;
+
+/// Summaries of callee bodies, as they are and with a call's immediate
+/// arguments in place of their parameters.
+#[derive(Default)]
+pub(super) struct SummaryCache {
+    bodies: FxHashMap<SummaryKey, InlineeSummary>,
+    bound: FxHashMap<SummaryKey, FxHashMap<KnownArgs, InlineeSummary>>,
+}
+
+impl SummaryCache {
+    /// Forgets the summaries of the body `key` names, which changed.
+    pub(super) fn invalidate(&mut self, key: SummaryKey) {
+        self.bodies.remove(&key);
+        self.bound.remove(&key);
+    }
+}
+
 pub(super) fn decide_inline(
     module: &Module,
-    summary_cache: &mut FxHashMap<SummaryKey, InlineeSummary>,
+    summary_cache: &mut SummaryCache,
     callee: Option<&Function>,
     recursive_callsite: bool,
     ctx: InlineDecisionContext<'_>,
@@ -151,7 +176,7 @@ pub(super) fn decide_inline(
 
     let summary = get_inlinee_summary(
         module,
-        summary_cache,
+        &mut summary_cache.bodies,
         request.callee_ref,
         callee,
         ctx.local_object_args,
@@ -221,10 +246,23 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::Budget);
     }
 
+    // A small leaf helper that known arguments or scalarization may shrink
+    // inlines for the cleanup after it, as does a callee the call's
+    // immediate arguments reduce to one.
     let should_force_small_cleanup_helper = request.call_continuation_may_commit
-        && is_multi_block_small_leaf_helper(summary, config)
-        && (request.known_arg_mask != 0
-            || (config.scalarization_bonus_cap > 0 && summary.scalarization.has_opportunity()));
+        && ((is_multi_block_small_leaf_helper(summary, config)
+            && (request.known_arg_mask != 0
+                || (config.scalarization_bonus_cap > 0
+                    && summary.scalarization.has_opportunity())))
+            || reduces_to_small_leaf_helper(
+                module,
+                summary_cache,
+                callee,
+                ctx,
+                request.callee_ref,
+                summary,
+                config,
+            ));
 
     if should_force_small_cleanup_helper {
         return InlineDecision::Inline(InlinePlan { removed_insts: 0 });
@@ -292,7 +330,7 @@ pub(super) fn decide_inline(
         .min(config.scalarization_bonus_cap);
     score -= compute_scalarization_helper_cluster_bonus(
         module,
-        summary_cache,
+        &mut summary_cache.bodies,
         ctx,
         request.callee_ref,
         summary,
@@ -323,6 +361,74 @@ fn is_small_leaf_helper(summary: InlineeSummary, config: &InlinerConfig) -> bool
 
 fn is_multi_block_small_leaf_helper(summary: InlineeSummary, config: &InlinerConfig) -> bool {
     summary.blocks > 1 && is_small_leaf_helper(summary, config)
+}
+
+/// The most rounds of constant propagation over a body with a call's
+/// immediate arguments bound.
+const BOUND_SCCP_ROUNDS: usize = 4;
+
+/// Whether the call's immediate arguments reduce the body of `callee_ref`,
+/// which is not a small leaf helper itself, to one once constants
+/// propagate, as `MemVec::with_capacity(0)` reduces to the empty vector
+/// without its allocation and failure paths.
+fn reduces_to_small_leaf_helper(
+    module: &Module,
+    summary_cache: &mut SummaryCache,
+    callee: Option<&Function>,
+    ctx: InlineDecisionContext<'_>,
+    callee_ref: FuncRef,
+    summary: InlineeSummary,
+    config: &InlinerConfig,
+) -> bool {
+    if ctx.known_args.is_empty()
+        || config.small_function_inst_limit == 0
+        || is_small_leaf_helper(summary, config)
+    {
+        return false;
+    }
+    let key = match callee {
+        Some(_) => SummaryKey::Snapshot(callee_ref),
+        None => SummaryKey::Live(callee_ref),
+    };
+    let bound = *summary_cache
+        .bound
+        .entry(key)
+        .or_default()
+        .entry(ctx.known_args.into())
+        .or_insert_with(|| {
+            let bind = |func: &Function| {
+                let mut func = func.clone();
+                for &(index, imm) in ctx.known_args {
+                    let value = func.dfg.make_imm_value(imm);
+                    func.dfg.change_to_alias(func.arg_values[index], value);
+                }
+                // A round can fold a branch condition only after removing
+                // edges, leaving the branch to the next.
+                let mut cfg = ControlFlowGraph::default();
+                for _ in 0..BOUND_SCCP_ROUNDS {
+                    cfg.compute(&func);
+                    if !SccpSolver::new().run(&mut func, &mut cfg) {
+                        break;
+                    }
+                }
+                compute_inlinee_summary(
+                    callee_ref,
+                    &func,
+                    ctx.local_object_args,
+                    ctx.object_effects,
+                )
+            };
+            callee.map_or_else(
+                || {
+                    module
+                        .func_store
+                        .try_view(callee_ref, bind)
+                        .unwrap_or_default()
+                },
+                bind,
+            )
+        });
+    is_small_leaf_helper(bound, config)
 }
 
 fn compute_scalarization_helper_cluster_bonus(

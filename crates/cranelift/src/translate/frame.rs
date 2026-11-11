@@ -79,16 +79,17 @@ use super::{
 /// later in its block, with no state change in between, is written there
 /// by the callee, unless an argument reaches the object or an instruction in
 /// between reads it. Any other load of such an object reads it in place
-/// when nothing reachable after the load writes it: no store into it, no
-/// call that may write through one of its addresses (`ArgWrites`), and no
-/// call that may be given its storage, as below.
+/// when no write of it can come between the load and a read of the loaded
+/// value or of a view of it: no store into it, no call that may write
+/// through one of its addresses (`ArgWrites`), and no call that may be given
+/// its storage, as below, runs after the load and before or at such a read.
 ///
 /// A callee may own a by-reference argument (`Ownership`), building an
 /// object in its storage. The caller then passes storage it does not use
 /// after the call and no other argument shares: a forwarded load of a local
 /// object in its own slot that it no longer uses, or a value whose range
-/// ends at the call. The call writes an object it is given, so no load of
-/// the object reads it in place across the call.
+/// ends at the call. The call writes an object it is given, so a load of
+/// the object read after the call does not read it in place.
 /// Otherwise it copies the argument into a temporary, a class live only at
 /// the call.
 pub(super) struct FrameSlots {
@@ -525,8 +526,8 @@ impl Plan {
                     }
                     NativeInstKind::ObjLoad(load)
                         if let Some(&object) = local.get(load.object())
-                            && !object_written_after(
-                                function, cfg, &position, &local, object, inst, calls,
+                            && !object_written_while_read(
+                                function, cfg, &position, &local, object, inst, result, calls,
                             ) =>
                     {
                         plan.forwarded.insert(result);
@@ -657,7 +658,7 @@ impl Plan {
         }
 
         plan.embed(function, &class_of)?;
-        plan.store_in_place(function, &position);
+        plan.store_in_place(function, &position, &local, calls);
 
         // Owned arguments the caller cannot give away go through temporaries.
         for &block in block_order {
@@ -718,14 +719,46 @@ impl Plan {
     /// Builds each `insert_value` chain on undef whose last value is only
     /// stored into an object at that object, with the classes embedded in
     /// it, when the object's address is defined before the first of them
-    /// starts and everything from there to the store is free of effects and
-    /// uses no forwarded load, which reads memory where it is used. No other
-    /// class lives inside such a chain, and none of the values it inserts is
-    /// a forwarded load. Every class embedded in it must be such a chain or
-    /// an `enum.make` in its block too, so that all of them write the object
-    /// only there.
-    fn store_in_place(&mut self, function: &Function, position: &SecondaryMap<InstId, u32>) {
+    /// starts and nothing from there to the store may read or write the
+    /// object, which would see it written early. Every class embedded in it
+    /// must be such a chain or an `enum.make` in its block too, so that all
+    /// of them write the object only there.
+    ///
+    /// Only the function's own uses of its addresses reach a local object,
+    /// so the instructions in between may be anything else, and a forwarded
+    /// load, which reads its source where it is used, reaches the object
+    /// only if that source is one of its addresses. Any other object may be
+    /// reached through memory, so everything in between must be free of
+    /// effects, and no forwarded load may be used there or inserted. An
+    /// object built in the storage of an argument the function owns is read
+    /// by the argument's reads too.
+    fn store_in_place(
+        &mut self,
+        function: &Function,
+        position: &SecondaryMap<InstId, u32>,
+        local: &FxHashMap<ValueId, ValueId>,
+        calls: &impl CallFacts,
+    ) {
         let dfg = &function.dfg;
+        // The reads of each argument the function owns whose storage holds
+        // a local object (`Ownership`), by that object: they read the
+        // object, and may follow its initializing store.
+        let owned_reads: FxHashMap<ValueId, Vec<InstId>> = function
+            .arg_values
+            .iter()
+            .enumerate()
+            .filter(|&(index, _)| calls.owns_arg(index))
+            .flat_map(|(_, &arg)| {
+                dfg.users(arg).filter_map(move |&user| {
+                    match native_inst_set().resolve_inst(dfg.inst(user)) {
+                        NativeInstKind::ObjStore(store) if *store.value() == arg => {
+                            Some((*store.object(), value_reads(function, arg)))
+                        }
+                        _ => None,
+                    }
+                })
+            })
+            .collect();
         // The classes embedded in each class, directly or not.
         let mut descendants = FxHashMap::<usize, Vec<usize>>::default();
         for &child in self.embedded.keys() {
@@ -735,53 +768,39 @@ impl Plan {
                 outer = parent;
             }
         }
-        // The `insert_value` chain of a class on undef, if it is one: each
-        // insert with the value it inserts.
-        let chain_of = |class: usize| -> Option<Vec<(InstId, ValueId)>> {
+        // The `insert_value` chain of a class on undef, if it is one.
+        let chain_of = |class: usize| -> Option<Vec<InstId>> {
             let head = dfg.value_inst(*self.members[class].first()?)?;
             let chain: Option<Vec<_>> = std::iter::successors(Some(head), |&inst| {
                 self.continuation.get(&dfg.inst_result(inst)?).copied()
             })
             .map(
                 |inst| match native_inst_set().resolve_inst(dfg.inst(inst)) {
-                    NativeInstKind::InsertValue(insert) => {
-                        Some((inst, *insert.dest(), *insert.value()))
-                    }
+                    NativeInstKind::InsertValue(insert) => Some((inst, *insert.dest())),
                     _ => None,
                 },
             )
             .collect();
             let chain = chain?;
-            (is_undef(function, chain[0].1)
-                && chain
-                    .iter()
-                    .all(|(_, _, value)| !self.forwarded.contains(value)))
-            .then(|| {
-                chain
-                    .into_iter()
-                    .map(|(inst, _, value)| (inst, value))
-                    .collect()
-            })
+            is_undef(function, chain[0].1)
+                .then(|| chain.into_iter().map(|(inst, _)| inst).collect())
         };
         // The instructions that write a class embedded in such a chain: its
         // own chain, or an `enum.make`, which writes the tag and the
-        // variant's fields. Neither may write a forwarded load.
+        // variant's fields, if any.
         let writes_of = |class: usize| -> Option<Vec<InstId>> {
             if let Some(chain) = chain_of(class) {
-                return Some(chain.into_iter().map(|(inst, _)| inst).collect());
+                return Some(chain);
             }
             let [root] = self.members[class][..] else {
                 return None;
             };
             let inst = dfg.value_inst(root)?;
-            let NativeInstKind::EnumMake(make) = native_inst_set().resolve_inst(dfg.inst(inst))
-            else {
-                return None;
-            };
-            make.values()
-                .iter()
-                .all(|value| !self.forwarded.contains(value))
-                .then(|| vec![inst])
+            matches!(
+                native_inst_set().resolve_inst(dfg.inst(inst)),
+                NativeInstKind::EnumMake(_)
+            )
+            .then(|| vec![inst])
         };
         'classes: for class in 0..self.classes.len() {
             if self.embedded.contains_key(&class) {
@@ -790,8 +809,8 @@ impl Plan {
             let Some(chain) = chain_of(class) else {
                 continue;
             };
-            let (head, _) = chain[0];
-            let Some(tail) = chain.last().and_then(|&(inst, _)| dfg.inst_result(inst)) else {
+            let head = chain[0];
+            let Some(tail) = chain.last().and_then(|&inst| dfg.inst_result(inst)) else {
                 continue;
             };
             let mut users = dfg.users(tail).copied();
@@ -806,7 +825,32 @@ impl Plan {
             if *info.value() != tail || function.layout.inst_block(store) != block {
                 continue;
             }
-            let mut builders: FxHashSet<InstId> = chain.iter().map(|&(inst, _)| inst).collect();
+            let object = *info.object();
+            let root = local.get(&object).copied();
+            // Whether `value` is a forwarded load that may read the object, or
+            // a view of one, which reads it where it is used too. Only a load
+            // of one of a local object's addresses may read it; any may read
+            // another object.
+            let reads_object = |mut value: ValueId| loop {
+                let Some(inst) = dfg.value_inst(value) else {
+                    return false;
+                };
+                let kind = native_inst_set().resolve_inst(dfg.inst(inst));
+                if self.forwarded.contains(&value) {
+                    let source = match kind {
+                        NativeInstKind::ObjLoad(load) => local.get(load.object()),
+                        _ => None,
+                    };
+                    return root.is_none_or(|root| source == Some(&root));
+                }
+                let view = uses_indirect_value_representation(function.ctx(), dfg.value_ty(value));
+                value = match kind {
+                    NativeInstKind::ExtractValue(extract) if view => *extract.dest(),
+                    NativeInstKind::EnumExtract(extract) if view => *extract.value(),
+                    _ => return false,
+                };
+            };
+            let mut builders = chain;
             for &child in descendants.get(&class).into_iter().flatten() {
                 let Some(writes) = writes_of(child) else {
                     continue 'classes;
@@ -819,26 +863,41 @@ impl Plan {
                 }
                 builders.extend(writes);
             }
+            if builders.iter().any(|&inst| {
+                dfg.inst(inst)
+                    .collect_values()
+                    .into_iter()
+                    .any(reads_object)
+            }) {
+                continue;
+            }
+            let builders: FxHashSet<InstId> = builders.into_iter().collect();
             let Some(&first) = builders.iter().min_by_key(|&&inst| position[inst]) else {
                 continue;
             };
-            let object = *info.object();
             let defined_before = dfg.value_inst(object).is_none_or(|def| {
                 function.layout.inst_block(def) != block || position[def] < position[first]
             });
+            let reads_owner = owned_reads.get(&root.unwrap_or(object));
+            let touches_object = |inst: InstId| {
+                if reads_owner.is_some_and(|reads| reads.contains(&inst)) {
+                    return true;
+                }
+                let operands = dfg.inst(inst).collect_values();
+                match root {
+                    Some(root) => operands
+                        .iter()
+                        .any(|&value| local.get(&value) == Some(&root) || reads_object(value)),
+                    None => {
+                        !dfg.has_value_semantics(inst) || operands.into_iter().any(reads_object)
+                    }
+                }
+            };
             let untouched = std::iter::successors(function.layout.next_inst_of(first), |&next| {
                 function.layout.next_inst_of(next)
             })
             .take_while(|&next| next != store)
-            .all(|next| {
-                builders.contains(&next)
-                    || (dfg.has_value_semantics(next)
-                        && !dfg
-                            .inst(next)
-                            .collect_values()
-                            .iter()
-                            .any(|value| self.forwarded.contains(value)))
-            });
+            .all(|next| builders.contains(&next) || !touches_object(next));
             if defined_before && untouched {
                 self.stored.insert(class, (object, store));
             }
@@ -959,12 +1018,6 @@ fn object_used_after(
     object_uses(function, local, object).any(runs_after(function, cfg, position, call))
 }
 
-/// Whether anything after `inst` may write the local object `object`: a
-/// store into it, a call that may write through one of its addresses, or a
-/// call its storage may be given to. That is a call passed a load of the
-/// object in place (`passed_once`) for an argument its callee owns, when the
-/// object is an `obj.alloc` not used after the call; the load itself may
-/// come before `inst`.
 /// The by-reference argument whose storage holds `value`, with `value`'s
 /// offset there: the argument itself, or a projection of it by constant
 /// indices that the function cannot write, as it neither owns the argument
@@ -994,6 +1047,7 @@ fn argument_storage(
     }
 }
 
+/// Whether anything after `inst` may write the local object `object`.
 fn object_written_after(
     function: &Function,
     cfg: &ControlFlowGraph,
@@ -1003,32 +1057,118 @@ fn object_written_after(
     inst: InstId,
     calls: &impl CallFacts,
 ) -> bool {
-    let dfg = &function.dfg;
-    let after = runs_after(function, cfg, position, inst);
-    object_uses(function, local, object).any(|user| {
-        match native_inst_set().resolve_inst(dfg.inst(user)) {
-            NativeInstKind::ObjStore(_) => after(user),
-            NativeInstKind::Call(call) => {
-                after(user)
-                    && call.args().iter().enumerate().any(|(index, arg)| {
-                        local.get(arg) == Some(&object) && calls.may_write(*call.callee(), index)
-                    })
-            }
-            NativeInstKind::ObjLoad(_) => dfg.inst_result(user).is_some_and(|loaded| {
-                passed_once(function, user, loaded, object, local, calls).is_some_and(
-                    |(call, info)| {
-                        after(call)
-                            && dfg.value_inst(object).is_some()
-                            && info.args().iter().enumerate().any(|(index, &arg)| {
-                                arg == loaded && calls.owns(*info.callee(), index)
-                            })
-                            && !object_used_after(function, cfg, position, local, object, call)
-                    },
-                )
-            }),
-            _ => false,
+    object_writes(function, cfg, position, local, object, calls)
+        .any(runs_after(function, cfg, position, inst))
+}
+
+/// Whether something may write the local object `object` after the load
+/// `inst` of it and before, or at, a read of its result `result` or of a
+/// view of that result, which reads the object in place.
+#[allow(clippy::too_many_arguments)]
+fn object_written_while_read(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    position: &SecondaryMap<InstId, u32>,
+    local: &FxHashMap<ValueId, ValueId>,
+    object: ValueId,
+    inst: InstId,
+    result: ValueId,
+    calls: &impl CallFacts,
+) -> bool {
+    let reads = value_reads(function, result);
+    let after_load = runs_after(function, cfg, position, inst);
+    object_writes(function, cfg, position, local, object, calls).any(|write| {
+        after_load(write) && {
+            let after_write = runs_after(function, cfg, position, write);
+            reads.iter().any(|&read| read == write || after_write(read))
         }
     })
+}
+
+/// The instructions that may write the local object `object`, each where
+/// the write happens: a store into it, a call that may write through one of
+/// its addresses, or a call its storage may be given to. That is a call
+/// passed a load of the object in place (`passed_once`) for an argument its
+/// callee owns, when the object is an `obj.alloc` not used after the call.
+/// A call whose result a store copies into the object may also write it
+/// there itself (`result_destination`), at the call.
+fn object_writes<'a>(
+    function: &'a Function,
+    cfg: &'a ControlFlowGraph,
+    position: &'a SecondaryMap<InstId, u32>,
+    local: &'a FxHashMap<ValueId, ValueId>,
+    object: ValueId,
+    calls: &'a impl CallFacts,
+) -> impl Iterator<Item = InstId> + 'a {
+    let dfg = &function.dfg;
+    let writes =
+        object_uses(function, local, object).filter_map(move |user| {
+            match native_inst_set().resolve_inst(dfg.inst(user)) {
+                NativeInstKind::ObjStore(_) => Some(user),
+                NativeInstKind::Call(call) => call
+                    .args()
+                    .iter()
+                    .enumerate()
+                    .any(|(index, arg)| {
+                        local.get(arg) == Some(&object) && calls.may_write(*call.callee(), index)
+                    })
+                    .then_some(user),
+                NativeInstKind::ObjLoad(_) => {
+                    let loaded = dfg.inst_result(user)?;
+                    let (call, info) = passed_once(function, user, loaded, object, local, calls)?;
+                    (dfg.value_inst(object).is_some()
+                        && info.args().iter().enumerate().any(|(index, &arg)| {
+                            arg == loaded && calls.owns(*info.callee(), index)
+                        })
+                        && !object_used_after(function, cfg, position, local, object, call))
+                    .then_some(call)
+                }
+                _ => None,
+            }
+        });
+    // Without the plan's forwarded loads, `result_destination` accepts every
+    // call the plan does, so no write at a call is missed.
+    let results_in_place = object_uses(function, local, object).filter_map(move |user| {
+        let NativeInstKind::ObjStore(store) = native_inst_set().resolve_inst(dfg.inst(user)) else {
+            return None;
+        };
+        let value = *store.value();
+        let call = dfg.value_inst(value)?;
+        let no_forwarded_loads = FxHashMap::default();
+        result_destination(function, position, call, value, local, &no_forwarded_loads)
+            .is_some_and(|(_, at)| at == user)
+            .then_some(call)
+    });
+    writes.chain(results_in_place)
+}
+
+/// The instructions reading the aggregate `value` where they run, when it
+/// is left in its source's storage: its users, and those of the views
+/// `extract_value` and `enum.extract` take of it.
+fn value_reads(function: &Function, value: ValueId) -> Vec<InstId> {
+    let dfg = &function.dfg;
+    let mut reads = Vec::new();
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        for &user in dfg.users(value) {
+            reads.push(user);
+            let view = match native_inst_set().resolve_inst(dfg.inst(user)) {
+                NativeInstKind::ExtractValue(extract) if *extract.dest() == value => {
+                    dfg.inst_result(user)
+                }
+                NativeInstKind::EnumExtract(extract) if *extract.value() == value => {
+                    dfg.inst_result(user)
+                }
+                _ => None,
+            };
+            if let Some(view) = view
+                && uses_indirect_value_representation(function.ctx(), dfg.value_ty(view))
+            {
+                pending.push(view);
+            }
+        }
+    }
+    reads
 }
 
 /// The uses of addresses of the local object `object`.
@@ -1453,25 +1593,100 @@ block0:
 
     #[test]
     fn stored_chains_are_built_at_their_destination() {
-        // `v2`'s chain is only stored into `v1`; `v5`'s store follows a load
-        // of memory, so it is built in a slot and copied.
+        // `v2`'s chain is only stored into `v1`; `v5`'s store into memory
+        // follows a load of memory, which may read it, so it is built in a
+        // slot and copied.
         let sizes = slot_sizes(
             r#"
-func public %f(v0.i64, v4.*i64) {
+func public %f(v0.i64, v4.*i64, v7.*[i64; 32]) {
 block0:
     v1.objref<[i64; 32]> = obj.alloc [i64; 32];
     v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
     v3.[i64; 32] = insert_value v2 1.i64 v0;
     obj.store v1 v3;
+    v8.objref<[i64; 32]> = obj.from_ptr v7;
     v5.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
     v6.i64 = mload v4 i64;
-    obj.store v1 v5;
+    obj.store v8 v5;
     mstore v4 v6 i64;
     return;
 }
 "#,
         );
         assert_eq!(sizes, [256]);
+    }
+
+    #[test]
+    fn chains_stored_into_local_objects_are_built_there_across_other_effects() {
+        // Nothing but its own uses reaches `v1`, so neither the store to
+        // memory nor the call between `v2`'s chain and `v1`'s store sees `v1`
+        // written early.
+        let sizes = slot_sizes(
+            r#"
+declare external %g(i64) -> i64;
+func public %f(v0.i64, v7.*i64) {
+block0:
+    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    mstore v7 v0 i64;
+    v3.i64 = call %g v0;
+    v4.[i64; 32] = insert_value undef.[i64; 32] 5.i64 v3;
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
+    v6.[[i64; 32]; 2] = insert_value v5 0.i64 v4;
+    obj.store v1 v6;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [0u32; 0]);
+    }
+
+    #[test]
+    fn chains_stored_into_local_objects_keep_storage_when_the_object_is_read_between() {
+        // `v4` reads `v1`'s second field after `v2` would have written it.
+        // (Built there, the chains would need no slot.)
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v10.*i64) {
+block0:
+    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v14.objref<[i64; 32]> = obj.index v1 1.i64;
+    v3.objref<i64> = obj.index v14 2.i64;
+    obj.store v3 v0;
+    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v4.i64 = obj.load v3;
+    mstore v10 v4 i64;
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
+    obj.store v1 v5;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [512]);
+    }
+
+    #[test]
+    fn chains_stored_into_local_objects_keep_storage_when_they_insert_its_loads() {
+        // `v4` reads `v1`'s first field in place where `v6` inserts it,
+        // after `v5` would have written the second.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64) {
+block0:
+    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v2.objref<[i64; 32]> = obj.index v1 0.i64;
+    v7.objref<i64> = obj.index v2 3.i64;
+    obj.store v7 v0;
+    v4.[i64; 32] = obj.load v2;
+    v3.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v3;
+    v6.[[i64; 32]; 2] = insert_value v5 0.i64 v4;
+    obj.store v1 v6;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [512]);
     }
 
     #[test]
@@ -1525,12 +1740,13 @@ block0:
     #[test]
     fn stored_chains_keep_storage_when_a_store_comes_between_their_parts() {
         // `v2`'s chain is embedded but a store comes between it and the store
-        // of its parent, which may read what the chain would overwrite.
+        // of its parent into memory, which may be what the chain would
+        // overwrite.
         let sizes = slot_sizes(
             r#"
-func public %f(v0.i64, v7.*i64) {
+func public %f(v0.i64, v7.*i64, v8.*[[i64; 32]; 2]) {
 block0:
-    v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v1.objref<[[i64; 32]; 2]> = obj.from_ptr v8;
     v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
     mstore v7 v0 i64;
     v4.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
