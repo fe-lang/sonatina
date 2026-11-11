@@ -1236,3 +1236,39 @@ fn addmod_and_mulmod_match_the_reference_at_the_boundaries_and_for_mixed_lengths
         }
     }
 }
+
+#[test]
+fn the_unused_limbs_of_a_result_are_not_computed() {
+    // Only the low limb of the sum is used: the carries, the upper limbs and
+    // the sign fills of the operands are dead, and the backend leaves them
+    // out. At O0 the optimizer does not narrow the sum first.
+    let source = "func public %low(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.i256 = sext v0 i256;
+        v3.i256 = sext v1 i256;
+        v4.i256 = add v2 v3;
+        v5.i64 = trunc v4 i64;
+        return v5;
+}";
+    let bytes = build_at(source, OptLevel::O0);
+    let mut operators = Vec::new();
+    for payload in wasmparser::Parser::new(0).parse_all(&bytes) {
+        if let wasmparser::Payload::CodeSectionEntry(body) = payload.unwrap() {
+            for operator in body.get_operators_reader().unwrap() {
+                operators.push(format!("{:?}", operator.unwrap()));
+            }
+        }
+    }
+    let count = |name: &str| operators.iter().filter(|op| op.starts_with(name)).count();
+    assert_eq!(
+        (count("I64Add"), count("I64LtU"), count("I64ShrS")),
+        (1, 0, 0),
+        "{operators:?}"
+    );
+    let mut machine = Machine::new(&bytes);
+    let low = machine.func("low");
+    for (a, b) in [(1i64, 2i64), (-1, -1), (i64::MAX, 1), (i64::MIN, -1)] {
+        let got = machine.call(&low, &[Val::I64(a), Val::I64(b)]);
+        assert_eq!(got[0].unwrap_i64(), a.wrapping_add(b), "{a} + {b}");
+    }
+}

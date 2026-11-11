@@ -304,7 +304,10 @@ included, is built in place, and so is a product with at most three limb product
 zero: any 128-bit product, and a 256-bit product of values extended from 64
 bits. Limbs that are constants, such as the zero high limbs of a value
 extended from 64 or 128 bits, are folded out of additions, subtractions,
-comparisons and bitwise operations.
+comparisons and bitwise operations. A limb that no use reads is not computed:
+before encoding, the backend removes every operator without effects whose
+value nothing uses, as WAFFLE's encoder writes each value to a local whether
+or not it is read.
 
 Division traps on a zero divisor. It is one 64-bit division when both operands
 fit in 64 bits, and no step when the dividend is below the divisor. Otherwise
