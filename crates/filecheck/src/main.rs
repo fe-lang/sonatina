@@ -1,17 +1,30 @@
 use sonatina_filecheck::{
-    FileCheckRunner, adce::AdceTransform, aggregate_combine::AggregateCombineTransform,
-    aggregate_scalarize::AggregateScalarizeTransform, bool_phi_fold::BoolPhiFoldTransform,
-    branch_canonicalize::BranchCanonicalizeTransform, cfg_cleanup::CfgCleanupTransform,
+    FileCheckRunner,
+    adce::AdceTransform,
+    aggregate_combine::AggregateCombineTransform,
+    aggregate_scalarize::AggregateScalarizeTransform,
+    bool_phi_fold::BoolPhiFoldTransform,
+    branch_canonicalize::BranchCanonicalizeTransform,
+    cfg_cleanup::CfgCleanupTransform,
     checked_arith_elim::CheckedArithElimTransform,
-    coalesce_object_copies::CoalesceObjectCopiesTransform, code_sink::CodeSinkTransform,
-    compare_sub_fusion::CompareSubFusionTransform, gvn::GvnTransform,
-    hoist_insert_chains::HoistInsertChainsTransform, if_convert::IfConvertTransform,
-    jump_thread::JumpThreadTransform, known_bits_simplify::KnownBitsSimplifyTransform,
-    licm::LicmTransformer, load_store::LoadStoreTransform, loop_rotate::LoopRotateTransform,
-    loop_strength_reduce::LoopStrengthReduceTransform, loop_unroll::LoopUnrollTransform,
+    coalesce_object_copies::CoalesceObjectCopiesTransform,
+    code_sink::CodeSinkTransform,
+    compare_sub_fusion::CompareSubFusionTransform,
+    gvn::GvnTransform,
+    hoist_insert_chains::HoistInsertChainsTransform,
+    if_convert::IfConvertTransform,
+    jump_thread::JumpThreadTransform,
+    known_bits_simplify::KnownBitsSimplifyTransform,
+    licm::LicmTransformer,
+    load_store::LoadStoreTransform,
+    loop_rotate::LoopRotateTransform,
+    loop_strength_reduce::LoopStrengthReduceTransform,
+    loop_unroll::{LoopUnrollSmallTransform, LoopUnrollTransform},
     narrow_object_loads::NarrowObjectLoadsTransform,
-    range_branch_simplify::RangeBranchSimplifyTransform, return_thread::ReturnThreadTransform,
-    sccp::SccpTransform, switch_formation::SwitchFormationTransform,
+    range_branch_simplify::RangeBranchSimplifyTransform,
+    return_thread::ReturnThreadTransform,
+    sccp::SccpTransform,
+    switch_formation::SwitchFormationTransform,
 };
 
 fn main() {
@@ -46,6 +59,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(LoopUnrollTransform);
+    runner.run();
+
+    runner.attach_transformer(LoopUnrollSmallTransform);
     runner.run();
 
     runner.attach_transformer(RangeBranchSimplifyTransform::default());

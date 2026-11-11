@@ -1,0 +1,123 @@
+target = "evm-ethereum-osaka"
+
+# A loop tested at its header whose body runs twice: two copies of the
+# header and the body run before the header's last test, which leaves the
+# loop, and the body's blocks go.
+# regex: VAL=\bv\d+\b
+# sameln: func public %sum_twice(v0.i64) -> i64 {
+# check:   block0:
+# nextln:      jump block4;
+# check:   block4:
+# nextln:      $VAL.i1 = lt 0.i64 2.i64;
+# nextln:      jump block5;
+# check:   block5:
+# nextln:      $(s=$VAL).i64 = add 0.i64 v0;
+# nextln:      $(i=$VAL).i64 = add 0.i64 1.i64;
+# nextln:      jump block6;
+# check:   block6:
+# nextln:      $VAL.i1 = lt $i 2.i64;
+# nextln:      jump block7;
+# check:   block7:
+# nextln:      $(t=$VAL).i64 = add $s v0;
+# nextln:      $(j=$VAL).i64 = add $i 1.i64;
+# nextln:      jump block1;
+# check:   block1:
+# nextln:      v5.i1 = lt $j 2.i64;
+# nextln:      jump block3;
+# not: block2:
+# check:   block3:
+# nextln:      return $t;
+func public %sum_twice(v0.i64) -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v1.i64 = phi (0.i64 block0) (v4 block2);
+    v2.i64 = phi (0.i64 block0) (v3 block2);
+    v5.i1 = lt v1 2.i64;
+    br v5 block2 block3;
+
+block2:
+    v3.i64 = add v2 v0;
+    v4.i64 = add v1 1.i64;
+    jump block1;
+
+block3:
+    return v2;
+}
+
+# A header test that leaves at once keeps no copy, and the body goes.
+# sameln: func public %never_runs(v0.i64) -> i64 {
+# check:   block1:
+# nextln:      v3.i1 = lt 5.i64 3.i64;
+# nextln:      jump block3;
+# not: block2:
+# check:   block3:
+# nextln:      return v0;
+func public %never_runs(v0.i64) -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v1.i64 = phi (5.i64 block0) (v4 block2);
+    v2.i64 = phi (v0 block0) (v5 block2);
+    v3.i1 = lt v1 3.i64;
+    br v3 block2 block3;
+
+block2:
+    v4.i64 = add v1 1.i64;
+    v5.i64 = add v2 v1;
+    jump block1;
+
+block3:
+    return v2;
+}
+
+# A body of two blocks, the first checking a bound on the way to the second,
+# which uses its value: each copy keeps its check, and the body's blocks go.
+# regex: VAL=\bv\d+\b
+# sameln: func public %checked_twice(v0.i64) -> i64 {
+# check:   block7:
+# nextln:      $(a=$VAL).i64 = mul 0.i64 0.i64;
+# nextln:      $(c=$VAL).i1 = ge $a v0;
+# nextln:      br $c block5 block8;
+# check:   block8:
+# nextln:      $(s=$VAL).i64 = add 0.i64 $a;
+# nextln:      $(i=$VAL).i64 = add 0.i64 1.i64;
+# nextln:      jump block9;
+# check:   block10:
+# nextln:      $(b=$VAL).i64 = mul $i $i;
+# nextln:      $(d=$VAL).i1 = ge $b v0;
+# nextln:      br $d block5 block11;
+# check:   block1:
+# nextln:      v3.i1 = lt $VAL 2.i64;
+# nextln:      jump block4;
+# not: block2:
+# not: block3:
+# check:   block4:
+func public %checked_twice(v0.i64) -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v1.i64 = phi (0.i64 block0) (v6 block3);
+    v2.i64 = phi (0.i64 block0) (v5 block3);
+    v3.i1 = lt v1 2.i64;
+    br v3 block2 block4;
+
+block2:
+    v7.i64 = mul v1 v1;
+    v4.i1 = ge v7 v0;
+    br v4 block5 block3;
+
+block3:
+    v5.i64 = add v2 v7;
+    v6.i64 = add v1 1.i64;
+    jump block1;
+
+block4:
+    return v2;
+
+block5:
+    return 0.i64;
+}

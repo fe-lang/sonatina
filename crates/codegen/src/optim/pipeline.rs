@@ -109,6 +109,9 @@ pub enum Pass {
     /// Run each iteration of a one-block loop with a constant trip count in
     /// sequence (native pipelines only).
     LoopUnroll,
+    /// Unroll the loops with a constant trip count that unrolling makes no
+    /// larger (size pipelines only).
+    LoopUnrollSmall,
     /// Loop strength reduction for affine memory addresses.
     LoopStrengthReduce,
     /// Sink pure instructions into the blocks that use their results.
@@ -238,6 +241,11 @@ impl Pass {
             },
             Pass::LoopUnroll => PassInfo {
                 name: "loop_unroll",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::LoopUnrollSmall => PassInfo {
+                name: "loop_unroll_small",
                 needs_func_behavior: false,
                 invalidates_func_behavior: true,
             },
@@ -454,7 +462,8 @@ const POST_INLINE_CLEANUP_PASSES: &[Pass] = &[
 /// What the optimization schedule does to loops.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Loops {
-    Keep,
+    /// Unroll the loops that unrolling makes no larger, without rotating.
+    UnrollSmall,
     Rotate,
     /// Rotate, then unroll the one-block loops that run a few times.
     Unroll,
@@ -565,16 +574,20 @@ impl Pipeline {
     /// second of its four inline rounds.
     fn optimized(inliner_config: InlinerConfig, loops: Loops, late_rounds: bool) -> Self {
         // Rotation copies each rotated loop's header, so a size-oriented
-        // pipeline leaves loops as they are; unrolling copies whole bodies,
-        // which only native code affords.
+        // pipeline only unrolls the loops that unrolling makes no larger;
+        // unrolling copies whole bodies, which otherwise only native code
+        // affords.
         let passes = |passes: &[Pass]| {
             passes
                 .iter()
-                .copied()
-                .filter(|&pass| match pass {
-                    Pass::LoopRotate => loops != Loops::Keep,
-                    Pass::LoopUnroll => loops == Loops::Unroll,
-                    _ => true,
+                .filter_map(|&pass| match pass {
+                    Pass::LoopRotate => (loops != Loops::UnrollSmall).then_some(pass),
+                    Pass::LoopUnroll => match loops {
+                        Loops::UnrollSmall => Some(Pass::LoopUnrollSmall),
+                        Loops::Rotate => None,
+                        Loops::Unroll => Some(pass),
+                    },
+                    _ => Some(pass),
                 })
                 .collect()
         };
@@ -619,16 +632,17 @@ impl Pipeline {
     /// Size-oriented optimization pipeline preset.
     ///
     /// It uses the same aggressive pass schedule as [`Pipeline::speed`], but
-    /// keeps inlining biased toward avoiding code size growth and does not
-    /// rotate loops.
+    /// keeps inlining biased toward avoiding code size growth and, instead of
+    /// rotating loops, unrolls the ones that unrolling makes no larger.
     pub fn size() -> Self {
-        Self::optimized(size_inliner_config(), Loops::Keep, true)
+        Self::optimized(size_inliner_config(), Loops::UnrollSmall, true)
     }
 
     /// Speed-oriented optimization pipeline preset.
     ///
     /// Uses the same pass schedule as [`Pipeline::size`], but widens the
-    /// inliner budget for runtime speed and rotates loops.
+    /// inliner budget for runtime speed and rotates loops instead of
+    /// unrolling them.
     pub fn speed() -> Self {
         Self::optimized(speed_inliner_config(), Loops::Rotate, true)
     }
@@ -1206,7 +1220,11 @@ fn run_pass(
         }
         Pass::LoopUnroll => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.loop_unroll").entered();
-            LoopUnroll.run(func)
+            LoopUnroll::default().run(func)
+        }
+        Pass::LoopUnrollSmall => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.loop_unroll_small").entered();
+            LoopUnroll::small().run(func)
         }
         Pass::LoopStrengthReduce => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.loop_strength_reduce").entered();
@@ -2970,7 +2988,7 @@ func private %entry(v0.i32, v1.i32) -> i32 {
     }
 
     #[test]
-    fn size_and_speed_differ_only_in_loop_rotation() {
+    fn size_and_speed_differ_only_in_loop_passes() {
         let size = Pipeline::size();
         let speed = Pipeline::speed();
         assert_eq!(size.steps.len(), speed.steps.len());
@@ -2983,12 +3001,14 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 | (Step::DeadFuncElim, Step::DeadFuncElim) => {}
                 (Step::FuncPasses(size_passes), Step::FuncPasses(speed_passes)) => {
                     rotates |= speed_passes.contains(&Pass::LoopRotate);
-                    let without_rotation: Vec<_> = speed_passes
+                    let unrolling: Vec<_> = speed_passes
                         .iter()
-                        .copied()
-                        .filter(|&pass| pass != Pass::LoopRotate)
+                        .map(|&pass| match pass {
+                            Pass::LoopRotate => Pass::LoopUnrollSmall,
+                            _ => pass,
+                        })
                         .collect();
-                    assert_eq!(size_passes, &without_rotation);
+                    assert_eq!(size_passes, &unrolling);
                 }
                 _ => panic!("size and speed should share their step schedule"),
             }

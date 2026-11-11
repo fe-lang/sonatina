@@ -1,0 +1,62 @@
+target = "evm-ethereum-osaka"
+
+# A loop tested at its header whose body runs once becomes one copy of the
+# header and the body, then the header's last test.
+# regex: VAL=\bv\d+\b
+# sameln: func public %runs_once(v0.i256) -> i256 {
+# check:   block0:
+# nextln:      jump block4;
+# check:   block4:
+# nextln:      $VAL.i1 = lt 0.i256 1.i256;
+# nextln:      jump block5;
+# check:   block5:
+# nextln:      $(s=$VAL).i256 = add 0.i256 v0;
+# nextln:      $(i=$VAL).i256 = add 0.i256 1.i256;
+# nextln:      jump block1;
+# check:   block1:
+# nextln:      v5.i1 = lt $i 1.i256;
+# nextln:      jump block3;
+# check:   block3:
+# nextln:      return $s;
+func public %runs_once(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (0.i256 block0) (v4 block2);
+    v2.i256 = phi (0.i256 block0) (v3 block2);
+    v5.i1 = lt v1 1.i256;
+    br v5 block2 block3;
+
+block2:
+    v3.i256 = add v2 v0;
+    v4.i256 = add v1 1.i256;
+    jump block1;
+
+block3:
+    return v2;
+}
+
+# A loop whose copies would take more instructions than it stays.
+# sameln: func public %stores(v0.i256) {
+# check:   block1:
+# nextln:      v1.i256 = phi (0.i256 block0) (v3 block2);
+# check:       br v4 block2 block3;
+func public %stores(v0.i256) {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (0.i256 block0) (v3 block2);
+    v4.i1 = lt v1 256.i256;
+    br v4 block2 block3;
+
+block2:
+    v2.i256 = add v0 v1;
+    mstore v2 v1 i256;
+    v3.i256 = add v1 32.i256;
+    jump block1;
+
+block3:
+    return;
+}
