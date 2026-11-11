@@ -312,12 +312,11 @@ mod tests {
                 )
             })
             .collect();
-        let mut variants = vec![false];
         #[cfg(target_arch = "x86_64")]
-        if std::is_x86_feature_detected!("sha") {
-            variants.push(true);
-        }
-        for hardware in variants {
+        let has_sha = std::is_x86_feature_detected!("sha");
+        #[cfg(not(target_arch = "x86_64"))]
+        let has_sha = false;
+        for hardware in std::iter::once(false).chain(has_sha.then_some(true)) {
             let compress = compile(hardware);
             assert_eq!(compress(IV, abc), digest, "hardware {hardware}");
             for &(state, block) in &inputs {
