@@ -522,6 +522,23 @@ fn has_memory_copy(bytes: &[u8]) -> bool {
     })
 }
 
+/// The number of `memory.fill`s in the function bodies of the module.
+fn memory_fills(bytes: &[u8]) -> usize {
+    wasmparser::Parser::new(0)
+        .parse_all(bytes)
+        .map(|payload| {
+            let Ok(wasmparser::Payload::CodeSectionEntry(body)) = payload else {
+                return 0;
+            };
+            body.get_operators_reader()
+                .expect("the body has operators")
+                .into_iter()
+                .filter(|op| matches!(op, Ok(wasmparser::Operator::MemoryFill { .. })))
+                .count()
+        })
+        .sum()
+}
+
 #[test]
 fn inserts_that_write_every_byte_need_no_zero_fill() {
     // Built field by field from `undef`, `%full` writes every byte of its
@@ -546,20 +563,7 @@ func public %partial(v0.i64, v1.*@Pair) {
         .compile_module(&parse(source), &BackendOptions::default())
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .into_bytes();
-    let fills: usize = wasmparser::Parser::new(0)
-        .parse_all(&bytes)
-        .map(|payload| {
-            let Ok(wasmparser::Payload::CodeSectionEntry(body)) = payload else {
-                return 0;
-            };
-            body.get_operators_reader()
-                .expect("the body has operators")
-                .into_iter()
-                .filter(|op| matches!(op, Ok(wasmparser::Operator::MemoryFill { .. })))
-                .count()
-        })
-        .sum();
-    assert_eq!(fills, 1, "only `%partial` fills");
+    assert_eq!(memory_fills(&bytes), 1, "only `%partial` fills");
     let mut machine = Machine::new(&bytes);
     let base = machine.memory_size();
     machine.grow_memory(1);
@@ -576,6 +580,55 @@ func public %partial(v0.i64, v1.*@Pair) {
     let partial = machine.func("partial");
     machine.call(&partial, &[Val::I64(5), Val::I32(base as i32)]);
     assert_eq!(words(&mut machine), [5, 0]);
+}
+
+#[test]
+fn inserts_cover_an_aggregate_in_any_order_but_not_its_padding() {
+    // `%reversed` writes the fields last to first and needs no fill. The
+    // fields of `@Gap` leave seven bytes of padding unwritten, and `%huge`
+    // writes one byte of a 1 GiB array, so both keep their fills; the check
+    // takes memory for the inserts, not for the bytes of the aggregate.
+    let source = "type @Pair = { i64, i64 };
+type @Gap = { i8, i64 };
+func public %reversed(v0.i64, v1.i64, v2.*@Pair) {
+    block0:
+        v3.@Pair = insert_value undef.@Pair 1.i32 v1;
+        v4.@Pair = insert_value v3 0.i32 v0;
+        mstore v2 v4 @Pair;
+        return;
+}
+func public %padded(v0.i8, v1.i64, v2.*@Gap) {
+    block0:
+        v3.@Gap = insert_value undef.@Gap 0.i32 v0;
+        v4.@Gap = insert_value v3 1.i32 v1;
+        mstore v2 v4 @Gap;
+        return;
+}
+func public %huge(v0.i8, v1.*[i8; 1073741824]) {
+    block0:
+        v2.[i8; 1073741824] = insert_value undef.[i8; 1073741824] 0.i32 v0;
+        mstore v1 v2 [i8; 1073741824];
+        return;
+}";
+    let bytes = WasmBackend::new()
+        .compile_module(&parse(source), &BackendOptions::default())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .into_bytes();
+    assert_eq!(memory_fills(&bytes), 2, "`%padded` and `%huge` fill");
+    let mut machine = Machine::new(&bytes);
+    let base = machine.memory_size();
+    machine.grow_memory(1);
+    let reversed = machine.func("reversed");
+    machine.call(
+        &reversed,
+        &[Val::I64(7), Val::I64(9), Val::I32(base as i32)],
+    );
+    let words: Vec<i64> = machine
+        .read(base, 16)
+        .chunks(8)
+        .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(words, [7, 9]);
 }
 
 #[test]

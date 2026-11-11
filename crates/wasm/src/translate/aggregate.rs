@@ -889,7 +889,7 @@ impl FunctionTranslator<'_> {
         size: u32,
     ) -> Result<bool, WasmError> {
         let dfg = &self.function.dfg;
-        let mut written = vec![false; size as usize];
+        let mut written = Vec::new();
         let mut inst = Some(first);
         while let Some(current) = inst {
             let NativeInstKind::InsertValue(insert) =
@@ -900,13 +900,19 @@ impl FunctionTranslator<'_> {
             let idx = self.constant_index("insert_value", *insert.idx())?;
             let (offset, elem_ty) = self.element_offset(ty, idx)?;
             let (elem_size, _) = self.layout_of(elem_ty)?;
-            written[offset as usize..(offset + elem_size) as usize].fill(true);
+            written.push((offset, offset + elem_size));
             inst = dfg
                 .inst_result(current)
                 .and_then(|result| dfg.users(result).copied().next())
                 .filter(|&next| self.continues_in_place(block, current, next));
         }
-        Ok(written.into_iter().all(|byte| byte))
+        // The written ranges cover the aggregate if, in order of their
+        // starts, each begins within those before it.
+        written.sort_unstable();
+        let end = written.into_iter().try_fold(0, |end, (start, stop)| {
+            (start <= end).then_some(end.max(stop))
+        });
+        Ok(end == Some(size))
     }
 
     pub(super) fn extract_value(
