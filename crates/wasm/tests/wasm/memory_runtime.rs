@@ -14,7 +14,7 @@ use crate::Lcg;
 
 pub(crate) const PAGE: usize = 65536;
 /// The lowest address the backend uses.
-pub(crate) const DATA_BASE: usize = 16;
+pub(crate) const DATA_BASE: usize = 1024;
 
 pub(crate) fn build_with(source: &str, level: OptLevel, backend: WasmBackend) -> Vec<u8> {
     let bytes = Compile::new(parse(source), backend)
@@ -319,7 +319,7 @@ func public %run(v0.i32) -> i32 {
 #[test]
 fn the_stack_has_a_size_and_overflowing_it_traps() {
     // Each frame is 256 bytes. The stack is 64 KiB rounded up to a page
-    // boundary after the reserved block, 128 KiB less 16 bytes, so it holds
+    // boundary after the reserved block, 128 KiB less 1 KiB, so it holds
     // about 500 levels.
     for level in [OptLevel::O0, OptLevel::O2] {
         let bytes = build_with(
@@ -447,7 +447,7 @@ func public %outer(v0.i32) -> i32 {
 fn a_trap_after_a_host_call_leaves_the_stack_as_it_was() {
     // Each call to `run` has a 1 KiB frame and calls the host, which makes the
     // module note where the caller's stack ends. The division after it traps
-    // when the argument is zero. The stack is 128 KiB less 16 bytes (64 KiB
+    // when the argument is zero. The stack is 128 KiB less 1 KiB (64 KiB
     // rounded up to a page boundary after the reserved block), so if every
     // trap left the note behind, 128 traps would use it up.
     let source = "declare external %host(i32) -> i32;
@@ -655,16 +655,25 @@ func public %short(v0.i32) -> i16 {
         }
         // Addresses: each global at its natural alignment, after the reserved
         // block, in declaration order.
+        let base = DATA_BASE;
         let place = machine.func("where");
         let wide_at = machine.call(&place, &[Val::I32(1)])[0].unwrap_i32();
-        assert_eq!(wide_at, 24, "i8 at 16, then i64 at 24");
+        assert_eq!(
+            wide_at as usize,
+            base + 8,
+            "i8 at the base, then i64 8 above"
+        );
         let all = machine.call(&place, &[Val::I32(0)])[0].unwrap_i32();
-        // first = 16, shorts = 32, record = 40 (aligned to 8 after 32 + 6)
-        assert_eq!(all, 16 + 32 + 40);
+        // first at the base, shorts 16 above, record 24 above (aligned to 8
+        // after 16 + 6)
+        assert_eq!(all as usize, 3 * base + 16 + 24);
         // The data is where the layout says it is.
-        assert_eq!(machine.read(16, 1), [5]);
-        assert_eq!(machine.read(24, 8), 0x1122334455667788u64.to_le_bytes());
-        assert_eq!(machine.read(32, 6), [1, 0, 0xfe, 0xff, 3, 0]);
+        assert_eq!(machine.read(base, 1), [5]);
+        assert_eq!(
+            machine.read(base + 8, 8),
+            0x1122334455667788u64.to_le_bytes()
+        );
+        assert_eq!(machine.read(base + 16, 6), [1, 0, 0xfe, 0xff, 3, 0]);
     }
 }
 
@@ -1232,5 +1241,36 @@ fn the_names_of_the_host_allocator_are_reserved() {
             message.contains(&format!("`{name}` is reserved for the host allocator")),
             "{message}"
         );
+    }
+}
+
+#[test]
+fn a_null_pointer_plus_a_small_offset_misses_global_data() {
+    // Global data starts above a reserved kilobyte, so a store through null
+    // plus an offset below it leaves the constants as they were.
+    let source = "global private const [i64; 4] $table = [11, 22, 33, 44];
+func public %poke(v0.i32, v1.i64) {
+    block0:
+        v2.*i64 = int_to_ptr v0 *i64;
+        mstore v2 v1 i64;
+        return;
+}
+func public %sum() -> i64 {
+    block0:
+        v0.constref<[i64; 4]> = const.ref $table;
+        v1.constref<i64> = const.index v0 0.i32;
+        v2.constref<i64> = const.index v0 3.i32;
+        v3.i64 = const.load v1;
+        v4.i64 = const.load v2;
+        v5.i64 = add v3 v4;
+        return v5;
+}";
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let mut machine = Machine::new(&build_with(source, level, WasmBackend::new()));
+        let (poke, sum) = (machine.func("poke"), machine.func("sum"));
+        for offset in (0..1024).step_by(8) {
+            machine.call(&poke, &[Val::I32(offset), Val::I64(-1)]);
+        }
+        assert_eq!(machine.call(&sum, &[])[0].unwrap_i64(), 55, "{level:?}");
     }
 }

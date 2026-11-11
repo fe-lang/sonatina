@@ -306,53 +306,12 @@ fn check_arithmetic(width: u32, random: usize) -> usize {
 #[test]
 fn checked_arithmetic_matrix() {
     let mut total = 0;
-    for width in [8, 16, 32, 64] {
+    for width in [1, 8, 16, 32, 64] {
         let compared = check_arithmetic(width, 3000);
         eprintln!("i{width}: {compared} arithmetic results compared");
         total += compared;
     }
     eprintln!("checked arithmetic matrix: {total} results compared");
-}
-
-#[test]
-fn single_bit_arithmetic_matches_the_reference_for_unsigned_forms() {
-    // Signed i1 is not compared: the interpreter reads `i1 1` as +1 while the
-    // native backend reads it as -1. The wasm backend follows the native one.
-    let source = "func public %uaddo(v0.i1, v1.i1) -> (i1, i1) {
-    block0:
-        (v2.i1, v3.i1) = uaddo v0 v1;
-        return (v2, v3);
-}
-func public %usubo(v0.i1, v1.i1) -> (i1, i1) {
-    block0:
-        (v2.i1, v3.i1) = usubo v0 v1;
-        return (v2, v3);
-}
-func public %umulo(v0.i1, v1.i1) -> (i1, i1) {
-    block0:
-        (v2.i1, v3.i1) = umulo v0 v1;
-        return (v2, v3);
-}
-";
-    let mut machine = Machine::new(&compile_valid(&parse(source)));
-    for (name, reference) in [
-        ("uaddo", Immediate::overflowing_uadd as OverflowReference),
-        ("usubo", Immediate::overflowing_usub),
-        ("umulo", Immediate::overflowing_umul),
-    ] {
-        let func = machine.func(name);
-        for a in 0..2 {
-            for b in 0..2 {
-                let results = machine.call(&func, &[val(1, a), val(1, b)]);
-                let (value, overflow) = reference(imm(1, a), imm(1, b));
-                assert_eq!(
-                    (bits_from(1, &results[0]), bits_from(1, &results[1])),
-                    (bits_of(1, value), u64::from(overflow)),
-                    "{name} i1: {a}, {b}"
-                );
-            }
-        }
-    }
 }
 
 #[test]
@@ -421,7 +380,7 @@ fn shift_function(name: &str, ty: &str) -> String {
 #[test]
 fn bitwise_shift_division_and_comparison_match_the_reference() {
     let mut total = 0;
-    for width in [8, 16, 32, 64] {
+    for width in [1, 8, 16, 32, 64] {
         let ty = ir_type(width);
         let mut source = String::new();
         for (name, _) in BITWISE {
@@ -705,10 +664,6 @@ fn extensions_and_truncations_match_the_reference() {
             let source = imm(from, a);
             let expected = match op {
                 "zext" => source.zext(imm(to, 0).ty()),
-                "sext" if from == 1 => {
-                    // `i1 1` is -1 when sign-extended, as in the native backend.
-                    Immediate::from_i256(-sonatina_ir::I256::from(a), imm(to, 0).ty())
-                }
                 "sext" => source.sext(imm(to, 0).ty()),
                 _ => source.trunc(imm(to, 0).ty()),
             };

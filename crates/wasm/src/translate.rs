@@ -34,7 +34,10 @@ use waffle::{
     Operator, Signature, SignatureData, Terminator, Type as WType, ValueDef, entity::EntityRef,
 };
 
-use sonatina_codegen::analysis::tail_position::{tail_callers, tail_position_calls};
+use sonatina_codegen::{
+    OptLevel,
+    analysis::tail_position::{tail_callers, tail_position_calls},
+};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Inst, InstId, Linkage, Module, Type, Value,
     ValueId,
@@ -349,6 +352,7 @@ pub(super) fn translate_module(
     stack_bytes: u32,
     host_allocator: bool,
     heap_poison: bool,
+    opt_level: OptLevel,
 ) -> Result<Translated, WasmError> {
     let mut scan = scan_module(module);
     if host_allocator {
@@ -683,6 +687,7 @@ pub(super) fn translate_module(
                     free_func.map(|(func, _)| func),
                     helpers,
                     sites.into_keys().collect(),
+                    opt_level,
                 )
                 .translate(canonicalize_params)
             })
@@ -1153,6 +1158,8 @@ struct FunctionTranslator<'a> {
     undef_slots: FxHashMap<ValueId, u32>,
     /// The calls that end their block as tail calls.
     tail_calls: FxHashSet<InstId>,
+    /// The size of the largest copy made with loads and stores.
+    inline_copy_bytes: u32,
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -1172,6 +1179,7 @@ impl<'a> FunctionTranslator<'a> {
         free: Option<Func>,
         wide_helpers: WideHelpers,
         tail_calls: FxHashSet<InstId>,
+        opt_level: OptLevel,
     ) -> Self {
         Self {
             module,
@@ -1200,6 +1208,7 @@ impl<'a> FunctionTranslator<'a> {
             edge_slots: FxHashMap::default(),
             undef_slots: FxHashMap::default(),
             tail_calls,
+            inline_copy_bytes: aggregate::inline_copy_bytes(opt_level),
         }
     }
 

@@ -5,7 +5,8 @@
 //! touch. Any other module gets this layout, from the lowest address:
 //!
 //! 1. A reserved block of [`DATA_BASE`] bytes. No object lives there, so a null
-//!    pointer is never the address of one.
+//!    pointer is never the address of one, and a null pointer plus an offset
+//!    below 1 KiB reads and writes this block, not a global variable.
 //! 2. The global variables, each at its natural alignment, filled from the
 //!    module's initializers.
 //! 3. When the module has a heap, the table of free-list heads
@@ -37,7 +38,7 @@ use super::{WasmError, heap};
 pub(super) const PAGE: u64 = 65536;
 
 /// The lowest address that the backend uses.
-pub(super) const DATA_BASE: u32 = 16;
+pub(super) const DATA_BASE: u32 = 1024;
 
 /// The alignment of every frame, stack slot base and arena block.
 pub(super) const ALIGN: u32 = 16;

@@ -1,6 +1,6 @@
 //! Frames, aggregates, objects, constants and the arena.
 
-use sonatina_codegen::{Compile, OptLevel};
+use sonatina_codegen::{Backend, BackendOptions, Compile, OptLevel};
 use sonatina_wasm::WasmBackend;
 use wasmtime::Val;
 
@@ -520,6 +520,144 @@ fn has_memory_copy(bytes: &[u8]) -> bool {
             .into_iter()
             .any(|op| matches!(op, Ok(wasmparser::Operator::MemoryCopy { .. })))
     })
+}
+
+/// The number of `memory.fill`s in the function bodies of the module.
+fn memory_fills(bytes: &[u8]) -> usize {
+    wasmparser::Parser::new(0)
+        .parse_all(bytes)
+        .map(|payload| {
+            let Ok(wasmparser::Payload::CodeSectionEntry(body)) = payload else {
+                return 0;
+            };
+            body.get_operators_reader()
+                .expect("the body has operators")
+                .into_iter()
+                .filter(|op| matches!(op, Ok(wasmparser::Operator::MemoryFill { .. })))
+                .count()
+        })
+        .sum()
+}
+
+#[test]
+fn inserts_that_write_every_byte_need_no_zero_fill() {
+    // Built field by field from `undef`, `%full` writes every byte of its
+    // storage, which then needs no filling first. `%partial` leaves the
+    // second field undef, which reads as zero although `%full` left a value
+    // in the frame both use.
+    let source = "type @Pair = { i64, i64 };
+func public %full(v0.i64, v1.i64, v2.*@Pair) {
+    block0:
+        v3.@Pair = insert_value undef.@Pair 0.i32 v0;
+        v4.@Pair = insert_value v3 1.i32 v1;
+        mstore v2 v4 @Pair;
+        return;
+}
+func public %partial(v0.i64, v1.*@Pair) {
+    block0:
+        v2.@Pair = insert_value undef.@Pair 0.i32 v0;
+        mstore v1 v2 @Pair;
+        return;
+}";
+    let bytes = WasmBackend::new()
+        .compile_module(&parse(source), &BackendOptions::default())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .into_bytes();
+    assert_eq!(memory_fills(&bytes), 1, "only `%partial` fills");
+    let mut machine = Machine::new(&bytes);
+    let base = machine.memory_size();
+    machine.grow_memory(1);
+    let words = |machine: &mut Machine| -> Vec<i64> {
+        machine
+            .read(base, 16)
+            .chunks(8)
+            .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect()
+    };
+    let full = machine.func("full");
+    machine.call(&full, &[Val::I64(7), Val::I64(9), Val::I32(base as i32)]);
+    assert_eq!(words(&mut machine), [7, 9]);
+    let partial = machine.func("partial");
+    machine.call(&partial, &[Val::I64(5), Val::I32(base as i32)]);
+    assert_eq!(words(&mut machine), [5, 0]);
+}
+
+#[test]
+fn inserts_cover_an_aggregate_in_any_order_but_not_its_padding() {
+    // `%reversed` writes the fields last to first and needs no fill. The
+    // fields of `@Gap` leave seven bytes of padding unwritten, and `%huge`
+    // writes one byte of a 1 GiB array, so both keep their fills; the check
+    // takes memory for the inserts, not for the bytes of the aggregate.
+    let source = "type @Pair = { i64, i64 };
+type @Gap = { i8, i64 };
+func public %reversed(v0.i64, v1.i64, v2.*@Pair) {
+    block0:
+        v3.@Pair = insert_value undef.@Pair 1.i32 v1;
+        v4.@Pair = insert_value v3 0.i32 v0;
+        mstore v2 v4 @Pair;
+        return;
+}
+func public %padded(v0.i8, v1.i64, v2.*@Gap) {
+    block0:
+        v3.@Gap = insert_value undef.@Gap 0.i32 v0;
+        v4.@Gap = insert_value v3 1.i32 v1;
+        mstore v2 v4 @Gap;
+        return;
+}
+func public %huge(v0.i8, v1.*[i8; 1073741824]) {
+    block0:
+        v2.[i8; 1073741824] = insert_value undef.[i8; 1073741824] 0.i32 v0;
+        mstore v1 v2 [i8; 1073741824];
+        return;
+}";
+    let bytes = WasmBackend::new()
+        .compile_module(&parse(source), &BackendOptions::default())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .into_bytes();
+    assert_eq!(memory_fills(&bytes), 2, "`%padded` and `%huge` fill");
+    let mut machine = Machine::new(&bytes);
+    let base = machine.memory_size();
+    machine.grow_memory(1);
+    let reversed = machine.func("reversed");
+    machine.call(
+        &reversed,
+        &[Val::I64(7), Val::I64(9), Val::I32(base as i32)],
+    );
+    let words: Vec<i64> = machine
+        .read(base, 16)
+        .chunks(8)
+        .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(words, [7, 9]);
+}
+
+#[test]
+fn a_small_copy_is_a_memory_copy_only_at_os() {
+    // Loads and stores copy a small aggregate faster, and a `memory.copy` is
+    // smaller, so `Os` makes every copy one. The IR goes to the backend as
+    // it is, without the pipeline, which could take the copy apart.
+    let source = "type @Pair = { i64, i64 };
+func public %copy(v0.*@Pair, v1.*@Pair) {
+    block0:
+        v2.@Pair = mload v0 @Pair;
+        mstore v1 v2 @Pair;
+        return;
+}";
+    for (opt_level, copies) in [(OptLevel::O2, false), (OptLevel::Os, true)] {
+        let bytes = WasmBackend::new()
+            .compile_module(&parse(source), &BackendOptions { opt_level })
+            .unwrap_or_else(|errors| panic!("{opt_level:?}: {errors:?}"))
+            .into_bytes();
+        assert_eq!(has_memory_copy(&bytes), copies, "{opt_level:?}");
+        let mut machine = Machine::new(&bytes);
+        let base = machine.memory_size();
+        machine.grow_memory(1);
+        let pair: Vec<u8> = (1..=16).collect();
+        machine.write(base, &pair);
+        let copy = machine.func("copy");
+        machine.call(&copy, &[Val::I32(base as i32), Val::I32(base as i32 + 16)]);
+        assert_eq!(machine.read(base + 16, 16), pair, "{opt_level:?}");
+    }
 }
 
 #[test]

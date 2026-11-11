@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 mod arith;
+mod dce;
 mod heap;
 mod memory;
 mod tail;
@@ -172,20 +173,22 @@ impl Backend for WasmBackend {
     fn compile_module(
         &self,
         module: &Module,
-        _options: &BackendOptions,
+        options: &BackendOptions,
     ) -> Result<Self::Artifact, Vec<Self::Error>> {
         ensure_wasm32_target(module.ctx.triple).map_err(|error| vec![error])?;
 
         let module = module.clone_for_funcs(&module.funcs());
         legalize_module(&module).map_err(|error| vec![error])?;
-        let translated = translate::translate_module(
+        let mut translated = translate::translate_module(
             &module,
             &self.import_module,
             self.stack_bytes,
             self.host_allocator,
             self.heap_poison,
+            options.opt_level,
         )
         .map_err(|error| vec![error])?;
+        dce::run(&mut translated.module);
         let imported = translated.module.imports.len() as u32;
         let bytes = translated
             .module

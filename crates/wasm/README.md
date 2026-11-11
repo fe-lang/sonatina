@@ -89,7 +89,8 @@ A module that uses `alloca`, `obj.alloc`, struct or array values, constants,
 global variables, `mem.alloc_dynamic` or the external `malloc` or `free` has this
 layout, from the lowest address:
 
-1. A reserved block of 16 bytes, so that address 0 is never an object.
+1. A reserved block of 1 KiB, so that address 0 is never an object, and a null
+   pointer plus an offset below 1 KiB does not reach a global variable.
 2. The global variables, each at its alignment, in declaration order. Their
    initial contents are data segments of the module (all-zero data is not
    emitted). `const.ref` and the address of a global variable are these
@@ -246,6 +247,14 @@ aggregate combination and object returns the backend runs first.
   `insert_value`, `enum.make` and `obj.load` make a new snapshot;
   `extract_value` and `enum.extract` of an aggregate and `const.load` view the
   source in place.
+- `insert_value` makes its snapshot in place when it is the only user of an
+  insert in the same block. An `undef` aggregate is zero, so the snapshot of an
+  insert into `undef` is filled with zero first, and that of another insert is
+  a copy of its source, unless the inserts that continue in its storage write
+  every byte.
+- An aggregate of at most 64 bytes is copied with loads and stores, and a
+  larger one with `memory.copy`. At `Os` every copy is a `memory.copy`, which
+  is smaller than even one load and store.
 - A function receives aggregates by address and returns a single aggregate through
   a buffer in the caller's frame, which is a hidden parameter after the stack
   top. A `constref` result is the address of the constant. A function cannot
@@ -304,7 +313,10 @@ included, is built in place, and so is a product with at most three limb product
 zero: any 128-bit product, and a 256-bit product of values extended from 64
 bits. Limbs that are constants, such as the zero high limbs of a value
 extended from 64 or 128 bits, are folded out of additions, subtractions,
-comparisons and bitwise operations.
+comparisons and bitwise operations. A limb that no use reads is not computed:
+before encoding, the backend removes every operator without effects whose
+value nothing uses, as WAFFLE's encoder writes each value to a local whether
+or not it is read.
 
 Division traps on a zero divisor. It is one 64-bit division when both operands
 fit in 64 bits, and no step when the dividend is below the divisor. Otherwise
