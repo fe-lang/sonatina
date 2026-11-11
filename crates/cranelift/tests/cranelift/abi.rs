@@ -717,3 +717,42 @@ func public %run(v0.i64) -> i64 {
         assert_eq!(unsafe { run(1000) }, 7, "{level:?}");
     }
 }
+
+#[test]
+fn the_sym_addr_of_a_global_is_its_address() {
+    // The caller reads the bytes of `$data` at the address `%data` returns,
+    // and `%third` reads them through a pointer made from it.
+    let source = r#"
+global private const [i8; 4] $data = [11, 22, 33, 44];
+
+func public %data() -> i64 {
+    block0:
+        v0.i64 = sym_addr $data;
+        return v0;
+}
+
+func public %third() -> i8 {
+    block0:
+        v0.i64 = sym_addr $data;
+        v1.i64 = add v0 2.i64;
+        v2.*i8 = int_to_ptr v1 *i8;
+        v3.i8 = mload v2 i8;
+        return v3;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let data: unsafe extern "C" fn() -> *const [u8; 4] =
+            unsafe { std::mem::transmute(artifact.function_address("data").unwrap()) };
+        let third: unsafe extern "C" fn() -> u8 =
+            unsafe { std::mem::transmute(artifact.function_address("third").unwrap()) };
+        assert_eq!(unsafe { *data() }, [11, 22, 33, 44], "{level:?}");
+        assert_eq!(unsafe { third() }, 33, "{level:?}");
+    }
+}

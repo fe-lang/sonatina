@@ -257,8 +257,9 @@ aggregate combination and object returns the backend runs first.
   is smaller than even one load and store.
 - A function receives aggregates by address and returns a single aggregate through
   a buffer in the caller's frame, which is a hidden parameter after the stack
-  top. A `constref` result is the address of the constant. A function cannot
-  return an aggregate together with other values.
+  top. A `constref` result is the address of the constant, as is `sym_addr`
+  of a global. A function cannot return an aggregate together with other
+  values.
 - `obj.alloc`, `obj.proj`, `obj.index`, `obj.load`, `obj.store`,
   `obj.from_ptr`, `const.ref`, `const.proj`, `const.index` and `const.load` are
   address arithmetic and loads and stores. `obj.from_ptr`
@@ -359,7 +360,7 @@ model at every optimization level.
 
 Every instruction of the native instruction set is either translated or
 rejected with an error that names it. These are rejected: `get_function_ptr`,
-`sym_addr`, `sym_size`, and any instruction whose type is a function
-type. Public and external global variables are rejected as a
+`sym_addr` of anything but a global, `sym_size`, and any instruction whose type
+is a function type. Public and external global variables are rejected as a
 module-level error. Errors are returned from `compile_module`; the backend does
 not panic on unsupported input.

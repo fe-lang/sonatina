@@ -198,7 +198,8 @@ Enum operations are translated against the enum layout above;
 `enum.make` writes its variant's tag and fields. Padding and other variants'
 payloads are not part of a value: copies and `enum.make` leave them as they
 are.
-`get_function_ptr`, `sym_addr` and `sym_size` are unsupported. Dynamic
+`get_function_ptr`, `sym_size` and `sym_addr` of anything but a global are
+unsupported; `sym_addr` of a global is its address. Dynamic
 allocation and object materialization use the allocation and lifetime rules
 above.
 There are no first-class function values, indirect calls, varargs, floating

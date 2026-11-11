@@ -36,7 +36,7 @@ use sonatina_ir::{
     Value, ValueId,
     inst::{
         InstId, control_flow,
-        data::{ObjIndex, ObjProj},
+        data::{ObjIndex, ObjProj, SymbolRef},
         inst_set::InstSetExt,
         native::inst_set::NativeInstKind,
     },
@@ -2363,6 +2363,13 @@ fn translate_function(
                         )?;
                         value_map.insert(result, addr);
                     }
+                }
+                NativeInstKind::SymAddr(sym_addr)
+                    if let SymbolRef::Global(gv) = sym_addr.sym()
+                        && let Some(result) = function.dfg.inst_result(inst_id) =>
+                {
+                    let addr = global_address(*gv, data_ids, clif_module, &mut builder)?;
+                    value_map.insert(result, addr);
                 }
                 NativeInstKind::ConstProj(const_proj) => {
                     if let Some(result) = function.dfg.inst_result(inst_id) {

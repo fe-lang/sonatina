@@ -41,7 +41,9 @@ use sonatina_codegen::{
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Inst, InstId, Linkage, Module, Type, Value,
     ValueId,
-    inst::{control_flow::Call, inst_set::InstSetExt, native::inst_set::NativeInstKind},
+    inst::{
+        control_flow::Call, data::SymbolRef, inst_set::InstSetExt, native::inst_set::NativeInstKind,
+    },
     isa::native::inst_set as native_inst_set,
     module::{FuncRef, ModuleCtx},
     types::CompoundType,
@@ -2454,7 +2456,12 @@ impl<'a> FunctionTranslator<'a> {
             NativeInstKind::ObjStore(i) => self.obj_store(*wb, *i.object(), *i.value())?,
             NativeInstKind::ObjMaterializeStack(i) => self.alias(*wb, inst_id, *i.object())?,
             NativeInstKind::ObjFromPtr(i) => self.alias(*wb, inst_id, *i.ptr())?,
-            NativeInstKind::ConstRef(i) => self.const_ref(*wb, inst_id, i.global().gv())?,
+            NativeInstKind::ConstRef(i) => {
+                self.global_address(*wb, inst_id, op, i.global().gv())?
+            }
+            NativeInstKind::SymAddr(i) if let SymbolRef::Global(gv) = i.sym() => {
+                self.global_address(*wb, inst_id, op, *gv)?
+            }
             NativeInstKind::InsertValue(i) => {
                 self.insert_value(block, *wb, inst_id, *i.dest(), *i.idx(), *i.value())?
             }
@@ -2572,7 +2579,7 @@ impl<'a> FunctionTranslator<'a> {
                 self.body.set_terminator(*wb, Terminator::Unreachable);
             }
 
-            // Not translated: symbols and function pointers.
+            // Not translated: function pointers, and symbols other than globals.
             NativeInstKind::GetFunctionPtr(_)
             | NativeInstKind::SymAddr(_)
             | NativeInstKind::SymSize(_) => return Err(self.unsupported_inst(op)),

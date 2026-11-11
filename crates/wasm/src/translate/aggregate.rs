@@ -794,15 +794,17 @@ impl FunctionTranslator<'_> {
         self.define(inst_id, 0, address, ty)
     }
 
-    pub(super) fn const_ref(
+    /// The address of the global `gv`, for `const.ref` and `sym_addr`.
+    pub(super) fn global_address(
         &mut self,
         wb: waffle::Block,
         inst_id: InstId,
+        op: &str,
         gv: GlobalVariableRef,
     ) -> Result<(), WasmError> {
         let address = *self.plan.globals.get(&gv).ok_or_else(|| {
             invalid(format!(
-                "function `{}`: `const.ref` of a global variable that has no storage",
+                "function `{}`: `{op}` of a global variable that has no storage",
                 self.name
             ))
         })?;
