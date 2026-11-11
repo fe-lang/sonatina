@@ -1,12 +1,13 @@
-#! evm.config: { opt: s }
+#! evm.config: { opt: 0 }
 #! evm.case: ok
 #!   calldata:
 #!   expect: return
 
 # `v1` is last used as the loop pointer's phi input from `block0`. It keeps the
 # first allocation live across the second, which must not reuse its memory.
-# Built for size, which does not rotate loops: rotating this one-trip loop
-# would fold it away, and with it the phi this test needs.
+# The second's size comes from the calldata size, so it stays on the heap
+# instead of moving into the frame. Built without optimization: rotating or
+# unrolling this one-trip loop would fold it away, and with it the phi.
 target = "evm-ethereum-osaka"
 
 func public %entry() {
@@ -16,7 +17,9 @@ func public %entry() {
         mstore v1 9.i256 i256;
         v2.i256 = add v1 32.i256;
         evm_mstore8 v2 3.i256;
-        v3.*i256 = evm_malloc 64.i256;
+        v15.i256 = evm_calldata_size;
+        v16.i256 = add v15 64.i256;
+        v3.*i256 = evm_malloc v16;
         v4.i256 = ptr_to_int v3 i256;
         memzero v4 64.i256;
         jump block1;
