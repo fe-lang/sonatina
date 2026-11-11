@@ -4,6 +4,7 @@
 //! time, so an optimization that folds it changes nothing.
 
 use sonatina_codegen::OptLevel;
+use sonatina_ir::{Immediate, Type};
 use wasmtime::Val;
 
 use super::{aggregates::build_at, harness::Machine};
@@ -367,6 +368,103 @@ func public %wide(v0.i32, v1.i64, v2.i64) -> i64 {
             // The top limb: all ones from the sign-extended -5, zero from 5.
             let top = machine.call(&wide, &[Val::I32(cond), Val::I64(-5), Val::I64(5)]);
             assert_eq!(top[0].unwrap_i64(), if cond != 0 { -1 } else { 0 });
+        }
+    }
+}
+
+#[test]
+fn signed_booleans_are_minus_one_folded_or_not() {
+    // Read as signed, `true` of type `i1` is -1: in the reference, in the
+    // optimizer's folds of constant operands, and in the backend.
+    type Signed = fn(Immediate, Immediate) -> Immediate;
+    type Flagged = fn(Immediate, Immediate) -> (Immediate, bool);
+    let plain: [(&str, Signed); 10] = [
+        ("slt", Immediate::slt),
+        ("sgt", Immediate::sgt),
+        ("sle", Immediate::sle),
+        ("sge", Immediate::sge),
+        ("sdiv", Immediate::sdiv),
+        ("smod", Immediate::srem),
+        ("sar", Immediate::ashr),
+        ("saddsat", Immediate::saturating_sadd),
+        ("ssubsat", Immediate::saturating_ssub),
+        ("smulsat", Immediate::saturating_smul),
+    ];
+    let flagged: [(&str, Flagged); 3] = [
+        ("saddo", Immediate::overflowing_sadd),
+        ("ssubo", Immediate::overflowing_ssub),
+        ("smulo", Immediate::overflowing_smul),
+    ];
+    let bit = |imm: Immediate| i32::from(!imm.is_zero());
+    let reference = |name: &str, a: Immediate, b: Immediate| {
+        if let Some((_, op)) = plain.iter().find(|(n, _)| *n == name) {
+            return bit(op(a, b));
+        }
+        if let Some((_, op)) = flagged.iter().find(|(n, _)| *n == name) {
+            let (value, overflow) = op(a, b);
+            return bit(value) | i32::from(overflow) << 1;
+        }
+        let Immediate::I32(extended) = a.sext(Type::I32) else {
+            unreachable!("an i32 extension")
+        };
+        extended
+    };
+
+    // `%op(a, b)` computes at run time and `%op_a_b()` from constants. `sar`
+    // takes the count first.
+    let mut bodies: Vec<(&str, String)> = plain
+        .iter()
+        .map(|&(name, _)| {
+            let operands = if name == "sar" { "v1 v0" } else { "v0 v1" };
+            let body = format!(
+                "v2.i1 = {name} {operands};\n        v3.i32 = zext v2 i32;\n        return v3;"
+            );
+            (name, body)
+        })
+        .collect();
+    bodies.extend(flagged.iter().map(|&(name, _)| {
+        let body = format!(
+            "(v2.i1, v3.i1) = {name} v0 v1;\n        v4.i32 = zext v2 i32;\n        v5.i32 = zext v3 i32;\n        v6.i32 = shl 1.i32 v5;\n        v7.i32 = or v4 v6;\n        return v7;"
+        );
+        (name, body)
+    }));
+    bodies.push((
+        "sext",
+        "v2.i32 = sext v0 i32;\n        return v2;".to_string(),
+    ));
+    let mut source = String::new();
+    let mut cases = Vec::new();
+    for (name, body) in &bodies {
+        source += &format!(
+            "func public %{name}(v0.i1, v1.i1) -> i32 {{\n    block0:\n        {body}\n}}\n"
+        );
+        for (a, b) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            // A division by zero traps.
+            if matches!(*name, "sdiv" | "smod") && b == 0 {
+                continue;
+            }
+            let constant = format!("{name}_{a}_{b}");
+            let body = body
+                .replace("v0", &format!("{a}.i1"))
+                .replace("v1", &format!("{b}.i1"));
+            source +=
+                &format!("func public %{constant}() -> i32 {{\n    block0:\n        {body}\n}}\n");
+            cases.push((*name, constant, a, b));
+        }
+    }
+    for level in LEVELS {
+        let mut machine = Machine::new(&build_at(&source, level));
+        for (name, constant, a, b) in &cases {
+            let want = reference(name, Immediate::I1(*a == 1), Immediate::I1(*b == 1));
+            let func = machine.func(name);
+            let computed = machine.call(&func, &[Val::I32(*a), Val::I32(*b)])[0].unwrap_i32();
+            let func = machine.func(constant);
+            let folded = machine.call(&func, &[])[0].unwrap_i32();
+            assert_eq!(
+                (computed, folded),
+                (want, want),
+                "{name}({a}, {b}) at {level:?}"
+            );
         }
     }
 }
