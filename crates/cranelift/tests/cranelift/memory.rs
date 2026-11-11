@@ -2250,6 +2250,74 @@ block0:
 }
 
 #[test]
+fn chains_built_in_owned_arguments_come_after_reads_of_them() {
+    // `%first` and `%across` own their argument, so `v1` lives in its
+    // storage, and they read its first field after `v1`'s chain starts:
+    // built in `v1`, the chain would overwrite the field first. `%across`
+    // calls a function between the read and the store.
+    let source = r#"
+func inline(never) private %noise(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    return v1;
+}
+func inline(never) private %first(v0.[i64; 8]) -> i64 {
+block0:
+    v1.objref<[i64; 8]> = obj.alloc [i64; 8];
+    obj.store v1 v0;
+    v2.[i64; 8] = insert_value undef.[i64; 8] 0.i64 7.i64;
+    v3.i64 = extract_value v0 0.i64;
+    v4.[i64; 8] = insert_value v2 1.i64 v3;
+    obj.store v1 v4;
+    v5.objref<i64> = obj.index v1 1.i64;
+    v6.i64 = obj.load v5;
+    return v6;
+}
+func inline(never) private %across(v0.[i64; 8]) -> i64 {
+block0:
+    v1.objref<[i64; 8]> = obj.alloc [i64; 8];
+    obj.store v1 v0;
+    v2.[i64; 8] = insert_value undef.[i64; 8] 0.i64 7.i64;
+    v3.i64 = extract_value v0 0.i64;
+    v7.i64 = call %noise v3;
+    v4.[i64; 8] = insert_value v2 1.i64 v7;
+    obj.store v1 v4;
+    v5.objref<i64> = obj.index v1 1.i64;
+    v6.i64 = obj.load v5;
+    return v6;
+}
+func public %sums(v0.i64) -> i64 {
+block0:
+    v1.[i64; 8] = insert_value undef.[i64; 8] 0.i64 v0;
+    v2.i64 = call %first v1;
+    v3.[i64; 8] = insert_value undef.[i64; 8] 0.i64 v0;
+    v4.i64 = call %across v3;
+    v5.i64 = mul v4 1000.i64;
+    v6.i64 = add v2 v5;
+    return v6;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let sums: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("sums").unwrap()) };
+        for value in [5, -7, 1000] {
+            assert_eq!(
+                unsafe { sums(value) },
+                value + 3 * value * 1000,
+                "{level:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn read_only_objects_share_storage_until_a_callee_may_write() {
     // `%reader` only reads through its argument and `%writer` writes
     // element 0. `%read_only`'s object never changes, so it lives in its

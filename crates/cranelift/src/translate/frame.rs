@@ -658,7 +658,7 @@ impl Plan {
         }
 
         plan.embed(function, &class_of)?;
-        plan.store_in_place(function, &position, &local);
+        plan.store_in_place(function, &position, &local, calls);
 
         // Owned arguments the caller cannot give away go through temporaries.
         for &block in block_order {
@@ -729,14 +729,36 @@ impl Plan {
     /// load, which reads its source where it is used, reaches the object
     /// only if that source is one of its addresses. Any other object may be
     /// reached through memory, so everything in between must be free of
-    /// effects, and no forwarded load may be used there or inserted.
+    /// effects, and no forwarded load may be used there or inserted. An
+    /// object built in the storage of an argument the function owns is read
+    /// by the argument's reads too.
     fn store_in_place(
         &mut self,
         function: &Function,
         position: &SecondaryMap<InstId, u32>,
         local: &FxHashMap<ValueId, ValueId>,
+        calls: &impl CallFacts,
     ) {
         let dfg = &function.dfg;
+        // The reads of each argument the function owns whose storage holds
+        // a local object (`Ownership`), by that object: they read the
+        // object, and may follow its initializing store.
+        let owned_reads: FxHashMap<ValueId, Vec<InstId>> = function
+            .arg_values
+            .iter()
+            .enumerate()
+            .filter(|&(index, _)| calls.owns_arg(index))
+            .flat_map(|(_, &arg)| {
+                dfg.users(arg).filter_map(move |&user| {
+                    match native_inst_set().resolve_inst(dfg.inst(user)) {
+                        NativeInstKind::ObjStore(store) if *store.value() == arg => {
+                            Some((*store.object(), value_reads(function, arg)))
+                        }
+                        _ => None,
+                    }
+                })
+            })
+            .collect();
         // The classes embedded in each class, directly or not.
         let mut descendants = FxHashMap::<usize, Vec<usize>>::default();
         for &child in self.embedded.keys() {
@@ -845,7 +867,11 @@ impl Plan {
             let defined_before = dfg.value_inst(object).is_none_or(|def| {
                 function.layout.inst_block(def) != block || position[def] < position[first]
             });
+            let reads_owner = owned_reads.get(&root.unwrap_or(object));
             let touches_object = |inst: InstId| {
+                if reads_owner.is_some_and(|reads| reads.contains(&inst)) {
+                    return true;
+                }
                 let operands = dfg.inst(inst).collect_values();
                 match root {
                     Some(root) => operands
