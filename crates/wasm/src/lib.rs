@@ -173,7 +173,7 @@ impl Backend for WasmBackend {
     fn compile_module(
         &self,
         module: &Module,
-        _options: &BackendOptions,
+        options: &BackendOptions,
     ) -> Result<Self::Artifact, Vec<Self::Error>> {
         ensure_wasm32_target(module.ctx.triple).map_err(|error| vec![error])?;
 
@@ -185,6 +185,7 @@ impl Backend for WasmBackend {
             self.stack_bytes,
             self.host_allocator,
             self.heap_poison,
+            options.opt_level,
         )
         .map_err(|error| vec![error])?;
         dce::run(&mut translated.module);

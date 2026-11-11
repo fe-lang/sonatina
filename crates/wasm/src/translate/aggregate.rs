@@ -11,6 +11,7 @@
 //! Frame slots are static: an instruction in a loop uses the same slot on every
 //! iteration, as `alloca` does on the native target.
 
+use sonatina_codegen::OptLevel;
 use waffle::{Operator, Type as WType};
 
 use sonatina_ir::{
@@ -28,8 +29,13 @@ use crate::{
     wide::{Limbs, Wide},
 };
 
-/// Aggregates of at most this many bytes are copied with loads and stores.
-const INLINE_COPY_BYTES: u32 = 64;
+/// The size of the largest aggregate copied with loads and stores, which
+/// are faster than `memory.copy` for small sizes. At `Os` every copy is a
+/// `memory.copy`: it takes 10 bytes, and one load and store through a local
+/// takes 14.
+pub(super) fn inline_copy_bytes(opt_level: OptLevel) -> u32 {
+    if opt_level == OptLevel::Os { 0 } else { 64 }
+}
 
 /// A value read from memory.
 enum Loaded {
@@ -144,7 +150,7 @@ impl FunctionTranslator<'_> {
         if size == 0 {
             return;
         }
-        if size <= INLINE_COPY_BYTES {
+        if size <= self.inline_copy_bytes {
             // Read everything before writing anything.
             let mut loaded = Vec::new();
             for (offset, access) in Self::chunks(size) {

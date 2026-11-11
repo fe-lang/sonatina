@@ -1,6 +1,6 @@
 //! Frames, aggregates, objects, constants and the arena.
 
-use sonatina_codegen::{Compile, OptLevel};
+use sonatina_codegen::{Backend, BackendOptions, Compile, OptLevel};
 use sonatina_wasm::WasmBackend;
 use wasmtime::Val;
 
@@ -520,6 +520,35 @@ fn has_memory_copy(bytes: &[u8]) -> bool {
             .into_iter()
             .any(|op| matches!(op, Ok(wasmparser::Operator::MemoryCopy { .. })))
     })
+}
+
+#[test]
+fn a_small_copy_is_a_memory_copy_only_at_os() {
+    // Loads and stores copy a small aggregate faster, and a `memory.copy` is
+    // smaller, so `Os` makes every copy one. The IR goes to the backend as
+    // it is, without the pipeline, which could take the copy apart.
+    let source = "type @Pair = { i64, i64 };
+func public %copy(v0.*@Pair, v1.*@Pair) {
+    block0:
+        v2.@Pair = mload v0 @Pair;
+        mstore v1 v2 @Pair;
+        return;
+}";
+    for (opt_level, copies) in [(OptLevel::O2, false), (OptLevel::Os, true)] {
+        let bytes = WasmBackend::new()
+            .compile_module(&parse(source), &BackendOptions { opt_level })
+            .unwrap_or_else(|errors| panic!("{opt_level:?}: {errors:?}"))
+            .into_bytes();
+        assert_eq!(has_memory_copy(&bytes), copies, "{opt_level:?}");
+        let mut machine = Machine::new(&bytes);
+        let base = machine.memory_size();
+        machine.grow_memory(1);
+        let pair: Vec<u8> = (1..=16).collect();
+        machine.write(base, &pair);
+        let copy = machine.func("copy");
+        machine.call(&copy, &[Val::I32(base as i32), Val::I32(base as i32 + 16)]);
+        assert_eq!(machine.read(base + 16, 16), pair, "{opt_level:?}");
+    }
 }
 
 #[test]

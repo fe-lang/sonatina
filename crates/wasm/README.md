@@ -246,6 +246,9 @@ aggregate combination and object returns the backend runs first.
   `insert_value`, `enum.make` and `obj.load` make a new snapshot;
   `extract_value` and `enum.extract` of an aggregate and `const.load` view the
   source in place.
+- An aggregate of at most 64 bytes is copied with loads and stores, and a
+  larger one with `memory.copy`. At `Os` every copy is a `memory.copy`, which
+  is smaller than even one load and store.
 - A function receives aggregates by address and returns a single aggregate through
   a buffer in the caller's frame, which is a hidden parameter after the stack
   top. A `constref` result is the address of the constant. A function cannot
