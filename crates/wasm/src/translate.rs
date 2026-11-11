@@ -50,7 +50,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    HOST_ALLOCATOR_EXPORTS, STACK_TOP_EXPORT, WasmError,
+    HOST_ALLOCATOR_EXPORTS, WasmError,
     arith::{Arith, Cmp, DivRem, Emit, Int, Shift},
     heap::{self, Mode},
     memory::{
@@ -470,27 +470,12 @@ pub(super) fn translate_module(
         }
     }
 
-    // An import that throws never returns to the call that moved `stack_top`,
-    // so the host puts the global back; see "Frames" in the README.
-    let stack_top_export = globals.filter(|_| !wmod.imports.is_empty());
-    if let Some(globals) = stack_top_export {
-        wmod.exports.push(waffle::Export {
-            name: STACK_TOP_EXPORT.to_string(),
-            kind: ExportKind::Global(globals.stack_top),
-        });
-    }
-
     // Declare every defined function before translating bodies so calls
     // resolve regardless of definition order.
     let mut pending = Vec::new();
     let mut wrappers = Vec::new();
     for (func_ref, name, linkage) in definitions {
         let public = linkage == Linkage::Public;
-        if public && stack_top_export.is_some() && name == STACK_TOP_EXPORT {
-            return Err(invalid(format!(
-                "export name `{name}` is reserved for the stack of a module with imports"
-            )));
-        }
         if public && host_allocator && HOST_ALLOCATOR_EXPORTS.contains(&name.as_str()) {
             return Err(invalid(format!(
                 "export name `{name}` is reserved for the host allocator"

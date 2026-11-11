@@ -27,11 +27,6 @@ pub const DEFAULT_IMPORT_MODULE: &str = "env";
 /// `arena_release(mark)`.
 pub const HOST_ALLOCATOR_EXPORTS: [&str; 3] = ["alloc", "arena_mark", "arena_release"];
 
-/// The name under which a module with frames and imports exports the global
-/// that holds the top of its stack. A host puts it back to the value it had
-/// before a call that an import ended by throwing.
-pub const STACK_TOP_EXPORT: &str = "stack_top";
-
 #[derive(Debug)]
 pub enum WasmError {
     /// The module does not target `wasm32-unknown-native`.

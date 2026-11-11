@@ -131,12 +131,9 @@ callback traps, the module does not run again before the host call ends, and
 the global stays at the end of the caller's frame. Every frame that was active
 then stays reserved for later calls.
 
-The host repairs this. A module with frames and at least one import exports the
-global as `stack_top` (a mutable `i32`; no function of the module may have the
-name). A host reads it before it calls an export and, if the call ends with an
-error, writes that value back. Calls that the host makes from inside an import do
-the same, so nested calls restore in order. A module with no imports does not
-export the global and needs no repair.
+The blocks that a failed call allocated on the heap also stay allocated. A host
+does not call an instance again after a call fails; it makes a new instance of
+the module.
 
 ### Tail calls
 
