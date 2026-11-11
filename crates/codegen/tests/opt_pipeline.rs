@@ -2416,3 +2416,128 @@ func public %shifted_high(v0.i64, v1.i64) -> i64 {{
         assert!(!shifted.contains("13."), "{target}\n{optimized}");
     }
 }
+
+#[test]
+fn native_calls_inline_callees_their_immediates_reduce_to_small_helpers() {
+    // With a zero capacity `%with_capacity` is the empty vector: its
+    // allocation and failure paths go once the constant propagates. Called
+    // with a variable it stays a call, as its body is too large to inline.
+    let source = r#"
+target = "x86_64-unknown-native"
+type @vec = {*i8, i64, i64};
+declare external %abort();
+declare external %malloc(i64) -> *i8;
+declare external %report(*i8, i64);
+
+func private %fail(v0.i256) {
+    block0:
+        v1.*i8 = call %malloc 36.i64;
+        v2.i64 = ptr_to_int v1 i64;
+        v3.i1 = is_zero v2;
+        br v3 block1 block2;
+    block1:
+        call %abort;
+        unreachable;
+    block2:
+        mstore v1 1903904846.i256 i256;
+        v4.*i8 = gep v1 4.i64;
+        mstore v4 v0 i256;
+        call %report v1 36.i64;
+        unreachable;
+}
+
+func private %with_capacity(v0.i64) -> @vec {
+    block0:
+        (v1.i64, v2.i1) = umulo v0 32.i64;
+        br v2 block1 block2;
+    block1:
+        v20.*i8 = call %malloc 36.i64;
+        v21.i64 = ptr_to_int v20 i64;
+        v22.i1 = is_zero v21;
+        br v22 block8 block9;
+    block8:
+        call %abort;
+        unreachable;
+    block9:
+        mstore v20 1903904846.i256 i256;
+        v23.*i8 = gep v20 4.i64;
+        mstore v23 65.i256 i256;
+        call %report v20 36.i64;
+        unreachable;
+    block2:
+        v3.i1 = is_zero v1;
+        br v3 block3 block4;
+    block3:
+        v4.*i8 = int_to_ptr 16.i64 *i8;
+        jump block5;
+    block4:
+        v5.*i8 = call %malloc v1;
+        jump block5;
+    block5:
+        v6.*i8 = phi (v4 block3) (v5 block4);
+        v7.@vec = insert_value undef.@vec 0.i64 v6;
+        v8.@vec = insert_value v7 1.i64 0.i64;
+        v9.@vec = insert_value v8 2.i64 v0;
+        v10.i64 = ptr_to_int v6 i64;
+        v11.i1 = is_zero v10;
+        br v11 block6 block7;
+    block6:
+        v30.*i8 = call %malloc 36.i64;
+        v31.i64 = ptr_to_int v30 i64;
+        v32.i1 = is_zero v31;
+        br v32 block10 block11;
+    block10:
+        call %abort;
+        unreachable;
+    block11:
+        mstore v30 1903904846.i256 i256;
+        v33.*i8 = gep v30 4.i64;
+        mstore v33 66.i256 i256;
+        call %report v30 36.i64;
+        unreachable;
+    block7:
+        return v9;
+}
+
+func public %empty(v0.*@vec) {
+    block0:
+        v1.@vec = call %with_capacity 0.i64;
+        mstore v0 v1 @vec;
+        return;
+}
+
+func public %sized(v0.*@vec, v1.i64) {
+    block0:
+        v2.@vec = call %with_capacity v1;
+        mstore v0 v2 @vec;
+        return;
+}
+
+func public %sized_again(v0.*@vec, v1.i64) {
+    block0:
+        v2.i64 = add v1 1.i64;
+        v3.@vec = call %with_capacity v2;
+        mstore v0 v3 @vec;
+        return;
+}
+"#;
+    let mut parsed = parse_module(source).unwrap();
+    Pipeline::native(OptLevel::O2).run(&mut parsed.module);
+    verify_module_or_panic(
+        &parsed.module,
+        &VerifierConfig::for_level(VerificationLevel::Full),
+    );
+    let module = &parsed.module;
+    let body = |name: &str| {
+        let func_ref = find_func_by_name(module, name);
+        module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        })
+    };
+    let empty = body("empty");
+    assert!(!empty.contains("call"), "{empty}");
+    for name in ["sized", "sized_again"] {
+        let sized = body(name);
+        assert!(sized.contains("call %with_capacity"), "{sized}");
+    }
+}

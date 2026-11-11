@@ -180,11 +180,11 @@ func public %entry() {
         br v8 block4 block5;
 
     block3:
-        v84.i256 = evm_return_data_size;
-        v85.*i8 = evm_malloc v84;
-        v86.i256 = ptr_to_int v85 i256;
-        evm_return_data_copy v86 0.i256 v84;
-        evm_revert v86 v84;
+        v78.i256 = evm_return_data_size;
+        v79.*i8 = evm_malloc v78;
+        v80.i256 = ptr_to_int v79 i256;
+        evm_return_data_copy v80 0.i256 v78;
+        evm_revert v80 v78;
 
     block4:
         evm_revert 0.i256 0.i256;
@@ -210,154 +210,154 @@ func public %entry() {
 
     block8:
         mstore v19 42.i256 i256;
-        (v25.i256, v26.i1) = uaddo v19 32.i256;
-        br v26 block10 block11;
+        (v22.i256, v23.i1) = uaddo v19 32.i256;
+        br v23 block9 block10;
+
+    block9:
+        evm_revert 0.i256 0.i256;
 
     block10:
-        evm_revert 0.i256 0.i256;
+        v24.i256 = obj.load v12;
+        v25.i256 = obj.load v14;
+        (v26.i256, v27.i1) = usubo v25 v24;
+        br v27 block11 block12;
 
     block11:
-        v27.i256 = obj.load v12;
-        v28.i256 = obj.load v14;
-        (v29.i256, v30.i1) = usubo v28 v27;
-        br v30 block13 block14;
+        evm_revert 0.i256 0.i256;
+
+    block12:
+        v29.i256 = evm_call 100000.i256 v9 0.i256 v24 v26 0.i256 0.i256;
+        v30.i256 = evm_return_data_size;
+        v31.*i8 = evm_malloc v30;
+        v32.i256 = ptr_to_int v31 i256;
+        evm_return_data_copy v32 0.i256 v30;
+        v33.i1 = is_zero v29;
+        br v33 block13 block15;
 
     block13:
-        evm_revert 0.i256 0.i256;
-
-    block14:
-        v32.i256 = evm_call 100000.i256 v9 0.i256 v27 v29 0.i256 0.i256;
-        v33.i256 = evm_return_data_size;
-        v34.*i8 = evm_malloc v33;
-        v35.i256 = ptr_to_int v34 i256;
-        evm_return_data_copy v35 0.i256 v33;
-        v36.i1 = is_zero v32;
-        br v36 block15 block17;
+        evm_revert v32 v30;
 
     block15:
-        evm_revert v35 v33;
+        v34.i1 = lt v30 32.i256;
+        br v34 block16 block17;
 
-    block17:
-        v37.i1 = lt v33 32.i256;
-        br v37 block18 block19;
-
-    block18:
+    block16:
         evm_revert 0.i256 0.i256;
 
+    block17:
+        v35.i256 = mload v32 i256;
+        v36.i1 = eq v35 42.i256;
+        br v36 block20 block19;
+
     block19:
-        v38.i256 = mload v35 i256;
-        v39.i1 = eq v38 42.i256;
-        br v39 block22 block21;
+        evm_revert 0.i256 0.i256;
+
+    block20:
+        v37.objref<@__fe_obj_SolEncoder_3> = obj.alloc @__fe_obj_SolEncoder_3;
+        v38.objref<i256> = obj.proj v37 0.i256;
+        obj.store v38 0.i256;
+        v39.objref<i256> = obj.proj v37 2.i256;
+        obj.store v39 0.i256;
+        v40.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v37 36.i256;
+        mstore v40 -19479681221441210686320150100176307435043235690442009417734788562406650937344.i256 i256;
+        (v42.i256, v43.i1) = uaddo v40 4.i256;
+        br v43 block21 block22;
 
     block21:
         evm_revert 0.i256 0.i256;
 
     block22:
-        v40.objref<@__fe_obj_SolEncoder_3> = obj.alloc @__fe_obj_SolEncoder_3;
-        v41.objref<i256> = obj.proj v40 0.i256;
-        obj.store v41 0.i256;
-        v42.objref<i256> = obj.proj v40 2.i256;
-        obj.store v42 0.i256;
-        v43.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v40 36.i256;
-        mstore v43 -19479681221441210686320150100176307435043235690442009417734788562406650937344.i256 i256;
-        (v45.i256, v46.i1) = uaddo v43 4.i256;
+        mstore v42 99.i256 i256;
+        (v45.i256, v46.i1) = uaddo v42 32.i256;
         br v46 block23 block24;
 
     block23:
         evm_revert 0.i256 0.i256;
 
     block24:
-        mstore v45 99.i256 i256;
-        (v51.i256, v52.i1) = uaddo v45 32.i256;
-        br v52 block26 block27;
+        v47.i256 = obj.load v38;
+        v48.i256 = obj.load v39;
+        (v49.i256, v50.i1) = usubo v48 v47;
+        br v50 block25 block26;
+
+    block25:
+        evm_revert 0.i256 0.i256;
 
     block26:
-        evm_revert 0.i256 0.i256;
+        v51.i256 = evm_call 100000.i256 v9 0.i256 v47 v49 0.i256 0.i256;
+        v52.i256 = evm_return_data_size;
+        v53.*i8 = evm_malloc v52;
+        v54.i256 = ptr_to_int v53 i256;
+        evm_return_data_copy v54 0.i256 v52;
+        v55.i1 = is_zero v51;
+        br v55 block27 block29;
 
     block27:
-        v53.i256 = obj.load v41;
-        v54.i256 = obj.load v42;
-        (v55.i256, v56.i1) = usubo v54 v53;
-        br v56 block29 block30;
+        evm_revert v54 v52;
 
     block29:
-        evm_revert 0.i256 0.i256;
+        v56.i1 = lt v52 32.i256;
+        br v56 block30 block31;
 
     block30:
-        v57.i256 = evm_call 100000.i256 v9 0.i256 v53 v55 0.i256 0.i256;
-        v58.i256 = evm_return_data_size;
-        v59.*i8 = evm_malloc v58;
-        v60.i256 = ptr_to_int v59 i256;
-        evm_return_data_copy v60 0.i256 v58;
-        v61.i1 = is_zero v57;
-        br v61 block31 block33;
-
-    block31:
-        evm_revert v60 v58;
-
-    block33:
-        v62.i1 = lt v58 32.i256;
-        br v62 block34 block35;
-
-    block34:
         evm_revert 0.i256 0.i256;
 
+    block31:
+        v57.i256 = mload v54 i256;
+        v58.i1 = eq v57 1.i256;
+        br v58 block34 block33;
+
+    block33:
+        evm_revert 0.i256 0.i256;
+
+    block34:
+        v59.objref<@__fe_obj_SolEncoder_3> = obj.alloc @__fe_obj_SolEncoder_3;
+        v60.objref<i256> = obj.proj v59 0.i256;
+        obj.store v60 0.i256;
+        v61.objref<i256> = obj.proj v59 2.i256;
+        obj.store v61 0.i256;
+        v62.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v59 4.i256;
+        mstore v62 31375362698142810071693338840885679545176626209085102383094335935879449673728.i256 i256;
+        (v64.i256, v65.i1) = uaddo v62 4.i256;
+        br v65 block35 block36;
+
     block35:
-        v63.i256 = mload v60 i256;
-        v64.i1 = eq v63 1.i256;
-        br v64 block38 block37;
+        evm_revert 0.i256 0.i256;
+
+    block36:
+        v66.i256 = obj.load v60;
+        v67.i256 = obj.load v61;
+        (v68.i256, v69.i1) = usubo v67 v66;
+        br v69 block37 block38;
 
     block37:
         evm_revert 0.i256 0.i256;
 
     block38:
-        v65.objref<@__fe_obj_SolEncoder_3> = obj.alloc @__fe_obj_SolEncoder_3;
-        v66.objref<i256> = obj.proj v65 0.i256;
-        obj.store v66 0.i256;
-        v67.objref<i256> = obj.proj v65 2.i256;
-        obj.store v67 0.i256;
-        v68.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v65 4.i256;
-        mstore v68 31375362698142810071693338840885679545176626209085102383094335935879449673728.i256 i256;
-        (v70.i256, v71.i1) = uaddo v68 4.i256;
-        br v71 block39 block40;
+        v70.i256 = evm_call 100000.i256 v9 0.i256 v66 v68 0.i256 0.i256;
+        v71.i256 = evm_return_data_size;
+        v72.*i8 = evm_malloc v71;
+        v73.i256 = ptr_to_int v72 i256;
+        evm_return_data_copy v73 0.i256 v71;
+        v74.i1 = is_zero v70;
+        br v74 block39 block41;
 
     block39:
-        evm_revert 0.i256 0.i256;
-
-    block40:
-        v72.i256 = obj.load v66;
-        v73.i256 = obj.load v67;
-        (v74.i256, v75.i1) = usubo v73 v72;
-        br v75 block41 block42;
+        evm_revert v73 v71;
 
     block41:
-        evm_revert 0.i256 0.i256;
+        v75.i1 = lt v71 32.i256;
+        br v75 block42 block43;
 
     block42:
-        v76.i256 = evm_call 100000.i256 v9 0.i256 v72 v74 0.i256 0.i256;
-        v77.i256 = evm_return_data_size;
-        v78.*i8 = evm_malloc v77;
-        v79.i256 = ptr_to_int v78 i256;
-        evm_return_data_copy v79 0.i256 v77;
-        v80.i1 = is_zero v76;
-        br v80 block43 block45;
-
-    block43:
-        evm_revert v79 v77;
-
-    block45:
-        v81.i1 = lt v77 32.i256;
-        br v81 block46 block47;
-
-    block46:
         evm_revert 0.i256 0.i256;
 
-    block47:
-        v82.i256 = mload v79 i256;
-        v83.i1 = is_zero v82;
-        br v83 block1 block49;
+    block43:
+        v76.i256 = mload v73 i256;
+        v77.i1 = is_zero v76;
+        br v77 block1 block45;
 
-    block49:
+    block45:
         evm_revert 0.i256 0.i256;
 
     block1:
