@@ -246,6 +246,11 @@ aggregate combination and object returns the backend runs first.
   `insert_value`, `enum.make` and `obj.load` make a new snapshot;
   `extract_value` and `enum.extract` of an aggregate and `const.load` view the
   source in place.
+- `insert_value` makes its snapshot in place when it is the only user of an
+  insert in the same block. An `undef` aggregate is zero, so the snapshot of an
+  insert into `undef` is filled with zero first, and that of another insert is
+  a copy of its source, unless the inserts that continue in its storage write
+  every byte.
 - An aggregate of at most 64 bytes is copied with loads and stores, and a
   larger one with `memory.copy`. At `Os` every copy is a `memory.copy`, which
   is smaller than even one load and store.

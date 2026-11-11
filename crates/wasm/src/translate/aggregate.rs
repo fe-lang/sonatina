@@ -15,7 +15,9 @@ use sonatina_codegen::OptLevel;
 use waffle::{Operator, Type as WType};
 
 use sonatina_ir::{
-    GlobalVariableRef, Immediate, InstId, InstSetExt, Type, U256, Value, ValueId,
+    BlockId, GlobalVariableRef, Immediate, InstId, InstSetExt, Type, U256, Value, ValueId,
+    inst::native::inst_set::NativeInstKind,
+    isa::native,
     types::{CompoundType, EnumVariantRef},
 };
 
@@ -811,7 +813,7 @@ impl FunctionTranslator<'_> {
 
     pub(super) fn insert_value(
         &mut self,
-        block: sonatina_ir::BlockId,
+        block: BlockId,
         wb: waffle::Block,
         inst_id: InstId,
         dest: ValueId,
@@ -826,25 +828,24 @@ impl FunctionTranslator<'_> {
         // snapshot. Stay in the same block: a use in a nested loop can execute
         // repeatedly for one definition. Other sources do not carry this
         // ownership guarantee.
-        let reuse = function.dfg.value_inst(dest).is_some_and(|source_inst| {
-            function.layout.inst_block(source_inst) == block
-                && function.dfg.users(dest).copied().eq([inst_id])
-                && matches!(
-                    sonatina_ir::isa::native::inst_set()
-                        .resolve_inst(function.dfg.inst(source_inst)),
-                    sonatina_ir::inst::native::inst_set::NativeInstKind::InsertValue(_)
-                )
-        });
+        let reuse = function
+            .dfg
+            .value_inst(dest)
+            .is_some_and(|source_inst| self.continues_in_place(block, source_inst, inst_id));
         let address = if reuse {
             self.operand(wb, dest)?
         } else {
             let slot = self.slot(size, align)?;
             let address = self.slot_address(wb, slot)?;
-            if matches!(function.dfg.value(dest), Value::Undef { .. }) {
-                self.fill_zero(wb, address, size);
-            } else {
-                let source = self.operand(wb, dest)?;
-                self.copy_bytes(wb, address, source, size);
+            // If the inserts that continue in this storage write every byte,
+            // what it held before does not matter.
+            match function.dfg.value(dest) {
+                _ if self.inserts_write_every_byte(block, inst_id, result_ty, size)? => {}
+                Value::Undef { .. } => self.fill_zero(wb, address, size),
+                _ => {
+                    let source = self.operand(wb, dest)?;
+                    self.copy_bytes(wb, address, source, size);
+                }
             }
             address
         };
@@ -858,6 +859,54 @@ impl FunctionTranslator<'_> {
         }
         self.store_value(wb, "insert_value", elem_ty, address, offset, value)?;
         self.define(inst_id, 0, address, result_ty)
+    }
+
+    /// Whether the `insert_value` `next` writes into the storage of the
+    /// insert `source`: `source`'s result is the aggregate that `next` changes,
+    /// and `next`, in `block`, is its only user.
+    fn continues_in_place(&self, block: BlockId, source: InstId, next: InstId) -> bool {
+        let dfg = &self.function.dfg;
+        let insert = |inst| match native::inst_set().resolve_inst(dfg.inst(inst)) {
+            NativeInstKind::InsertValue(insert) => Some(insert),
+            _ => None,
+        };
+        let Some(result) = dfg.inst_result(source) else {
+            return false;
+        };
+        self.function.layout.inst_block(source) == block
+            && insert(source).is_some()
+            && insert(next).is_some_and(|next| *next.dest() == result)
+            && dfg.users(result).copied().eq([next])
+    }
+
+    /// Whether the `insert_value` `first` and the inserts that continue in its
+    /// storage write every byte of the aggregate.
+    fn inserts_write_every_byte(
+        &self,
+        block: BlockId,
+        first: InstId,
+        ty: Type,
+        size: u32,
+    ) -> Result<bool, WasmError> {
+        let dfg = &self.function.dfg;
+        let mut written = vec![false; size as usize];
+        let mut inst = Some(first);
+        while let Some(current) = inst {
+            let NativeInstKind::InsertValue(insert) =
+                native::inst_set().resolve_inst(dfg.inst(current))
+            else {
+                break;
+            };
+            let idx = self.constant_index("insert_value", *insert.idx())?;
+            let (offset, elem_ty) = self.element_offset(ty, idx)?;
+            let (elem_size, _) = self.layout_of(elem_ty)?;
+            written[offset as usize..(offset + elem_size) as usize].fill(true);
+            inst = dfg
+                .inst_result(current)
+                .and_then(|result| dfg.users(result).copied().next())
+                .filter(|&next| self.continues_in_place(block, current, next));
+        }
+        Ok(written.into_iter().all(|byte| byte))
     }
 
     pub(super) fn extract_value(

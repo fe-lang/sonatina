@@ -523,6 +523,62 @@ fn has_memory_copy(bytes: &[u8]) -> bool {
 }
 
 #[test]
+fn inserts_that_write_every_byte_need_no_zero_fill() {
+    // Built field by field from `undef`, `%full` writes every byte of its
+    // storage, which then needs no filling first. `%partial` leaves the
+    // second field undef, which reads as zero although `%full` left a value
+    // in the frame both use.
+    let source = "type @Pair = { i64, i64 };
+func public %full(v0.i64, v1.i64, v2.*@Pair) {
+    block0:
+        v3.@Pair = insert_value undef.@Pair 0.i32 v0;
+        v4.@Pair = insert_value v3 1.i32 v1;
+        mstore v2 v4 @Pair;
+        return;
+}
+func public %partial(v0.i64, v1.*@Pair) {
+    block0:
+        v2.@Pair = insert_value undef.@Pair 0.i32 v0;
+        mstore v1 v2 @Pair;
+        return;
+}";
+    let bytes = WasmBackend::new()
+        .compile_module(&parse(source), &BackendOptions::default())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .into_bytes();
+    let fills: usize = wasmparser::Parser::new(0)
+        .parse_all(&bytes)
+        .map(|payload| {
+            let Ok(wasmparser::Payload::CodeSectionEntry(body)) = payload else {
+                return 0;
+            };
+            body.get_operators_reader()
+                .expect("the body has operators")
+                .into_iter()
+                .filter(|op| matches!(op, Ok(wasmparser::Operator::MemoryFill { .. })))
+                .count()
+        })
+        .sum();
+    assert_eq!(fills, 1, "only `%partial` fills");
+    let mut machine = Machine::new(&bytes);
+    let base = machine.memory_size();
+    machine.grow_memory(1);
+    let words = |machine: &mut Machine| -> Vec<i64> {
+        machine
+            .read(base, 16)
+            .chunks(8)
+            .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect()
+    };
+    let full = machine.func("full");
+    machine.call(&full, &[Val::I64(7), Val::I64(9), Val::I32(base as i32)]);
+    assert_eq!(words(&mut machine), [7, 9]);
+    let partial = machine.func("partial");
+    machine.call(&partial, &[Val::I64(5), Val::I32(base as i32)]);
+    assert_eq!(words(&mut machine), [5, 0]);
+}
+
+#[test]
 fn a_small_copy_is_a_memory_copy_only_at_os() {
     // Loads and stores copy a small aggregate faster, and a `memory.copy` is
     // smaller, so `Os` makes every copy one. The IR goes to the backend as
