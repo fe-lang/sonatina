@@ -93,8 +93,10 @@ layout, from the lowest address:
    pointer plus an offset below 1 KiB does not reach a global variable.
 2. The global variables, each at its alignment, in declaration order. Their
    initial contents are data segments of the module (all-zero data is not
-   emitted). `const.ref` and the address of a global variable are these
-   addresses. Only `private` global variables are supported.
+   emitted). `const.ref`, `sym_addr` and the address of a global variable are
+   these addresses. Only `private` global variables are supported. A module
+   that uses `sha256_compress` has 512 bytes more here: the 64 round constants
+   of SHA-256 and the 64 words of a message schedule.
 3. When the module has a heap: the table of the heads of the free lists, 128
    bytes, one word for each size class.
 4. The stack, `WasmBackend::with_stack_size` bytes (1 MiB by default) rounded
@@ -345,6 +347,9 @@ native backend:
   close together index a WebAssembly `br_table`; other cases are compared in
   order.
 - `unreachable` traps.
+- `sha256_compress` calls a function of the module that runs the 64 rounds in
+  a loop: WebAssembly has no SHA instructions. Every use shares the function,
+  which is about 1 KB with its table of round constants.
 - An `undef` operand is materialized as zero.
 
 ## Order of effects

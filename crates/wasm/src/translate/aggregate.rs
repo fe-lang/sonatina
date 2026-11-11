@@ -813,6 +813,31 @@ impl FunctionTranslator<'_> {
         self.define(inst_id, 0, address, ty)
     }
 
+    /// `sha256_compress`: the module's compression function writes the
+    /// result into a new snapshot.
+    pub(super) fn sha256_compress(
+        &mut self,
+        wb: waffle::Block,
+        inst_id: InstId,
+        state: ValueId,
+        block: ValueId,
+    ) -> Result<(), WasmError> {
+        let func = self.sha256.ok_or_else(|| {
+            invalid(format!(
+                "function `{}`: the module has no SHA-256 compression function",
+                self.name
+            ))
+        })?;
+        let state = self.operand(wb, state)?;
+        let block = self.operand(wb, block)?;
+        let ty = self.result_ty(inst_id)?;
+        let (size, align) = self.layout_of(ty)?;
+        let slot = self.slot(size, align)?;
+        let dst = self.slot_address(wb, slot)?;
+        emit_call(&mut self.body, wb, func, &[state, block, dst], &[]);
+        self.define(inst_id, 0, dst, ty)
+    }
+
     pub(super) fn insert_value(
         &mut self,
         block: BlockId,

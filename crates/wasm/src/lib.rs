@@ -4,6 +4,7 @@ mod arith;
 mod dce;
 mod heap;
 mod memory;
+mod sha256;
 mod tail;
 mod translate;
 mod wide;

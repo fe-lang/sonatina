@@ -57,6 +57,7 @@ use super::{
         self, ALIGN, MemoryPlan, RuntimeGlobals, align_up, build_arena_mark,
         declare_runtime_globals,
     },
+    sha256,
     tail::TailCallSites,
     wide::{self, LIMBS, Limbs, Wide},
 };
@@ -209,6 +210,8 @@ struct Scan {
     /// Which 256-bit helper functions are used: multiplication, division, left
     /// and right shifts.
     helpers: (bool, bool, bool, bool, bool, bool),
+    /// The module uses `sha256_compress`.
+    sha256: bool,
 }
 
 fn kind_needs_runtime(kind: &NativeInstKind<'_>) -> bool {
@@ -229,6 +232,7 @@ fn kind_needs_runtime(kind: &NativeInstKind<'_>) -> bool {
             | NativeInstKind::ExtractValue(_)
             | NativeInstKind::EnumMake(_)
             | NativeInstKind::MemAllocDynamic(_)
+            | NativeInstKind::Sha256Compress(_)
     )
 }
 
@@ -257,6 +261,7 @@ fn scan_module(module: &Module) -> Scan {
     let mut arena = false;
     let mut free = false;
     let mut helpers = (false, false, false, false, false, false);
+    let mut sha256 = false;
     let mut called = FxHashSet::default();
     let inst_set = native_inst_set();
     for func_ref in module.funcs() {
@@ -295,6 +300,9 @@ fn scan_module(module: &Module) -> Scan {
                     }
                     if matches!(kind, NativeInstKind::MemAllocDynamic(_)) {
                         arena = true;
+                    }
+                    if matches!(kind, NativeInstKind::Sha256Compress(_)) {
+                        sha256 = true;
                     }
                     // A shift by a constant and a 128-bit product are built
                     // in place.
@@ -345,6 +353,7 @@ fn scan_module(module: &Module) -> Scan {
         arena,
         free,
         helpers,
+        sha256,
     }
 }
 
@@ -361,7 +370,7 @@ pub(super) fn translate_module(
         scan.runtime = true;
         scan.arena = true;
     }
-    let plan = memory::plan_memory(module, scan.runtime, scan.arena, stack_bytes)?;
+    let plan = memory::plan_memory(module, scan.runtime, scan.arena, scan.sha256, stack_bytes)?;
 
     let mut wmod = WaffleModule::empty();
     // Linear memory is always present and exported, so scalar loads and stores
@@ -570,6 +579,16 @@ pub(super) fn translate_module(
         None
     };
 
+    // The SHA-256 compression that `sha256_compress` calls.
+    let sha256_func = scan.sha256.then(|| {
+        let sig = sha256::signature(&mut wmod);
+        let placeholder = FunctionBody::new(&wmod, sig);
+        let func = wmod
+            .funcs
+            .push(FuncDecl::Body(sig, sha256::NAME.to_string(), placeholder));
+        (func, sig)
+    });
+
     // The 256-bit helpers that the bodies call.
     let mut helpers = WideHelpers::default();
     let mut helper_bodies = Vec::new();
@@ -672,6 +691,7 @@ pub(super) fn translate_module(
                     globals,
                     arena_func.map(|(func, _)| func),
                     free_func.map(|(func, _)| func),
+                    sha256_func.map(|(func, _)| func),
                     helpers,
                     sites.into_keys().collect(),
                     opt_level,
@@ -706,6 +726,11 @@ pub(super) fn translate_module(
             }
         };
         wmod.funcs[func] = FuncDecl::Body(sig, name, body);
+    }
+
+    if let Some((func, sig)) = sha256_func {
+        let body = sha256::build_compress(&wmod, sig, memory, plan.sha256);
+        wmod.funcs[func] = FuncDecl::Body(sig, sha256::NAME.to_string(), body);
     }
 
     if let Some((func, sig)) = arena_func {
@@ -1117,6 +1142,7 @@ struct FunctionTranslator<'a> {
     globals: Option<RuntimeGlobals>,
     arena: Option<Func>,
     free: Option<Func>,
+    sha256: Option<Func>,
     wide_helpers: WideHelpers,
     return_tys: Vec<Type>,
     /// Sonatina values defined so far, in canonical WAFFLE form. Not 128- or
@@ -1164,6 +1190,7 @@ impl<'a> FunctionTranslator<'a> {
         globals: Option<RuntimeGlobals>,
         arena: Option<Func>,
         free: Option<Func>,
+        sha256: Option<Func>,
         wide_helpers: WideHelpers,
         tail_calls: FxHashSet<InstId>,
         opt_level: OptLevel,
@@ -1179,6 +1206,7 @@ impl<'a> FunctionTranslator<'a> {
             globals,
             arena,
             free,
+            sha256,
             wide_helpers,
             return_tys: callees[&func_ref].rets.clone(),
             values: FxHashMap::default(),
@@ -2416,11 +2444,8 @@ impl<'a> FunctionTranslator<'a> {
             // Sonatina's passes keep it in place. WebAssembly has no way to hide
             // a value from the engine, so the module passes it on unchanged.
             NativeInstKind::BlackBox(i) => self.copy_value(*wb, inst_id, *i.arg())?,
-            NativeInstKind::Sha256Compress(_) => {
-                return Err(unsupported(format!(
-                    "function `{}`: sha256_compress is not supported on WebAssembly",
-                    self.name
-                )));
+            NativeInstKind::Sha256Compress(i) => {
+                self.sha256_compress(*wb, inst_id, *i.state(), *i.block())?
             }
             NativeInstKind::Gep(i) => self.gep(wb, inst_id, op, i.values())?,
             NativeInstKind::Alloca(i) => self.alloca(*wb, inst_id, *i.ty())?,
