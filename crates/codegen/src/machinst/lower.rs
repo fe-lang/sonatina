@@ -4,10 +4,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Linkage, Module,
     Type, Value, ValueId,
-    inst::{
-        data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
-        evm::EvmCodeSize,
-    },
+    inst::data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
     module::{FuncRef, ModuleCtx},
     object::EmbedSymbol,
 };
@@ -105,7 +102,6 @@ pub struct SectionMembership {
     pub funcs: FxHashSet<FuncRef>,
     pub globals: FxHashSet<GlobalVariableRef>,
     pub used_embed_symbols: FxHashSet<EmbedSymbol>,
-    observes_section_size: bool,
 }
 
 pub fn build_section_membership(
@@ -141,21 +137,18 @@ pub fn build_section_membership(
                         record_section_symbol(module, sym.sym(), &mut membership, &mut worklist);
                     }
                     if let Some(sym) = <&SymSize as InstDowncast>::downcast(is, inst) {
-                        if matches!(sym.sym(), SymbolRef::CurrentSection) {
-                            membership.observes_section_size = true;
-                        }
                         record_section_symbol(module, sym.sym(), &mut membership, &mut worklist);
-                    }
-                    if <&EvmCodeSize as InstDowncast>::downcast(is, inst).is_some() {
-                        membership.observes_section_size = true;
                     }
                 }
             }
         });
     }
 
+    // Code reaches private const data only through `sym_addr` or `sym_size`
+    // of the global: section data has no layout it could compute an address
+    // from, even when it reads the section's size.
     for &gv in data {
-        if membership.observes_section_size || should_root_explicit_data(module, gv) {
+        if should_root_explicit_data(module, gv) {
             membership.globals.insert(gv);
         }
     }

@@ -1156,93 +1156,63 @@ object @Contract {
 }
 
 #[test]
-fn object_compile_keeps_private_const_data_when_section_size_is_observed() {
-    let parsed = parse(
-        r#"
+fn object_compile_drops_unreferenced_private_const_data_when_size_is_observed() {
+    for size in ["sym_size .", "evm_code_size"] {
+        let parsed = parse(&format!(
+            r#"
 target = "evm-ethereum-osaka"
 
-global private const [i256; 2] $data = [1, 2];
+global private const [i256; 2] $dead = [1, 2];
+global private const [i256; 2] $live = [3, 4];
 
-func private %entry() {
+func private %entry() {{
     block0:
-        v0.i256 = sym_size .;
-        mstore 0.i256 v0 i256;
+        v0.i256 = {size};
+        v1.i256 = sym_addr $live;
+        v2.i256 = add v0 v1;
+        mstore 0.i256 v2 i256;
         evm_return 0.i256 32.i256;
-}
+}}
 
-object @Contract {
-  section runtime { entry %entry; data $data; }
-}
-"#,
-    );
+object @Contract {{
+  section runtime {{ entry %entry; data $dead; data $live; }}
+}}
+"#
+        ));
 
-    let data = parsed
-        .module
-        .ctx
-        .with_gv_store(|store| store.lookup_gv("data").expect("data global should exist"));
-    let opts = CompileOptions {
-        emit_symtab: true,
-        ..Default::default()
-    };
-    let artifacts = compile_all_objects(&parsed.module, &osaka_backend(), &opts)
-        .expect("object compilation should preserve section-size-observed data");
-    let runtime = artifacts[0]
-        .sections
-        .values()
-        .next()
-        .expect("runtime section should exist");
-    let data_def = runtime
-        .symtab
-        .get(&SymbolId::Global(data))
-        .expect("section-size-observed data should be present");
+        let (dead, live) = parsed.module.ctx.with_gv_store(|store| {
+            (
+                store.lookup_gv("dead").expect("dead global should exist"),
+                store.lookup_gv("live").expect("live global should exist"),
+            )
+        });
+        let opts = CompileOptions {
+            emit_symtab: true,
+            ..Default::default()
+        };
+        let artifacts = compile_all_objects(&parsed.module, &osaka_backend(), &opts)
+            .expect("object compilation should drop dead private const data");
+        let runtime = artifacts[0]
+            .sections
+            .values()
+            .next()
+            .expect("runtime section should exist");
 
-    assert_eq!(data_def.size, 64);
-    assert!(runtime.bytes.len() >= 64);
-}
-
-#[test]
-fn object_compile_keeps_private_const_data_when_code_size_is_observed() {
-    let parsed = parse(
-        r#"
-target = "evm-ethereum-osaka"
-
-global private const [i256; 2] $data = [1, 2];
-
-func private %entry() {
-    block0:
-        v0.i256 = evm_code_size;
-        mstore 0.i256 v0 i256;
-        evm_return 0.i256 32.i256;
-}
-
-object @Contract {
-  section runtime { entry %entry; data $data; }
-}
-"#,
-    );
-
-    let data = parsed
-        .module
-        .ctx
-        .with_gv_store(|store| store.lookup_gv("data").expect("data global should exist"));
-    let opts = CompileOptions {
-        emit_symtab: true,
-        ..Default::default()
-    };
-    let artifacts = compile_all_objects(&parsed.module, &osaka_backend(), &opts)
-        .expect("object compilation should preserve code-size-observed data");
-    let runtime = artifacts[0]
-        .sections
-        .values()
-        .next()
-        .expect("runtime section should exist");
-    let data_def = runtime
-        .symtab
-        .get(&SymbolId::Global(data))
-        .expect("code-size-observed data should be present");
-
-    assert_eq!(data_def.size, 64);
-    assert!(runtime.bytes.len() >= 64);
+        assert!(
+            !runtime.symtab.contains_key(&SymbolId::Global(dead)),
+            "`{size}` kept dead data"
+        );
+        let live_def = runtime
+            .symtab
+            .get(&SymbolId::Global(live))
+            .expect("referenced data should be present");
+        assert_eq!(live_def.size, 64);
+        assert!(
+            runtime.bytes.len() < 128,
+            "`{size}` appended dead data: {} bytes",
+            runtime.bytes.len()
+        );
+    }
 }
 
 #[test]
