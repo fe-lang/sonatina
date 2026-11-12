@@ -29,6 +29,8 @@ mod memory_and_calls;
 mod memory_runtime;
 #[path = "wasm/operands.rs"]
 mod operands;
+#[path = "wasm/sha256.rs"]
+mod sha256;
 #[path = "wasm/shared_oracles.rs"]
 mod shared_oracles;
 #[path = "wasm/tail_calls.rs"]

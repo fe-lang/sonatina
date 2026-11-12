@@ -93,8 +93,10 @@ layout, from the lowest address:
    pointer plus an offset below 1 KiB does not reach a global variable.
 2. The global variables, each at its alignment, in declaration order. Their
    initial contents are data segments of the module (all-zero data is not
-   emitted). `const.ref` and the address of a global variable are these
-   addresses. Only `private` global variables are supported.
+   emitted). `const.ref`, `sym_addr` and the address of a global variable are
+   these addresses. Only `private` global variables are supported. A module
+   that uses `sha256_compress` has 512 bytes more here: the 64 round constants
+   of SHA-256 and the 64 words of a message schedule.
 3. When the module has a heap: the table of the heads of the free lists, 128
    bytes, one word for each size class.
 4. The stack, `WasmBackend::with_stack_size` bytes (1 MiB by default) rounded
@@ -131,12 +133,9 @@ callback traps, the module does not run again before the host call ends, and
 the global stays at the end of the caller's frame. Every frame that was active
 then stays reserved for later calls.
 
-The host repairs this. A module with frames and at least one import exports the
-global as `stack_top` (a mutable `i32`; no function of the module may have the
-name). A host reads it before it calls an export and, if the call ends with an
-error, writes that value back. Calls that the host makes from inside an import do
-the same, so nested calls restore in order. A module with no imports does not
-export the global and needs no repair.
+The blocks that a failed call allocated on the heap also stay allocated. A host
+does not call an instance again after a call fails; it makes a new instance of
+the module.
 
 ### Tail calls
 
@@ -257,8 +256,9 @@ aggregate combination and object returns the backend runs first.
   is smaller than even one load and store.
 - A function receives aggregates by address and returns a single aggregate through
   a buffer in the caller's frame, which is a hidden parameter after the stack
-  top. A `constref` result is the address of the constant. A function cannot
-  return an aggregate together with other values.
+  top. A `constref` result is the address of the constant, as is `sym_addr`
+  of a global. A function cannot return an aggregate together with other
+  values.
 - `obj.alloc`, `obj.proj`, `obj.index`, `obj.load`, `obj.store`,
   `obj.from_ptr`, `const.ref`, `const.proj`, `const.index` and `const.load` are
   address arithmetic and loads and stores. `obj.from_ptr`
@@ -347,6 +347,9 @@ native backend:
   close together index a WebAssembly `br_table`; other cases are compared in
   order.
 - `unreachable` traps.
+- `sha256_compress` calls a function of the module that runs the 64 rounds in
+  a loop: WebAssembly has no SHA instructions. Every use shares the function,
+  which is about 1 KB with its table of round constants.
 - An `undef` operand is materialized as zero.
 
 ## Order of effects
@@ -359,7 +362,7 @@ model at every optimization level.
 
 Every instruction of the native instruction set is either translated or
 rejected with an error that names it. These are rejected: `get_function_ptr`,
-`sym_addr`, `sym_size`, and any instruction whose type is a function
-type. Public and external global variables are rejected as a
+`sym_addr` of anything but a global, `sym_size`, and any instruction whose type
+is a function type. Public and external global variables are rejected as a
 module-level error. Errors are returned from `compile_module`; the backend does
 not panic on unsupported input.

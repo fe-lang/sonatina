@@ -189,6 +189,38 @@ func public %row(v0.i32) -> i32 {
 }
 
 #[test]
+fn the_sym_addr_of_a_global_is_its_address() {
+    // A host reads the bytes of `$data` at the address `%data` returns, and
+    // `%third` reads them through a pointer made from it.
+    let source = "global private const [i8; 4] $data = [11, 22, 33, 44];
+func public %data() -> i32 {
+    block0:
+        v0.i32 = sym_addr $data;
+        return v0;
+}
+func public %third() -> i8 {
+    block0:
+        v0.i32 = sym_addr $data;
+        v1.i32 = add v0 2.i32;
+        v2.*i8 = int_to_ptr v1 *i8;
+        v3.i8 = mload v2 i8;
+        return v3;
+}";
+    for level in LEVELS {
+        let mut machine = Machine::new(&build(source, level));
+        let data = machine.func("data");
+        let address = machine.call(&data, &[])[0].unwrap_i32();
+        assert_eq!(
+            machine.read(address as usize, 4),
+            [11, 22, 33, 44],
+            "{level:?}"
+        );
+        let third = machine.func("third");
+        assert_eq!(machine.call(&third, &[])[0].unwrap_i32(), 33, "{level:?}");
+    }
+}
+
+#[test]
 fn a_constref_result_outlives_later_calls() {
     // The first result stays live through a phi while the loop calls again.
     let source = "global private const i32 $one = 1;

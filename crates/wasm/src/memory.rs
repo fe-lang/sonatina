@@ -8,7 +8,9 @@
 //!    pointer is never the address of one, and a null pointer plus an offset
 //!    below 1 KiB reads and writes this block, not a global variable.
 //! 2. The global variables, each at its natural alignment, filled from the
-//!    module's initializers.
+//!    module's initializers, then, when the module uses `sha256_compress`, the
+//!    round constants and the message schedule of SHA-256
+//!    ([`sha256::AREA_BYTES`] bytes).
 //! 3. When the module has a heap, the table of free-list heads
 //!    ([`heap::TABLE_BYTES`] bytes, one word for each size class).
 //! 4. The stack, at least [`WasmBackend::with_stack_size`](super::WasmBackend)
@@ -32,7 +34,7 @@ use sonatina_ir::{
     module::ModuleCtx, types::CompoundType,
 };
 
-use super::{WasmError, heap};
+use super::{WasmError, heap, sha256};
 
 /// The size of a WebAssembly page.
 pub(super) const PAGE: u64 = 65536;
@@ -56,6 +58,9 @@ pub(super) struct MemoryPlan {
     /// The address of the table of free-list heads, one word per size class,
     /// when the module has a heap.
     pub(super) lists: u32,
+    /// The address of the round constants and message schedule of
+    /// `sha256_compress`, when the module compresses.
+    pub(super) sha256: u32,
     pub(super) globals: FxHashMap<GlobalVariableRef, u32>,
     pub(super) segments: Vec<MemorySegment>,
     pub(super) stack_base: u32,
@@ -70,6 +75,7 @@ impl MemoryPlan {
             runtime: false,
             arena: false,
             lists: 0,
+            sha256: 0,
             globals: FxHashMap::default(),
             segments: Vec::new(),
             stack_base: 0,
@@ -89,6 +95,7 @@ pub(super) fn plan_memory(
     module: &Module,
     needs_runtime: bool,
     needs_arena: bool,
+    needs_sha256: bool,
     stack_bytes: u32,
 ) -> Result<MemoryPlan, WasmError> {
     let has_globals = module.ctx.with_gv_store(|store| !store.is_empty());
@@ -154,7 +161,19 @@ pub(super) fn plan_memory(
         Ok::<(), WasmError>(())
     })?;
 
-    // The table of free-list heads follows the globals.
+    // The area of `sha256_compress` and the table of free-list heads follow
+    // the globals.
+    let sha256 = if needs_sha256 {
+        let at = align_up(cursor, ALIGN).ok_or_else(too_large)?;
+        segments.push(MemorySegment {
+            offset: at as usize,
+            data: sha256::table(),
+        });
+        cursor = at.checked_add(sha256::AREA_BYTES).ok_or_else(too_large)?;
+        at
+    } else {
+        0
+    };
     let lists = if needs_arena {
         let at = align_up(cursor, ALIGN).ok_or_else(too_large)?;
         cursor = at.checked_add(heap::TABLE_BYTES).ok_or_else(too_large)?;
@@ -174,6 +193,7 @@ pub(super) fn plan_memory(
         runtime: needs_runtime || has_globals,
         arena: needs_arena,
         lists,
+        sha256,
         globals,
         segments,
         stack_base,
