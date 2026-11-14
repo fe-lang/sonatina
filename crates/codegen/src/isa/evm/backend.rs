@@ -72,6 +72,7 @@ pub struct EvmBackend {
     pub(crate) switch_lowering_strategy: SwitchLoweringStrategy,
     pub(crate) immediate_materialization_mode: ImmediateMaterializationMode,
     pub(crate) capture_stackify_trace: bool,
+    pub(crate) record_lowering: bool,
 }
 
 impl EvmBackend {
@@ -93,6 +94,7 @@ impl EvmBackend {
             switch_lowering_strategy: SwitchLoweringStrategy::Auto,
             immediate_materialization_mode: ImmediateMaterializationMode::Gas,
             capture_stackify_trace: false,
+            record_lowering: false,
         }
     }
 
@@ -122,6 +124,14 @@ impl EvmBackend {
 
     pub fn with_stackify_trace_capture(mut self, enable: bool) -> Self {
         self.capture_stackify_trace = enable;
+        self
+    }
+
+    /// Keep what a section's `SectionLowering` is built from: the source IR,
+    /// the source-to-machine block map, malloc placements and block entry
+    /// stacks.
+    pub fn with_lowering_record(mut self, enable: bool) -> Self {
+        self.record_lowering = enable;
         self
     }
 

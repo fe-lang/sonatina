@@ -9,8 +9,8 @@ mod edge_split;
 mod stackify;
 pub use edge_split::StackifyEdgeSplitter;
 pub(crate) use stackify::{
-    HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
-    StackifySearchCache, StackifyTrace,
+    HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES, SpillStorage,
+    StackItem, StackifySearchCache, StackifyTrace,
 };
 pub use stackify::{StackifyAlloc, StackifyBuilder, StackifySearchProfile};
 

@@ -3,6 +3,7 @@ pub mod compile;
 pub mod data;
 pub mod error;
 pub mod link;
+pub mod lowering;
 pub mod resolve;
 
 use crate::isa::evm::PushWidthPolicy;
@@ -24,6 +25,9 @@ pub struct CompileOptions {
     pub fixup_policy: PushWidthPolicy,
     pub emit_symtab: bool,
     pub emit_observability: bool,
+    /// Keep each section's `SectionLowering`. The backend must record what it
+    /// is built from (`EvmBackend::with_lowering_record`).
+    pub emit_lowering: bool,
     pub verifier_cfg: VerifierConfig,
 }
 
@@ -33,6 +37,7 @@ impl Default for CompileOptions {
             fixup_policy: PushWidthPolicy::default(),
             emit_symtab: false,
             emit_observability: false,
+            emit_lowering: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
         }
     }

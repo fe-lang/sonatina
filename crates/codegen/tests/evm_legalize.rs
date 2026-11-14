@@ -267,6 +267,7 @@ object @O {
         fixup_policy: PushWidthPolicy::MinimalRelax,
         emit_symtab: false,
         emit_observability: false,
+        emit_lowering: false,
         verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
     };
 

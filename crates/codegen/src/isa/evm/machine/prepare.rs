@@ -208,7 +208,8 @@ fn prepare_machine_stackify_analysis(
     )
     .with_search_profile(backend.stackify_search_profile)
     .with_scratch_slots(barred)
-    .with_hot_immediate_caching();
+    .with_hot_immediate_caching()
+    .with_entry_stack_record(backend.record_lowering);
 
     if backend.immediate_materialization_mode == ImmediateMaterializationMode::Size {
         builder = builder

@@ -205,7 +205,8 @@ impl<'a> EvmMachineFunctionLowering<'a> {
                     self.function_plan.alloc.clone(),
                     self.function_plan.mem_plan.clone(),
                 );
-                let lower = Lower::new(&module.ctx, function, &emitted_block_order);
+                let lower = Lower::new(&module.ctx, function, &emitted_block_order)
+                    .with_lowering_record(self.backend.record_lowering);
                 lower
                     .lower(
                         &alloc,

@@ -343,6 +343,13 @@ impl<'a, Op: Default> Lower<'a, Op> {
         }
     }
 
+    /// Keep what the lowering record reads of the code
+    /// (`VCode::record_lowering`).
+    pub fn with_lowering_record(mut self, record: bool) -> Self {
+        self.vcode.record_lowering = record;
+        self
+    }
+
     pub fn lower(
         mut self,
         alloc: &dyn Allocator,

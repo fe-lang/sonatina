@@ -170,6 +170,7 @@ pub struct StackifyBuilder<'a> {
     cache_hot_immediates: bool,
     hot_immediate_min_block_uses: u32,
     hot_immediate_min_materialization_bytes: usize,
+    record_entry_stacks: bool,
 }
 
 pub(super) struct StackifyContext<'a> {
@@ -195,6 +196,7 @@ pub(super) struct StackifyContext<'a> {
     pub(super) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
     pub(super) remat_actions: SecondaryMap<ValueId, Option<Action>>,
     pub(super) stack_cached_immediates: FxHashSet<I256>,
+    pub(super) record_entry_stacks: bool,
 }
 
 impl StackifyContext<'_> {
@@ -246,6 +248,7 @@ impl<'a> StackifyBuilder<'a> {
             hot_immediate_min_block_uses: HOT_IMMEDIATE_DEFAULT_MIN_BLOCK_USES,
             hot_immediate_min_materialization_bytes:
                 HOT_IMMEDIATE_DEFAULT_MIN_MATERIALIZATION_BYTES,
+            record_entry_stacks: false,
         }
     }
 
@@ -270,6 +273,13 @@ impl<'a> StackifyBuilder<'a> {
 
     pub(crate) fn with_hot_immediate_caching(mut self) -> Self {
         self.cache_hot_immediates = true;
+        self
+    }
+
+    /// Record the stack each block is planned to start with
+    /// (`StackifyAlloc::entry_stacks`).
+    pub(crate) fn with_entry_stack_record(mut self, record: bool) -> Self {
+        self.record_entry_stacks = record;
         self
     }
 
@@ -404,6 +414,7 @@ impl<'a> StackifyBuilder<'a> {
             value_aliases,
             remat_actions,
             stack_cached_immediates,
+            record_entry_stacks: self.record_entry_stacks,
         };
 
         // `spill_set` is discovered via a monotone fixed point:
@@ -503,6 +514,7 @@ impl<'a> StackifyBuilder<'a> {
             brtable_actions: SecondaryMap::new(),
             spill_storage: SecondaryMap::new(),
             remat_actions: ctx.remat_actions.clone(),
+            entry_stacks: SecondaryMap::new(),
         };
 
         let mut spill_requests: BitSet<ValueId> = BitSet::default();

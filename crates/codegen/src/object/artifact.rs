@@ -9,6 +9,8 @@ use sonatina_ir::{
 };
 use std::fmt::Write as _;
 
+use super::lowering::SectionLowering;
+
 pub const OBSERVABILITY_SCHEMA_VERSION: &str = "0.3.0";
 
 /// The owner of a PC-map range.
@@ -513,6 +515,7 @@ pub struct SectionArtifact {
     pub bytes: Vec<u8>,
     pub symtab: FxHashMap<SymbolId, SymbolDef>,
     pub observability: Option<SectionObservability>,
+    pub lowering: Option<SectionLowering>,
 }
 
 #[derive(Debug, Clone)]

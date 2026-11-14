@@ -86,6 +86,9 @@ impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
 
         let uses = UseTracker::for_block(self.ctx, block);
         let (stack, prologue) = self.resolve_entry(block, &uses, &mut free_slots);
+        if self.ctx.record_entry_stacks {
+            self.alloc.entry_stacks[block] = stack.items().cloned().collect();
+        }
 
         let state = BlockSimState::new(block, stack, free_slots, prologue, uses);
         let state = BlockPlanner::new(self, state).run();

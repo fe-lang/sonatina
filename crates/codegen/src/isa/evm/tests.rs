@@ -5049,6 +5049,7 @@ object @Contract {
             fixup_policy: PushWidthPolicy::Push4,
             emit_symtab: true,
             emit_observability: true,
+            emit_lowering: false,
             ..CompileOptions::default()
         },
     )

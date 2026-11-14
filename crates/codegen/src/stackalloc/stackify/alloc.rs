@@ -1,7 +1,8 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
-use sonatina_ir::{Function, InstId, ValueId};
+use sonatina_ir::{BlockId, Function, InstId, ValueId};
 
+use super::sym_stack::StackItem;
 use crate::{
     isa::evm::static_arena_alloc::StackObjId,
     stackalloc::{Action, Actions, Allocator},
@@ -38,6 +39,11 @@ pub struct StackifyAlloc {
     /// object/scratch projections below are derived from it on demand.
     pub(crate) spill_storage: SecondaryMap<ValueId, Option<SpillStorage>>,
     pub(crate) remat_actions: SecondaryMap<ValueId, Option<Action>>,
+
+    /// The stack each planned block starts with, top first, when the builder
+    /// records it: values are canonical aliases, so equal immediates share one.
+    /// Below the last item the stack is the caller's, or unused.
+    pub(crate) entry_stacks: SecondaryMap<BlockId, Vec<StackItem>>,
 }
 
 impl StackifyAlloc {

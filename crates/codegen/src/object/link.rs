@@ -1,5 +1,7 @@
 use crate::{
-    isa::evm::{EvmBackend, EvmPreparedSection, PushWidthPolicy, opcode::OpCode},
+    isa::evm::{
+        EvmBackend, EvmPreparedSection, PushWidthPolicy, opcode::OpCode, record_section_lowering,
+    },
     machinst::{
         assemble::{CodeUnitOwner, ObjectLayout},
         lower::LoweredFunction,
@@ -379,6 +381,11 @@ pub(crate) fn link_section(
                     FxHashMap::default()
                 },
                 observability,
+                lowering: if opts.emit_lowering {
+                    record_section_lowering(prepared, &layout)
+                } else {
+                    None
+                },
             });
         }
     }

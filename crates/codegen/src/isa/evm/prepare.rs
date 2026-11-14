@@ -10,6 +10,7 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     machinst::lower::{SectionMembership, SectionWorkModule},
     module_analysis::{CallGraphSchedule, SccRef},
+    object::lowering::MallocLowering,
     stackalloc::{Action, StackifyAlloc},
 };
 use sonatina_ir::{
@@ -41,6 +42,7 @@ use super::{
     },
     fixed_slots,
     heap_plan::compute_heap_bound_provenance,
+    lowering_record::functions_text,
     machine::{
         final_spills::{
             FinalSpillAllocationInput, FinalSpillChoiceCtx, FinalSpillObjects,
@@ -50,8 +52,12 @@ use super::{
         },
         lazy_frame::{FrameSummary, compute_frame_summary, compute_machine_frame_roots},
         lower::lower_section_to_machine,
+        module::SourceMachineMap,
         pipeline::run_machine_opt_pipeline,
-        placement::{MemoryPlacementSection, compute_semantic_memory_placement},
+        placement::{
+            EvmMemoryPlacementPlan, MallocPlacement, MemoryPlacementSection,
+            compute_semantic_memory_placement,
+        },
         prepare::{SectionStackifySearchCaches, prepare_machine_stackify_analyses},
     },
     memory_plan::{
@@ -76,9 +82,79 @@ pub struct EvmPreparedSection {
     used_embed_symbols: FxHashSet<EmbedSymbol>,
     section_plan: EvmSectionPlan,
     function_plans: FxHashMap<FuncRef, EvmFunctionPlan>,
+    lowering: Option<PreparedLowering>,
+}
+
+/// What `SectionLowering` needs of preparation that the prepared section
+/// keeps only when the backend records lowering.
+pub(crate) struct PreparedLowering {
+    pub(crate) source_ir: String,
+    /// The source blocks each machine block comes from.
+    pub(crate) source_blocks: FxHashMap<FuncRef, FxHashMap<BlockId, Vec<BlockId>>>,
+    pub(crate) mallocs: FxHashMap<FuncRef, Vec<(ValueId, MallocLowering)>>,
+    pub(crate) entry_free_ptr: Option<u32>,
+}
+
+impl PreparedLowering {
+    fn new(
+        source: &Module,
+        funcs: &[FuncRef],
+        placement: &EvmMemoryPlacementPlan,
+        source_to_machine: &SourceMachineMap,
+    ) -> Self {
+        let mut source_blocks = FxHashMap::default();
+        let mut mallocs = FxHashMap::default();
+        for &func in funcs {
+            let mut blocks: FxHashMap<BlockId, Vec<BlockId>> = FxHashMap::default();
+            for (source, machine) in expect_func_entry(&source_to_machine.funcs, func, "source map")
+                .blocks
+                .iter()
+            {
+                if let Some(machine) = machine {
+                    blocks.entry(*machine).or_default().push(source);
+                }
+            }
+            source_blocks.insert(func, blocks);
+            let placements =
+                &expect_func_entry(&placement.funcs, func, "placement").malloc_placements;
+            let mut func_mallocs: Vec<_> = source.func_store.view(func, |function| {
+                placements
+                    .iter()
+                    .filter_map(|(&inst, &placement)| {
+                        let malloc = match placement {
+                            MallocPlacement::Fixed { base } => MallocLowering::Fixed { base },
+                            MallocPlacement::Heap {
+                                min_base,
+                                update_free_ptr,
+                                exact_base,
+                                ..
+                            } => MallocLowering::Heap {
+                                min_base,
+                                exact_base,
+                                update_free_ptr,
+                            },
+                        };
+                        Some((function.dfg.inst_result(inst)?, malloc))
+                    })
+                    .collect()
+            });
+            func_mallocs.sort_unstable_by_key(|(value, _)| value.as_u32());
+            mallocs.insert(func, func_mallocs);
+        }
+        Self {
+            source_ir: functions_text(source, funcs),
+            source_blocks,
+            mallocs,
+            entry_free_ptr: placement.section_entry_free_ptr,
+        }
+    }
 }
 
 impl EvmPreparedSection {
+    pub(crate) fn lowering(&self) -> Option<&PreparedLowering> {
+        self.lowering.as_ref()
+    }
+
     pub fn module(&self) -> &Module {
         self.work.module()
     }
@@ -1291,6 +1367,14 @@ fn prepare_machine_section_after_pipeline(
             }
             let mut globals: Vec<_> = membership.globals.iter().copied().collect();
             globals.sort_unstable();
+            let lowering = backend.record_lowering.then(|| {
+                PreparedLowering::new(
+                    source_module,
+                    &funcs,
+                    &placement,
+                    &machine.source_to_machine,
+                )
+            });
             return Ok(EvmPreparedSection {
                 work: machine.work,
                 funcs,
@@ -1298,6 +1382,7 @@ fn prepare_machine_section_after_pipeline(
                 used_embed_symbols: membership.used_embed_symbols,
                 section_plan,
                 function_plans,
+                lowering,
             });
         }
         if spill_reserve_satisfied

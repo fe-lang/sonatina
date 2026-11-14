@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use super::templates::BlockTemplate;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(super) enum StackItem {
+pub(crate) enum StackItem {
     Value(ValueId),
     /// Implicit return address for the current function.
     FuncRetAddr,
@@ -21,6 +21,11 @@ pub(super) struct SymStack {
 }
 
 impl SymStack {
+    /// The items, top first.
+    pub(super) fn items(&self) -> impl Iterator<Item = &StackItem> {
+        self.items.iter()
+    }
+
     pub(super) fn entry_stack(func: &Function, has_internal_return: bool) -> Self {
         let mut items: VecDeque<StackItem> = func
             .arg_values

@@ -524,6 +524,7 @@ mod tests {
             fixup_policy,
             emit_symtab,
             emit_observability,
+            emit_lowering: false,
             verifier_cfg,
         }
     }

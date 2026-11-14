@@ -365,6 +365,17 @@ impl<Op> FuncLayout<Op> {
     pub(crate) fn end(&self) -> u32 {
         self.offset + self.size
     }
+
+    pub(crate) fn offset(&self) -> u32 {
+        self.offset
+    }
+
+    /// Where `block` starts, if it is laid out.
+    pub(crate) fn block_offset(&self, block: BlockId) -> Option<u32> {
+        self.block_order
+            .contains(&block)
+            .then(|| self.block_offsets[block])
+    }
 }
 
 impl<Op> ObjectLayout<Op>
