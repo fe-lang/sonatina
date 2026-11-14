@@ -3,12 +3,14 @@
 
 use sonatina_ir::{Module, ir_writer::ModuleWriter, module::FuncRef};
 
-use super::{EvmPreparedSection, emit::FinalAlloc, memory_plan::StableMode, opcode::OpCode};
+use super::{
+    DynSpInitKind, EvmPreparedSection, emit::FinalAlloc, memory_plan::StableMode, opcode::OpCode,
+};
 use crate::{
     machinst::{assemble::ObjectLayout, vcode::Label},
     object::lowering::{
-        BlockLowering, CodeLabel, FrameLowering, FuncLowering, SectionLowering, SpillLocation,
-        StableLowering, StackSlot,
+        BlockLowering, CodeLabel, DynSpInitLowering, FrameLowering, FuncLowering, SectionLowering,
+        SpillLocation, StableLowering, StackSlot,
     },
     stackalloc::{Action, SpillStorage, StackItem},
 };
@@ -128,6 +130,29 @@ pub(crate) fn record_section_lowering(
                             },
                             scratch_words: plan.mem_plan.scratch_words,
                             stable_words: plan.mem_plan.stable_words,
+                            lazy_frame: plan.frame_summary.lowering.is_some(),
+                            dyn_sp_entry_init: plan.dyn_sp_plan.entry_init.map(|kind| match kind {
+                                DynSpInitKind::Always => DynSpInitLowering::Always,
+                                DynSpInitKind::Checked => DynSpInitLowering::Checked,
+                            }),
+                            dyn_sp_init_calls: plan.dyn_sp_plan.frontier_init_calls.len() as u32,
+                            call_preserves: {
+                                let mut calls: Vec<_> = plan
+                                    .mem_plan
+                                    .call_preserve
+                                    .keys()
+                                    .filter_map(|&call| {
+                                        let block = function.layout.inst_block(call);
+                                        let position = function
+                                            .layout
+                                            .iter_inst(block)
+                                            .position(|inst| inst == call)?;
+                                        Some((block, position as u32))
+                                    })
+                                    .collect();
+                                calls.sort_unstable();
+                                calls
+                            },
                         },
                         mallocs: lowering.mallocs[&func].clone(),
                     }

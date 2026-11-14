@@ -92,6 +92,23 @@ fn check_record(lowering: &SectionLowering, bytes: &[u8]) {
     }
 
     for func in &lowering.funcs {
+        for (block, _) in &func.frame.call_preserves {
+            assert!(
+                blocks.contains(&(func.name.as_str(), *block)),
+                "{}: a call preserve in unknown block{}",
+                func.name,
+                block.0
+            );
+        }
+        if func.frame.dyn_sp_init_calls != 0 || func.frame.dyn_sp_entry_init.is_some() {
+            assert!(
+                lowering.funcs.iter().any(|f| f.frame.lazy_frame),
+                "{}: initializes the dynamic stack pointer, but no function has a frame",
+                func.name
+            );
+        }
+    }
+    for func in &lowering.funcs {
         let Some(entry) = func.blocks.first() else {
             continue;
         };

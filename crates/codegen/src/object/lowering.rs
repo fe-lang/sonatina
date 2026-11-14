@@ -87,12 +87,29 @@ pub enum SpillLocation {
     Rematerialized,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameLowering {
     /// No stable objects, objects at `base_word`, or a dynamic frame.
     pub stable: StableLowering,
     pub scratch_words: u32,
     pub stable_words: u32,
+    /// The function's code enters and leaves a dynamic frame.
+    pub lazy_frame: bool,
+    /// The function's entry initializes the dynamic stack pointer at `0x80`:
+    /// always, or only when it is unset (`checked`).
+    pub dyn_sp_entry_init: Option<DynSpInitLowering>,
+    /// The calls before which the code initializes the dynamic stack pointer.
+    pub dyn_sp_init_calls: u32,
+    /// Each call around which the code saves and restores the caller's
+    /// scratch objects, as its block and its position in the block. What is
+    /// saved where is not recorded.
+    pub call_preserves: Vec<(BlockId, u32)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynSpInitLowering {
+    Always,
+    Checked,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
