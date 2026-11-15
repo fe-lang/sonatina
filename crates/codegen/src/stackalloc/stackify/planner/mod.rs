@@ -27,8 +27,14 @@ use super::{
 /// scratch pre-pass in the builder.
 ///
 /// A spilled value must use arena (object) storage rather than a reusable scratch slot when there
-/// are no scratch slots, when it is live across a scratch clobber, or when a previous fixed-point
+/// are no scratch slots, when it is in `scratch_live_values`, or when a previous fixed-point
 /// iteration already forced object storage for it.
+///
+/// Invariant: using a scratch slot never changes what the program observes. On EVM the slots are
+/// memory `[0, 64)`, which the IR may use too, so `scratch_live_values` holds every value live
+/// across an IR write or a call that may touch the slots, and every value whose spill store may
+/// run while IR data in the slots is live: possibly read after the store, here, in a callee, or in
+/// a caller after a return, without a write of it in between (`isa::evm::fixed_slots`).
 pub(super) fn must_use_object_storage(
     scratch_spill_slots: u32,
     scratch_live_values: &BitSet<ValueId>,

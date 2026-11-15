@@ -1266,6 +1266,14 @@ fn prepare_machine_section_after_pipeline(
                     optional_final_spill_placements.len(),
                 );
             }
+            // Fixed-slot eligibility counts only the slot bytes below the arena
+            // as IR data (`fixed_slots::IrSlotDataSummaries`).
+            assert!(
+                actual_fixed_slot_effects.is_empty()
+                    || placement.arena_base >= fixed_slots::FIXED_SLOTS_END_BYTES,
+                "fixed-slot spills kept with the static arena at 0x{:x}",
+                placement.arena_base,
+            );
             validate_committed_final_spill_section(&section_plan, &function_plans)?;
             for &func in &funcs {
                 let plan = expect_func_entry(&function_plans, func, "function plan");

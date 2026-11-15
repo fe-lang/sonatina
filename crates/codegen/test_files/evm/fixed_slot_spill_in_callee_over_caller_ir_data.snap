@@ -1,0 +1,171 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/fixed_slot_spill_in_callee_over_caller_ir_data.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 173 bytes
+  total: 173 bytes
+
+functions:
+  mem: global_dyn_base=0x80 arena_base=0x20 scratch_peak_words=0 stable_chain_peak_words=3
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=18 fixups=2 imm_bytes=3
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  pressure: ir_blocks=1 ir_insts=41 vcode_ops=122 fixups=0 imm_bytes=26
+    mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0x20) entry_abs_words=0 abs_words_end=3
+
+evm:
+  case reads_word_after_call: calldata_len=32 success reason=Return gas_used=21584 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=444
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    DUP1  // evm_mstore v0 v1;
+    PUSH0
+    MSTORE
+    PUSH1 `pc + (4)`  // v2.i256 = call %pressure v1;
+    SWAP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH0  // v3.i256 = evm_mload v0;
+    MLOAD
+    ADD  // v4.i256 = add v2 v3;
+    PUSH2 0x100 (256)  // evm_mstore 256.i256 v4;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 256.i256 32.i256;
+    PUSH2 0x100 (256)
+    RETURN
+
+// func private %pressure(v0.i256) -> i256
+pressure:
+  block0:
+    JUMPDEST
+    PUSH1 0x1 (1)  // v2.i256 = add v0 v1;
+    DUP2
+    ADD
+    DUP1
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x2 (2)  // v4.i256 = add v0 v3;
+    DUP3
+    ADD
+    DUP1
+    PUSH1 0x40 (64)
+    MSTORE
+    PUSH1 0x3 (3)  // v6.i256 = add v0 v5;
+    DUP4
+    ADD
+    DUP1
+    PUSH1 0x60 (96)
+    MSTORE
+    PUSH1 0x4 (4)  // v8.i256 = add v0 v7;
+    DUP5
+    ADD
+    PUSH1 0x5 (5)  // v10.i256 = add v0 v9;
+    DUP6
+    ADD
+    PUSH1 0x6 (6)  // v12.i256 = add v0 v11;
+    DUP7
+    ADD
+    PUSH1 0x7 (7)  // v14.i256 = add v0 v13;
+    DUP8
+    ADD
+    PUSH1 0x8 (8)  // v16.i256 = add v0 v15;
+    DUP9
+    ADD
+    PUSH1 0x9 (9)  // v18.i256 = add v0 v17;
+    DUP10
+    ADD
+    PUSH1 0xa (10)  // v20.i256 = add v0 v19;
+    DUP11
+    ADD
+    PUSH1 0xb (11)  // v202.i256 = add v0 v201;
+    DUP12
+    ADD
+    PUSH1 0xc (12)  // v204.i256 = add v0 v203;
+    DUP13
+    ADD
+    PUSH1 0xd (13)  // v206.i256 = add v0 v205;
+    DUP14
+    ADD
+    PUSH1 0xe (14)  // v208.i256 = add v0 v207;
+    DUP15
+    ADD
+    PUSH1 0xf (15)  // v210.i256 = add v0 v209;
+    DUP16
+    ADD
+    DUP16  // v212.i256 = add v0 v211;
+    PUSH1 0x10 (16)
+    ADD
+    SWAP16  // v214.i256 = add v0 v213;
+    DUP1
+    PUSH1 0x11 (17)
+    ADD
+    PUSH1 0x12 (18)  // v216.i256 = add v0 v215;
+    DUP3
+    ADD
+    PUSH1 0x13 (19)  // v218.i256 = add v0 v217;
+    DUP4
+    ADD
+    PUSH1 0x14 (20)  // v220.i256 = add v0 v219;
+    DUP5
+    ADD
+    SWAP4  // v41.i256 = add v0 v2;
+    PUSH1 0x20 (32)
+    MLOAD
+    ADD
+    PUSH1 0x40 (64)  // v42.i256 = add v41 v4;
+    MLOAD
+    ADD
+    PUSH1 0x60 (96)  // v43.i256 = add v42 v6;
+    MLOAD
+    ADD
+    SWAP1  // v44.i256 = add v43 v8;
+    SWAP16
+    ADD
+    SWAP1  // v45.i256 = add v44 v10;
+    SWAP14
+    ADD
+    SWAP1  // v46.i256 = add v45 v12;
+    SWAP12
+    ADD
+    SWAP1  // v47.i256 = add v46 v14;
+    SWAP10
+    ADD
+    SWAP1  // v48.i256 = add v47 v16;
+    SWAP8
+    ADD
+    SWAP1  // v49.i256 = add v48 v18;
+    SWAP6
+    ADD
+    SWAP1  // v50.i256 = add v49 v20;
+    SWAP4
+    ADD
+    SWAP1  // v51.i256 = add v50 v202;
+    SWAP2
+    ADD
+    ADD  // v52.i256 = add v51 v204;
+    ADD  // v53.i256 = add v52 v206;
+    ADD  // v54.i256 = add v53 v208;
+    ADD  // v55.i256 = add v54 v210;
+    SWAP1  // v56.i256 = add v55 v212;
+    SWAP8
+    ADD
+    ADD  // v57.i256 = add v56 v214;
+    ADD  // v58.i256 = add v57 v216;
+    ADD  // v59.i256 = add v58 v218;
+    SWAP3  // v60.i256 = add v59 v220;
+    POP
+    POP
+    POP
+    ADD
+    SWAP1  // return v60;
+    JUMP

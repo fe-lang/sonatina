@@ -1,0 +1,159 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/fixed_slot_spill_alloca_preimage.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 166 bytes
+  total: 166 bytes
+
+functions:
+  mem: global_dyn_base=0xa0 arena_base=0x40 scratch_peak_words=2 stable_chain_peak_words=1
+  entry: ir_blocks=1 ir_insts=46 vcode_ops=134 fixups=0 imm_bytes=30
+    mem: scratch_words=2 stable_words=1 stable_mode=StableAbs(base=0x80) entry_abs_words=2 abs_words_end=3
+
+evm:
+  case hashes_key_and_slot: calldata_len=32 success reason=Return gas_used=21599 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=459
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v50.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    DUP1  // evm_mstore v51 v50;
+    PUSH1 0x40 (64)
+    MSTORE
+    PUSH1 0x1 (1)  // v2.i256 = add v50 v1;
+    DUP2
+    ADD
+    DUP1
+    PUSH0
+    MSTORE
+    PUSH1 0x2 (2)  // v4.i256 = add v50 v3;
+    DUP3
+    ADD
+    DUP1
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x3 (3)  // v6.i256 = add v50 v5;
+    DUP4
+    ADD
+    DUP1
+    PUSH1 0x80 (128)
+    MSTORE
+    PUSH1 0x4 (4)  // v8.i256 = add v50 v7;
+    DUP5
+    ADD
+    PUSH1 0x5 (5)  // v10.i256 = add v50 v9;
+    DUP6
+    ADD
+    PUSH1 0x6 (6)  // v12.i256 = add v50 v11;
+    DUP7
+    ADD
+    PUSH1 0x7 (7)  // v14.i256 = add v50 v13;
+    DUP8
+    ADD
+    PUSH1 0x8 (8)  // v16.i256 = add v50 v15;
+    DUP9
+    ADD
+    PUSH1 0x9 (9)  // v18.i256 = add v50 v17;
+    DUP10
+    ADD
+    PUSH1 0xa (10)  // v20.i256 = add v50 v19;
+    DUP11
+    ADD
+    PUSH1 0xb (11)  // v202.i256 = add v50 v201;
+    DUP12
+    ADD
+    PUSH1 0xc (12)  // v204.i256 = add v50 v203;
+    DUP13
+    ADD
+    PUSH1 0xd (13)  // v206.i256 = add v50 v205;
+    DUP14
+    ADD
+    PUSH1 0xe (14)  // v208.i256 = add v50 v207;
+    DUP15
+    ADD
+    PUSH1 0xf (15)  // v210.i256 = add v50 v209;
+    DUP16
+    ADD
+    DUP16  // v212.i256 = add v50 v211;
+    PUSH1 0x10 (16)
+    ADD
+    SWAP16  // v214.i256 = add v50 v213;
+    DUP1
+    PUSH1 0x11 (17)
+    ADD
+    PUSH1 0x12 (18)  // v216.i256 = add v50 v215;
+    DUP3
+    ADD
+    PUSH1 0x13 (19)  // v218.i256 = add v50 v217;
+    DUP4
+    ADD
+    PUSH1 0x14 (20)  // v220.i256 = add v50 v219;
+    DUP5
+    ADD
+    SWAP4  // v52.i256 = add v50 v2;
+    PUSH0
+    MLOAD
+    ADD
+    PUSH1 0x20 (32)  // v53.i256 = add v52 v4;
+    MLOAD
+    ADD
+    PUSH1 0x80 (128)  // v54.i256 = add v53 v6;
+    MLOAD
+    ADD
+    SWAP1  // v46.i256 = add v54 v8;
+    SWAP16
+    ADD
+    SWAP1  // v47.i256 = add v46 v10;
+    SWAP14
+    ADD
+    SWAP1  // v48.i256 = add v47 v12;
+    SWAP12
+    ADD
+    SWAP1  // v49.i256 = add v48 v14;
+    SWAP10
+    ADD
+    SWAP1  // v68.i256 = add v49 v16;
+    SWAP8
+    ADD
+    SWAP1  // v69.i256 = add v68 v18;
+    SWAP6
+    ADD
+    SWAP1  // v70.i256 = add v69 v20;
+    SWAP4
+    ADD
+    SWAP1  // v71.i256 = add v70 v202;
+    SWAP2
+    ADD
+    ADD  // v72.i256 = add v71 v204;
+    ADD  // v55.i256 = add v72 v206;
+    ADD  // v56.i256 = add v55 v208;
+    ADD  // v57.i256 = add v56 v210;
+    SWAP1  // v58.i256 = add v57 v212;
+    SWAP8
+    ADD
+    ADD  // v59.i256 = add v58 v214;
+    ADD  // v60.i256 = add v59 v216;
+    ADD  // v61.i256 = add v60 v218;
+    SWAP3  // v62.i256 = add v61 v220;
+    POP
+    POP
+    POP
+    ADD
+    PUSH1 0x60 (96)  // evm_mstore 96.i256 v62;
+    MSTORE
+    PUSH1 0x40 (64)  // v65.i256 = evm_keccak256 v51 v51;
+    DUP1
+    KECCAK256
+    PUSH2 0x100 (256)  // evm_mstore 256.i256 v65;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 256.i256 32.i256;
+    PUSH2 0x100 (256)
+    RETURN

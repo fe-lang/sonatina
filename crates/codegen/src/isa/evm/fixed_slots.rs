@@ -1,18 +1,34 @@
-use rustc_hash::FxHashSet;
+use std::iter;
+
+use cranelift_entity::SecondaryMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, Immediate, InstId, InstSetExt, U256, ValueId,
-    inst::evm::machine_inst_set::EvmMachineInstKind,
-    isa::{Isa, evm::EvmMachine},
+    AccessKind, AccessLoc, BlockId, ControlFlowGraph, Function, Immediate, InstId, InstSetExt,
+    MemoryAccess, Module, U256, ValueId,
+    inst::{
+        data::{GetFunctionPtr, SymAddr, SymbolRef},
+        evm::machine_inst_set::EvmMachineInstKind,
+    },
+    isa::{
+        Isa,
+        evm::{EvmMachine, space::MEMORY},
+    },
     module::FuncRef,
 };
 
-use crate::{bitset::BitSet, liveness::InstLiveness};
+use crate::{bitset::BitSet, liveness::InstLiveness, module_analysis::CallGraphSchedule};
 
-use super::memory_plan::WORD_BYTES;
+use super::{emit::immediate_u32, memory_plan::WORD_BYTES};
+
+// The fixed spill slots are memory `[0, 64)`, which the IR may also use. A value
+// may take a slot only if neither side can change what the other reads: it is
+// not live across an IR write or call that may touch the slots
+// (`MachineSpillClobberLiveness`), and its spill store never runs while IR data
+// in the slots is live (`values_stored_over_ir_slot_data`).
 
 pub(crate) const FIXED_SPILL_SLOTS: u32 = 2;
 
-const FIXED_SLOTS_END_BYTES: u32 = FIXED_SPILL_SLOTS * WORD_BYTES;
+pub(crate) const FIXED_SLOTS_END_BYTES: u32 = FIXED_SPILL_SLOTS * WORD_BYTES;
 
 pub(crate) struct MachineSpillClobberLiveness {
     fixed_slot_live_values: BitSet<ValueId>,
@@ -172,6 +188,313 @@ pub(crate) fn machine_inst_is_fixed_slot_clobber(
         }
         _ => false,
     }
+}
+
+/// Bytes of the fixed slots `[0, 64)` as a mask: bit `i` is byte `i`.
+type SlotBytes = u64;
+
+const ALL_SLOT_BYTES: SlotBytes = SlotBytes::MAX;
+
+const _: () = assert!(FIXED_SLOTS_END_BYTES == SlotBytes::BITS);
+
+/// The bytes of `[start, start + len)` in the fixed slots. An unknown `len`
+/// reaches the end of the slots.
+fn slot_range_bytes(start: u32, len: Option<u32>) -> SlotBytes {
+    let end = len
+        .and_then(|len| start.checked_add(len))
+        .map_or(FIXED_SLOTS_END_BYTES, |end| end.min(FIXED_SLOTS_END_BYTES));
+    if end <= start {
+        return 0;
+    }
+    ALL_SLOT_BYTES >> (SlotBytes::BITS - (end - start)) << start
+}
+
+/// The IR-owned fixed-slot bytes `access` may touch, and those it must write.
+/// An immediate address beyond `u32` touches none, like in
+/// [`machine_inst_is_fixed_slot_clobber`]; a computed address may touch any.
+fn access_slot_bytes(
+    function: &Function,
+    access: &MemoryAccess,
+    ir_bytes: SlotBytes,
+) -> (SlotBytes, SlotBytes) {
+    if access.space != MEMORY {
+        return (0, 0);
+    }
+    let imm_u32 = |imm: Immediate| immediate_u32(imm).unwrap_or(u32::MAX);
+    let value_u32 = |value: ValueId| function.dfg.value_imm(value).map(imm_u32);
+    let (start, len) = match &access.loc {
+        AccessLoc::LinearExact { addr, bytes, .. } => (value_u32(*addr), Some(*bytes)),
+        AccessLoc::LinearExactImm { addr, bytes, .. } => (Some(imm_u32(*addr)), Some(*bytes)),
+        AccessLoc::LinearRange { addr, len } => (value_u32(*addr), value_u32(*len)),
+        AccessLoc::KeyedExact { .. } => return (0, 0),
+        AccessLoc::WholeSpace | AccessLoc::Unknown => (None, None),
+    };
+    let Some(start) = start else {
+        return (ir_bytes, 0);
+    };
+    let touched = slot_range_bytes(start, len) & ir_bytes;
+    let written = if access.kind == AccessKind::Write && access.must_happen && len.is_some() {
+        touched
+    } else {
+        0
+    };
+    (touched, written)
+}
+
+/// Interprocedural facts for [`IrSlotDataLiveness`].
+pub(crate) struct IrSlotDataSummaries {
+    /// The fixed-slot bytes below the static arena. The arena holds compiler
+    /// memory, not IR data, and lies at or above the fixed slots in any
+    /// placement that uses them: [`choose_arena_base`] reserves the slots once
+    /// a function needs them, and placement repeats until it does (see
+    /// `prepare_machine_section_after_pipeline`). So all of `[0, 64)` is IR
+    /// data whenever a fixed-slot spill is kept, and an arena below 64 can only
+    /// make a placement iteration that will be discarded spill speculatively.
+    ///
+    /// [`choose_arena_base`]: super::prepare::choose_arena_base
+    ir_bytes: SlotBytes,
+    /// The fixed-slot bytes a call may read before writing them.
+    entry_reads: FxHashMap<FuncRef, SlotBytes>,
+    /// The fixed-slot bytes whose IR data may be read after the function returns.
+    live_at_return: FxHashMap<FuncRef, SlotBytes>,
+}
+
+impl IrSlotDataSummaries {
+    /// Callers outside the section, and functions whose address is taken, may
+    /// read any byte after a return.
+    pub(crate) fn compute(module: &Module, schedule: &CallGraphSchedule, arena_base: u32) -> Self {
+        let cfgs: FxHashMap<FuncRef, ControlFlowGraph> = schedule
+            .funcs()
+            .iter()
+            .map(|&func| {
+                let cfg = module.func_store.view(func, |function| {
+                    let mut cfg = ControlFlowGraph::new();
+                    cfg.compute(function);
+                    cfg
+                });
+                (func, cfg)
+            })
+            .collect();
+        let mut summaries = Self {
+            ir_bytes: slot_range_bytes(0, Some(arena_base)),
+            entry_reads: FxHashMap::default(),
+            live_at_return: FxHashMap::default(),
+        };
+
+        // Least fixed point, callees first; a call within an SCC starts from no reads.
+        for &scc in schedule.topo.iter().rev() {
+            let members = schedule.members(scc);
+            for &func in members {
+                summaries.entry_reads.insert(func, 0);
+            }
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for &func in members {
+                    let reads = module.func_store.view(func, |function| {
+                        let liveness =
+                            IrSlotDataLiveness::compute(function, &cfgs[&func], &summaries, 0);
+                        cfgs[&func]
+                            .entry()
+                            .map_or(0, |entry| liveness.live_in[entry])
+                    });
+                    changed |= summaries.entry_reads.insert(func, reads) != Some(reads);
+                }
+            }
+        }
+
+        let mut called = FxHashSet::default();
+        let mut escaped = FxHashSet::default();
+        for &func in schedule.funcs() {
+            module.func_store.view(func, |function| {
+                for inst in function
+                    .layout
+                    .iter_block()
+                    .flat_map(|b| function.layout.iter_inst(b))
+                {
+                    if let Some(call) = function.dfg.call_info(inst) {
+                        called.insert(call.callee());
+                    } else if let Some(ptr) = function.dfg.downcast::<&GetFunctionPtr>(inst) {
+                        escaped.insert(*ptr.func());
+                    } else if let Some(sym) = function.dfg.downcast::<&SymAddr>(inst)
+                        && let SymbolRef::Func(func) = sym.sym()
+                    {
+                        escaped.insert(*func);
+                    }
+                }
+            });
+        }
+        for &func in schedule.funcs() {
+            let live = if called.contains(&func) && !escaped.contains(&func) {
+                0
+            } else {
+                ALL_SLOT_BYTES
+            };
+            summaries.live_at_return.insert(func, live);
+        }
+
+        // Least fixed point, callers first: a callee's returns see what is live
+        // after each call to it.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &scc in &schedule.topo {
+                for &func in schedule.members(scc) {
+                    let live_at_return = summaries.live_at_return[&func];
+                    let mut after_calls = Vec::new();
+                    module.func_store.view(func, |function| {
+                        let cfg = &cfgs[&func];
+                        let liveness =
+                            IrSlotDataLiveness::compute(function, cfg, &summaries, live_at_return);
+                        for block in cfg.post_order() {
+                            liveness.walk_block(function, block, &summaries, |inst, live_after| {
+                                if let Some(call) = function.dfg.call_info(inst) {
+                                    after_calls.push((call.callee(), live_after));
+                                }
+                            });
+                        }
+                    });
+                    for (callee, live_after) in after_calls {
+                        if let Some(live) = summaries.live_at_return.get_mut(&callee)
+                            && *live | live_after != *live
+                        {
+                            *live |= live_after;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        summaries
+    }
+
+    fn entry_reads(&self, callee: FuncRef) -> SlotBytes {
+        self.entry_reads
+            .get(&callee)
+            .copied()
+            .unwrap_or(ALL_SLOT_BYTES)
+    }
+}
+
+/// Backward liveness of IR data in the fixed slots: the bytes of `[0, 64)` the
+/// IR may still read, whether it wrote them or they are fresh memory. A read is any memory
+/// read the effects model reports (including `return`/`revert`/log/call/create
+/// input ranges and `msize`), a callee's [`IrSlotDataSummaries::entry_reads`],
+/// or a caller's read after a return. Only a write that must happen at an
+/// immediate address and length kills bytes.
+struct IrSlotDataLiveness {
+    live_in: SecondaryMap<BlockId, SlotBytes>,
+    live_out: SecondaryMap<BlockId, SlotBytes>,
+    live_at_return: SlotBytes,
+}
+
+impl IrSlotDataLiveness {
+    fn compute(
+        function: &Function,
+        cfg: &ControlFlowGraph,
+        summaries: &IrSlotDataSummaries,
+        live_at_return: SlotBytes,
+    ) -> Self {
+        let mut liveness = Self {
+            live_in: SecondaryMap::new(),
+            live_out: SecondaryMap::new(),
+            live_at_return,
+        };
+        let blocks: Vec<BlockId> = cfg.post_order().collect();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block in &blocks {
+                let live_out = cfg
+                    .succs_of(block)
+                    .fold(0, |live, &succ| live | liveness.live_in[succ]);
+                liveness.live_out[block] = live_out;
+                let live_in = liveness.walk_block(function, block, summaries, |_, _| {});
+                if liveness.live_in[block] != live_in {
+                    liveness.live_in[block] = live_in;
+                    changed = true;
+                }
+            }
+        }
+        liveness
+    }
+
+    /// Visits `block`'s instructions backward with the bytes live after each,
+    /// returning the bytes live at the block's entry.
+    fn walk_block(
+        &self,
+        function: &Function,
+        block: BlockId,
+        summaries: &IrSlotDataSummaries,
+        mut visit: impl FnMut(InstId, SlotBytes),
+    ) -> SlotBytes {
+        let mut live = self.live_out[block];
+        let insts = iter::successors(function.layout.last_inst_of(block), |&inst| {
+            function.layout.prev_inst_of(inst)
+        });
+        for inst in insts {
+            if function.dfg.is_return(inst) {
+                live |= self.live_at_return;
+            }
+            visit(inst, live);
+            if let Some(call) = function.dfg.call_info(inst) {
+                live |= summaries.entry_reads(call.callee());
+                continue;
+            }
+            let (mut read, mut written) = (0, 0);
+            for access in &function.dfg.effects(inst).accesses {
+                let (touched, must_write) = access_slot_bytes(function, access, summaries.ir_bytes);
+                match access.kind {
+                    AccessKind::Read => read |= touched,
+                    AccessKind::Write => written |= must_write,
+                }
+            }
+            live = (live & !written) | read;
+        }
+        live
+    }
+}
+
+/// The values a fixed-slot spill store could overwrite live IR data with: a
+/// spilled value is stored after its definition, on the incoming edges of its
+/// phi, or at function entry for an argument, and any IR data in `[0, 64)`
+/// live there may be read after the store.
+pub(crate) fn values_stored_over_ir_slot_data(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    func: FuncRef,
+    summaries: &IrSlotDataSummaries,
+) -> BitSet<ValueId> {
+    let liveness =
+        IrSlotDataLiveness::compute(function, cfg, summaries, summaries.live_at_return[&func]);
+    let mut values = BitSet::default();
+    if let Some(entry) = cfg.entry()
+        && liveness.live_in[entry] != 0
+    {
+        for &arg in &function.arg_values {
+            values.insert(arg);
+        }
+    }
+    for block in cfg.post_order() {
+        let phi_store_live = liveness.live_in[block] != 0
+            || cfg
+                .preds_of(block)
+                .any(|&pred| liveness.live_out[pred] != 0);
+        liveness.walk_block(function, block, summaries, |inst, live_after| {
+            let store_live = if function.dfg.is_phi(inst) {
+                phi_store_live
+            } else {
+                live_after != 0
+            };
+            if store_live {
+                for &result in function.dfg.inst_results(inst) {
+                    values.insert(result);
+                }
+            }
+        });
+    }
+    values
 }
 
 #[cfg(test)]

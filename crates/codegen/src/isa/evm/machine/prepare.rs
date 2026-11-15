@@ -72,6 +72,8 @@ pub(crate) fn prepare_machine_stackify_analyses(
     let _span = debug_span!("sonatina.codegen.evm.machine.prepare_stackify").entered();
     let local_scratch_clobbers =
         compute_local_machine_scratch_clobbers(module, schedule.funcs(), machine_isa);
+    let ir_slot_data =
+        fixed_slots::IrSlotDataSummaries::compute(module, schedule, placement.arena_base);
 
     let mut analyses = FxHashMap::default();
     let mut fixed_slot_effects = FxHashSet::default();
@@ -103,10 +105,12 @@ pub(crate) fn prepare_machine_stackify_analyses(
                 let analysis = module.func_store.modify(func, |function| {
                     prepare_machine_stackify_analysis(
                         function,
+                        func,
                         backend,
                         machine_isa,
                         analysis_fixed_slot_effects,
                         analysis_scratch_arena_effects,
+                        &ir_slot_data,
                         &mut search_cache,
                     )
                 });
@@ -166,12 +170,15 @@ pub(crate) fn prepare_machine_stackify_analyses(
     Ok(analyses)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_machine_stackify_analysis(
     function: &mut sonatina_ir::Function,
+    func: FuncRef,
     backend: &EvmBackend,
     machine_isa: &EvmMachine,
     fixed_slot_effects: &FxHashSet<FuncRef>,
     scratch_arena_effects: &FxHashSet<FuncRef>,
+    ir_slot_data: &fixed_slots::IrSlotDataSummaries,
     search_cache: &mut StackifySearchCache,
 ) -> MachineStackifyAnalysis {
     let _span = trace_span!("sonatina.codegen.evm.machine.prepare_stackify_func").entered();
@@ -200,7 +207,14 @@ fn prepare_machine_stackify_analysis(
         scratch_arena_effects,
         &inst_liveness,
     );
-    let (scratch_live_values, stable_final_spill_values) = scratch_clobber_liveness.into_parts();
+    let (mut scratch_live_values, stable_final_spill_values) =
+        scratch_clobber_liveness.into_parts();
+    scratch_live_values.union_with(&fixed_slots::values_stored_over_ir_slot_data(
+        function,
+        &cfg,
+        func,
+        ir_slot_data,
+    ));
     let mut builder = StackifyBuilder::new(
         function,
         &cfg,
