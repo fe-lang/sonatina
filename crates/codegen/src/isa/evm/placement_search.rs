@@ -941,8 +941,7 @@ fn collect_metric_shortlist(
         } else {
             &mut work.add_shortlist
         };
-        for pos in 0..keep {
-            let candidate_idx = work.metric_candidates[pos];
+        for &candidate_idx in &work.metric_candidates[..keep] {
             if !shortlist.contains(&candidate_idx) {
                 shortlist.push(candidate_idx);
             }

@@ -1598,10 +1598,10 @@ impl BoundedAStarProblem for OperandPrepSearchProblem<'_> {
         let mut duplicable: u64 = 0;
         if self.cfg.dup_max != 0 && cur_len != 0 {
             let max_pos = (cur_len - 1).min(self.cfg.dup_max.saturating_sub(1));
-            for pos in 0..=max_pos {
+            for (pos, &dup_cost) in self.costs.dup[..=max_pos].iter().enumerate() {
                 let kid = state.window.get(pos) as usize;
                 duplicable |= 1u64 << kid;
-                dup_cost_for_kid[kid] = dup_cost_for_kid[kid].min(self.costs.dup[pos]);
+                dup_cost_for_kid[kid] = dup_cost_for_kid[kid].min(dup_cost);
             }
         }
 
@@ -1609,7 +1609,7 @@ impl BoundedAStarProblem for OperandPrepSearchProblem<'_> {
             let max_depth = cur_len
                 .saturating_sub(1)
                 .min(self.cfg.swap_max.saturating_sub(1));
-            for depth in 1..=max_depth {
+            for (depth, &swap_cost) in self.costs.swap[..=max_depth].iter().enumerate().skip(1) {
                 if matches!(prev_step, Some(Step::Swap(d)) if d as usize == depth) {
                     continue;
                 }
@@ -1620,11 +1620,7 @@ impl BoundedAStarProblem for OperandPrepSearchProblem<'_> {
                     window: state.window.swap(depth),
                     ..state
                 };
-                emit(
-                    next,
-                    g.saturating_add(self.costs.swap[depth]),
-                    Step::Swap(depth as u8),
-                );
+                emit(next, g.saturating_add(swap_cost), Step::Swap(depth as u8));
             }
         }
 
