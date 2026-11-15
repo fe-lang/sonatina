@@ -850,6 +850,61 @@ pub(crate) fn unread_spill_stores<W: Copy + Ord>(
     unread
 }
 
+/// The number of loads that some path reaches without a store of the word.
+#[cfg(test)]
+pub(crate) fn unstored_spill_loads<W: Copy + Ord>(
+    cfg: &ControlFlowGraph,
+    accesses: &SecondaryMap<BlockId, Vec<SpillAccess<W>>>,
+) -> usize {
+    use std::collections::BTreeSet;
+
+    // The words stored on every path to the block's end, counting its loads
+    // of words not stored. `None` is every word: no path reaches the block yet.
+    let scan = |stored_out: &SecondaryMap<BlockId, Option<BTreeSet<W>>>,
+                block: BlockId,
+                unstored: &mut usize| {
+        let mut preds = cfg
+            .preds_of(block)
+            .filter_map(|pred| stored_out[*pred].as_ref());
+        let mut stored = match (cfg.entry() == Some(block), preds.next()) {
+            (true, _) => BTreeSet::new(),
+            (false, Some(first)) => preds.fold(first.clone(), |stored, pred| &stored & pred),
+            (false, None) => return None,
+        };
+        for access in &accesses[block] {
+            match *access {
+                SpillAccess::Load(word) => *unstored += usize::from(!stored.contains(&word)),
+                // A store that may not run stores nothing for sure.
+                SpillAccess::Store { word, kills } => {
+                    if kills {
+                        stored.insert(word);
+                    }
+                }
+            }
+        }
+        Some(stored)
+    };
+    let mut blocks: Vec<BlockId> = cfg.post_order().collect();
+    blocks.reverse();
+    let mut stored_out: SecondaryMap<BlockId, Option<BTreeSet<W>>> = SecondaryMap::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block in &blocks {
+            let stored = scan(&stored_out, block, &mut 0);
+            if stored_out[block] != stored {
+                stored_out[block] = stored;
+                changed = true;
+            }
+        }
+    }
+    let mut unstored = 0;
+    for &block in &blocks {
+        scan(&stored_out, block, &mut unstored);
+    }
+    unstored
+}
+
 fn final_spilled_values(alloc: &StackifyAlloc) -> Vec<(ValueId, StackObjId)> {
     alloc.object_spills().collect()
 }

@@ -22,7 +22,7 @@ use crate::{
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Function, Immediate, InstId, InstSetBase, InstSetExt, Module, ValueId,
+    BlockId, Function, Immediate, InstId, InstSetBase, InstSetExt, Module, Value, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     ir_writer::FuncWriter,
@@ -41,7 +41,10 @@ use self::{
         rewrite_evm_local_fallthrough_layout,
     },
     machine::{
-        final_spills::{compute_malloc_spill_bounds, spill_word_accesses, unread_spill_stores},
+        final_spills::{
+            compute_malloc_spill_bounds, spill_word_accesses, unread_spill_stores,
+            unstored_spill_loads,
+        },
         module::FuncMachineMap,
         placement::{
             EvmMemoryPlacementPlan, MallocPlacement, MemoryPlacementSection,
@@ -62,10 +65,12 @@ struct PlanTestCtx {
     plan: ProgramMemoryPlan,
 }
 
-/// A value spilled by one stackify plan may have every use reached on the
-/// stack by the final one. Such a value must not be stored.
+/// Every spill load reads a word that was stored on every path to it. A
+/// value spilled by one stackify plan may have every use reached on the stack
+/// by the final one; such a value must not be stored, so every spill store
+/// has a load that may read it.
 #[test]
-fn fixtures_emit_no_spill_store_without_a_reload() {
+fn fixtures_store_exactly_the_spills_they_reload() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/test_files/evm");
     let mut paths: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
@@ -124,23 +129,37 @@ fn fixtures_emit_no_spill_store_without_a_reload() {
                 let stores = prepared.module().func_store.view(func, |function| {
                     let mut cfg = ControlFlowGraph::new();
                     cfg.compute(function);
+                    // An `undef` operand is loaded from a word nothing stores.
+                    let undef_objs: FxHashSet<_> = function
+                        .dfg
+                        .value_ids()
+                        .filter(|&value| matches!(function.dfg.value(value), Value::Undef { .. }))
+                        .filter_map(|value| alloc.spill_obj(value))
+                        .collect();
                     let accesses = spill_word_accesses(function, alloc, |action| match *action {
                         Action::MemLoadAbs(addr) => Some(((0, addr), false)),
                         Action::MemStoreAbs(addr) => Some(((0, addr), true)),
-                        Action::MemLoadObj(obj) => Some(((1, obj.as_u32()), false)),
+                        Action::MemLoadObj(obj) if !undef_objs.contains(&obj) => {
+                            Some(((1, obj.as_u32()), false))
+                        }
                         Action::MemStoreObj(obj) => Some(((1, obj.as_u32()), true)),
                         _ => None,
                     });
-                    unread_spill_stores(&cfg, &accesses)
+                    (
+                        unread_spill_stores(&cfg, &accesses),
+                        unstored_spill_loads(&cfg, &accesses),
+                    )
                 });
-                if stores != 0 {
+                if stores != (0, 0) {
                     let name = prepared
                         .module()
                         .ctx
                         .func_sig(func, |sig| sig.name().to_string());
                     unread.push(format!(
-                        "{}: %{name} ({profile:?}): {stores}",
-                        path.display()
+                        "{}: %{name} ({profile:?}): {} unread stores, {} unstored loads",
+                        path.display(),
+                        stores.0,
+                        stores.1
                     ));
                 }
             }
@@ -160,7 +179,7 @@ fn fixtures_emit_no_spill_store_without_a_reload() {
     });
     assert!(
         unread.is_empty(),
-        "spill stores without a reload:\n{}",
+        "spill stores without a reload, or loads without a store:\n{}",
         unread.join("\n")
     );
 }
