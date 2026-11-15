@@ -4,7 +4,7 @@
 #!   expect: return u256(0x0000000000000000000000000000000000000000000000000000000000016136)
 
 # The pressure values are live across the IR store of 0x00, so only the phi defined after
-# it could take a fixed slot. Its spill store on the incoming edges must not.
+# it could take the fixed slot there. Its spill store on the incoming edges must not.
 target = "evm-ethereum-osaka"
 
 func public %entry() {

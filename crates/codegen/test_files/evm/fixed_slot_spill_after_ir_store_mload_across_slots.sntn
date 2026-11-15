@@ -1,0 +1,59 @@
+#! evm.config: { mem_plan_detail: true }
+#! evm.case: reads_stored_word
+#!   calldata: u256(0x0000000000000000000000000000000000000000000000000000000000001000)
+#!   expect: return u256(0x00000000000000000000000000000000000000000000000000000000000130ab)
+
+# The IR stores v0 to 0x10, across both fixed slots, and reads it back after defining
+# 18 values. A value spilled between the store and the read must avoid both slots.
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    evm_mstore 16.i256 v0;
+    v1.i256 = add v0 1.i256;
+    v2.i256 = add v0 2.i256;
+    v3.i256 = add v0 3.i256;
+    v4.i256 = add v0 4.i256;
+    v5.i256 = add v0 5.i256;
+    v6.i256 = add v0 6.i256;
+    v7.i256 = add v0 7.i256;
+    v8.i256 = add v0 8.i256;
+    v9.i256 = add v0 9.i256;
+    v10.i256 = add v0 10.i256;
+    v11.i256 = add v0 11.i256;
+    v12.i256 = add v0 12.i256;
+    v13.i256 = add v0 13.i256;
+    v14.i256 = add v0 14.i256;
+    v15.i256 = add v0 15.i256;
+    v16.i256 = add v0 16.i256;
+    v17.i256 = add v0 17.i256;
+    v18.i256 = add v0 18.i256;
+    v100.i256 = evm_mload 16.i256;
+    v201.i256 = add v100 v1;
+    v202.i256 = add v201 v2;
+    v203.i256 = add v202 v3;
+    v204.i256 = add v203 v4;
+    v205.i256 = add v204 v5;
+    v206.i256 = add v205 v6;
+    v207.i256 = add v206 v7;
+    v208.i256 = add v207 v8;
+    v209.i256 = add v208 v9;
+    v210.i256 = add v209 v10;
+    v211.i256 = add v210 v11;
+    v212.i256 = add v211 v12;
+    v213.i256 = add v212 v13;
+    v214.i256 = add v213 v14;
+    v215.i256 = add v214 v15;
+    v216.i256 = add v215 v16;
+    v217.i256 = add v216 v17;
+    v218.i256 = add v217 v18;
+    evm_mstore 64.i256 v218;
+    evm_return 64.i256 32.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

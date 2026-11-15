@@ -169,16 +169,6 @@ fn addr_len_overlaps_range(lhs_start: u32, lhs_len: u32, rhs_start: u32, rhs_end
         .is_none_or(|lhs_end| lhs_start < rhs_end && rhs_start < lhs_end)
 }
 
-fn addr_is_allocator_managed(prov: &Provenance) -> bool {
-    // The address must name an allocation on every path: a raw alternative,
-    // such as a literal joined with a heap pointer, may reach low memory. A
-    // heap object a callee allocated lies above the heap floor like a local one.
-    !prov.is_empty()
-        && !prov.may_be_raw()
-        && !prov.may_reference_unknown_local()
-        && !prov.has_any_arg()
-}
-
 /// Whether an access of `len` bytes at `addr` may touch the free-pointer slot.
 /// The backend owns the slot and IR reaches it only through immediate
 /// addresses (see [`FREE_PTR_SLOT`]), so a computed address never touches it.
@@ -404,7 +394,7 @@ fn memory_layout_reservation_for_addr_len(
         };
     }
 
-    Ok(if addr_is_allocator_managed(&prov[addr]) {
+    Ok(if prov[addr].names_allocation(|_| false) {
         MemoryLayoutReservation::None
     } else {
         MemoryLayoutReservation::ConservativeFloor
@@ -899,6 +889,8 @@ fn prepare_machine_section_after_pipeline(
     let schedule = CallGraphSchedule::compute(source_module, &funcs);
     let fixed_reservations =
         scan_fixed_reservations(source_module, &funcs, backend, &pre_analyses)?;
+    let allocation_addrs =
+        fixed_slots::allocation_addresses(source_module, &funcs, work.entry(), &pre_analyses);
     let mut fixed_slot_effects = FxHashSet::default();
     let mut backend_spills = BackendSpillPlan::default();
     let mut last_convergence_error = None;
@@ -935,12 +927,21 @@ fn prepare_machine_section_after_pipeline(
 
         let machine_isa = EvmMachine::new(machine.work.module().ctx.triple);
         let machine_schedule = CallGraphSchedule::compute(machine.work.module(), &funcs);
+        // Machine passes only merge equal values, so a machine value still
+        // addresses what its source values do.
+        let machine_allocation_addrs = funcs
+            .iter()
+            .map(|func| {
+                let map = expect_func_entry(&machine.source_to_machine.funcs, *func, "source map");
+                (*func, map.images_only_of(&allocation_addrs[func]))
+            })
+            .collect();
         let machine_analyses = prepare_machine_stackify_analyses(
             machine.work.module(),
             &machine_schedule,
             backend,
-            &machine_isa,
             &placement,
+            &machine_allocation_addrs,
             &search_caches,
         )?;
         // Recompute fixed-slot effects from the current machine allocation. Final spills selected
@@ -1267,7 +1268,7 @@ fn prepare_machine_section_after_pipeline(
                 );
             }
             // Fixed-slot eligibility counts only the slot bytes below the arena
-            // as IR data (`fixed_slots::IrSlotDataSummaries`).
+            // as IR data (`fixed_slots::FixedSlotSummaries`).
             assert!(
                 actual_fixed_slot_effects.is_empty()
                     || placement.arena_base >= fixed_slots::FIXED_SLOTS_END_BYTES,

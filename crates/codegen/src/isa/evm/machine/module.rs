@@ -2,7 +2,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{BlockId, InstId, Module, ValueId, module::FuncRef};
 
-use crate::machinst::lower::SectionWorkModule;
+use crate::{bitset::BitSet, machinst::lower::SectionWorkModule};
 
 pub(crate) struct MachineSectionModule {
     pub(crate) work: SectionWorkModule,
@@ -54,5 +54,22 @@ impl FuncMachineMap {
             values: SecondaryMap::new(),
             insts: SecondaryMap::new(),
         }
+    }
+
+    /// The machine values lowered from source values in `sources` and from no
+    /// other source value.
+    pub(crate) fn images_only_of(&self, sources: &BitSet<ValueId>) -> BitSet<ValueId> {
+        let (mut images, mut others) = (BitSet::default(), BitSet::default());
+        for (source, &machine) in self.values.iter() {
+            if let Some(machine) = machine {
+                if sources.contains(source) {
+                    images.insert(machine);
+                } else {
+                    others.insert(machine);
+                }
+            }
+        }
+        images.difference_with(&others);
+        images
     }
 }

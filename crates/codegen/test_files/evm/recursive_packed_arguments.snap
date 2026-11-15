@@ -6,19 +6,19 @@ input_file: test_files/evm/recursive_packed_arguments.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 1636 bytes
-  total: 1636 bytes
+  section runtime: 1590 bytes
+  total: 1590 bytes
 
 functions:
   mem: global_dyn_base=0x2c0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=17
   entry: ir_blocks=1 ir_insts=21 vcode_ops=66 fixups=2 imm_bytes=37
     mem: scratch_words=0 stable_words=17 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=17
-  recursive: ir_blocks=40 ir_insts=150 vcode_ops=793 fixups=26 imm_bytes=194
-    mem: scratch_words=0 stable_words=39 stable_mode=DynamicFrame entry_abs_words=17 abs_words_end=0
+  recursive: ir_blocks=40 ir_insts=150 vcode_ops=769 fixups=26 imm_bytes=180
+    mem: scratch_words=0 stable_words=37 stable_mode=DynamicFrame entry_abs_words=17 abs_words_end=0
   weighted16: ir_blocks=62 ir_insts=154 vcode_ops=315 fixups=30 imm_bytes=35
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=17 abs_words_end=0
 
 evm:
-  case depth0: calldata_len=32 success reason=Return gas_used=23258 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=2130
-  case depth1: calldata_len=32 success reason=Return gas_used=26859 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=5719
-  case depth2: calldata_len=32 success reason=Return gas_used=30454 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=9314
+  case depth0: calldata_len=32 success reason=Return gas_used=23242 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=2114
+  case depth1: calldata_len=32 success reason=Return gas_used=26757 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=5617
+  case depth2: calldata_len=32 success reason=Return gas_used=30267 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=9127

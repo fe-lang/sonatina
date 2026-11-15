@@ -91,7 +91,7 @@ impl SpillSlotInterference {
 #[derive(Default, Clone)]
 pub(super) struct SlotPool {
     slot_of: SecondaryMap<ValueId, Option<u32>>,
-    next_slot: u32,
+    /// The union of the live ranges of each slot's values.
     slot_live_ranges: Vec<SpillSlotLiveRange>,
 }
 
@@ -104,16 +104,22 @@ impl SlotPool {
         self.slot_of[v]
     }
 
+    /// Assigns `v` a slot no interfering value uses. `barred` has an entry per
+    /// slot: the values it cannot hold.
     pub(super) fn try_ensure_slot(
         &mut self,
         v: SpilledValueId,
         interference: &SpillSlotInterference,
         free_slots: &mut FreeSlots,
-        max_slots: Option<u32>,
+        barred: &[BitSet<ValueId>],
     ) -> Option<u32> {
         let v = v.value();
         if let Some(slot) = self.slot_of[v] {
             return Some(slot);
+        }
+        if self.slot_live_ranges.len() < barred.len() {
+            self.slot_live_ranges
+                .resize_with(barred.len(), SpillSlotLiveRange::default);
         }
 
         // Prefer reusing a slot freed earlier in this block, whose last value is dead from here on.
@@ -122,49 +128,21 @@ impl SlotPool {
         // which this block's outgoing edges store to the slot when it is a successor's phi.
         let range = interference.range(v);
         let confined = range.blocks.len() <= 1 && range.phi_edges.is_empty();
-        let slot = if confined && let Some(slot) = free_slots.take_released() {
+        let slot = if confined
+            && let Some(slot) = free_slots.take_released(|slot| !barred[slot as usize].contains(v))
+        {
             slot
         } else {
-            let mut found: Option<u32> = None;
-            for candidate in 0..self.next_slot {
-                let idx = candidate as usize;
-                debug_assert!(
-                    idx < self.slot_live_ranges.len(),
-                    "slot_live_ranges out of sync: candidate={candidate} len={}",
-                    self.slot_live_ranges.len()
-                );
-                if self.slot_live_ranges[idx].is_disjoint(range) {
-                    found = Some(candidate);
-                    break;
-                }
-            }
-            if let Some(slot) = found {
-                slot
-            } else {
-                let can_grow = max_slots.is_none_or(|max| self.next_slot < max);
-                if !can_grow {
-                    return None;
-                }
-
-                let slot = self.next_slot;
-                self.next_slot = self
-                    .next_slot
-                    .checked_add(1)
-                    .expect("frame slot index overflow");
-                self.slot_live_ranges.push(SpillSlotLiveRange::default());
-                slot
-            }
+            self.slot_live_ranges
+                .iter()
+                .zip(barred)
+                .position(|(live, barred)| !barred.contains(v) && live.is_disjoint(range))?
+                as u32
         };
 
         self.slot_of[v] = Some(slot);
-
         // Track the live range union for this slot to support cross-path reuse checks.
-        let idx = slot as usize;
-        debug_assert!(
-            idx < self.slot_live_ranges.len(),
-            "slot_live_ranges missing slot"
-        );
-        self.slot_live_ranges[idx].union_with(range);
+        self.slot_live_ranges[slot as usize].union_with(range);
         Some(slot)
     }
 
@@ -201,12 +179,11 @@ impl FreeSlots {
         self.slots.insert(slot);
     }
 
-    pub(super) fn take_released(&mut self) -> Option<u32> {
-        if let Some(&slot) = self.slots.iter().next() {
-            self.slots.remove(&slot);
-            return Some(slot);
-        }
-        None
+    /// Takes the lowest released slot that `allowed` accepts.
+    pub(super) fn take_released(&mut self, allowed: impl Fn(u32) -> bool) -> Option<u32> {
+        let slot = self.slots.iter().copied().find(|&slot| allowed(slot))?;
+        self.slots.remove(&slot);
+        Some(slot)
     }
 }
 
@@ -239,8 +216,9 @@ mod tests {
         };
         let mut pool = SlotPool::default();
         let mut free_slots = FreeSlots::default();
+        let barred = vec![BitSet::default(); 3];
         let mut slot_for = |v, free_slots: &mut FreeSlots| {
-            pool.try_ensure_slot(spilled(v), &interference, free_slots, None)
+            pool.try_ensure_slot(spilled(v), &interference, free_slots, &barred)
         };
 
         assert_eq!(slot_for(dead, &mut free_slots), Some(0));

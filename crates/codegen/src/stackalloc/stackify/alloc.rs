@@ -46,10 +46,18 @@ impl StackifyAlloc {
         self.set_spill_object(value, obj);
     }
 
-    pub(crate) fn uses_scratch_spills(&self) -> bool {
+    /// The scratch slot of each value spilled to one.
+    pub(crate) fn scratch_slots(&self) -> impl Iterator<Item = u32> + '_ {
         self.spill_storage
             .values()
-            .any(|storage| matches!(storage, Some(SpillStorage::Scratch(_))))
+            .filter_map(|storage| match storage {
+                Some(SpillStorage::Scratch(slot)) => Some(*slot),
+                _ => None,
+            })
+    }
+
+    pub(crate) fn uses_scratch_spills(&self) -> bool {
+        self.scratch_slots().next().is_some()
     }
 
     pub(crate) fn storage_for_value(&self, value: ValueId) -> Option<SpillStorage> {

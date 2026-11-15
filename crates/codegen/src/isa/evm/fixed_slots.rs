@@ -2,196 +2,50 @@ use std::iter;
 
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
-    AccessKind, AccessLoc, BlockId, ControlFlowGraph, Function, Immediate, InstId, InstSetExt,
-    MemoryAccess, Module, U256, ValueId,
+    AccessKind, AccessLoc, BlockId, ControlFlowGraph, Function, Immediate, InstId, MemoryAccess,
+    Module, ValueId,
     inst::{
+        control_flow::Call,
         data::{GetFunctionPtr, SymAddr, SymbolRef},
-        evm::machine_inst_set::EvmMachineInstKind,
+        evm::EvmMsize,
     },
-    isa::{
-        Isa,
-        evm::{EvmMachine, space::MEMORY},
-    },
+    isa::evm::space::MEMORY,
     module::FuncRef,
 };
+use tracing::debug_span;
 
-use crate::{bitset::BitSet, liveness::InstLiveness, module_analysis::CallGraphSchedule};
+use crate::{
+    bitset::BitSet, liveness::InstLiveness, module_analysis::CallGraphSchedule,
+    stackalloc::StackifyAlloc,
+};
 
-use super::{emit::immediate_u32, memory_plan::WORD_BYTES};
+use super::{
+    emit::immediate_u32,
+    memory_plan::{FuncPreAnalysis, WORD_BYTES},
+};
 
 // The fixed spill slots are memory `[0, 64)`, which the IR may also use. A value
-// may take a slot only if neither side can change what the other reads: it is
-// not live across an IR write or call that may touch the slots
-// (`MachineSpillClobberLiveness`), and its spill store never runs while IR data
-// in the slots is live (`values_stored_over_ir_slot_data`).
+// may take a slot only if neither side can change what the other reads
+// (`FixedSlotConflicts`): the value is not live across an IR write or a call
+// that may write the slot, and its spill store never runs while IR data in the
+// slot is live.
+//
+// Both rules ask which slot bytes an IR access may touch. An immediate address
+// says exactly. A computed address touches none if it names an allocation on
+// every path (`allocation_addresses`): allocations lie in the static arena, a
+// dynamic frame or the heap, never below the arena base, and an address computed
+// from an allocation's stays inside the allocation (`ptr_provenance`), as arena
+// placement assumes of the same addresses. Any other computed address may touch
+// every byte.
 
 pub(crate) const FIXED_SPILL_SLOTS: u32 = 2;
 
 pub(crate) const FIXED_SLOTS_END_BYTES: u32 = FIXED_SPILL_SLOTS * WORD_BYTES;
 
-pub(crate) struct MachineSpillClobberLiveness {
-    fixed_slot_live_values: BitSet<ValueId>,
-    stable_final_spill_values: BitSet<ValueId>,
-}
-
-impl MachineSpillClobberLiveness {
-    pub(crate) fn compute(
-        function: &Function,
-        isa: &EvmMachine,
-        fixed_slot_effects: &FxHashSet<FuncRef>,
-        scratch_arena_effects: &FxHashSet<FuncRef>,
-        inst_liveness: &InstLiveness,
-    ) -> Self {
-        let mut liveness = Self {
-            fixed_slot_live_values: BitSet::default(),
-            stable_final_spill_values: BitSet::default(),
-        };
-
-        for block in function.layout.iter_block() {
-            for inst in function.layout.iter_inst(block) {
-                if let Some(call) = function.dfg.call_info(inst) {
-                    let clobbers_fixed_slots = fixed_slot_effects.contains(&call.callee());
-                    if clobbers_fixed_slots {
-                        liveness.record_fixed_slot_clobber(function, inst_liveness, inst);
-                    }
-                    // Fixed slots occupy bytes 0..64; final scratch spills live in the
-                    // shared arena. A callee can overwrite the latter without touching
-                    // either fixed slot, including through private static mallocs.
-                    if clobbers_fixed_slots || scratch_arena_effects.contains(&call.callee()) {
-                        liveness.record_stable_final_spill_clobber(function, inst_liveness, inst);
-                    }
-                } else if machine_inst_is_fixed_slot_clobber(function, isa, inst) {
-                    liveness.record_fixed_slot_clobber(function, inst_liveness, inst);
-                }
-            }
-        }
-
-        liveness
-    }
-
-    pub(crate) fn into_parts(self) -> (BitSet<ValueId>, BitSet<ValueId>) {
-        (self.fixed_slot_live_values, self.stable_final_spill_values)
-    }
-
-    fn record_fixed_slot_clobber(
-        &mut self,
-        function: &Function,
-        inst_liveness: &InstLiveness,
-        inst: InstId,
-    ) {
-        Self::record_live_out_minus_defs(
-            &mut self.fixed_slot_live_values,
-            function,
-            inst_liveness,
-            inst,
-        );
-    }
-
-    fn record_stable_final_spill_clobber(
-        &mut self,
-        function: &Function,
-        inst_liveness: &InstLiveness,
-        inst: InstId,
-    ) {
-        Self::record_live_out_minus_defs(
-            &mut self.stable_final_spill_values,
-            function,
-            inst_liveness,
-            inst,
-        );
-    }
-
-    fn record_live_out_minus_defs(
-        values: &mut BitSet<ValueId>,
-        function: &Function,
-        inst_liveness: &InstLiveness,
-        inst: InstId,
-    ) {
-        // Exclude this instruction's results before adding its live-across set.
-        // Removing them from the accumulated set would erase liveness across
-        // other clobbers when block layout visits a use before its definition.
-        let defs = function.dfg.inst_results(inst);
-        for value in inst_liveness.live_out(inst).iter() {
-            if !defs.contains(&value) {
-                values.insert(value);
-            }
-        }
-    }
-}
-
-fn imm_lt_u32(imm: Immediate, bound: u32) -> bool {
-    match imm {
-        Immediate::I1(val) => (val as u32) < bound,
-        Immediate::I8(val) => val >= 0 && (val as u32) < bound,
-        Immediate::I16(val) => val >= 0 && (val as u32) < bound,
-        Immediate::I32(val) => val >= 0 && (val as u32) < bound,
-        Immediate::I64(val) => val >= 0 && (val as u64) < bound as u64,
-        Immediate::I128(val) => val >= 0 && (val as u128) < bound as u128,
-        Immediate::I256(val) => !val.is_negative() && val.to_u256() < U256::from(bound),
-        Immediate::EnumTag { value, .. } => {
-            !value.is_negative() && value.to_u256() < U256::from(bound)
-        }
-    }
-}
-
-fn machine_addr_may_overlap_fixed_slots(function: &Function, addr: ValueId) -> bool {
-    if function.dfg.value_is_imm(addr) {
-        let imm = function
-            .dfg
-            .value_imm(addr)
-            .expect("imm value missing payload");
-        imm_lt_u32(imm, FIXED_SLOTS_END_BYTES)
-    } else {
-        true
-    }
-}
-
-pub(crate) fn machine_inst_is_fixed_slot_clobber(
-    function: &Function,
-    isa: &EvmMachine,
-    inst: InstId,
-) -> bool {
-    match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
-        EvmMachineInstKind::EvmMstore(mstore) => {
-            machine_addr_may_overlap_fixed_slots(function, *mstore.addr())
-        }
-        EvmMachineInstKind::EvmMstore8(mstore8) => {
-            machine_addr_may_overlap_fixed_slots(function, *mstore8.addr())
-        }
-        EvmMachineInstKind::EvmCalldataCopy(copy) => {
-            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
-        }
-        EvmMachineInstKind::EvmCodeCopy(copy) => {
-            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
-        }
-        EvmMachineInstKind::EvmExtCodeCopy(copy) => {
-            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
-        }
-        EvmMachineInstKind::EvmReturnDataCopy(copy) => {
-            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
-        }
-        EvmMachineInstKind::EvmMcopy(copy) => {
-            machine_addr_may_overlap_fixed_slots(function, *copy.dest())
-        }
-        EvmMachineInstKind::EvmCall(call) => {
-            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
-        }
-        EvmMachineInstKind::EvmCallCode(call) => {
-            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
-        }
-        EvmMachineInstKind::EvmDelegateCall(call) => {
-            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
-        }
-        EvmMachineInstKind::EvmStaticCall(call) => {
-            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
-        }
-        _ => false,
-    }
-}
-
 /// Bytes of the fixed slots `[0, 64)` as a mask: bit `i` is byte `i`.
-type SlotBytes = u64;
+pub(crate) type SlotBytes = u64;
 
 const ALL_SLOT_BYTES: SlotBytes = SlotBytes::MAX;
 
@@ -209,74 +63,270 @@ fn slot_range_bytes(start: u32, len: Option<u32>) -> SlotBytes {
     ALL_SLOT_BYTES >> (SlotBytes::BITS - (end - start)) << start
 }
 
-/// The IR-owned fixed-slot bytes `access` may touch, and those it must write.
-/// An immediate address beyond `u32` touches none, like in
-/// [`machine_inst_is_fixed_slot_clobber`]; a computed address may touch any.
+/// The source values of each function that name an allocation on every path
+/// ([`Provenance::names_allocation`]). An argument does if every call passes
+/// such a value. The section entry and a function whose address is taken have
+/// callers this cannot see.
+///
+/// [`Provenance::names_allocation`]: super::ptr_provenance::Provenance::names_allocation
+pub(crate) fn allocation_addresses(
+    module: &Module,
+    funcs: &[FuncRef],
+    entry: FuncRef,
+    analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
+) -> FxHashMap<FuncRef, BitSet<ValueId>> {
+    let mut calls: Vec<(FuncRef, FuncRef, SmallVec<[ValueId; 8]>)> = Vec::new();
+    let mut unseen_callers = FxHashSet::from_iter([entry]);
+    for &func in funcs {
+        module.func_store.view(func, |function| {
+            for inst in function.layout.iter_all_insts() {
+                if let Some(call) = function.dfg.downcast::<&Call>(inst) {
+                    calls.push((func, *call.callee(), call.args().iter().copied().collect()));
+                } else if let Some(taken) = func_address_taken(function, inst) {
+                    unseen_callers.insert(taken);
+                }
+            }
+        });
+    }
+
+    // Greatest fixed point: an argument names an allocation until a call passes
+    // something else.
+    let mut arg_allocations: FxHashMap<FuncRef, Vec<bool>> = calls
+        .iter()
+        .filter(|(_, callee, _)| !unseen_callers.contains(callee))
+        .map(|(_, callee, args)| (*callee, vec![true; args.len()]))
+        .collect();
+    let names_allocation =
+        |arg_allocations: &FxHashMap<FuncRef, Vec<bool>>, func: FuncRef, value: ValueId| {
+            analyses[&func].prov.value[value].names_allocation(|arg| {
+                arg_allocations
+                    .get(&func)
+                    .is_some_and(|args| args[arg as usize])
+            })
+        };
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (caller, callee, args) in &calls {
+            for (arg, &value) in args.iter().enumerate() {
+                if arg_allocations.get(callee).is_some_and(|args| args[arg])
+                    && !names_allocation(&arg_allocations, *caller, value)
+                {
+                    arg_allocations.get_mut(callee).expect("checked above")[arg] = false;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    funcs
+        .iter()
+        .map(|&func| {
+            let values = module.func_store.view(func, |function| {
+                function
+                    .dfg
+                    .value_ids()
+                    .filter(|&value| names_allocation(&arg_allocations, func, value))
+                    .collect()
+            });
+            (func, values)
+        })
+        .collect()
+}
+
+fn func_address_taken(function: &Function, inst: InstId) -> Option<FuncRef> {
+    if let Some(ptr) = function.dfg.downcast::<&GetFunctionPtr>(inst) {
+        return Some(*ptr.func());
+    }
+    match function.dfg.downcast::<&SymAddr>(inst)?.sym() {
+        SymbolRef::Func(func) => Some(*func),
+        _ => None,
+    }
+}
+
+/// What an instruction may do to the IR's bytes of the fixed slots.
+#[derive(Clone, Copy)]
+enum SlotEffect {
+    /// Memory accesses: the bytes they may read, may write, and must write.
+    Access {
+        read: SlotBytes,
+        write: SlotBytes,
+        kill: SlotBytes,
+    },
+    Call(FuncRef),
+    Return,
+}
+
+impl SlotEffect {
+    /// `MSIZE` reads how far memory extends, not what the slots hold, and every
+    /// spill placement extends memory, so it is no read of slot data.
+    fn of(
+        function: &Function,
+        inst: InstId,
+        ir_bytes: SlotBytes,
+        allocation_addrs: &BitSet<ValueId>,
+    ) -> Option<Self> {
+        if let Some(call) = function.dfg.call_info(inst) {
+            return Some(Self::Call(call.callee()));
+        }
+        if function.dfg.is_return(inst) {
+            return Some(Self::Return);
+        }
+        if function.dfg.downcast::<&EvmMsize>(inst).is_some() {
+            return None;
+        }
+        let (mut read, mut write, mut kill) = (0, 0, 0);
+        for access in &function.dfg.effects(inst).accesses {
+            let (touched, exact) = access_slot_bytes(function, access, ir_bytes, allocation_addrs);
+            match access.kind {
+                AccessKind::Read => read |= touched,
+                AccessKind::Write => {
+                    write |= touched;
+                    if access.must_happen && exact {
+                        kill |= touched;
+                    }
+                }
+            }
+        }
+        (read | write != 0).then_some(Self::Access { read, write, kill })
+    }
+
+    /// The bytes live after the instruction, given those live at the next one.
+    fn live_after(self, live: SlotBytes, live_at_return: SlotBytes) -> SlotBytes {
+        match self {
+            Self::Return => live | live_at_return,
+            Self::Access { .. } | Self::Call(_) => live,
+        }
+    }
+
+    /// The bytes live before the instruction, given those live after it. Only
+    /// a write that must happen at an immediate address and length kills bytes.
+    fn live_before(
+        self,
+        live_after: SlotBytes,
+        entry_reads: &FxHashMap<FuncRef, SlotBytes>,
+    ) -> SlotBytes {
+        match self {
+            Self::Access { read, kill, .. } => (live_after & !kill) | read,
+            Self::Call(callee) => {
+                live_after | entry_reads.get(&callee).copied().unwrap_or(ALL_SLOT_BYTES)
+            }
+            Self::Return => live_after,
+        }
+    }
+}
+
+/// The IR-owned fixed-slot bytes `access` may touch, and whether it touches
+/// exactly those: its address and length are immediates. An immediate beyond
+/// `u32` is past the slots.
 fn access_slot_bytes(
     function: &Function,
     access: &MemoryAccess,
     ir_bytes: SlotBytes,
-) -> (SlotBytes, SlotBytes) {
+    allocation_addrs: &BitSet<ValueId>,
+) -> (SlotBytes, bool) {
     if access.space != MEMORY {
-        return (0, 0);
+        return (0, false);
     }
     let imm_u32 = |imm: Immediate| immediate_u32(imm).unwrap_or(u32::MAX);
     let value_u32 = |value: ValueId| function.dfg.value_imm(value).map(imm_u32);
-    let (start, len) = match &access.loc {
-        AccessLoc::LinearExact { addr, bytes, .. } => (value_u32(*addr), Some(*bytes)),
-        AccessLoc::LinearExactImm { addr, bytes, .. } => (Some(imm_u32(*addr)), Some(*bytes)),
-        AccessLoc::LinearRange { addr, len } => (value_u32(*addr), value_u32(*len)),
-        AccessLoc::KeyedExact { .. } => return (0, 0),
-        AccessLoc::WholeSpace | AccessLoc::Unknown => (None, None),
+    let (addr, start, len) = match &access.loc {
+        AccessLoc::LinearExact { addr, bytes, .. } => (*addr, value_u32(*addr), Some(*bytes)),
+        AccessLoc::LinearExactImm { addr, bytes, .. } => {
+            return (
+                slot_range_bytes(imm_u32(*addr), Some(*bytes)) & ir_bytes,
+                true,
+            );
+        }
+        AccessLoc::LinearRange { addr, len } => (*addr, value_u32(*addr), value_u32(*len)),
+        AccessLoc::KeyedExact { .. } => return (0, false),
+        AccessLoc::WholeSpace | AccessLoc::Unknown => return (ir_bytes, false),
     };
-    let Some(start) = start else {
-        return (ir_bytes, 0);
-    };
-    let touched = slot_range_bytes(start, len) & ir_bytes;
-    let written = if access.kind == AccessKind::Write && access.must_happen && len.is_some() {
-        touched
-    } else {
-        0
-    };
-    (touched, written)
+    match start {
+        _ if len == Some(0) => (0, false),
+        Some(start) => (slot_range_bytes(start, len) & ir_bytes, len.is_some()),
+        None if allocation_addrs.contains(addr) => (0, false),
+        None => (ir_bytes, false),
+    }
 }
 
-/// Interprocedural facts for [`IrSlotDataLiveness`].
-pub(crate) struct IrSlotDataSummaries {
-    /// The fixed-slot bytes below the static arena. The arena holds compiler
-    /// memory, not IR data, and lies at or above the fixed slots in any
-    /// placement that uses them: [`choose_arena_base`] reserves the slots once
-    /// a function needs them, and placement repeats until it does (see
-    /// `prepare_machine_section_after_pipeline`). So all of `[0, 64)` is IR
-    /// data whenever a fixed-slot spill is kept, and an arena below 64 can only
-    /// make a placement iteration that will be discarded spill speculatively.
-    ///
-    /// [`choose_arena_base`]: super::prepare::choose_arena_base
-    ir_bytes: SlotBytes,
+/// A function's instructions with a [`SlotEffect`], by block in layout order.
+struct FuncSlotEffects {
+    blocks: SecondaryMap<BlockId, Vec<(InstId, SlotEffect)>>,
+    cfg: ControlFlowGraph,
+    address_taken: Vec<FuncRef>,
+}
+
+impl FuncSlotEffects {
+    fn compute(
+        function: &Function,
+        ir_bytes: SlotBytes,
+        allocation_addrs: &BitSet<ValueId>,
+    ) -> Self {
+        let mut cfg = ControlFlowGraph::new();
+        cfg.compute(function);
+        let mut effects = Self {
+            blocks: SecondaryMap::new(),
+            cfg,
+            address_taken: Vec::new(),
+        };
+        for block in function.layout.iter_block() {
+            for inst in function.layout.iter_inst(block) {
+                if let Some(effect) = SlotEffect::of(function, inst, ir_bytes, allocation_addrs) {
+                    effects.blocks[block].push((inst, effect));
+                } else if let Some(taken) = func_address_taken(function, inst) {
+                    effects.address_taken.push(taken);
+                }
+            }
+        }
+        effects
+    }
+}
+
+/// Section-wide facts for [`FixedSlotConflicts`].
+pub(crate) struct FixedSlotSummaries {
+    effects: FxHashMap<FuncRef, FuncSlotEffects>,
     /// The fixed-slot bytes a call may read before writing them.
     entry_reads: FxHashMap<FuncRef, SlotBytes>,
     /// The fixed-slot bytes whose IR data may be read after the function returns.
     live_at_return: FxHashMap<FuncRef, SlotBytes>,
 }
 
-impl IrSlotDataSummaries {
+impl FixedSlotSummaries {
+    /// `allocation_addrs` holds each function's machine values that name an
+    /// allocation on every path.
+    ///
+    /// Only the slot bytes below the static arena are the IR's. The arena holds
+    /// compiler memory and lies at or above the fixed slots in any placement
+    /// that uses them: [`choose_arena_base`] reserves the slots once a function
+    /// needs them, and placement repeats until it does (see
+    /// `prepare_machine_section_after_pipeline`). So all of `[0, 64)` is IR
+    /// data whenever a fixed-slot spill is kept, and an arena below 64 can only
+    /// make a placement iteration that will be discarded spill speculatively.
+    ///
     /// Callers outside the section, and functions whose address is taken, may
     /// read any byte after a return.
-    pub(crate) fn compute(module: &Module, schedule: &CallGraphSchedule, arena_base: u32) -> Self {
-        let cfgs: FxHashMap<FuncRef, ControlFlowGraph> = schedule
-            .funcs()
-            .iter()
-            .map(|&func| {
-                let cfg = module.func_store.view(func, |function| {
-                    let mut cfg = ControlFlowGraph::new();
-                    cfg.compute(function);
-                    cfg
+    ///
+    /// [`choose_arena_base`]: super::prepare::choose_arena_base
+    pub(crate) fn compute(
+        module: &Module,
+        schedule: &CallGraphSchedule,
+        arena_base: u32,
+        allocation_addrs: &FxHashMap<FuncRef, BitSet<ValueId>>,
+    ) -> Self {
+        let _span = debug_span!("sonatina.codegen.evm.machine.fixed_slot_summaries").entered();
+        let ir_bytes = slot_range_bytes(0, Some(arena_base));
+        let effects: FxHashMap<FuncRef, FuncSlotEffects> =
+            sonatina_ir::parallel::map(&module.func_store, schedule.funcs(), |&func| {
+                let effects = module.func_store.view(func, |function| {
+                    FuncSlotEffects::compute(function, ir_bytes, &allocation_addrs[&func])
                 });
-                (func, cfg)
+                (func, effects)
             })
+            .into_iter()
             .collect();
         let mut summaries = Self {
-            ir_bytes: slot_range_bytes(0, Some(arena_base)),
+            effects,
             entry_reads: FxHashMap::default(),
             live_at_return: FxHashMap::default(),
         };
@@ -291,13 +341,17 @@ impl IrSlotDataSummaries {
             while changed {
                 changed = false;
                 for &func in members {
-                    let reads = module.func_store.view(func, |function| {
-                        let liveness =
-                            IrSlotDataLiveness::compute(function, &cfgs[&func], &summaries, 0);
-                        cfgs[&func]
-                            .entry()
-                            .map_or(0, |entry| liveness.live_in[entry])
-                    });
+                    let effects = &summaries.effects[&func];
+                    let liveness = IrSlotDataLiveness::compute(
+                        effects,
+                        &effects.cfg,
+                        &summaries.entry_reads,
+                        0,
+                    );
+                    let reads = effects
+                        .cfg
+                        .entry()
+                        .map_or(0, |entry| liveness.live_in[entry]);
                     changed |= summaries.entry_reads.insert(func, reads) != Some(reads);
                 }
             }
@@ -305,24 +359,14 @@ impl IrSlotDataSummaries {
 
         let mut called = FxHashSet::default();
         let mut escaped = FxHashSet::default();
-        for &func in schedule.funcs() {
-            module.func_store.view(func, |function| {
-                for inst in function
-                    .layout
-                    .iter_block()
-                    .flat_map(|b| function.layout.iter_inst(b))
-                {
-                    if let Some(call) = function.dfg.call_info(inst) {
-                        called.insert(call.callee());
-                    } else if let Some(ptr) = function.dfg.downcast::<&GetFunctionPtr>(inst) {
-                        escaped.insert(*ptr.func());
-                    } else if let Some(sym) = function.dfg.downcast::<&SymAddr>(inst)
-                        && let SymbolRef::Func(func) = sym.sym()
-                    {
-                        escaped.insert(*func);
-                    }
-                }
-            });
+        for effects in summaries.effects.values() {
+            escaped.extend(effects.address_taken.iter().copied());
+            called.extend(effects.blocks.values().flatten().filter_map(
+                |&(_, effect)| match effect {
+                    SlotEffect::Call(callee) => Some(callee),
+                    SlotEffect::Access { .. } | SlotEffect::Return => None,
+                },
+            ));
         }
         for &func in schedule.funcs() {
             let live = if called.contains(&func) && !escaped.contains(&func) {
@@ -340,20 +384,25 @@ impl IrSlotDataSummaries {
             changed = false;
             for &scc in &schedule.topo {
                 for &func in schedule.members(scc) {
+                    let effects = &summaries.effects[&func];
                     let live_at_return = summaries.live_at_return[&func];
+                    let liveness = IrSlotDataLiveness::compute(
+                        effects,
+                        &effects.cfg,
+                        &summaries.entry_reads,
+                        live_at_return,
+                    );
                     let mut after_calls = Vec::new();
-                    module.func_store.view(func, |function| {
-                        let cfg = &cfgs[&func];
-                        let liveness =
-                            IrSlotDataLiveness::compute(function, cfg, &summaries, live_at_return);
-                        for block in cfg.post_order() {
-                            liveness.walk_block(function, block, &summaries, |inst, live_after| {
-                                if let Some(call) = function.dfg.call_info(inst) {
-                                    after_calls.push((call.callee(), live_after));
-                                }
-                            });
+                    for block in effects.cfg.post_order() {
+                        let mut live = liveness.live_out[block];
+                        for &(_, effect) in effects.blocks[block].iter().rev() {
+                            live = effect.live_after(live, live_at_return);
+                            if let SlotEffect::Call(callee) = effect {
+                                after_calls.push((callee, live));
+                            }
+                            live = effect.live_before(live, &summaries.entry_reads);
                         }
-                    });
+                    }
                     for (callee, live_after) in after_calls {
                         if let Some(live) = summaries.live_at_return.get_mut(&callee)
                             && *live | live_after != *live
@@ -369,37 +418,51 @@ impl IrSlotDataSummaries {
         summaries
     }
 
-    fn entry_reads(&self, callee: FuncRef) -> SlotBytes {
-        self.entry_reads
-            .get(&callee)
-            .copied()
-            .unwrap_or(ALL_SLOT_BYTES)
+    /// The fixed-slot bytes `func` itself may write: IR writes and its
+    /// fixed-slot spills.
+    pub(crate) fn local_writes(&self, func: FuncRef, alloc: &StackifyAlloc) -> SlotBytes {
+        let ir_writes = self.effects[&func]
+            .blocks
+            .values()
+            .flatten()
+            .map(|&(_, effect)| match effect {
+                SlotEffect::Access { write, .. } => write,
+                SlotEffect::Call(_) | SlotEffect::Return => 0,
+            });
+        alloc
+            .scratch_slots()
+            .map(slot_bytes)
+            .chain(ir_writes)
+            .fold(0, |writes, bytes| writes | bytes)
     }
 }
 
+fn slot_bytes(slot: u32) -> SlotBytes {
+    slot_range_bytes(slot * WORD_BYTES, Some(WORD_BYTES))
+}
+
 /// Backward liveness of IR data in the fixed slots: the bytes of `[0, 64)` the
-/// IR may still read, whether it wrote them or they are fresh memory. A read is any memory
-/// read the effects model reports (including `return`/`revert`/log/call/create
-/// input ranges and `msize`), a callee's [`IrSlotDataSummaries::entry_reads`],
-/// or a caller's read after a return. Only a write that must happen at an
-/// immediate address and length kills bytes.
+/// IR may still read, whether it wrote them or they are fresh memory. A read is
+/// any memory read the effects model reports (including
+/// `return`/`revert`/log/call/create input ranges), a callee's
+/// [`FixedSlotSummaries::entry_reads`], or a caller's read after a return.
 struct IrSlotDataLiveness {
     live_in: SecondaryMap<BlockId, SlotBytes>,
     live_out: SecondaryMap<BlockId, SlotBytes>,
-    live_at_return: SlotBytes,
 }
 
 impl IrSlotDataLiveness {
+    /// `cfg` may have blocks split off after `effects` was computed; a split
+    /// block holds only its jump.
     fn compute(
-        function: &Function,
+        effects: &FuncSlotEffects,
         cfg: &ControlFlowGraph,
-        summaries: &IrSlotDataSummaries,
+        entry_reads: &FxHashMap<FuncRef, SlotBytes>,
         live_at_return: SlotBytes,
     ) -> Self {
         let mut liveness = Self {
             live_in: SecondaryMap::new(),
             live_out: SecondaryMap::new(),
-            live_at_return,
         };
         let blocks: Vec<BlockId> = cfg.post_order().collect();
         let mut changed = true;
@@ -410,7 +473,13 @@ impl IrSlotDataLiveness {
                     .succs_of(block)
                     .fold(0, |live, &succ| live | liveness.live_in[succ]);
                 liveness.live_out[block] = live_out;
-                let live_in = liveness.walk_block(function, block, summaries, |_, _| {});
+                let live_in =
+                    effects.blocks[block]
+                        .iter()
+                        .rev()
+                        .fold(live_out, |live, &(_, effect)| {
+                            effect.live_before(effect.live_after(live, live_at_return), entry_reads)
+                        });
                 if liveness.live_in[block] != live_in {
                     liveness.live_in[block] = live_in;
                     changed = true;
@@ -419,214 +488,259 @@ impl IrSlotDataLiveness {
         }
         liveness
     }
-
-    /// Visits `block`'s instructions backward with the bytes live after each,
-    /// returning the bytes live at the block's entry.
-    fn walk_block(
-        &self,
-        function: &Function,
-        block: BlockId,
-        summaries: &IrSlotDataSummaries,
-        mut visit: impl FnMut(InstId, SlotBytes),
-    ) -> SlotBytes {
-        let mut live = self.live_out[block];
-        let insts = iter::successors(function.layout.last_inst_of(block), |&inst| {
-            function.layout.prev_inst_of(inst)
-        });
-        for inst in insts {
-            if function.dfg.is_return(inst) {
-                live |= self.live_at_return;
-            }
-            visit(inst, live);
-            if let Some(call) = function.dfg.call_info(inst) {
-                live |= summaries.entry_reads(call.callee());
-                continue;
-            }
-            let (mut read, mut written) = (0, 0);
-            for access in &function.dfg.effects(inst).accesses {
-                let (touched, must_write) = access_slot_bytes(function, access, summaries.ir_bytes);
-                match access.kind {
-                    AccessKind::Read => read |= touched,
-                    AccessKind::Write => written |= must_write,
-                }
-            }
-            live = (live & !written) | read;
-        }
-        live
-    }
 }
 
-/// The values a fixed-slot spill store could overwrite live IR data with: a
-/// spilled value is stored after its definition, on the incoming edges of its
-/// phi, or at function entry for an argument, and any IR data in `[0, 64)`
-/// live there may be read after the store.
-pub(crate) fn values_stored_over_ir_slot_data(
-    function: &Function,
-    cfg: &ControlFlowGraph,
-    func: FuncRef,
-    summaries: &IrSlotDataSummaries,
-) -> BitSet<ValueId> {
-    let liveness =
-        IrSlotDataLiveness::compute(function, cfg, summaries, summaries.live_at_return[&func]);
-    let mut values = BitSet::default();
-    if let Some(entry) = cfg.entry()
-        && liveness.live_in[entry] != 0
-    {
-        for &arg in &function.arg_values {
-            values.insert(arg);
-        }
-    }
-    for block in cfg.post_order() {
-        let phi_store_live = liveness.live_in[block] != 0
-            || cfg
-                .preds_of(block)
-                .any(|&pred| liveness.live_out[pred] != 0);
-        liveness.walk_block(function, block, summaries, |inst, live_after| {
-            let store_live = if function.dfg.is_phi(inst) {
-                phi_store_live
-            } else {
-                live_after != 0
+/// The values each fixed slot cannot hold, and the values whose final spill
+/// must survive a call.
+pub(crate) struct FixedSlotConflicts {
+    pub(crate) barred: Vec<BitSet<ValueId>>,
+    pub(crate) stable_final_spill_values: BitSet<ValueId>,
+}
+
+impl FixedSlotConflicts {
+    /// `slot_writes` gives the fixed-slot bytes a call to each analyzed function
+    /// may write; a callee not in it, as within a call cycle, may write all.
+    /// `cfg` and `inst_liveness` are those stackify plans against.
+    pub(crate) fn compute(
+        function: &Function,
+        cfg: &ControlFlowGraph,
+        func: FuncRef,
+        summaries: &FixedSlotSummaries,
+        slot_writes: &FxHashMap<FuncRef, SlotBytes>,
+        scratch_arena_effects: &FxHashSet<FuncRef>,
+        inst_liveness: &InstLiveness,
+    ) -> Self {
+        let effects = &summaries.effects[&func];
+        let mut conflicts = Self {
+            barred: vec![BitSet::default(); FIXED_SPILL_SLOTS as usize],
+            stable_final_spill_values: BitSet::default(),
+        };
+
+        // A slot cannot hold a value live across a write of the slot. Fixed
+        // slots occupy bytes 0..64; final scratch spills live in the shared
+        // arena. A callee can overwrite the latter without touching either
+        // fixed slot, including through private static mallocs.
+        for &(inst, effect) in effects.blocks.values().flatten() {
+            let (write, clobbers_final_spills) = match effect {
+                SlotEffect::Access { write, .. } => (write, false),
+                SlotEffect::Call(callee) => {
+                    let write = slot_writes.get(&callee).copied().unwrap_or(ALL_SLOT_BYTES);
+                    (write, write != 0 || scratch_arena_effects.contains(&callee))
+                }
+                SlotEffect::Return => continue,
             };
-            if store_live {
-                for &result in function.dfg.inst_results(inst) {
-                    values.insert(result);
+            if write == 0 && !clobbers_final_spills {
+                continue;
+            }
+            // The instruction's own results are stored after it.
+            let defs = function.dfg.inst_results(inst);
+            for value in inst_liveness.live_out(inst).iter() {
+                if !defs.contains(&value) {
+                    conflicts.bar(write, value);
+                    if clobbers_final_spills {
+                        conflicts.stable_final_spill_values.insert(value);
+                    }
                 }
             }
-        });
+        }
+
+        // A slot cannot hold a value whose spill store may overwrite live IR
+        // data: a spilled value is stored after its definition, on the incoming
+        // edges of its phi, or at function entry for an argument, and IR data
+        // live there may be read after the store.
+        let live_at_return = summaries.live_at_return[&func];
+        let liveness =
+            IrSlotDataLiveness::compute(effects, cfg, &summaries.entry_reads, live_at_return);
+        if let Some(entry) = cfg.entry() {
+            for &arg in &function.arg_values {
+                conflicts.bar(liveness.live_in[entry], arg);
+            }
+        }
+        for block in cfg.post_order() {
+            let phi_live = cfg
+                .preds_of(block)
+                .fold(liveness.live_in[block], |live, &pred| {
+                    live | liveness.live_out[pred]
+                });
+            let mut live = liveness.live_out[block];
+            let mut events = effects.blocks[block].iter().rev().peekable();
+            if live | phi_live == 0
+                && events.clone().all(|&(_, effect)| {
+                    let live_after = effect.live_after(0, live_at_return);
+                    effect.live_before(live_after, &summaries.entry_reads) == 0
+                })
+            {
+                continue;
+            }
+            let insts = iter::successors(function.layout.last_inst_of(block), |&inst| {
+                function.layout.prev_inst_of(inst)
+            });
+            for inst in insts {
+                let effect = events
+                    .next_if(|&&(event, _)| event == inst)
+                    .map(|&(_, effect)| effect);
+                if let Some(effect) = effect {
+                    live = effect.live_after(live, live_at_return);
+                }
+                let store_live = if function.dfg.is_phi(inst) {
+                    phi_live
+                } else {
+                    live
+                };
+                for &result in function.dfg.inst_results(inst) {
+                    conflicts.bar(store_live, result);
+                }
+                if let Some(effect) = effect {
+                    live = effect.live_before(live, &summaries.entry_reads);
+                }
+            }
+        }
+
+        conflicts
     }
-    values
+
+    /// Bars `value` from every slot with a byte in `bytes`.
+    fn bar(&mut self, bytes: SlotBytes, value: ValueId) {
+        for (slot, barred) in self.barred.iter_mut().enumerate() {
+            if bytes & slot_bytes(slot as u32) != 0 {
+                barred.insert(value);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::isa::evm::test_util::osaka_triple;
-    use rustc_hash::FxHashSet;
-    use smallvec::smallvec;
-    use sonatina_ir::{
-        I256, Immediate, InstSetBase, Linkage, Module, Signature, Type,
-        builder::{FunctionBuilder, ModuleBuilder},
-        cfg::ControlFlowGraph,
-        func_cursor::InstInserter,
-        inst::{
-            control_flow::{Call, Return},
-            evm::EvmMstore,
-        },
-        isa::{Isa, evm::EvmMachine},
-        module::{FuncRef, ModuleCtx},
-    };
-    use sonatina_parser::parse_module;
+    use sonatina_ir::Module;
+    use sonatina_parser::{ParsedModule, parse_module};
 
     use crate::liveness::Liveness;
 
     use super::*;
 
-    fn machine_builder() -> ModuleBuilder {
-        ModuleBuilder::new(ModuleCtx::new(&EvmMachine::new(osaka_triple())))
-    }
-
-    fn i256(builder: &mut FunctionBuilder<InstInserter>, val: i64) -> ValueId {
-        builder.make_imm_value(Immediate::from_i256(I256::from(val), Type::I256))
-    }
-
-    fn define_unit_callee(builder: &ModuleBuilder, name: &str) -> FuncRef {
-        let func = builder
-            .declare_function(Signature::new_unit(name, Linkage::Private, &[]))
-            .expect("callee declaration succeeds");
-        let machine = EvmMachine::new(builder.triple());
-        let is = machine.inst_set();
-        let mut func_builder = builder.func_builder::<InstInserter>(func);
-        let entry = func_builder.append_block();
-        func_builder.switch_to_block(entry);
-        func_builder.insert_inst_no_result(Return::new_unit(is));
-        func_builder.seal_all();
-        func_builder.finish();
-        func
-    }
-
-    fn define_calling_return_arg(builder: &ModuleBuilder, name: &str, callee: FuncRef) -> FuncRef {
-        let func = builder
-            .declare_function(Signature::new_single(
-                name,
-                Linkage::Public,
-                &[Type::I256],
-                Type::I256,
-            ))
-            .expect("caller declaration succeeds");
-        let machine = EvmMachine::new(builder.triple());
-        let is = machine.inst_set();
-        let mut func_builder = builder.func_builder::<InstInserter>(func);
-        let entry = func_builder.append_block();
-        func_builder.switch_to_block(entry);
-        let arg = func_builder.func.arg_values[0];
-        func_builder.insert_inst_no_result(Call::new(
-            is.has_call().expect("machine ISA supports calls"),
-            callee,
-            smallvec![],
-        ));
-        func_builder.insert_inst_no_result(Return::new_single(is, arg));
-        func_builder.seal_all();
-        func_builder.finish();
-        func
-    }
-
-    fn define_local_scratch_clobber_return_arg(builder: &ModuleBuilder, name: &str) -> FuncRef {
-        let func = builder
-            .declare_function(Signature::new_single(
-                name,
-                Linkage::Public,
-                &[Type::I256],
-                Type::I256,
-            ))
-            .expect("caller declaration succeeds");
-        let machine = EvmMachine::new(builder.triple());
-        let is = machine.inst_set();
-        let mut func_builder = builder.func_builder::<InstInserter>(func);
-        let entry = func_builder.append_block();
-        func_builder.switch_to_block(entry);
-        let arg = func_builder.func.arg_values[0];
-        let addr = i256(&mut func_builder, 0);
-        let val = i256(&mut func_builder, 7);
-        func_builder.insert_inst_no_result(EvmMstore::new(is, addr, val));
-        func_builder.insert_inst_no_result(Return::new_single(is, arg));
-        func_builder.seal_all();
-        func_builder.finish();
-        func
-    }
-
-    fn analyze(
-        module: &Module,
+    /// The fixed-slot conflicts of `%f` in a module whose `%root` calls it and
+    /// halts, so that no IR data is live when `%f` returns.
+    struct Analysis {
+        parsed: ParsedModule,
         func: FuncRef,
-        fixed_slot_effects: &FxHashSet<FuncRef>,
-        scratch_arena_effects: &FxHashSet<FuncRef>,
-    ) -> (ValueId, BitSet<ValueId>, BitSet<ValueId>) {
-        let machine = EvmMachine::new(module.ctx.triple);
-        module.func_store.view(func, |function| {
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(function);
-
-            let mut liveness = Liveness::new();
-            liveness.compute(function, &cfg);
-
-            let mut inst_liveness = InstLiveness::new();
-            inst_liveness.compute(function, &cfg, &liveness);
-
-            let scratch_liveness = MachineSpillClobberLiveness::compute(
-                function,
-                &machine,
-                fixed_slot_effects,
-                scratch_arena_effects,
-                &inst_liveness,
-            );
-            let (fixed_scratch, stable_final) = scratch_liveness.into_parts();
-            (function.arg_values[0], fixed_scratch, stable_final)
-        })
+        conflicts: FixedSlotConflicts,
     }
+
+    impl Analysis {
+        /// A call to a function in `slot_writers` may write both slots, and one
+        /// to a function in `arena_writers` the scratch arena. The values in
+        /// `allocation_addrs` name an allocation.
+        fn of(
+            funcs: &str,
+            slot_writers: &[&str],
+            arena_writers: &[&str],
+            allocation_addrs: &[&str],
+        ) -> Self {
+            let parsed = parse_module(&format!(
+                r#"
+target = "evm-ethereum-osaka"
+{funcs}
+func public %root() {{
+block0:
+    v0.i256 = call %f 1.i256;
+    evm_stop;
+}}
+"#
+            ))
+            .unwrap();
+            let module = &parsed.module;
+            let named = |name: &str| {
+                module
+                    .funcs()
+                    .into_iter()
+                    .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == name))
+                    .unwrap()
+            };
+            let func = named("f");
+            let schedule = CallGraphSchedule::compute(module, &module.funcs());
+            let allocation_addrs = module
+                .funcs()
+                .into_iter()
+                .map(|other| {
+                    let values = allocation_addrs
+                        .iter()
+                        .filter(|_| other == func)
+                        .map(|name| parsed.debug.value(func, name).unwrap())
+                        .collect();
+                    (other, values)
+                })
+                .collect();
+            let summaries = FixedSlotSummaries::compute(
+                module,
+                &schedule,
+                FIXED_SLOTS_END_BYTES,
+                &allocation_addrs,
+            );
+            let slot_writes = module
+                .funcs()
+                .into_iter()
+                .filter(|&other| other != func)
+                .map(|other| {
+                    let writes = if slot_writers.iter().any(|name| named(name) == other) {
+                        ALL_SLOT_BYTES
+                    } else {
+                        summaries.local_writes(other, &StackifyAlloc::default())
+                    };
+                    (other, writes)
+                })
+                .collect();
+            let arena_writers = arena_writers.iter().map(|name| named(name)).collect();
+            let conflicts = module.func_store.view(func, |function| {
+                let mut cfg = ControlFlowGraph::new();
+                cfg.compute(function);
+                let mut liveness = Liveness::new();
+                liveness.compute(function, &cfg);
+                let mut inst_liveness = InstLiveness::new();
+                inst_liveness.compute(function, &cfg, &liveness);
+                FixedSlotConflicts::compute(
+                    function,
+                    &cfg,
+                    func,
+                    &summaries,
+                    &slot_writes,
+                    &arena_writers,
+                    &inst_liveness,
+                )
+            });
+            Self {
+                parsed,
+                func,
+                conflicts,
+            }
+        }
+
+        /// Whether slot 0 and slot 1 bar the value.
+        fn barred(&self, name: &str) -> [bool; 2] {
+            let value = self.parsed.debug.value(self.func, name).unwrap();
+            [0, 1].map(|slot| self.conflicts.barred[slot].contains(value))
+        }
+
+        fn needs_stable_final_spill(&self, name: &str) -> bool {
+            let value = self.parsed.debug.value(self.func, name).unwrap();
+            self.conflicts.stable_final_spill_values.contains(value)
+        }
+    }
+
+    const CALLS_CALLEE: &str = r#"
+func private %callee() {
+block0:
+    return;
+}
+func private %f(v0.i256) -> i256 {
+block0:
+    call %callee;
+    return v0;
+}
+"#;
 
     #[test]
     fn call_result_liveness_is_independent_of_block_layout_order() {
-        let parsed = parse_module(
-            r#"
-target = "evm-ethereum-osaka"
+        const FUNCS: &str = r#"
 func private %produce() -> i256 {
 block0:
     return 42.i256;
@@ -635,7 +749,7 @@ func private %clobber() {
 block0:
     return;
 }
-func public %caller(v0.i256) -> i256 {
+func private %f(v0.i256) -> i256 {
 block0:
     jump block2;
 block1:
@@ -645,94 +759,170 @@ block2:
     v1.i256 = call %produce;
     jump block1;
 }
-"#,
-        )
-        .unwrap();
-        let funcs = parsed.module.funcs();
-        let [produce, clobber, caller] = funcs.as_slice() else {
-            panic!("three functions");
-        };
-        let result = parsed.module.func_store.view(*caller, |function| {
-            function
-                .layout
-                .iter_all_insts()
-                .find_map(|inst| {
-                    function
-                        .dfg
-                        .call_info(inst)
-                        .filter(|call| call.callee() == *produce)
-                        .map(|_| function.dfg.inst_results(inst)[0])
-                })
-                .unwrap()
-        });
-        for later_clobber in [false, true] {
-            let mut effects = FxHashSet::from_iter([*produce]);
-            if later_clobber {
-                effects.insert(*clobber);
-            }
-            let (_, fixed, stable) = analyze(&parsed.module, *caller, &effects, &effects);
-            assert_eq!(fixed.contains(result), later_clobber);
-            assert_eq!(stable.contains(result), later_clobber);
+"#;
+        for (writers, live_across) in [(&["produce"][..], false), (&["produce", "clobber"], true)] {
+            let analysis = Analysis::of(FUNCS, writers, writers, &[]);
+            assert_eq!(analysis.barred("v1"), [live_across; 2]);
+            assert_eq!(analysis.needs_stable_final_spill("v1"), live_across);
         }
     }
 
     #[test]
-    fn scratch_clean_call_does_not_require_stable_final_spill() {
-        let builder = machine_builder();
-        let callee = define_unit_callee(&builder, "callee");
-        let caller = define_calling_return_arg(&builder, "caller", callee);
-        let module = builder.build();
-        let fixed_slot_effects = FxHashSet::default();
-        let (arg, fixed_scratch, stable_final) =
-            analyze(&module, caller, &fixed_slot_effects, &FxHashSet::default());
+    fn value_live_across_a_call_follows_what_the_callee_writes() {
+        let clean = Analysis::of(CALLS_CALLEE, &[], &[], &[]);
+        assert_eq!(clean.barred("v0"), [false; 2]);
+        assert!(!clean.needs_stable_final_spill("v0"));
 
-        assert!(!fixed_scratch.contains(arg));
-        assert!(!stable_final.contains(arg));
+        let arena = Analysis::of(CALLS_CALLEE, &[], &["callee"], &[]);
+        assert_eq!(arena.barred("v0"), [false; 2]);
+        assert!(arena.needs_stable_final_spill("v0"));
+
+        let slots = Analysis::of(CALLS_CALLEE, &["callee"], &[], &[]);
+        assert_eq!(slots.barred("v0"), [true; 2]);
+        assert!(slots.needs_stable_final_spill("v0"));
     }
 
     #[test]
-    fn arena_clobbering_call_requires_stable_spills_but_preserves_fixed_slots() {
-        let builder = machine_builder();
-        let callee = define_unit_callee(&builder, "callee");
-        let caller = define_calling_return_arg(&builder, "caller", callee);
-        let module = builder.build();
-        let scratch_arena_effects = FxHashSet::from_iter([callee]);
-        let (arg, fixed_scratch, stable_final) = analyze(
-            &module,
-            caller,
-            &FxHashSet::default(),
-            &scratch_arena_effects,
+    fn callee_ir_write_bars_only_the_slot_it_writes() {
+        let analysis = Analysis::of(
+            r#"
+func private %callee() {
+block0:
+    mstore 32.i256 7.i256 i256;
+    return;
+}
+func private %f(v0.i256) -> i256 {
+block0:
+    call %callee;
+    return v0;
+}
+"#,
+            &[],
+            &[],
+            &[],
         );
-
-        assert!(!fixed_scratch.contains(arg));
-        assert!(stable_final.contains(arg));
+        assert_eq!(analysis.barred("v0"), [false, true]);
     }
 
     #[test]
-    fn scratch_clobbering_call_requires_stable_final_spill() {
-        let builder = machine_builder();
-        let callee = define_unit_callee(&builder, "callee");
-        let caller = define_calling_return_arg(&builder, "caller", callee);
-        let module = builder.build();
-        let mut fixed_slot_effects = FxHashSet::default();
-        fixed_slot_effects.insert(callee);
-        let (arg, fixed_scratch, stable_final) =
-            analyze(&module, caller, &fixed_slot_effects, &FxHashSet::default());
-
-        assert!(fixed_scratch.contains(arg));
-        assert!(stable_final.contains(arg));
+    fn local_write_bars_only_the_slots_it_touches() {
+        for (addr, barred) in [(0, [true, false]), (16, [true, true]), (63, [false, true])] {
+            let analysis = Analysis::of(
+                &format!(
+                    r#"
+func private %f(v0.i256) -> i256 {{
+block0:
+    mstore {addr}.i256 7.i256 i256;
+    return v0;
+}}
+"#
+                ),
+                &[],
+                &[],
+                &[],
+            );
+            assert_eq!(analysis.barred("v0"), barred, "write at {addr}");
+            assert!(!analysis.needs_stable_final_spill("v0"));
+        }
     }
 
     #[test]
-    fn local_scratch_clobber_does_not_require_stable_final_spill() {
-        let builder = machine_builder();
-        let caller = define_local_scratch_clobber_return_arg(&builder, "caller");
-        let module = builder.build();
-        let fixed_slot_effects = FxHashSet::default();
-        let (arg, fixed_scratch, stable_final) =
-            analyze(&module, caller, &fixed_slot_effects, &FxHashSet::default());
+    fn store_over_live_ir_data_bars_only_the_slot_holding_it() {
+        // `v1` is stored while the word at 32 is read later; `v3` after the read.
+        let analysis = Analysis::of(
+            r#"
+func private %f(v0.i256) -> i256 {
+block0:
+    mstore 32.i256 5.i256 i256;
+    v1.i256 = add v0 1.i256;
+    v2.i256 = mload 32.i256 i256;
+    v3.i256 = add v1 v2;
+    return v3;
+}
+"#,
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(analysis.barred("v1"), [false, true]);
+        assert_eq!(analysis.barred("v3"), [false; 2]);
+    }
 
-        assert!(fixed_scratch.contains(arg));
-        assert!(!stable_final.contains(arg));
+    #[test]
+    fn computed_address_touches_the_slots_unless_it_names_an_allocation() {
+        const FUNCS: &str = r#"
+func private %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = evm_calldata_load 0.i256;
+    v2.i256 = add v0 1.i256;
+    v3.i256 = mload v1 i256;
+    mstore v1 v2 i256;
+    v4.i256 = add v3 v2;
+    return v4;
+}
+"#;
+        // `v2` is stored before the read and is live across the write.
+        assert_eq!(Analysis::of(FUNCS, &[], &[], &[]).barred("v2"), [true; 2]);
+        assert_eq!(
+            Analysis::of(FUNCS, &[], &[], &["v1"]).barred("v2"),
+            [false; 2]
+        );
+    }
+
+    #[test]
+    fn msize_reads_no_slot_data() {
+        let analysis = Analysis::of(
+            r#"
+func private %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    v2.i256 = evm_msize;
+    v3.i256 = add v1 v2;
+    return v3;
+}
+"#,
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(analysis.barred("v1"), [false; 2]);
+    }
+
+    #[test]
+    fn data_read_after_the_return_is_live_at_every_store() {
+        // `%root` reads the word at 0 after the call.
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    return v1;
+}
+func public %root() {
+block0:
+    v0.i256 = call %f 1.i256;
+    evm_return 0.i256 32.i256;
+}
+"#,
+        )
+        .unwrap();
+        let module: &Module = &parsed.module;
+        let [func, _] = module.funcs()[..] else {
+            panic!("two functions");
+        };
+        let schedule = CallGraphSchedule::compute(module, &module.funcs());
+        let allocation_addrs = module
+            .funcs()
+            .into_iter()
+            .map(|func| (func, BitSet::default()))
+            .collect();
+        let summaries = FixedSlotSummaries::compute(
+            module,
+            &schedule,
+            FIXED_SLOTS_END_BYTES,
+            &allocation_addrs,
+        );
+        assert_eq!(summaries.live_at_return[&func], slot_bytes(0));
     }
 }

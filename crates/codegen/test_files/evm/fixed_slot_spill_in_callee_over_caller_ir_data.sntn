@@ -4,7 +4,7 @@
 #!   expect: return u256(0x00000000000000000000000000000000000000000000000000000000000160d2)
 
 # The caller stores 0x00, calls a function that spills under pressure, then reads 0x00.
-# The callee's spills must not take the fixed slots while the caller's data is live.
+# The callee's spills must not take the fixed slot at 0x00 while the caller's data is live.
 target = "evm-ethereum-osaka"
 
 func public %entry() {

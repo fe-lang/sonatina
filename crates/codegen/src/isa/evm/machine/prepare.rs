@@ -1,9 +1,10 @@
 use rustc_hash::{FxHashMap, FxHashSet};
-use sonatina_ir::{Module, cfg::ControlFlowGraph, isa::evm::EvmMachine, module::FuncRef};
+use sonatina_ir::{Module, ValueId, cfg::ControlFlowGraph, module::FuncRef};
 use std::sync::Mutex;
 use tracing::{debug_span, trace_span};
 
 use crate::{
+    bitset::BitSet,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
     module_analysis::CallGraphSchedule,
@@ -15,7 +16,9 @@ use crate::{
 
 use super::{
     super::{
-        EvmBackend, ImmediateMaterializationMode, fixed_slots, memory_plan::MachineStackifyAnalysis,
+        EvmBackend, ImmediateMaterializationMode,
+        fixed_slots::{FixedSlotConflicts, FixedSlotSummaries, SlotBytes},
+        memory_plan::MachineStackifyAnalysis,
     },
     placement::EvmMemoryPlacementPlan,
     verify::verify_machine_module,
@@ -60,35 +63,27 @@ impl SectionStackifySearchCaches {
     }
 }
 
+/// `allocation_addrs` holds each function's machine values that name an
+/// allocation on every path.
 pub(crate) fn prepare_machine_stackify_analyses(
     module: &Module,
     schedule: &CallGraphSchedule,
     backend: &EvmBackend,
-    machine_isa: &EvmMachine,
     placement: &EvmMemoryPlacementPlan,
+    allocation_addrs: &FxHashMap<FuncRef, BitSet<ValueId>>,
     search_caches: &Mutex<SectionStackifySearchCaches>,
 ) -> Result<FxHashMap<FuncRef, MachineStackifyAnalysis>, String> {
     verify_machine_module(module, schedule.funcs())?;
     let _span = debug_span!("sonatina.codegen.evm.machine.prepare_stackify").entered();
-    let local_scratch_clobbers =
-        compute_local_machine_scratch_clobbers(module, schedule.funcs(), machine_isa);
-    let ir_slot_data =
-        fixed_slots::IrSlotDataSummaries::compute(module, schedule, placement.arena_base);
+    let fixed_slots =
+        FixedSlotSummaries::compute(module, schedule, placement.arena_base, allocation_addrs);
 
     let mut analyses = FxHashMap::default();
-    let mut fixed_slot_effects = FxHashSet::default();
+    // The fixed-slot bytes a call to each analyzed function may write.
+    let mut slot_writes: FxHashMap<FuncRef, SlotBytes> = FxHashMap::default();
     let mut scratch_arena_effects = FxHashSet::default();
     for &scc_ref in schedule.topo.iter().rev() {
         let components = schedule.members(scc_ref);
-
-        let cycle_fixed_slot_effects = schedule.sccs.scc_info(scc_ref).is_cycle.then(|| {
-            let mut cycle_fixed_slot_effects = fixed_slot_effects.clone();
-            cycle_fixed_slot_effects.extend(components.iter().copied());
-            cycle_fixed_slot_effects
-        });
-        let analysis_fixed_slot_effects = cycle_fixed_slot_effects
-            .as_ref()
-            .unwrap_or(&fixed_slot_effects);
 
         let cycle_scratch_arena_effects = schedule.sccs.scc_info(scc_ref).is_cycle.then(|| {
             let mut effects = scratch_arena_effects.clone();
@@ -107,15 +102,14 @@ pub(crate) fn prepare_machine_stackify_analyses(
                         function,
                         func,
                         backend,
-                        machine_isa,
-                        analysis_fixed_slot_effects,
+                        &fixed_slots,
+                        &slot_writes,
                         analysis_scratch_arena_effects,
-                        &ir_slot_data,
                         &mut search_cache,
                     )
                 });
                 search_caches.lock().unwrap().retain(func, search_cache);
-                let uses_scratch_spills = analysis.alloc.uses_scratch_spills();
+                let local_slot_writes = fixed_slots.local_writes(func, &analysis.alloc);
                 // Optional final spills may be assigned to the shared arena after
                 // stackification. Account for them before analyzing callers, even on
                 // the first placement iteration when no reserve exists yet.
@@ -123,34 +117,24 @@ pub(crate) fn prepare_machine_stackify_analyses(
                     .alloc
                     .object_spills()
                     .any(|(value, _)| !analysis.stable_final_spill_values.contains(value));
-                (func, analysis, uses_scratch_spills, may_use_arena_spills)
+                (func, analysis, local_slot_writes, may_use_arena_spills)
             });
         scc_results.sort_unstable_by_key(|(func, ..)| func.as_u32());
 
-        let mut scc_uses_scratch_spills = false;
+        // Callees in this SCC are its members; the rest are analyzed already.
+        let mut scc_slot_writes = components
+            .iter()
+            .flat_map(|&func| schedule.call_graph.callee_of(func))
+            .filter_map(|callee| slot_writes.get(callee))
+            .fold(0, |writes, callee_writes| writes | callee_writes);
         let mut scc_may_use_arena_spills = false;
-        for (func, analysis, uses_scratch_spills, may_use_arena_spills) in scc_results {
+        for (func, analysis, local_slot_writes, may_use_arena_spills) in scc_results {
             scc_may_use_arena_spills |= may_use_arena_spills;
-            scc_uses_scratch_spills |= uses_scratch_spills;
+            scc_slot_writes |= local_slot_writes;
             analyses.insert(func, analysis);
         }
+        slot_writes.extend(components.iter().map(|&func| (func, scc_slot_writes)));
 
-        let scc_touches_fixed_slots = scc_uses_scratch_spills
-            || components
-                .iter()
-                .copied()
-                .any(|func| local_scratch_clobbers.contains(&func))
-            || components.iter().copied().any(|func| {
-                schedule
-                    .call_graph
-                    .callee_of(func)
-                    .iter()
-                    .copied()
-                    .any(|callee| fixed_slot_effects.contains(&callee))
-            });
-        if scc_touches_fixed_slots {
-            fixed_slot_effects.extend(components.iter().copied());
-        }
         let scc_touches_scratch_arena = scc_may_use_arena_spills
             || components
                 .iter()
@@ -170,15 +154,13 @@ pub(crate) fn prepare_machine_stackify_analyses(
     Ok(analyses)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn prepare_machine_stackify_analysis(
     function: &mut sonatina_ir::Function,
     func: FuncRef,
     backend: &EvmBackend,
-    machine_isa: &EvmMachine,
-    fixed_slot_effects: &FxHashSet<FuncRef>,
+    fixed_slots: &FixedSlotSummaries,
+    slot_writes: &FxHashMap<FuncRef, SlotBytes>,
     scratch_arena_effects: &FxHashSet<FuncRef>,
-    ir_slot_data: &fixed_slots::IrSlotDataSummaries,
     search_cache: &mut StackifySearchCache,
 ) -> MachineStackifyAnalysis {
     let _span = trace_span!("sonatina.codegen.evm.machine.prepare_stackify_func").entered();
@@ -200,21 +182,21 @@ fn prepare_machine_stackify_analysis(
     let mut inst_liveness = InstLiveness::new();
     inst_liveness.compute(function, &cfg, &liveness);
 
-    let scratch_clobber_liveness = fixed_slots::MachineSpillClobberLiveness::compute(
-        function,
-        machine_isa,
-        fixed_slot_effects,
-        scratch_arena_effects,
-        &inst_liveness,
-    );
-    let (mut scratch_live_values, stable_final_spill_values) =
-        scratch_clobber_liveness.into_parts();
-    scratch_live_values.union_with(&fixed_slots::values_stored_over_ir_slot_data(
-        function,
-        &cfg,
-        func,
-        ir_slot_data,
-    ));
+    let FixedSlotConflicts {
+        barred,
+        stable_final_spill_values,
+    } = {
+        let _span = trace_span!("sonatina.codegen.evm.machine.fixed_slot_conflicts").entered();
+        FixedSlotConflicts::compute(
+            function,
+            &cfg,
+            func,
+            fixed_slots,
+            slot_writes,
+            scratch_arena_effects,
+            &inst_liveness,
+        )
+    };
     let mut builder = StackifyBuilder::new(
         function,
         &cfg,
@@ -223,8 +205,7 @@ fn prepare_machine_stackify_analysis(
         backend.stackify_reach_depth,
     )
     .with_search_profile(backend.stackify_search_profile)
-    .with_scratch_live_values(scratch_live_values)
-    .with_scratch_spills(fixed_slots::FIXED_SPILL_SLOTS)
+    .with_scratch_slots(barred)
     .with_hot_immediate_caching();
 
     if backend.immediate_materialization_mode == ImmediateMaterializationMode::Size {
@@ -248,22 +229,4 @@ fn prepare_machine_stackify_analysis(
         stable_final_spill_values,
         trace,
     }
-}
-
-fn compute_local_machine_scratch_clobbers(
-    module: &Module,
-    funcs: &[FuncRef],
-    machine_isa: &EvmMachine,
-) -> FxHashSet<FuncRef> {
-    let mut local: Vec<_> = sonatina_ir::parallel::filter(&module.func_store, funcs, |&func| {
-        module.func_store.view(func, |function| {
-            function.layout.iter_block().any(|block| {
-                function.layout.iter_inst(block).any(|inst| {
-                    fixed_slots::machine_inst_is_fixed_slot_clobber(function, machine_isa, inst)
-                })
-            })
-        })
-    });
-    local.sort_unstable_by_key(|func| func.as_u32());
-    local.into_iter().collect()
 }

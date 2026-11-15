@@ -4,7 +4,8 @@
 #!   expect: return u256(0x0cae7a53faa4d416aeae6ed0cb16440a68527554c6b4d1d97857a5ff91a67fc0)
 
 # Mapping-slot hashing at 0x00: `mstore 0 key`, the slot computed under stack pressure,
-# `mstore 32 slot`, `keccak256 0 64`. No spill between the stores may use a fixed slot.
+# `mstore 32 slot`, `keccak256 0 64`. No spill between the stores may take the fixed slot
+# at 0x00. The one at 0x20 is free until the IR stores the slot there.
 target = "evm-ethereum-osaka"
 
 func public %entry() {

@@ -380,7 +380,7 @@ block1:
                 scc,
                 StackifyReachability::new(16),
             );
-            ctx.scratch_spill_slots = (edge.scratch.len() + edge.spilled.len()) as u32;
+            ctx.scratch_barred = vec![BitSet::default(); edge.scratch.len() + edge.spilled.len()];
 
             let spill_set: BitSet<ValueId> = edge
                 .scratch
@@ -399,7 +399,7 @@ block1:
                         spilled,
                         &ctx.spill_slot_interference,
                         &mut free_slots.scratch,
-                        Some(ctx.scratch_spill_slots),
+                        &ctx.scratch_barred,
                     ),
                     Some(slot as u32),
                     "{name} gets its own scratch slot"

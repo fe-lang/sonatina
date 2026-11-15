@@ -10,9 +10,9 @@ object: Contract
   total: 167 bytes
 
 functions:
-  mem: global_dyn_base=0xa0 arena_base=0x40 scratch_peak_words=0 stable_chain_peak_words=3
+  mem: global_dyn_base=0x80 arena_base=0x40 scratch_peak_words=0 stable_chain_peak_words=2
   entry: ir_blocks=1 ir_insts=46 vcode_ops=134 fixups=0 imm_bytes=31
-    mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0x40) entry_abs_words=0 abs_words_end=3
+    mem: scratch_words=0 stable_words=2 stable_mode=StableAbs(base=0x40) entry_abs_words=0 abs_words_end=2
 
 evm:
   case hashes_key_and_slot: calldata_len=96 success reason=Return gas_used=21867 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=459
@@ -32,19 +32,19 @@ entry:
     DUP2
     ADD
     DUP1
-    PUSH1 0x40 (64)
+    PUSH1 0x20 (32)
     MSTORE
     PUSH1 0x2 (2)  // v4.i256 = add v90 v3;
     DUP3
     ADD
     DUP1
-    PUSH1 0x60 (96)
+    PUSH1 0x40 (64)
     MSTORE
     PUSH1 0x3 (3)  // v6.i256 = add v90 v5;
     DUP4
     ADD
     DUP1
-    PUSH1 0x80 (128)
+    PUSH1 0x60 (96)
     MSTORE
     PUSH1 0x4 (4)  // v8.i256 = add v90 v7;
     DUP5
@@ -99,13 +99,13 @@ entry:
     DUP5
     ADD
     SWAP4  // v100.i256 = add v90 v2;
-    PUSH1 0x40 (64)
+    PUSH1 0x20 (32)
     MLOAD
     ADD
-    PUSH1 0x60 (96)  // v43.i256 = add v100 v4;
+    PUSH1 0x40 (64)  // v43.i256 = add v100 v4;
     MLOAD
     ADD
-    PUSH1 0x80 (128)  // v44.i256 = add v43 v6;
+    PUSH1 0x60 (96)  // v44.i256 = add v43 v6;
     MLOAD
     ADD
     SWAP1  // v45.i256 = add v44 v8;

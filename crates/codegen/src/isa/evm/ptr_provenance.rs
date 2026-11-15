@@ -277,6 +277,22 @@ impl Provenance {
         changed
     }
 
+    /// The address names an allocation on every path: a raw alternative, such
+    /// as a literal joined with a heap pointer, may reach low memory. A heap
+    /// object a callee allocated lies above the heap floor like a local one.
+    /// An argument counts only if `arg_names_allocation` says every caller
+    /// passes such an address.
+    pub(crate) fn names_allocation(&self, arg_names_allocation: impl Fn(u32) -> bool) -> bool {
+        !self.is_empty()
+            && !self.raw
+            && !self.may_reference_unknown_local()
+            && self.arg_memory.is_empty()
+            && self
+                .arg_indices()
+                .chain(self.forwarded_args.iter().copied())
+                .all(arg_names_allocation)
+    }
+
     pub(crate) fn has_any_arg(&self) -> bool {
         self.bases.iter().any(|b| matches!(b, PtrBase::Arg(_)))
             || !self.unknown_arg_indices.is_empty()
