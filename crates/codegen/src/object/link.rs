@@ -373,6 +373,11 @@ pub(crate) fn link_section(
                 None
             };
 
+            let lowering = if opts.emit_lowering {
+                record_section_lowering(prepared, &layout, &symtab)
+            } else {
+                None
+            };
             return Ok(SectionArtifact {
                 bytes,
                 symtab: if opts.emit_symtab {
@@ -381,11 +386,7 @@ pub(crate) fn link_section(
                     FxHashMap::default()
                 },
                 observability,
-                lowering: if opts.emit_lowering {
-                    record_section_lowering(prepared, &layout)
-                } else {
-                    None
-                },
+                lowering,
             });
         }
     }

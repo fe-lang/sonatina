@@ -6,7 +6,7 @@ use sonatina_codegen::{
     EvmCompile, OptLevel,
     isa::evm::opcode::OpCode,
     object::{
-        ObjectArtifact,
+        ObjectArtifact, encode_gv_initializer_to_bytes,
         lowering::{CodeLabel, SectionLowering, StackSlot},
     },
 };
@@ -40,8 +40,43 @@ fn instruction_starts(bytes: &[u8], code_end: usize) -> BTreeSet<u32> {
 }
 
 fn check_record(lowering: &SectionLowering, bytes: &[u8]) {
-    parse_module(&lowering.source_ir).expect("the source IR parses");
+    let source = parse_module(&lowering.source_ir)
+        .expect("the source IR parses")
+        .module;
     parse_module(&lowering.machine_ir).expect("the machine IR parses");
+
+    let source_funcs: BTreeSet<_> = source
+        .funcs()
+        .into_iter()
+        .map(|func| source.ctx.func_sig(func, |sig| format!("%{}", sig.name())))
+        .collect();
+    for (symbol, def) in &lowering.symbols {
+        let (start, end) = (def.offset as usize, (def.offset + def.size) as usize);
+        assert!(end <= bytes.len(), "{symbol} ends past the section");
+        if let Some(name) = symbol.strip_prefix('$') {
+            let gv = source
+                .ctx
+                .with_gv_store(|store| store.lookup_gv(name))
+                .unwrap_or_else(|| panic!("{symbol} is not a global of the source IR"));
+            let data = encode_gv_initializer_to_bytes(&source.ctx, gv).expect("data encodes");
+            assert!(
+                start >= lowering.code_size as usize,
+                "{symbol} is in the code"
+            );
+            assert_eq!(bytes[start..end], data, "the bytes of {symbol}");
+        } else if symbol.starts_with('%') {
+            assert!(
+                source_funcs.contains(symbol),
+                "{symbol} is not a function of the source IR"
+            );
+            assert!(
+                end <= lowering.code_size as usize,
+                "{symbol} is past the code"
+            );
+        } else if symbol == "." {
+            assert_eq!((start, end), (0, bytes.len()));
+        }
+    }
 
     let starts = instruction_starts(bytes, lowering.code_size as usize);
     for func in &lowering.funcs {
@@ -142,6 +177,88 @@ fn lowering_record_is_metadata_and_agrees_with_bytes(fixture: Fixture<&str>) {
                     .expect("a recorded compile has a lowering record");
                 check_record(lowering, &recorded.bytes);
             }
+        }
+    }
+}
+
+/// `%runtime` reads a table at an index from calldata through `%get`. The
+/// backend's pipeline specializes `%get` for the table and moves the table to
+/// a word blob: a function and a global the compiled module does not have,
+/// named in the record as the section's IR names them. The compiled module
+/// has no function with the new function's id.
+#[test]
+fn lowering_record_names_symbols_of_the_section_module() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 6] $table = [5, 17, 2, 99, 1234567, 8];
+
+func inline(never) private %get(v0.constref<[i256; 6]>, v1.i256) -> i256 {
+    block0:
+        v2.constref<i256> = const.index v0 v1;
+        v3.i256 = const.load v2;
+        return v3;
+}
+
+func public %runtime() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.constref<[i256; 6]> = const.ref $table;
+        v2.i256 = call %get v1 v0;
+        mstore 0.i256 v2 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func public %init() {
+    block0:
+        v0.i256 = sym_addr &runtime;
+        v1.i256 = sym_size &runtime;
+        evm_code_copy 0.i256 v0 v1;
+        evm_return 0.i256 v1;
+}
+
+object @Table {
+  section init {
+    entry %init;
+    embed .runtime as &runtime;
+  }
+  section runtime {
+    entry %runtime;
+  }
+}
+"#;
+    let input = parse_module(source).expect("fixture parses").module;
+    let input_symbols: BTreeSet<_> = input
+        .funcs()
+        .into_iter()
+        .map(|func| input.ctx.func_sig(func, |sig| format!("%{}", sig.name())))
+        .chain(["$table".to_string(), ".".to_string()])
+        .collect();
+    for opt in [OptLevel::O0, OptLevel::O1, OptLevel::Os] {
+        let artifacts = compile(source, opt, true);
+        for section in artifacts[0].sections.values() {
+            check_record(
+                section.lowering.as_ref().expect("a lowering record"),
+                &section.bytes,
+            );
+        }
+        let (_, runtime) = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0.as_str() == "runtime")
+            .expect("a runtime section");
+        let lowering = runtime.lowering.as_ref().expect("a lowering record");
+        let new: Vec<_> = lowering
+            .symbols
+            .iter()
+            .map(|(symbol, _)| symbol.as_str())
+            .filter(|symbol| !input_symbols.contains(*symbol))
+            .collect();
+        for prefix in ['%', '$'] {
+            assert!(
+                new.iter().any(|symbol| symbol.starts_with(prefix)),
+                "{opt:?}: no `{prefix}` symbol of the section's own in {new:?}"
+            );
         }
     }
 }

@@ -1,16 +1,25 @@
 //! Builds a section's `SectionLowering` from its prepared section and final
 //! layout.
 
-use sonatina_ir::{Module, ir_writer::ModuleWriter, module::FuncRef};
+use rustc_hash::FxHashMap;
+use sonatina_ir::{
+    Module,
+    inst::data::SymbolRef,
+    ir_writer::{IrWrite, ModuleWriter},
+    module::FuncRef,
+};
 
 use super::{
     DynSpInitKind, EvmPreparedSection, emit::FinalAlloc, memory_plan::StableMode, opcode::OpCode,
 };
 use crate::{
     machinst::{assemble::ObjectLayout, vcode::Label},
-    object::lowering::{
-        BlockLowering, CodeLabel, DynSpInitLowering, FrameLowering, FuncLowering, SectionLowering,
-        SpillLocation, StableLowering, StackSlot,
+    object::{
+        SymbolDef, SymbolId,
+        lowering::{
+            BlockLowering, CodeLabel, DynSpInitLowering, FrameLowering, FuncLowering,
+            SectionLowering, SpillLocation, StableLowering, StackSlot,
+        },
     },
     stackalloc::{Action, SpillStorage, StackItem},
 };
@@ -27,6 +36,7 @@ pub(crate) fn functions_text(module: &Module, funcs: &[FuncRef]) -> String {
 pub(crate) fn record_section_lowering(
     prepared: &EvmPreparedSection,
     layout: &ObjectLayout<OpCode>,
+    symtab: &FxHashMap<SymbolId, SymbolDef>,
 ) -> Option<SectionLowering> {
     let lowering = prepared.lowering()?;
     let module = prepared.module();
@@ -176,6 +186,20 @@ pub(crate) fn record_section_lowering(
         })
         .collect();
 
+    let mut symbols: Vec<_> = symtab
+        .iter()
+        .map(|(id, def)| {
+            let symbol = match id {
+                SymbolId::Func(func) => SymbolRef::Func(*func),
+                SymbolId::Global(gv) => SymbolRef::Global(*gv),
+                SymbolId::Embed(embed) => SymbolRef::Embed(embed.clone()),
+                SymbolId::CurrentSection => SymbolRef::CurrentSection,
+            };
+            (symbol.dump_string(&module.ctx), *def)
+        })
+        .collect();
+    symbols.sort_unstable_by(|(a, a_def), (b, b_def)| (a_def.offset, a).cmp(&(b_def.offset, b)));
+
     Some(SectionLowering {
         source_ir: lowering.source_ir.clone(),
         machine_ir: functions_text(module, prepared.funcs()),
@@ -186,5 +210,6 @@ pub(crate) fn record_section_lowering(
         funcs,
         units,
         redirects,
+        symbols,
     })
 }
