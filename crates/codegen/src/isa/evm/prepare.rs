@@ -931,9 +931,16 @@ fn prepare_machine_section_after_pipeline(
         // addresses what its source values do.
         let machine_allocation_addrs = funcs
             .iter()
-            .map(|func| {
-                let map = expect_func_entry(&machine.source_to_machine.funcs, *func, "source map");
-                (*func, map.images_only_of(&allocation_addrs[func]))
+            .map(|&func| {
+                let map = expect_func_entry(&machine.source_to_machine.funcs, func, "source map");
+                let addrs = machine.work.module().func_store.view(func, |function| {
+                    fixed_slots::machine_allocation_addresses(
+                        function,
+                        map,
+                        &allocation_addrs[&func],
+                    )
+                });
+                (func, addrs)
             })
             .collect();
         let machine_analyses = prepare_machine_stackify_analyses(

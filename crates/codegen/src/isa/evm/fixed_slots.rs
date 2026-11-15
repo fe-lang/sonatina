@@ -23,6 +23,7 @@ use crate::{
 
 use super::{
     emit::immediate_u32,
+    machine::module::FuncMachineMap,
     memory_plan::{FuncPreAnalysis, WORD_BYTES},
 };
 
@@ -132,6 +133,49 @@ pub(crate) fn allocation_addresses(
             (func, values)
         })
         .collect()
+}
+
+/// The machine values of `function` that address only allocations: those
+/// lowered from the source values in `source_addrs` and from no other source
+/// value, and phis of them, which machine passes create when they merge
+/// blocks.
+pub(crate) fn machine_allocation_addresses(
+    function: &Function,
+    map: &FuncMachineMap,
+    source_addrs: &BitSet<ValueId>,
+) -> BitSet<ValueId> {
+    let mut addrs = BitSet::default();
+    let mut others = BitSet::default();
+    for (source, &machine) in map.values.iter() {
+        if let Some(machine) = machine {
+            if source_addrs.contains(source) {
+                addrs.insert(machine);
+            } else {
+                others.insert(machine);
+            }
+        }
+    }
+    addrs.difference_with(&others);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for inst in function.layout.iter_all_insts() {
+            if function.dfg.is_phi(inst)
+                && let &[result] = function.dfg.inst_results(inst)
+                && !addrs.contains(result)
+                && function
+                    .dfg
+                    .inst(inst)
+                    .collect_values()
+                    .into_iter()
+                    .all(|value| addrs.contains(value))
+            {
+                addrs.insert(result);
+                changed = true;
+            }
+        }
+    }
+    addrs
 }
 
 fn func_address_taken(function: &Function, inst: InstId) -> Option<FuncRef> {
@@ -867,6 +911,49 @@ block0:
             Analysis::of(FUNCS, &[], &[], &["v1"]).barred("v2"),
             [false; 2]
         );
+    }
+
+    #[test]
+    fn machine_phi_of_allocation_addresses_is_one() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.i256, v1.i256, v2.i256) -> i256 {
+block0:
+    v3.i1 = lt v0 v1;
+    br v3 block1 block2;
+block1:
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v4.i256 = phi (v1 block1) (v2 block2);
+    v5.i256 = phi (v1 block1) (v0 block2);
+    v6.i256 = add v4 v5;
+    return v6;
+}
+"#,
+        )
+        .unwrap();
+        let func = parsed.module.funcs()[0];
+        let value = |name: &str| parsed.debug.value(func, name).unwrap();
+        let [v0, v1, v2, v3, v4, v5] = ["v0", "v1", "v2", "v3", "v4", "v5"].map(value);
+        // The function stands for its own lowering: every value is its own image.
+        let mut map = FuncMachineMap::new();
+        for machine in [v0, v1, v2] {
+            map.values[machine] = Some(machine);
+        }
+        let source_addrs = BitSet::from([v1, v2]);
+        parsed.module.func_store.view(func, |function| {
+            let addrs = machine_allocation_addresses(function, &map, &source_addrs);
+            assert_eq!(addrs, BitSet::from([v1, v2, v4]));
+
+            // `v2` is also the image of a source value that names no allocation.
+            map.values[v3] = Some(v2);
+            let addrs = machine_allocation_addresses(function, &map, &source_addrs);
+            assert_eq!(addrs, BitSet::from([v1]));
+            assert!(!addrs.contains(v5));
+        });
     }
 
     #[test]
