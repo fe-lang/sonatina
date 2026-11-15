@@ -608,11 +608,7 @@ fn is_loop_header_no_invert_candidate(
     let Some(body_branch) = function.dfg.branch_info(body_term) else {
         return false;
     };
-    if body_branch.dests().contains(&exit) {
-        return false;
-    }
-
-    true
+    !body_branch.dests().contains(&exit)
 }
 
 fn block_branches_to(function: &Function, block: BlockId, dest: BlockId) -> bool {
