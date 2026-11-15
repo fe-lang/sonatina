@@ -1,0 +1,66 @@
+#! evm.config: { mem_plan_detail: true }
+#! evm.case: ok
+#!   calldata: u256(256)
+#!   expect: return u256(136420)
+
+# The first plan of `%f` cannot reach v1 at one of its uses and spills it. Once the
+# other spills are in place, every use of v1 takes its copy on the stack, so v1 is
+# not stored after its definition.
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = call %f v0;
+    evm_mstore 0.i256 v1;
+    evm_return 0.i256 32.i256;
+}
+
+func private %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 v0;
+    v2.i256 = add v1 v1;
+    v3.i256 = add v1 1.i256;
+    v4.i256 = add v2 v3;
+    v5.i256 = add v2 v4;
+    v6.i256 = add v5 v3;
+    v7.i256 = add v6 v2;
+    v8.i256 = add v5 7.i256;
+    v9.i256 = add v8 v7;
+    v10.i256 = add v9 1.i256;
+    v11.i256 = add v10 v9;
+    v12.i256 = add v4 v11;
+    v13.i256 = add v3 6.i256;
+    v14.i256 = add v13 v6;
+    v15.i256 = add v11 v10;
+    v16.i256 = add v14 v0;
+    v17.i256 = add v13 1.i256;
+    v18.i256 = add v15 v14;
+    v19.i256 = add v18 v6;
+    v20.i256 = add v0 v1;
+    v21.i256 = add v20 v2;
+    v22.i256 = add v21 v3;
+    v23.i256 = add v22 v4;
+    v24.i256 = add v23 v5;
+    v25.i256 = add v24 v6;
+    v26.i256 = add v25 v7;
+    v27.i256 = add v26 v8;
+    v28.i256 = add v27 v9;
+    v29.i256 = add v28 v10;
+    v30.i256 = add v29 v11;
+    v31.i256 = add v30 v12;
+    v32.i256 = add v31 v13;
+    v33.i256 = add v32 v14;
+    v34.i256 = add v33 v15;
+    v35.i256 = add v34 v16;
+    v36.i256 = add v35 v17;
+    v37.i256 = add v36 v18;
+    v38.i256 = add v37 v19;
+    return v38;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

@@ -6,19 +6,19 @@ input_file: test_files/evm/spilled_phi_object_interference.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 601 bytes
-  total: 601 bytes
+  section runtime: 561 bytes
+  total: 561 bytes
 
 functions:
   mem: global_dyn_base=0x260 arena_base=0x40 scratch_peak_words=0 stable_chain_peak_words=17
-  join: ir_blocks=4 ir_insts=83 vcode_ops=417 fixups=2 imm_bytes=118
+  join: ir_blocks=4 ir_insts=83 vcode_ops=387 fixups=2 imm_bytes=108
     mem: scratch_words=0 stable_words=17 stable_mode=StableAbs(base=0x40) entry_abs_words=0 abs_words_end=17
   entry: ir_blocks=1 ir_insts=5 vcode_ops=14 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case left: calldata_len=32 success reason=Return gas_used=21918 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=790
-  case right: calldata_len=32 success reason=Return gas_used=21920 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=780
+  case left: calldata_len=32 success reason=Return gas_used=21873 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=745
+  case right: calldata_len=32 success reason=Return gas_used=21875 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=735
 
 
 --------------- DEBUG ---------------
@@ -124,34 +124,19 @@ join:
     DUP16  // v53.i256 = add v1 v52;
     PUSH1 0x10 (16)
     ADD
-    DUP1
-    PUSH1 0x40 (64)
-    MSTORE
     SWAP16  // v55.i256 = add v1 v54;
     DUP1
     PUSH1 0x11 (17)
     ADD
-    DUP1
-    PUSH1 0x40 (64)
-    MSTORE
     PUSH1 0x12 (18)  // v57.i256 = add v1 v56;
     DUP3
     ADD
-    DUP1
-    PUSH1 0x40 (64)
-    MSTORE
     PUSH1 0x13 (19)  // v59.i256 = add v1 v58;
     DUP4
     ADD
-    DUP1
-    PUSH1 0x40 (64)
-    MSTORE
     SWAP3  // v61.i256 = add v1 v60;
     PUSH1 0x14 (20)
     ADD
-    DUP1
-    PUSH1 0x40 (64)
-    MSTORE
     DUP3  // jump block3;
     PUSH1 0x40 (64)
     MSTORE
@@ -310,34 +295,19 @@ join:
     DUP16  // v93.i256 = add v1 116.i256;
     PUSH1 0x74 (116)
     ADD
-    DUP1
-    PUSH1 0x40 (64)
-    MSTORE
     SWAP16  // v95.i256 = add v1 117.i256;
     DUP1
     PUSH1 0x75 (117)
     ADD
-    DUP1
-    PUSH1 0x40 (64)
-    MSTORE
     PUSH1 0x76 (118)  // v97.i256 = add v1 118.i256;
     DUP3
     ADD
-    DUP1
-    PUSH1 0x40 (64)
-    MSTORE
     PUSH1 0x77 (119)  // v99.i256 = add v1 119.i256;
     DUP4
     ADD
-    DUP1
-    PUSH1 0x40 (64)
-    MSTORE
     SWAP3  // v101.i256 = add v1 120.i256;
     PUSH1 0x78 (120)
     ADD
-    DUP1
-    PUSH1 0x40 (64)
-    MSTORE
     DUP3  // jump block3;
     PUSH1 0x40 (64)
     MSTORE

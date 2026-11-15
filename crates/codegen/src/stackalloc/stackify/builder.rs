@@ -3,7 +3,10 @@ use crate::{
     bitset::BitSet,
     cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
-    isa::evm::{immediate_materialization_code_len, immediate_materialization_plan},
+    isa::evm::{
+        immediate_materialization_code_len, immediate_materialization_plan,
+        static_arena_alloc::StackObjId,
+    },
     liveness::Liveness,
     stackalloc::{Action, normalize_value_alias_map},
 };
@@ -138,6 +141,19 @@ impl StackifyReachability {
 
         Self { dup_max, swap_max }
     }
+}
+
+/// The plan of one fixed-point iteration, and what it asks of the next.
+struct IterationPlan {
+    alloc: StackifyAlloc,
+    /// The stack object of each stored value the plan may keep in one.
+    spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
+    /// The values the plan could not reach on the stack and are not spilled yet.
+    spill_requests: BitSet<ValueId>,
+    /// The values the plan loads from memory.
+    reloaded: BitSet<ValueId>,
+    /// The stored values the plan found no free scratch slot for.
+    object_spills: BitSet<ValueId>,
 }
 
 pub struct StackifyBuilder<'a> {
@@ -381,27 +397,41 @@ impl<'a> StackifyBuilder<'a> {
         // - or when a flush/rebuild needs to reconstruct a stack template
         // In that case we add `v` to `spill_requests`, discard this iteration's plan, and retry.
         //
-        // Once `v ∈ spill_set`, we emit a dominating store at its definition (or phi entry) and
-        // remove it from transfer regions (`T(B)` excludes `spill_set`), so future iterations
-        // can rely on loads being correct.
+        // Once `v ∈ spill_set`, we remove it from transfer regions (`T(B)` excludes `spill_set`).
+        // A later plan may then reach every use of `v` on the stack, so only the values the last
+        // plan reloaded are stored (`stored`): at their definition, on their phi's incoming edges,
+        // or at entry for an argument, each of which dominates the loads. The plan is final once
+        // it reloads exactly the values it stores.
+        //
+        // Stores do not move the symbolic stack, so dropping some leaves the rest of the plan
+        // alone, except where an edge no longer stages a phi's source for its store. If that makes
+        // a plan reload a value whose stores were dropped, the value stays stored from then on,
+        // which bounds the iterations.
         let mut spill_set: BitSet<ValueId> = BitSet::default();
+        let mut stored: BitSet<ValueId> = BitSet::default();
+        let mut dropped: BitSet<ValueId> = BitSet::default();
+        let mut pinned: BitSet<ValueId> = BitSet::default();
         let mut search_scratch = NormalizeSearchScratch::with_cache(std::mem::take(cache));
         loop {
             let checkpoint = observer.checkpoint();
             let mut slots: SpillSlotPools = SpillSlotPools::default();
 
-            let (mut alloc, spill_obj, spill_requests, object_spills) = Self::plan_iteration(
-                &ctx,
-                observer,
-                SpillSet::new(&spill_set),
-                &mut slots,
-                &mut search_scratch,
-            );
+            let spill = SpillSet::new(&spill_set, &stored);
+            let IterationPlan {
+                mut alloc,
+                spill_obj,
+                spill_requests,
+                reloaded,
+                object_spills,
+            } = Self::plan_iteration(&ctx, observer, spill, &mut slots, &mut search_scratch);
 
-            if spill_requests.is_subset(&spill_set) {
+            let mut next_stored = BitSet::difference(&stored, &reloaded);
+            next_stored.intersect_with(&pinned);
+            next_stored.union_with(&reloaded);
+            if spill_requests.is_subset(&spill_set) && next_stored == stored {
                 Self::finalize_spill_storage(
                     &ctx,
-                    SpillSet::new(&spill_set),
+                    spill,
                     &object_spills,
                     &mut slots,
                     &mut alloc,
@@ -414,6 +444,11 @@ impl<'a> StackifyBuilder<'a> {
 
             observer.rollback(checkpoint);
             spill_set.union_with(&spill_requests);
+            let mut reloaded_after_drop = BitSet::difference(&reloaded, &stored);
+            reloaded_after_drop.intersect_with(&dropped);
+            pinned.union_with(&reloaded_after_drop);
+            dropped.union_with(&BitSet::difference(&stored, &next_stored));
+            stored = next_stored;
         }
     }
 
@@ -423,17 +458,12 @@ impl<'a> StackifyBuilder<'a> {
         spill: SpillSet<'_>,
         slots: &mut SpillSlotPools,
         search_scratch: &mut NormalizeSearchScratch,
-    ) -> (
-        StackifyAlloc,
-        SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
-        BitSet<ValueId>,
-        BitSet<ValueId>,
-    ) {
+    ) -> IterationPlan {
         let mut object_spills: BitSet<ValueId> = BitSet::default();
         let mut arg_free_slots: FreeSlotPools = FreeSlotPools::default();
         for &arg in ctx.func.arg_values.iter() {
             let arg = ctx.canonicalize_value(arg);
-            if let Some(spilled) = spill.spilled(arg)
+            if let Some(spilled) = spill.stored(arg)
                 && ctx.remat_actions[arg].is_none()
                 && !must_use_object_storage(&ctx.scratch_barred, &object_spills, arg)
                 && slots
@@ -462,6 +492,7 @@ impl<'a> StackifyBuilder<'a> {
         };
 
         let mut spill_requests: BitSet<ValueId> = BitSet::default();
+        let mut reloaded: BitSet<ValueId> = BitSet::default();
         let terminal_chain_blocks = compute_terminal_chain_blocks(ctx, &interfaces);
 
         // The entry block enters with its ABI stack (function args ++ optional return address); the
@@ -476,6 +507,7 @@ impl<'a> StackifyBuilder<'a> {
             spill,
             spill_obj: &spill_obj,
             spill_requests: &mut spill_requests,
+            reloaded: &mut reloaded,
             object_spills: &mut object_spills,
             slots,
         };
@@ -490,7 +522,13 @@ impl<'a> StackifyBuilder<'a> {
         );
         planner.plan_blocks();
 
-        (alloc, spill_obj, spill_requests, object_spills)
+        IterationPlan {
+            alloc,
+            spill_obj,
+            spill_requests,
+            reloaded,
+            object_spills,
+        }
     }
 
     fn finalize_spill_storage(
@@ -499,7 +537,7 @@ impl<'a> StackifyBuilder<'a> {
         object_spills: &BitSet<ValueId>,
         slots: &mut SpillSlotPools,
         alloc: &mut StackifyAlloc,
-        spill_obj: &SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
+        spill_obj: &SecondaryMap<ValueId, Option<StackObjId>>,
     ) {
         let scratch_slots = slots.scratch.take_slot_map();
         let mut spill_storage: SecondaryMap<ValueId, Option<SpillStorage>> = SecondaryMap::new();
@@ -507,7 +545,7 @@ impl<'a> StackifyBuilder<'a> {
             let _ = &mut spill_storage[value];
         }
 
-        for value in spill.bitset().iter() {
+        for value in spill.stored_bitset().iter() {
             if ctx.remat_actions[value].is_some() {
                 spill_storage[value] = Some(SpillStorage::Rematerialized);
             } else if must_use_object_storage(&ctx.scratch_barred, object_spills, value) {
@@ -618,24 +656,21 @@ fn assign_spill_obj_ids(
     func: &Function,
     spill: SpillSet<'_>,
     remat_actions: &SecondaryMap<ValueId, Option<Action>>,
-) -> SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>> {
-    let mut map: SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>> =
-        SecondaryMap::new();
+) -> SecondaryMap<ValueId, Option<StackObjId>> {
+    let mut map: SecondaryMap<ValueId, Option<StackObjId>> = SecondaryMap::new();
     for v in func.dfg.value_ids() {
         let _ = &mut map[v];
     }
 
-    let mut spilled: Vec<ValueId> = spill.bitset().iter().collect();
-    spilled.sort_unstable_by_key(|v| v.as_u32());
+    let mut stored: Vec<ValueId> = spill.stored_bitset().iter().collect();
+    stored.sort_unstable_by_key(|v| v.as_u32());
 
     let mut next_idx = 0usize;
-    for v in spilled {
+    for v in stored {
         if remat_actions[v].is_some() {
             continue;
         }
-        map[v] = Some(crate::isa::evm::static_arena_alloc::StackObjId::new(
-            next_idx,
-        ));
+        map[v] = Some(StackObjId::new(next_idx));
         next_idx += 1;
     }
     map

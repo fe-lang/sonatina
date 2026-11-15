@@ -1,0 +1,29 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/spill_unreloaded_value.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false mem_plan_detail=true
+
+object: Contract
+  section runtime: 144 bytes
+  total: 144 bytes
+
+functions:
+  mem: global_dyn_base=0x60 arena_base=0x40 scratch_peak_words=0 stable_chain_peak_words=1
+  entry: ir_blocks=1 ir_insts=4 vcode_ops=12 fixups=2 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  f: ir_blocks=1 ir_insts=39 vcode_ops=116 fixups=0 imm_bytes=13
+    mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0x40) entry_abs_words=0 abs_words_end=1
+
+mem plan detail:
+evm mem plan: global_dyn_base=0x60 arena_base=0x40 scratch_peak_words=0 stable_chain_peak_words=1
+evm mem plan: entry scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+evm mem plan: f scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0x40) entry_abs_words=0 abs_words_end=1
+  scratch_spill v0 slot=0 addr=0x0
+  scratch_spill v2 slot=1 addr=0x20
+  spill v4 offset_words=0 loc=StableAbs(0) addr=0x40
+
+
+evm:
+  case ok: calldata_len=32 success reason=Return gas_used=21529 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=389

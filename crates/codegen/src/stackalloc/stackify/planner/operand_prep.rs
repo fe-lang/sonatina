@@ -1105,14 +1105,16 @@ block0:
 
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut reloaded = BitSet::default();
             let mut object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
             let mut mem_state = MemState {
-                spill: SpillSet::new(&spill_set),
+                spill: SpillSet::new(&spill_set, &spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
+                reloaded: &mut reloaded,
                 object_spills: &mut object_spills,
                 slots: &mut slots,
             };
@@ -1212,14 +1214,16 @@ block0:
 
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut reloaded = BitSet::default();
             let mut object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
             let mut mem_state = MemState {
-                spill: SpillSet::new(&spill_set),
+                spill: SpillSet::new(&spill_set, &spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
+                reloaded: &mut reloaded,
                 object_spills: &mut object_spills,
                 slots: &mut slots,
             };
@@ -1284,14 +1288,16 @@ block0:
 
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut reloaded = BitSet::default();
             let mut object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
             let mut mem_state = MemState {
-                spill: SpillSet::new(&spill_set),
+                spill: SpillSet::new(&spill_set, &spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
+                reloaded: &mut reloaded,
                 object_spills: &mut object_spills,
                 slots: &mut slots,
             };
@@ -1365,13 +1371,15 @@ block0:
 
             let query_key = |values: &[ValueId]| {
                 let mut spill_requests = BitSet::default();
+                let mut reloaded = BitSet::default();
                 let mut object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mut mem_state = MemState {
-                    spill: SpillSet::new(&spill_set),
+                    spill: SpillSet::new(&spill_set, &spill_set),
                     spill_obj: &spill_obj,
                     spill_requests: &mut spill_requests,
+                    reloaded: &mut reloaded,
                     object_spills: &mut object_spills,
                     slots: &mut slots,
                 };
@@ -1439,13 +1447,15 @@ block0:
 
             let query_key = |top: ValueId| {
                 let mut spill_requests = BitSet::default();
+                let mut reloaded = BitSet::default();
                 let mut object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mut mem_state = MemState {
-                    spill: SpillSet::new(&spill_set),
+                    spill: SpillSet::new(&spill_set, &spill_set),
                     spill_obj: &spill_obj,
                     spill_requests: &mut spill_requests,
+                    reloaded: &mut reloaded,
                     object_spills: &mut object_spills,
                     slots: &mut slots,
                 };
@@ -1516,13 +1526,15 @@ block0:
             let spill_set = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut spill_requests = BitSet::default();
+            let mut reloaded = BitSet::default();
             let mut object_spills = BitSet::default();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
             let mut mem_state = MemState {
-                spill: SpillSet::new(&spill_set),
+                spill: SpillSet::new(&spill_set, &spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
+                reloaded: &mut reloaded,
                 object_spills: &mut object_spills,
                 slots: &mut slots,
             };
@@ -1591,13 +1603,15 @@ block0:
 
             let query_key = |values: &[ValueId]| {
                 let mut spill_requests = BitSet::default();
+                let mut reloaded = BitSet::default();
                 let mut object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mut mem_state = MemState {
-                    spill: SpillSet::new(&spill_set),
+                    spill: SpillSet::new(&spill_set, &spill_set),
                     spill_obj: &spill_obj,
                     spill_requests: &mut spill_requests,
+                    reloaded: &mut reloaded,
                     object_spills: &mut object_spills,
                     slots: &mut slots,
                 };
@@ -1668,13 +1682,15 @@ block0:
             let mut search_scratch = NormalizeSearchScratch::default();
             let mut solve_with = |ignored: ValueId| {
                 let mut spill_requests = BitSet::default();
+                let mut reloaded = BitSet::default();
                 let mut object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mut mem_state = MemState {
-                    spill: SpillSet::new(&spill_set),
+                    spill: SpillSet::new(&spill_set, &spill_set),
                     spill_obj: &spill_obj,
                     spill_requests: &mut spill_requests,
+                    reloaded: &mut reloaded,
                     object_spills: &mut object_spills,
                     slots: &mut slots,
                 };
@@ -1741,13 +1757,15 @@ block0:
 
             let solve_steps = |mut stack: SymStack, arg: ValueId, last_use: &BitSet<ValueId>| {
                 let mut spill_requests = BitSet::default();
+                let mut reloaded = BitSet::default();
                 let mut object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mut mem_state = MemState {
-                    spill: SpillSet::new(&spill_set),
+                    spill: SpillSet::new(&spill_set, &spill_set),
                     spill_obj: &spill_obj,
                     spill_requests: &mut spill_requests,
+                    reloaded: &mut reloaded,
                     object_spills: &mut object_spills,
                     slots: &mut slots,
                 };
@@ -1838,13 +1856,15 @@ block0:
                        commutative: bool| {
                 let spill_set: BitSet<ValueId> = spill_values.iter().copied().collect();
                 let mut spill_requests = BitSet::default();
+                let mut reloaded = BitSet::default();
                 let mut object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mut mem_state = MemState {
-                    spill: SpillSet::new(&spill_set),
+                    spill: SpillSet::new(&spill_set, &spill_set),
                     spill_obj: &spill_obj,
                     spill_requests: &mut spill_requests,
+                    reloaded: &mut reloaded,
                     object_spills: &mut object_spills,
                     slots: &mut slots,
                 };
@@ -1939,14 +1959,16 @@ block0:
 
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut reloaded = BitSet::default();
             let mut object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
             let mut mem_state = MemState {
-                spill: SpillSet::new(&spill_set),
+                spill: SpillSet::new(&spill_set, &spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
+                reloaded: &mut reloaded,
                 object_spills: &mut object_spills,
                 slots: &mut slots,
             };
@@ -2015,14 +2037,16 @@ block0:
 
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut reloaded = BitSet::default();
             let mut object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
             let mut mem_state = MemState {
-                spill: SpillSet::new(&spill_set),
+                spill: SpillSet::new(&spill_set, &spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
+                reloaded: &mut reloaded,
                 object_spills: &mut object_spills,
                 slots: &mut slots,
             };
@@ -2055,9 +2079,10 @@ block0:
             let mut actions = crate::stackalloc::Actions::new();
             let mut object_spills = BitSet::default();
             let mut mem_state = MemState {
-                spill: SpillSet::new(&spill_set),
+                spill: SpillSet::new(&spill_set, &spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
+                reloaded: &mut reloaded,
                 object_spills: &mut object_spills,
                 slots: &mut slots,
             };

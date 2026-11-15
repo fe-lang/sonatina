@@ -10,9 +10,13 @@ use crate::{
     },
     module_analysis::CallGraphSchedule,
     object::{CompileOptions, PcAttribution, SymbolId, UnmappedReason, link::link_section},
-    optim::pipeline::Pipeline,
+    optim::{
+        dead_func::{collect_object_roots, run_dead_func_elim},
+        pipeline::Pipeline,
+    },
     stackalloc::{
         Action, Actions, Allocator, StackifyAlloc, StackifyBuilder, StackifyEdgeSplitter,
+        StackifySearchProfile,
     },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -37,7 +41,7 @@ use self::{
         rewrite_evm_local_fallthrough_layout,
     },
     machine::{
-        final_spills::compute_malloc_spill_bounds,
+        final_spills::{compute_malloc_spill_bounds, spill_word_accesses, unread_spill_stores},
         module::FuncMachineMap,
         placement::{
             EvmMemoryPlacementPlan, MallocPlacement, MemoryPlacementSection,
@@ -56,6 +60,109 @@ struct PlanTestCtx {
     funcs: Vec<FuncRef>,
     names: FxHashMap<String, FuncRef>,
     plan: ProgramMemoryPlan,
+}
+
+/// A value spilled by one stackify plan may have every use reached on the
+/// stack by the final one. Such a value must not be stored.
+#[test]
+fn fixtures_emit_no_spill_store_without_a_reload() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/test_files/evm");
+    let mut paths: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "sntn"))
+        .collect();
+    paths.sort();
+    assert!(!paths.is_empty());
+    let check = |path: &std::path::PathBuf| {
+        let source = std::fs::read_to_string(path).unwrap();
+        let reach = source
+            .split_once("stack_reach:")
+            .and_then(|(_, rest)| {
+                rest.trim_start()
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+            })
+            .map_or(16, |reach| reach.parse().unwrap());
+        let mut unread = Vec::new();
+        for (optimize, profile) in [
+            (false, StackifySearchProfile::Fast),
+            (true, StackifySearchProfile::GreedyWide),
+            (true, StackifySearchProfile::Exact),
+        ] {
+            let mut parsed = parse_module(&source).unwrap();
+            if optimize {
+                Pipeline::speed().run(&mut parsed.module);
+                let roots = collect_object_roots(&parsed.module);
+                run_dead_func_elim(&mut parsed.module, &roots, Default::default());
+            }
+            let funcs: Vec<FuncRef> = parsed
+                .debug
+                .func_order
+                .iter()
+                .copied()
+                .filter(|func| {
+                    parsed.module.ctx.declared_funcs.contains_key(func)
+                        && parsed
+                            .module
+                            .ctx
+                            .func_sig(*func, |sig| sig.linkage().has_definition())
+                })
+                .collect();
+            let prepared = osaka_backend()
+                .with_stackify_reach_depth(reach)
+                .with_stackify_search_profile(profile)
+                .prepare_section(SectionWorkModule::from_roots(
+                    &parsed.module,
+                    funcs[0],
+                    &funcs[1..],
+                    &[],
+                ))
+                .unwrap();
+            for &func in prepared.funcs() {
+                let alloc = &prepared.function_plan(func).unwrap().alloc;
+                let stores = prepared.module().func_store.view(func, |function| {
+                    let mut cfg = ControlFlowGraph::new();
+                    cfg.compute(function);
+                    let accesses = spill_word_accesses(function, alloc, |action| match *action {
+                        Action::MemLoadAbs(addr) => Some(((0, addr), false)),
+                        Action::MemStoreAbs(addr) => Some(((0, addr), true)),
+                        Action::MemLoadObj(obj) => Some(((1, obj.as_u32()), false)),
+                        Action::MemStoreObj(obj) => Some(((1, obj.as_u32()), true)),
+                        _ => None,
+                    });
+                    unread_spill_stores(&cfg, &accesses)
+                });
+                if stores != 0 {
+                    let name = prepared
+                        .module()
+                        .ctx
+                        .func_sig(func, |sig| sig.name().to_string());
+                    unread.push(format!(
+                        "{}: %{name} ({profile:?}): {stores}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        unread
+    };
+    let workers = std::thread::available_parallelism().map_or(1, usize::from);
+    let unread: Vec<String> = std::thread::scope(|scope| {
+        let handles: Vec<_> = paths
+            .chunks(paths.len().div_ceil(workers))
+            .map(|chunk| scope.spawn(|| chunk.iter().flat_map(check).collect::<Vec<_>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    assert!(
+        unread.is_empty(),
+        "spill stores without a reload:\n{}",
+        unread.join("\n")
+    );
 }
 
 #[test]

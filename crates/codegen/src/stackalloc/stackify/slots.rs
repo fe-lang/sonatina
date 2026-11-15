@@ -210,8 +210,8 @@ mod tests {
 
         let spill_set: BitSet<ValueId> = [dead, live_out, phi_source, local].into_iter().collect();
         let spilled = |v| {
-            SpillSet::new(&spill_set)
-                .spilled(v)
+            SpillSet::new(&spill_set, &spill_set)
+                .stored(v)
                 .expect("value is spilled")
         };
         let mut pool = SlotPool::default();

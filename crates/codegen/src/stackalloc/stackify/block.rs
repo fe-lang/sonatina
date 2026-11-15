@@ -442,7 +442,7 @@ impl<'d, 'a, 'ctx, O: StackifyObserver> BlockPlanner<'d, 'a, 'ctx, O> {
                 &mut self.state.stack,
                 &mut self.state.free_slots,
                 PlannerActionSink::Post(inst),
-                |planner| planner.emit_store_if_spilled_at_depth(res, depth),
+                |planner| planner.emit_store_if_stored_at_depth(res, depth),
             );
         }
 

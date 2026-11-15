@@ -225,58 +225,11 @@ impl FinalSpillObjects {
             return;
         }
 
-        // Object accesses at the action sites emission runs, in execution order.
-        let machine_isa = EvmMachine::new(function.dfg.ctx.triple);
-        let entry = function.layout.entry_block();
-        let mut accesses: SecondaryMap<BlockId, Vec<SpillObjectAccess>> = SecondaryMap::new();
-        let push = |accesses: &mut Vec<SpillObjectAccess>, actions: &[Action], kills: bool| {
-            accesses.extend(actions.iter().filter_map(|action| match *action {
-                Action::MemLoadObj(obj) => Some(SpillObjectAccess::Load(obj)),
-                Action::MemStoreObj(obj) => Some(SpillObjectAccess::Store { obj, kills }),
-                _ => None,
-            }));
-        };
-        let mut entry_accesses = 0;
-        for block in function.layout.iter_block() {
-            let block_accesses = &mut accesses[block];
-            if entry == Some(block) {
-                push(block_accesses, &alloc.enter_function(function), true);
-                entry_accesses = block_accesses.len();
-            }
-            let last_inst = function.layout.last_inst_of(block);
-            for inst in function.layout.iter_inst(block) {
-                push(block_accesses, alloc.pre_inst(inst), true);
-                // Case actions run in order until a case matches, so only the
-                // first case's actions run on every path through the dispatch.
-                if let EvmMachineInstKind::BrTable(br) =
-                    machine_isa.inst_set().resolve_inst(function.dfg.inst(inst))
-                {
-                    for case_idx in 0..br.table().len() {
-                        let actions = alloc.br_table_case(inst, case_idx);
-                        push(block_accesses, actions, case_idx == 0);
-                    }
-                }
-                push(
-                    block_accesses,
-                    alloc.post_inst(inst),
-                    Some(inst) != last_inst,
-                );
-            }
-        }
-        debug_assert_eq!(
-            accesses.values().map(Vec::len).sum::<usize>() - entry_accesses,
-            {
-                let mut stored = 0;
-                alloc.for_each_action(|action| {
-                    stored += usize::from(matches!(
-                        action,
-                        Action::MemLoadObj(_) | Action::MemStoreObj(_)
-                    ));
-                });
-                stored
-            },
-            "spill word sharing must see every stored object action"
-        );
+        let accesses = spill_word_accesses(function, alloc, |action| match *action {
+            Action::MemLoadObj(obj) => Some((obj, false)),
+            Action::MemStoreObj(obj) => Some((obj, true)),
+            _ => None,
+        });
 
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(function);
@@ -729,24 +682,84 @@ pub(crate) fn allocate_final_spills(
     })
 }
 
-/// A spill object access in execution order within a block.
+/// An access of spill word `W` in execution order within a block.
 #[derive(Clone, Copy)]
-enum SpillObjectAccess {
-    Load(StackObjId),
+pub(crate) enum SpillAccess<W> {
+    Load(W),
     /// `kills` is false for stores that may not run before every later access
     /// in the block: `br_table` case actions after the first, and actions after
     /// a block's terminator.
     Store {
-        obj: StackObjId,
+        word: W,
         kills: bool,
     },
+}
+
+/// The spill word accesses of each block at the action sites emission runs, in
+/// execution order. `word` gives the word an action accesses and whether it
+/// stores to it.
+pub(crate) fn spill_word_accesses<W: Copy>(
+    function: &Function,
+    alloc: &StackifyAlloc,
+    word: impl Fn(&Action) -> Option<(W, bool)>,
+) -> SecondaryMap<BlockId, Vec<SpillAccess<W>>> {
+    let machine_isa = EvmMachine::new(function.dfg.ctx.triple);
+    let entry = function.layout.entry_block();
+    let mut accesses: SecondaryMap<BlockId, Vec<SpillAccess<W>>> = SecondaryMap::new();
+    let push = |accesses: &mut Vec<SpillAccess<W>>, actions: &[Action], kills: bool| {
+        accesses.extend(actions.iter().filter_map(|action| {
+            let (word, stores) = word(action)?;
+            Some(if stores {
+                SpillAccess::Store { word, kills }
+            } else {
+                SpillAccess::Load(word)
+            })
+        }));
+    };
+    let mut entry_accesses = 0;
+    for block in function.layout.iter_block() {
+        let block_accesses = &mut accesses[block];
+        if entry == Some(block) {
+            push(block_accesses, &alloc.enter_function(function), true);
+            entry_accesses = block_accesses.len();
+        }
+        let last_inst = function.layout.last_inst_of(block);
+        for inst in function.layout.iter_inst(block) {
+            push(block_accesses, alloc.pre_inst(inst), true);
+            // Case actions run in order until a case matches, so only the
+            // first case's actions run on every path through the dispatch.
+            if let EvmMachineInstKind::BrTable(br) =
+                machine_isa.inst_set().resolve_inst(function.dfg.inst(inst))
+            {
+                for case_idx in 0..br.table().len() {
+                    let actions = alloc.br_table_case(inst, case_idx);
+                    push(block_accesses, actions, case_idx == 0);
+                }
+            }
+            push(
+                block_accesses,
+                alloc.post_inst(inst),
+                Some(inst) != last_inst,
+            );
+        }
+    }
+    debug_assert_eq!(
+        accesses.values().map(Vec::len).sum::<usize>() - entry_accesses,
+        {
+            let mut stored = 0;
+            alloc.for_each_action(|action| stored += usize::from(word(action).is_some()));
+            stored
+        },
+        "spill word accesses must cover every stored action"
+    );
+    accesses
 }
 
 /// Pairs of spill objects that must not share a word: one is stored while the
 /// other holds a value that a later load reads.
 fn spill_object_conflicts(
     cfg: &ControlFlowGraph,
-    accesses: &SecondaryMap<BlockId, Vec<SpillObjectAccess>>,
+    accesses: &SecondaryMap<BlockId, Vec<SpillAccess<StackObjId>>>,
 ) -> SecondaryMap<StackObjId, BitSet<StackObjId>> {
     let blocks: Vec<BlockId> = cfg.post_order().collect();
     let mut live_in: SecondaryMap<BlockId, BitSet<StackObjId>> = SecondaryMap::new();
@@ -763,10 +776,10 @@ fn spill_object_conflicts(
             }
             for access in accesses[block].iter().rev() {
                 match *access {
-                    SpillObjectAccess::Load(obj) => {
+                    SpillAccess::Load(obj) => {
                         live.insert(obj);
                     }
-                    SpillObjectAccess::Store { obj, kills } => {
+                    SpillAccess::Store { word: obj, kills } => {
                         for other in live.iter().filter(|&other| other != obj) {
                             conflicts[obj].insert(other);
                             conflicts[other].insert(obj);
@@ -784,6 +797,57 @@ fn spill_object_conflicts(
         }
     }
     conflicts
+}
+
+/// The number of stores that no load can read: on every path from the store,
+/// the word is stored again or never loaded.
+#[cfg(test)]
+pub(crate) fn unread_spill_stores<W: Copy + Ord>(
+    cfg: &ControlFlowGraph,
+    accesses: &SecondaryMap<BlockId, Vec<SpillAccess<W>>>,
+) -> usize {
+    use std::collections::BTreeSet;
+
+    // The words live at the block's entry, counting its stores of words not live.
+    let scan =
+        |live_in: &SecondaryMap<BlockId, BTreeSet<W>>, block: BlockId, unread: &mut usize| {
+            let mut live: BTreeSet<W> = cfg
+                .succs_of(block)
+                .flat_map(|succ| live_in[*succ].iter().copied())
+                .collect();
+            for access in accesses[block].iter().rev() {
+                match *access {
+                    SpillAccess::Load(word) => {
+                        live.insert(word);
+                    }
+                    SpillAccess::Store { word, kills } => {
+                        *unread += usize::from(!live.contains(&word));
+                        if kills {
+                            live.remove(&word);
+                        }
+                    }
+                }
+            }
+            live
+        };
+    let blocks: Vec<BlockId> = cfg.post_order().collect();
+    let mut live_in: SecondaryMap<BlockId, BTreeSet<W>> = SecondaryMap::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block in &blocks {
+            let live = scan(&live_in, block, &mut 0);
+            if live_in[block] != live {
+                live_in[block] = live;
+                changed = true;
+            }
+        }
+    }
+    let mut unread = 0;
+    for &block in &blocks {
+        scan(&live_in, block, &mut unread);
+    }
+    unread
 }
 
 fn final_spilled_values(alloc: &StackifyAlloc) -> Vec<(ValueId, StackObjId)> {
@@ -1359,9 +1423,8 @@ mod tests {
 
     use super::{
         FinalSpillAllocation, FinalSpillAllocationInput, FinalSpillObjects, FixedMemoryWriteRange,
-        OptionalFinalSpillPlacement, SpillObjectAccess,
-        allocate_final_spills as alloc_final_spills, spill_object_conflicts,
-        validate_final_spill_absolute_disjointness,
+        OptionalFinalSpillPlacement, SpillAccess, allocate_final_spills as alloc_final_spills,
+        spill_object_conflicts, validate_final_spill_absolute_disjointness,
         validate_final_spills_disjoint_from_fixed_writes,
     };
     use crate::{
@@ -1965,8 +2028,8 @@ mod tests {
                 function.layout.iter_block().collect()
             });
         let [a, b, c, d] = [0, 1, 2, 3].map(StackObjId::new);
-        let load = SpillObjectAccess::Load;
-        let store = |obj| SpillObjectAccess::Store { obj, kills: true };
+        let load = SpillAccess::Load;
+        let store = |word| SpillAccess::Store { word, kills: true };
         // `a` lives through the loop, `b` and `d` within one iteration, and `c`
         // is carried around the back edge, so `d`, stored after `c`, only
         // conflicts with it through the back edge.

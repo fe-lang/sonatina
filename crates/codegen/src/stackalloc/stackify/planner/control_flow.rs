@@ -54,8 +54,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         for (&phi_res, &src) in phi_results.iter().zip(phi_srcs.iter()) {
             if !self.mem.spill_set().contains(phi_res) {
                 stack_phi_pairs.push((phi_res, src));
-            } else if src != phi_res {
-                // A spilled self-copy leaves the phi's spill word unchanged.
+            } else if src != phi_res && self.mem.spill_set().stored(phi_res).is_some() {
+                // A spilled self-copy leaves the phi's spill word unchanged, and a spilled phi
+                // that is never reloaded has no word.
                 spilled_phi_pairs.push((phi_res, src));
             }
         }
@@ -391,8 +392,8 @@ block1:
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
             for (slot, &name) in edge.scratch.iter().enumerate() {
-                let spilled = SpillSet::new(&spill_set)
-                    .spilled(value(name))
+                let spilled = SpillSet::new(&spill_set, &spill_set)
+                    .stored(value(name))
                     .expect("scratch value is spilled");
                 assert_eq!(
                     slots.scratch.try_ensure_slot(
@@ -407,12 +408,14 @@ block1:
             }
 
             let mut spill_requests = BitSet::default();
+            let mut reloaded = BitSet::default();
             let mut object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut mem_state = MemState {
-                spill: SpillSet::new(&spill_set),
+                spill: SpillSet::new(&spill_set, &spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
+                reloaded: &mut reloaded,
                 object_spills: &mut object_spills,
                 slots: &mut slots,
             };

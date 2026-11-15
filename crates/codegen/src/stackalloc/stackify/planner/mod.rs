@@ -53,6 +53,8 @@ pub(super) struct MemState<'a> {
     pub(super) spill_obj:
         &'a SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
     pub(super) spill_requests: &'a mut BitSet<ValueId>,
+    /// The values this plan loads from memory.
+    pub(super) reloaded: &'a mut BitSet<ValueId>,
     /// The spilled values this plan found no free scratch slot for. Such a value has no slot yet,
     /// so every store and load of it planned from then on uses its object.
     pub(super) object_spills: &'a mut BitSet<ValueId>,
@@ -64,6 +66,7 @@ pub(super) struct MemPlanSnapshot {
     free_slots: FreeSlotPools,
     slots: SpillSlotPools,
     spill_requests: BitSet<ValueId>,
+    reloaded: BitSet<ValueId>,
     object_spills: BitSet<ValueId>,
 }
 
@@ -93,7 +96,7 @@ impl<'a> MemPlan<'a> {
             free_slots,
             slots: &mut *mem.slots,
             spill_slot_interference: &ctx.spill_slot_interference,
-            spill: SpillDiscovery::new(mem.spill, &mut *mem.spill_requests),
+            spill: SpillDiscovery::new(mem.spill, &mut *mem.spill_requests, &mut *mem.reloaded),
         }
     }
 
@@ -102,10 +105,12 @@ impl<'a> MemPlan<'a> {
     }
 
     pub(super) fn snapshot(&self) -> MemPlanSnapshot {
+        let (spill_requests, reloaded) = self.spill.requests();
         MemPlanSnapshot {
             free_slots: self.free_slots.clone(),
             slots: self.slots.clone(),
-            spill_requests: self.spill.spill_requests().clone(),
+            spill_requests: spill_requests.clone(),
+            reloaded: reloaded.clone(),
             object_spills: (*self.object_spills).clone(),
         }
     }
@@ -113,7 +118,8 @@ impl<'a> MemPlan<'a> {
     pub(super) fn restore(&mut self, snapshot: MemPlanSnapshot) {
         *self.free_slots = snapshot.free_slots;
         *self.slots = snapshot.slots;
-        self.spill.restore_spill_requests(snapshot.spill_requests);
+        self.spill
+            .restore_requests(snapshot.spill_requests, snapshot.reloaded);
         *self.object_spills = snapshot.object_spills;
     }
 
@@ -121,10 +127,12 @@ impl<'a> MemPlan<'a> {
         must_use_object_storage(self.scratch_barred, self.object_spills, v)
     }
 
+    /// Stores the stack top into `v`'s memory, consuming it.
     fn emit_store_for_spilled_value(&mut self, v: ValueId, actions: &mut Actions) {
-        let Some(spilled) = self.spill.spilled(v) else {
-            return;
-        };
+        let spilled = self
+            .spill_set()
+            .stored(v)
+            .expect("only a stored spilled value is stored");
         if self.remat_actions[v].is_some() {
             debug_assert_eq!(
                 self.spill_obj[v], None,
@@ -160,12 +168,12 @@ impl<'a> MemPlan<'a> {
     }
 
     fn load_frame_slot_or_placeholder(&mut self, v: ValueId) -> Action {
-        let Some(_) = self.spill.spilled(v) else {
-            self.spill.request_spill(v);
+        self.spill.reload(v);
+        if self.spill_set().stored(v).is_none() {
             // This fixed-point iteration will be discarded; the real slot assignment happens at
-            // `v`'s definition once it becomes part of `spill_set`.
+            // `v`'s definition once the next iteration stores it.
             return Action::MemLoadObj(crate::isa::evm::static_arena_alloc::StackObjId::new(0));
-        };
+        }
 
         if let Some(action) = self.remat_actions[v] {
             debug_assert_eq!(
@@ -187,8 +195,8 @@ impl<'a> MemPlan<'a> {
         Action::MemLoadObj(self.spill_obj[v].expect("spilled value missing stack object id"))
     }
 
-    fn emit_store_if_spilled_at_depth(&mut self, v: ValueId, depth: u8, actions: &mut Actions) {
-        if self.spill.spilled(v).is_none() {
+    fn emit_store_if_stored_at_depth(&mut self, v: ValueId, depth: u8, actions: &mut Actions) {
+        if self.spill_set().stored(v).is_none() {
             return;
         }
 
@@ -227,13 +235,10 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
     }
 
-    pub(super) fn emit_store_if_spilled_at_depth(&mut self, v: ValueId, depth: usize) {
-        if !self.mem.spill_set().contains(v) {
-            return;
-        }
+    pub(super) fn emit_store_if_stored_at_depth(&mut self, v: ValueId, depth: usize) {
         debug_assert!(depth < self.ctx.reach.dup_max, "DUP out of range");
         self.mem
-            .emit_store_if_spilled_at_depth(v, depth as u8, self.actions);
+            .emit_store_if_stored_at_depth(v, depth as u8, self.actions);
     }
 
     fn push_value_from_spill_slot_or_mark(&mut self, load_from: ValueId, stack_as: ValueId) {
