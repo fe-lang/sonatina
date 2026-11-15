@@ -177,7 +177,7 @@ impl AdceSolver {
 
         let mut changed = erased_dead_insts;
         {
-            let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
             for block in blocks {
                 if editor.func().layout.is_block_inserted(block) && self.does_block_live(block) {
                     changed |= self.modify_branch(&mut editor, block);

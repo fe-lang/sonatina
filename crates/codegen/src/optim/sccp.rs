@@ -71,12 +71,7 @@ impl SccpSolver {
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) -> bool {
         self.clear();
 
-        let cleanup_mode = if cfg!(debug_assertions) {
-            CleanupMode::Strict
-        } else {
-            CleanupMode::RepairWithUndef
-        };
-        let mut changed = CfgCleanup::new(cleanup_mode).run(func);
+        let mut changed = CfgCleanup::new(CleanupMode::Strict).run(func);
         let constref_value_tys = collect_constref_value_tys(func);
         let const_paths = analyze_const_paths(func, &constref_value_tys);
 
@@ -128,7 +123,7 @@ impl SccpSolver {
         #[cfg(debug_assertions)]
         self.assert_no_executable_inst_results_are_bot(func);
 
-        let edges_removed = self.remove_unreachable_edges(func, cleanup_mode);
+        let edges_removed = self.remove_unreachable_edges(func);
         changed |= edges_removed;
         cfg.compute(func);
         // Solving only reads the function, so its known bits still hold
@@ -140,7 +135,7 @@ impl SccpSolver {
         };
         changed |= self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
 
-        changed |= CfgCleanup::new(cleanup_mode).run(func);
+        changed |= CfgCleanup::new(CleanupMode::Strict).run(func);
         cfg.compute(func);
 
         changed |= AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects).run(func);
@@ -533,8 +528,8 @@ impl SccpSolver {
     }
 
     /// Remove unreachable edges and blocks.
-    fn remove_unreachable_edges(&self, func: &mut Function, mode: CleanupMode) -> bool {
-        let mut editor = CfgEditor::new(func, mode);
+    fn remove_unreachable_edges(&self, func: &mut Function) -> bool {
+        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
         let mut changed = false;
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
