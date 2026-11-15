@@ -796,7 +796,6 @@ fn fixed_write_range(
 pub(crate) struct ArenaBaseFacts {
     pub(crate) has_dynamic_frames: bool,
     pub(crate) has_stackify_fixed_slot_spills: bool,
-    pub(crate) backend_spill_scratch_reserve_words: u32,
     /// Some malloc lowers through the heap path, which reads the free-pointer
     /// slot, so compiler-owned memory must stay out of it.
     pub(crate) has_heap_mallocs: bool,
@@ -834,14 +833,9 @@ pub(crate) fn choose_arena_base(
 ) -> u32 {
     let mut layout = fixed_reservations.clone();
 
-    let spill_reserve_words = if facts.has_stackify_fixed_slot_spills {
-        facts
-            .backend_spill_scratch_reserve_words
-            .max(fixed_slots::FIXED_SPILL_SLOTS)
-    } else {
-        facts.backend_spill_scratch_reserve_words
-    };
-    layout.reserve_len(0, spill_reserve_words * WORD_BYTES);
+    if facts.has_stackify_fixed_slot_spills {
+        layout.reserve_len(0, fixed_slots::FIXED_SLOTS_END_BYTES);
+    }
     if facts.has_heap_mallocs {
         layout.reserve_len(FREE_PTR_SLOT_START, WORD_BYTES);
     }
@@ -951,9 +945,8 @@ fn prepare_machine_section_after_pipeline(
             &machine_allocation_addrs,
             &search_caches,
         )?;
-        // Recompute fixed-slot effects from the current machine allocation. Final spills selected
-        // for fixed slots are added below, after optional spill placement has been chosen.
-        let mut actual_fixed_slot_effects: FxHashSet<FuncRef> = machine_analyses
+        // Recompute fixed-slot effects from the current machine allocation.
+        let actual_fixed_slot_effects: FxHashSet<FuncRef> = machine_analyses
             .iter()
             .filter_map(|(&func, analysis)| analysis.alloc.uses_scratch_spills().then_some(func))
             .collect();
@@ -1165,9 +1158,6 @@ fn prepare_machine_section_after_pipeline(
         let mut actual_malloc_spill_bounds = FxHashMap::default();
         for (func, required_reserve, used_fallback, bounds, plan) in results {
             actual_malloc_spill_bounds.insert(func, bounds);
-            if required_reserve.scratch_words != 0 {
-                actual_fixed_slot_effects.insert(func);
-            }
             actual_spill_reserves.insert(func, required_reserve);
             if used_fallback {
                 final_spill_fallback_funcs.push(func);
