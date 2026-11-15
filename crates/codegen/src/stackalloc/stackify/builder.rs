@@ -552,6 +552,11 @@ impl<'a> StackifyBuilder<'a> {
                 let obj = spill_obj[value].expect("object spill missing stack object id");
                 spill_storage[value] = Some(SpillStorage::Object(obj));
             } else if let Some(slot) = scratch_slots[value] {
+                debug_assert!(
+                    !ctx.scratch_barred[slot as usize].contains(value),
+                    "spilled value {} holds scratch slot {slot}, which bars it",
+                    value.as_u32()
+                );
                 spill_storage[value] = Some(SpillStorage::Scratch(slot));
             } else {
                 panic!(

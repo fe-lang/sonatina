@@ -196,7 +196,8 @@ impl<'a> MemPlan<'a> {
     }
 
     fn emit_store_if_stored_at_depth(&mut self, v: ValueId, depth: u8, actions: &mut Actions) {
-        if self.spill_set().stored(v).is_none() {
+        // A rematerialized value is recomputed at each load.
+        if self.spill_set().stored(v).is_none() || self.remat_actions[v].is_some() {
             return;
         }
 

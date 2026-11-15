@@ -43,37 +43,30 @@ spill_set: o0=v19, o1=v21
     - stack=[]
       pre: [PUSH(0)]
       evm_calldata_load [0] -> v5
-      post: [DUP1, POP]
     // v7.i256 = evm_calldata_load 32.i256;
     - stack=[v5]
       pre: [PUSH(32)]
       evm_calldata_load [32] -> v7
-      post: [DUP1, POP]
     // v9.i256 = evm_calldata_load 64.i256;
     - stack=[v7, v5]
       pre: [PUSH(64)]
       evm_calldata_load [64] -> v9
-      post: [DUP1, POP]
     // v11.i256 = evm_calldata_load 96.i256;
     - stack=[v9, v7, v5]
       pre: [PUSH(96)]
       evm_calldata_load [96] -> v11
-      post: [DUP1, POP]
     // v13.i256 = evm_calldata_load 128.i256;
     - stack=[v11, v9, v7, v5]
       pre: [PUSH(128)]
       evm_calldata_load [128] -> v13
-      post: [DUP1, POP]
     // v15.i256 = evm_calldata_load 160.i256;
     - stack=[v13, v11, v9, v7, v5]
       pre: [PUSH(160)]
       evm_calldata_load [160] -> v15
-      post: [DUP1, POP]
     // v17.i256 = evm_calldata_load 65535.i256;
     - stack=[v15, v13, v11, v9, v7, v5]
       pre: [PUSH(65535)]
       evm_calldata_load [65535] -> v17
-      post: [DUP1, POP]
     // v19.i256 = evm_calldata_load 18446744073709551648.i256;
     - stack=[v17, v15, v13, v11, v9, v7, v5]
       pre: [PUSH(18446744073709551648)]
