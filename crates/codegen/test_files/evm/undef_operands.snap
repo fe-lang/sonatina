@@ -1,0 +1,102 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/undef_operands.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 75 bytes
+  total: 75 bytes
+
+functions:
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
+  triple: ir_blocks=1 ir_insts=1 vcode_ops=8 fixups=0 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  sum: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=0 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  entry: ir_blocks=4 ir_insts=16 vcode_ops=49 fixups=6 imm_bytes=8
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case phi_defined: calldata_len=32 success reason=Return gas_used=21350 gas_refunded=0 logs=0 output=call len=224 tx_gas=21140 runtime_gas=210
+  case phi_undef: calldata_len=32 success reason=Return gas_used=21339 gas_refunded=0 logs=0 output=call len=224 tx_gas=21140 runtime_gas=199
+
+
+--------------- DEBUG ---------------
+
+// func private %triple(v0.i256) -> (i256, i256, i256)
+triple:
+  block0:
+    JUMPDEST
+    PUSH0  // return (v0, 0.i256, 0.i256);
+    PUSH0
+    SWAP2
+    SWAP1
+    SWAP2
+    SWAP3
+    JUMP
+
+// func private %sum(v0.i256, v1.i256) -> i256
+sum:
+  block0:
+    JUMPDEST
+    ADD  // v2.i256 = add v0 v1;
+    SWAP1  // return v2;
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v2.i256 = evm_calldata_load v1;
+    CALLDATALOAD
+    DUP1  // (v3.i256, v4.i256, v5.i256) = call %triple v2;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    SWAP3  // v7.i256 = eq v2 v6;
+    PUSH1 0x7 (7)
+    EQ
+    ISZERO  // br v7 block2 block4;
+    PUSH1 block4
+    JUMPI
+  block2:
+    DUP3  // jump block3;
+    PUSH1 block3
+    JUMP
+  block4:
+    JUMPDEST
+    PUSH0  // jump block3;
+  block3:
+    JUMPDEST
+    PUSH0  // v8.i256 = call %sum v1 v0;
+    DUP2
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    SWAP4  // evm_mstore v1 v3;
+    PUSH0
+    MSTORE
+    SWAP1  // evm_mstore 32.i256 v4;
+    PUSH1 0x20 (32)
+    MSTORE
+    SWAP1  // evm_mstore 64.i256 v5;
+    PUSH1 0x40 (64)
+    MSTORE
+    PUSH1 0x60 (96)  // evm_mstore 96.i256 v0;
+    MSTORE
+    DUP1  // evm_mstore 128.i256 v8;
+    PUSH1 0x80 (128)
+    MSTORE
+    PUSH1 0xa0 (160)  // evm_mstore 160.i256 v8;
+    MSTORE
+    PUSH0  // evm_mstore 192.i256 v1;
+    PUSH1 0xc0 (192)
+    MSTORE
+    PUSH1 0xe0 (224)  // evm_return v1 224.i256;
+    PUSH0
+    RETURN

@@ -6,13 +6,13 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 328 bytes
-  total: 328 bytes
+  section runtime: 325 bytes
+  total: 325 bytes
 
 functions:
-  mem: global_dyn_base=0x140 arena_base=0x0 scratch_peak_words=9 stable_chain_peak_words=1
-  main_root: ir_blocks=23 ir_insts=70 vcode_ops=204 fixups=15 imm_bytes=49
-    mem: scratch_words=9 stable_words=1 stable_mode=StableAbs(base=0x120) entry_abs_words=9 abs_words_end=10
+  mem: global_dyn_base=0x120 arena_base=0x0 scratch_peak_words=9 stable_chain_peak_words=0
+  main_root: ir_blocks=23 ir_insts=70 vcode_ops=203 fixups=15 imm_bytes=48
+    mem: scratch_words=9 stable_words=0 stable_mode=None entry_abs_words=9 abs_words_end=9
 
 evm:
   case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=22239 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1239
@@ -235,8 +235,7 @@ main_root:
     POP
     POP
     POP
-    PUSH2 0x120 (288)
-    MLOAD
+    PUSH0
   block22:
     JUMPDEST
     PUSH1 0x1 (1)  // v75.i256 = shr 1.i256 v3;
