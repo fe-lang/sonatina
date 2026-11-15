@@ -21,7 +21,7 @@ use tracing::trace_span;
 
 use crate::{
     machinst::lower::{Lower, LoweredFunction},
-    stackalloc::{Action, Allocator},
+    stackalloc::{Action, ActionSite, Allocator},
 };
 use sonatina_ir::{BlockId, Function, Module, module::FuncRef};
 
@@ -83,10 +83,11 @@ impl<'a> EvmMachineFunctionLowering<'a> {
     fn emit_actions(
         &self,
         ctx: &mut Lower<OpCode>,
-        actions: &[crate::stackalloc::Action],
+        actions: &[Action],
         frame_layout: Option<DynamicFrameLayout>,
+        site: ActionSite,
     ) {
-        perform_actions(ctx, actions, frame_layout);
+        perform_actions(ctx, actions, frame_layout, site);
     }
 
     fn lazy_frame_plan_matches(&self, pred: impl FnOnce(&LazyFramePlan) -> bool) -> bool {
@@ -161,7 +162,7 @@ impl<'a> EvmMachineFunctionLowering<'a> {
             {
                 self.emit_frame_enter(ctx, frame_layout);
             }
-            perform_action(ctx, action, frame_layout);
+            perform_action(ctx, action, frame_layout, site.action_site());
             if self.lazy_frame_plan_matches(|plan| plan.exit_after_action(site, index))
                 && let Some(frame_layout) = frame_layout
             {
@@ -286,7 +287,7 @@ impl<'a> EvmMachineFunctionLowering<'a> {
             if let Some(frame_layout) = frame_layout {
                 self.emit_frame_enter(ctx, frame_layout);
             }
-            self.emit_actions(ctx, &actions, frame_layout);
+            self.emit_actions(ctx, &actions, frame_layout, ActionSite::Entry);
         }
     }
 

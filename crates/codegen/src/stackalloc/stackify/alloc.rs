@@ -5,7 +5,7 @@ use sonatina_ir::{BlockId, Function, InstId, ValueId};
 use super::sym_stack::StackItem;
 use crate::{
     isa::evm::static_arena_alloc::StackObjId,
-    stackalloc::{Action, Actions, Allocator},
+    stackalloc::{Action, Actions, Allocator, SpillWord},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,12 +16,14 @@ pub(crate) enum SpillStorage {
 }
 
 impl SpillStorage {
-    /// The action that stores a value from the stack top into this storage.
+    /// The action that stores `value` from the stack top into this storage.
     /// `None` for storage materialized without a store.
-    pub(super) fn store_action(self) -> Option<Action> {
+    pub(super) fn store_action(self, value: ValueId) -> Option<Action> {
         match self {
-            SpillStorage::Scratch(slot) => Some(Action::MemStoreAbs(slot * 32)),
-            SpillStorage::Object(obj) => Some(Action::MemStoreObj(obj)),
+            SpillStorage::Scratch(slot) => {
+                Some(Action::SpillStore(value, SpillWord::Abs(slot * 32)))
+            }
+            SpillStorage::Object(obj) => Some(Action::SpillStore(value, SpillWord::Obj(obj))),
             SpillStorage::Rematerialized => None,
         }
     }
@@ -123,7 +125,9 @@ impl StackifyAlloc {
     pub(crate) fn validate_spill_storage(&self) {
         let objects: FxHashSet<StackObjId> = self.object_spills().map(|(_, obj)| obj).collect();
         self.for_each_action(|action| {
-            if let Action::MemLoadObj(id) | Action::MemStoreObj(id) = action {
+            if let Action::SpillLoad(_, SpillWord::Obj(id))
+            | Action::SpillStore(_, SpillWord::Obj(id)) = action
+            {
                 assert!(
                     objects.contains(id),
                     "stackify emitted object action for non-object spill {}",
@@ -163,13 +167,11 @@ impl StackifyAlloc {
     pub(crate) fn remap_stack_objects(&mut self, remap: &FxHashMap<StackObjId, StackObjId>) {
         fn remap_actions(actions: &mut Actions, remap: &FxHashMap<StackObjId, StackObjId>) {
             for action in actions {
-                match action {
-                    Action::MemLoadObj(obj) | Action::MemStoreObj(obj) => {
-                        if let Some(new_obj) = remap.get(obj) {
-                            *obj = *new_obj;
-                        }
-                    }
-                    _ => {}
+                if let Action::SpillLoad(_, SpillWord::Obj(obj))
+                | Action::SpillStore(_, SpillWord::Obj(obj)) = action
+                    && let Some(new_obj) = remap.get(obj)
+                {
+                    *obj = *new_obj;
                 }
             }
         }
@@ -205,7 +207,7 @@ impl Allocator for StackifyAlloc {
             );
             if let Some(store) = self
                 .storage_for_value(arg)
-                .and_then(SpillStorage::store_action)
+                .and_then(|storage| storage.store_action(arg))
             {
                 act.push(Action::StackDup(idx as u8));
                 act.push(store);

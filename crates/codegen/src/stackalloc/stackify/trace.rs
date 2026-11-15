@@ -11,7 +11,7 @@ use sonatina_ir::{
 use crate::{
     bitset::BitSet,
     isa::evm::{immediate_u32, static_arena_alloc::StackObjId},
-    stackalloc::Actions,
+    stackalloc::{Actions, SpillWord},
 };
 
 use super::{
@@ -136,7 +136,8 @@ impl StackifyTrace {
     pub(crate) fn remap_stack_objects(&mut self, remap: &FxHashMap<StackObjId, StackObjId>) {
         fn remap_actions(actions: &mut Actions, remap: &FxHashMap<StackObjId, StackObjId>) {
             for action in actions {
-                if let Action::MemLoadObj(obj) | Action::MemStoreObj(obj) = action
+                if let Action::SpillLoad(_, SpillWord::Obj(obj))
+                | Action::SpillStore(_, SpillWord::Obj(obj)) = action
                     && let Some(new_obj) = remap.get(obj)
                 {
                     *obj = *new_obj;
@@ -517,10 +518,10 @@ fn fmt_actions(actions: &[Action]) -> String {
             }
             Action::PushContinuationOffset => s.push_str("PUSH_CONT"),
             Action::Pop => s.push_str("POP"),
-            Action::MemLoadAbs(addr) => {
+            Action::MemLoadAbs(addr) | Action::SpillLoad(_, SpillWord::Abs(addr)) => {
                 let _ = write!(&mut s, "MLOAD_ABS({addr})");
             }
-            Action::MemLoadFrameSlot(slot) => {
+            Action::MemLoadFrameSlot(slot) | Action::SpillLoad(_, SpillWord::Frame(slot)) => {
                 let _ = write!(&mut s, "MLOAD_SLOT({slot})");
             }
             Action::MaterializeLocalAddr {
@@ -539,16 +540,16 @@ fn fmt_actions(actions: &[Action]) -> String {
             } => {
                 let _ = write!(&mut s, "PUSH_FRAME_ADDR({offset_words}, {extra_bytes})");
             }
-            Action::MemLoadObj(obj) => {
+            Action::SpillLoad(_, SpillWord::Obj(obj)) => {
                 let _ = write!(&mut s, "MLOAD_OBJ({})", obj.as_u32());
             }
-            Action::MemStoreAbs(addr) => {
+            Action::MemStoreAbs(addr) | Action::SpillStore(_, SpillWord::Abs(addr)) => {
                 let _ = write!(&mut s, "MSTORE_ABS({addr})");
             }
-            Action::MemStoreFrameSlot(slot) => {
+            Action::MemStoreFrameSlot(slot) | Action::SpillStore(_, SpillWord::Frame(slot)) => {
                 let _ = write!(&mut s, "MSTORE_SLOT({slot})");
             }
-            Action::MemStoreObj(obj) => {
+            Action::SpillStore(_, SpillWord::Obj(obj)) => {
                 let _ = write!(&mut s, "MSTORE_OBJ({})", obj.as_u32());
             }
         }

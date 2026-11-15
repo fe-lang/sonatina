@@ -12,6 +12,8 @@ use sonatina_ir::{
 };
 use std::{collections::HashSet, fmt, io};
 
+use crate::stackalloc::SpillPoint;
+
 // xxx offset reference graph?
 //  fn call graph
 
@@ -72,8 +74,8 @@ pub struct VCode<Op> {
 
     pub insts_pool: ListPool<VCodeInst>,
 
-    /// Whether the lowering record is kept: only then are `redirects`
-    /// collected.
+    /// Whether the lowering record is kept: only then are `redirects` and
+    /// `spill_points` collected.
     pub record_lowering: bool,
 
     /// Each label payload `rewrite_labels` replaced, as `(old, new)`, in order
@@ -82,6 +84,10 @@ pub struct VCode<Op> {
     pub redirects: Vec<(Label, Label)>,
     /// The pairs in `redirects`.
     redirect_set: HashSet<(Label, Label)>,
+
+    /// Each spill store and reload lowering emitted, in emission order, when
+    /// `record_lowering`.
+    pub spill_points: Vec<SpillPoint>,
 }
 
 impl<Op> VCode<Op> {
@@ -242,6 +248,7 @@ impl<Op> Default for VCode<Op> {
             record_lowering: false,
             redirects: Vec::new(),
             redirect_set: HashSet::new(),
+            spill_points: Vec::new(),
         }
     }
 }

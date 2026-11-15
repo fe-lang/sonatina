@@ -732,8 +732,8 @@ fn machine_fixed_memory_write_ranges(
             action,
             Action::MemLoadAbs(_)
                 | Action::MemStoreAbs(_)
-                | Action::MemLoadObj(_)
-                | Action::MemStoreObj(_)
+                | Action::SpillLoad(..)
+                | Action::SpillStore(..)
                 | Action::MemLoadFrameSlot(_)
                 | Action::MemStoreFrameSlot(_)
         )

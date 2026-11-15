@@ -1,6 +1,6 @@
 use sonatina_ir::{Function, I256, Immediate, InstId};
 
-use crate::stackalloc::{Action, Actions, Allocator, StackifyAlloc};
+use crate::stackalloc::{Action, Actions, Allocator, SpillWord, StackifyAlloc};
 
 use super::super::{DynamicFrameLayout, MachineFuncPlan, ObjLoc, static_arena_alloc::StackObjId};
 
@@ -51,9 +51,21 @@ impl FinalAlloc {
             .unwrap_or_else(|| panic!("missing stack object location for obj {}", id.as_u32()))
     }
 
+    /// The placed word of spill object `id`.
+    pub(crate) fn spill_word(&self, id: StackObjId) -> SpillWord {
+        self.word_at_loc(
+            self.obj_loc_for_id(id),
+            0,
+            "spill",
+            SpillWord::Abs,
+            SpillWord::Frame,
+        )
+    }
+
     fn validate_object_actions(&self) {
         self.inner.for_each_action(|action| match action {
-            Action::MemLoadObj(id) | Action::MemStoreObj(id) => {
+            Action::SpillLoad(_, SpillWord::Obj(id))
+            | Action::SpillStore(_, SpillWord::Obj(id)) => {
                 assert!(
                     self.mem_plan.obj_loc.contains_key(id),
                     "stackify emitted object action for unplaced stack object {}",
@@ -79,14 +91,16 @@ impl FinalAlloc {
             .as_u32()
     }
 
-    fn action_for_loc(
+    /// The word `extra_words` past the start of `loc`, as `abs` of its address or `frame` of
+    /// its local word of the dynamic frame.
+    fn word_at_loc<T>(
         &self,
         loc: ObjLoc,
         extra_words: u32,
         kind: &str,
-        abs: fn(u32) -> Action,
-        frame: fn(u32) -> Action,
-    ) -> Action {
+        abs: impl FnOnce(u32) -> T,
+        frame: impl FnOnce(u32) -> T,
+    ) -> T {
         match loc {
             ObjLoc::ScratchAbs(off) => abs(self.abs_addr_for_word(
                 off.checked_add(extra_words)
@@ -109,7 +123,7 @@ impl FinalAlloc {
     }
 
     pub(crate) fn action_load_for_loc(&self, loc: ObjLoc, extra_words: u32) -> Action {
-        self.action_for_loc(
+        self.word_at_loc(
             loc,
             extra_words,
             "load",
@@ -119,7 +133,7 @@ impl FinalAlloc {
     }
 
     pub(crate) fn action_store_for_loc(&self, loc: ObjLoc, extra_words: u32) -> Action {
-        self.action_for_loc(
+        self.word_at_loc(
             loc,
             extra_words,
             "store",
@@ -252,11 +266,10 @@ impl FinalAlloc {
     fn rewrite_actions(&self, mut actions: Actions) -> Actions {
         for action in actions.iter_mut() {
             match action {
-                Action::MemLoadObj(id) => {
-                    *action = self.action_load_for_loc(self.obj_loc_for_id(*id), 0);
-                }
-                Action::MemStoreObj(id) => {
-                    *action = self.action_store_for_loc(self.obj_loc_for_id(*id), 0);
+                Action::SpillLoad(_, word) | Action::SpillStore(_, word) => {
+                    if let SpillWord::Obj(id) = *word {
+                        *word = self.spill_word(id);
+                    }
                 }
                 Action::MaterializeLocalAddr {
                     alloca,

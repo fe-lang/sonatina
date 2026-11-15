@@ -53,8 +53,9 @@ pub struct FuncLowering {
     /// Where the function's code starts; `None` if its code is another's.
     pub offset: Option<u32>,
     pub blocks: Vec<BlockLowering>,
-    /// Where each value the stack does not hold everywhere is kept.
-    pub spills: Vec<(ValueId, SpillLocation)>,
+    /// Where each value the stack does not hold everywhere is kept, and where
+    /// the function's code stores and reloads it.
+    pub spills: Vec<SpillLowering>,
     pub frame: FrameLowering,
     /// The placement of each `evm_malloc` of the source IR, by its result.
     pub mallocs: Vec<(ValueId, MallocLowering)>,
@@ -83,6 +84,44 @@ pub enum StackSlot {
     FuncReturn,
     /// The address an internal call returns to, pushed for the call.
     CallReturn,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpillLowering {
+    pub value: ValueId,
+    pub location: SpillLocation,
+    /// The points at which the code stores the value into its location, in
+    /// emission order: after its definition, at entry for an argument, and
+    /// for a phi before the terminator of each predecessor (an edge block,
+    /// for a critical edge) that gives it an operand other than itself,
+    /// except where the edge would reload that operand from the phi's own
+    /// location. The stack top holds the value stored, a phi's operand on its
+    /// edge, and the store may take it off the stack.
+    pub stores: Vec<CodePoint>,
+    /// The points at which the code reloads the value from its location onto
+    /// the stack, in emission order.
+    pub reloads: Vec<CodePoint>,
+}
+
+/// A point of a function's machine IR at which its code runs the stack
+/// allocator's moves. `index` is the position of an instruction in its block,
+/// phis included. A function without code of its own
+/// (`FuncLowering::offset` is `None`) has no points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodePoint {
+    /// Function entry, before the entry block's first instruction.
+    Entry,
+    /// Before the instruction's opcodes: where its operands are prepared, and
+    /// for a terminator, the moves into its successors.
+    Before { block: BlockId, index: u32 },
+    /// After the instruction's opcodes, where its results are stored.
+    After { block: BlockId, index: u32 },
+    /// Before the comparison of case `case` of the `br_table` instruction.
+    Case {
+        block: BlockId,
+        index: u32,
+        case: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

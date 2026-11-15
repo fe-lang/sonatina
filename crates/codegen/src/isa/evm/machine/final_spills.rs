@@ -13,7 +13,7 @@ use sonatina_ir::{
 use crate::{
     bitset::BitSet,
     module_analysis::CallGraphSchedule,
-    stackalloc::{Action, ActionSite, Actions, StackifyAlloc},
+    stackalloc::{Action, ActionSite, Actions, SpillWord, StackifyAlloc},
 };
 
 use crate::isa::evm::memory_plan::align_up_to_word;
@@ -78,7 +78,10 @@ pub(crate) fn compute_malloc_spill_bounds(
     cfg.compute(machine);
     let mut bounds: SecondaryMap<BlockId, u32> = SecondaryMap::new();
     let action_bound = |action: &Action| match *action {
-        Action::MemLoadAbs(addr) | Action::MemStoreAbs(addr) => addr
+        Action::MemLoadAbs(addr)
+        | Action::MemStoreAbs(addr)
+        | Action::SpillLoad(_, SpillWord::Abs(addr))
+        | Action::SpillStore(_, SpillWord::Abs(addr)) => addr
             .checked_add(WORD_BYTES)
             .expect("spill access end overflow")
             .saturating_sub(alloc.mem_plan.arena_base)
@@ -203,8 +206,8 @@ impl FinalSpillObjects {
         }
 
         let accesses = spill_word_accesses(function, alloc, |action| match *action {
-            Action::MemLoadObj(obj) => Some((obj, false)),
-            Action::MemStoreObj(obj) => Some((obj, true)),
+            Action::SpillLoad(_, SpillWord::Obj(obj)) => Some((obj, false)),
+            Action::SpillStore(_, SpillWord::Obj(obj)) => Some((obj, true)),
             _ => None,
         });
 
@@ -638,8 +641,9 @@ pub(crate) fn allocate_final_spills(
     let skip_same_word = |actions: Actions| {
         let mut kept = Actions::new();
         for action in actions {
-            if let Action::MemStoreObj(obj) = action
-                && kept.last() == Some(&Action::MemLoadObj(obj))
+            if let Action::SpillStore(_, SpillWord::Obj(obj)) = action
+                && let Some(Action::SpillLoad(_, SpillWord::Obj(loaded))) = kept.last()
+                && *loaded == obj
             {
                 kept.pop();
             } else {

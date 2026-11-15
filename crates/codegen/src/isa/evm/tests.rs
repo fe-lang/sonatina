@@ -15,8 +15,8 @@ use crate::{
         pipeline::Pipeline,
     },
     stackalloc::{
-        Action, Actions, Allocator, StackifyAlloc, StackifyBuilder, StackifyEdgeSplitter,
-        StackifySearchProfile,
+        Action, Actions, Allocator, SpillWord, StackifyAlloc, StackifyBuilder,
+        StackifyEdgeSplitter, StackifySearchProfile,
     },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -133,10 +133,14 @@ fn fixtures_store_exactly_the_spills_they_reload() {
                     let mut cfg = ControlFlowGraph::new();
                     cfg.compute(function);
                     let accesses = spill_word_accesses(function, alloc, |action| match *action {
-                        Action::MemLoadAbs(addr) => Some(((0, addr), false)),
-                        Action::MemStoreAbs(addr) => Some(((0, addr), true)),
-                        Action::MemLoadObj(obj) => Some(((1, obj.as_u32()), false)),
-                        Action::MemStoreObj(obj) => Some(((1, obj.as_u32()), true)),
+                        Action::SpillLoad(_, SpillWord::Abs(addr)) => Some(((0, addr), false)),
+                        Action::SpillStore(_, SpillWord::Abs(addr)) => Some(((0, addr), true)),
+                        Action::SpillLoad(_, SpillWord::Obj(obj)) => {
+                            Some(((1, obj.as_u32()), false))
+                        }
+                        Action::SpillStore(_, SpillWord::Obj(obj)) => {
+                            Some(((1, obj.as_u32()), true))
+                        }
                         _ => None,
                     });
                     (

@@ -309,7 +309,7 @@ mod tests {
         domtree::DomTree,
         liveness::Liveness,
         stackalloc::{
-            Action, Actions,
+            Action, Actions, SpillWord,
             stackify::{
                 builder::StackifyReachability,
                 planner::{
@@ -357,8 +357,11 @@ block1:
     }
 
     /// Plans the edge fixup into the `params ++ transfer` template of `%entry`'s `succ`, and
-    /// returns the emitted actions.
-    fn plan_edge_fixup(edge: EdgeFixup<'_>) -> Actions {
+    /// checks the emitted actions against `expected`, which names values by their text.
+    fn assert_edge_fixup(
+        edge: EdgeFixup<'_>,
+        expected: impl FnOnce(&dyn Fn(&str) -> ValueId) -> Vec<Action>,
+    ) {
         let parsed = parse_module(edge.src).expect("module parses");
         let func_ref = parsed
             .module
@@ -459,62 +462,63 @@ block1:
                 spill_requests.is_empty(),
                 "edge fixup requested new spills: {spill_requests:?}"
             );
-            actions
+            assert_eq!(actions.as_slice(), expected(&value).as_slice());
         })
     }
 
     #[test]
     fn spilled_phi_edge_slots_keep_parallel_sources_distinct() {
-        let actions = plan_edge_fixup(EdgeFixup {
-            src: ENTRY_EDGE,
-            pred: BlockId(0),
-            succ: BlockId(1),
-            scratch: &["v1"],
-            spilled: &["v2", "v3"],
-            stack: &[],
-            params: &[],
-            transfer: &[],
-        });
-
-        assert_eq!(
-            actions.as_slice(),
-            &[
-                Action::Push(Immediate::I256(0.into())),
-                Action::MemStoreAbs(32),
-                Action::MemLoadAbs(0),
-                Action::MemStoreAbs(64),
-            ],
+        assert_edge_fixup(
+            EdgeFixup {
+                src: ENTRY_EDGE,
+                pred: BlockId(0),
+                succ: BlockId(1),
+                scratch: &["v1"],
+                spilled: &["v2", "v3"],
+                stack: &[],
+                params: &[],
+                transfer: &[],
+            },
+            |v| {
+                vec![
+                    Action::Push(Immediate::I256(0.into())),
+                    Action::SpillStore(v("v2"), SpillWord::Abs(32)),
+                    Action::SpillLoad(v("v1"), SpillWord::Abs(0)),
+                    Action::SpillStore(v("v3"), SpillWord::Abs(64)),
+                ]
+            },
         );
     }
 
     #[test]
     fn spilled_phi_store_does_not_clobber_later_stack_phi_source() {
-        let actions = plan_edge_fixup(EdgeFixup {
-            src: ENTRY_EDGE,
-            pred: BlockId(0),
-            succ: BlockId(1),
-            scratch: &["v1"],
-            spilled: &["v2"],
-            stack: &[],
-            params: &["v3"],
-            transfer: &[],
-        });
-
-        assert_eq!(
-            actions.as_slice(),
-            &[
-                Action::Push(Immediate::I256(0.into())),
-                Action::MemStoreAbs(32),
-                Action::MemLoadAbs(0),
-            ],
+        assert_edge_fixup(
+            EdgeFixup {
+                src: ENTRY_EDGE,
+                pred: BlockId(0),
+                succ: BlockId(1),
+                scratch: &["v1"],
+                spilled: &["v2"],
+                stack: &[],
+                params: &["v3"],
+                transfer: &[],
+            },
+            |v| {
+                vec![
+                    Action::Push(Immediate::I256(0.into())),
+                    Action::SpillStore(v("v2"), SpillWord::Abs(32)),
+                    Action::SpillLoad(v("v1"), SpillWord::Abs(0)),
+                ]
+            },
         );
     }
 
     #[test]
     fn stack_phi_reads_spilled_phi_before_its_edge_store() {
         // Stack phi `v1` takes the old `v2`, while spilled `v2` is overwritten with `v3`.
-        let actions = plan_edge_fixup(EdgeFixup {
-            src: r#"
+        assert_edge_fixup(
+            EdgeFixup {
+                src: r#"
 target = "evm-ethereum-osaka"
 
 func public %entry(v0.i256) -> i256 {
@@ -535,22 +539,21 @@ block3:
     return v1;
 }
 "#,
-            pred: BlockId(2),
-            succ: BlockId(1),
-            scratch: &["v2"],
-            spilled: &[],
-            stack: &["v3", "v0"],
-            params: &["v1"],
-            transfer: &["v0"],
-        });
-
-        assert_eq!(
-            actions.as_slice(),
-            &[
-                Action::MemLoadAbs(0),
-                Action::StackSwap(1),
-                Action::MemStoreAbs(0),
-            ],
+                pred: BlockId(2),
+                succ: BlockId(1),
+                scratch: &["v2"],
+                spilled: &[],
+                stack: &["v3", "v0"],
+                params: &["v1"],
+                transfer: &["v0"],
+            },
+            |v| {
+                vec![
+                    Action::SpillLoad(v("v2"), SpillWord::Abs(0)),
+                    Action::StackSwap(1),
+                    Action::SpillStore(v("v2"), SpillWord::Abs(0)),
+                ]
+            },
         );
     }
 
@@ -558,8 +561,9 @@ block3:
     fn spilled_phi_rotation_holds_one_old_value() {
         // Holding the old `v1` breaks the cycle; every other old value is loaded just before its
         // phi's store.
-        let actions = plan_edge_fixup(EdgeFixup {
-            src: r#"
+        assert_edge_fixup(
+            EdgeFixup {
+                src: r#"
 target = "evm-ethereum-osaka"
 
 func public %entry(v0.i256) -> i256 {
@@ -580,25 +584,24 @@ block3:
     return v3;
 }
 "#,
-            pred: BlockId(2),
-            succ: BlockId(1),
-            scratch: &["v1", "v2", "v3"],
-            spilled: &[],
-            stack: &["v0"],
-            params: &[],
-            transfer: &["v0"],
-        });
-
-        assert_eq!(
-            actions.as_slice(),
-            &[
-                Action::MemLoadAbs(0),
-                Action::MemLoadAbs(32),
-                Action::MemStoreAbs(0),
-                Action::MemLoadAbs(64),
-                Action::MemStoreAbs(32),
-                Action::MemStoreAbs(64),
-            ],
+                pred: BlockId(2),
+                succ: BlockId(1),
+                scratch: &["v1", "v2", "v3"],
+                spilled: &[],
+                stack: &["v0"],
+                params: &[],
+                transfer: &["v0"],
+            },
+            |v| {
+                vec![
+                    Action::SpillLoad(v("v1"), SpillWord::Abs(0)),
+                    Action::SpillLoad(v("v2"), SpillWord::Abs(32)),
+                    Action::SpillStore(v("v1"), SpillWord::Abs(0)),
+                    Action::SpillLoad(v("v3"), SpillWord::Abs(64)),
+                    Action::SpillStore(v("v2"), SpillWord::Abs(32)),
+                    Action::SpillStore(v("v3"), SpillWord::Abs(64)),
+                ]
+            },
         );
     }
 
@@ -606,8 +609,9 @@ block3:
     fn stack_phi_reads_spilled_phi_in_copy_cycle() {
         // Spilled `v2` and `v3` swap, and stack phi `v1` also reads the old `v2`. The cycle is
         // broken after normalization by duplicating the old `v2` that `v1` placed.
-        let actions = plan_edge_fixup(EdgeFixup {
-            src: r#"
+        assert_edge_fixup(
+            EdgeFixup {
+                src: r#"
 target = "evm-ethereum-osaka"
 
 func public %entry(v0.i256) -> i256 {
@@ -628,24 +632,23 @@ block3:
     return v1;
 }
 "#,
-            pred: BlockId(2),
-            succ: BlockId(1),
-            scratch: &["v2", "v3"],
-            spilled: &[],
-            stack: &["v0"],
-            params: &["v1"],
-            transfer: &["v0"],
-        });
-
-        assert_eq!(
-            actions.as_slice(),
-            &[
-                Action::MemLoadAbs(0),
-                Action::StackDup(0),
-                Action::MemLoadAbs(32),
-                Action::MemStoreAbs(0),
-                Action::MemStoreAbs(32),
-            ],
+                pred: BlockId(2),
+                succ: BlockId(1),
+                scratch: &["v2", "v3"],
+                spilled: &[],
+                stack: &["v0"],
+                params: &["v1"],
+                transfer: &["v0"],
+            },
+            |v| {
+                vec![
+                    Action::SpillLoad(v("v2"), SpillWord::Abs(0)),
+                    Action::StackDup(0),
+                    Action::SpillLoad(v("v3"), SpillWord::Abs(32)),
+                    Action::SpillStore(v("v2"), SpillWord::Abs(0)),
+                    Action::SpillStore(v("v3"), SpillWord::Abs(32)),
+                ]
+            },
         );
     }
 
@@ -653,8 +656,9 @@ block3:
     fn spilled_phi_chain_stores_readers_first() {
         // `v2` reads the old `v1`, so `v2` is stored before `v1` despite the phi order, all before
         // normalization. Nothing else reads `v3`, so its store takes it from the top.
-        let actions = plan_edge_fixup(EdgeFixup {
-            src: r#"
+        assert_edge_fixup(
+            EdgeFixup {
+                src: r#"
 target = "evm-ethereum-osaka"
 
 func public %entry(v0.i256) -> i256 {
@@ -675,30 +679,30 @@ block3:
     return v2;
 }
 "#,
-            pred: BlockId(2),
-            succ: BlockId(1),
-            scratch: &["v1", "v2"],
-            spilled: &[],
-            stack: &["v3", "v0"],
-            params: &[],
-            transfer: &["v0"],
-        });
-
-        assert_eq!(
-            actions.as_slice(),
-            &[
-                Action::MemLoadAbs(0),
-                Action::MemStoreAbs(32),
-                Action::MemStoreAbs(0),
-            ],
+                pred: BlockId(2),
+                succ: BlockId(1),
+                scratch: &["v1", "v2"],
+                spilled: &[],
+                stack: &["v3", "v0"],
+                params: &[],
+                transfer: &["v0"],
+            },
+            |v| {
+                vec![
+                    Action::SpillLoad(v("v1"), SpillWord::Abs(0)),
+                    Action::SpillStore(v("v2"), SpillWord::Abs(32)),
+                    Action::SpillStore(v("v1"), SpillWord::Abs(0)),
+                ]
+            },
         );
     }
 
     #[test]
     fn spilled_phi_store_copies_source_another_phi_reads() {
         // `v1` and `v2` both take `v3`: the first store copies it, the last takes it.
-        let actions = plan_edge_fixup(EdgeFixup {
-            src: r#"
+        assert_edge_fixup(
+            EdgeFixup {
+                src: r#"
 target = "evm-ethereum-osaka"
 
 func public %entry(v0.i256) -> i256 {
@@ -719,30 +723,30 @@ block3:
     return v2;
 }
 "#,
-            pred: BlockId(2),
-            succ: BlockId(1),
-            scratch: &["v1", "v2"],
-            spilled: &[],
-            stack: &["v3", "v0"],
-            params: &[],
-            transfer: &["v0"],
-        });
-
-        assert_eq!(
-            actions.as_slice(),
-            &[
-                Action::StackDup(0),
-                Action::MemStoreAbs(0),
-                Action::MemStoreAbs(32),
-            ],
+                pred: BlockId(2),
+                succ: BlockId(1),
+                scratch: &["v1", "v2"],
+                spilled: &[],
+                stack: &["v3", "v0"],
+                params: &[],
+                transfer: &["v0"],
+            },
+            |v| {
+                vec![
+                    Action::StackDup(0),
+                    Action::SpillStore(v("v1"), SpillWord::Abs(0)),
+                    Action::SpillStore(v("v2"), SpillWord::Abs(32)),
+                ]
+            },
         );
     }
 
     #[test]
     fn spilled_phi_store_copies_source_the_successor_takes() {
         // `v0` feeds the spilled `v1` and also enters `block1` on the stack.
-        let actions = plan_edge_fixup(EdgeFixup {
-            src: r#"
+        assert_edge_fixup(
+            EdgeFixup {
+                src: r#"
 target = "evm-ethereum-osaka"
 
 func public %entry(v0.i256) -> i256 {
@@ -761,25 +765,28 @@ block3:
     return v1;
 }
 "#,
-            pred: BlockId(2),
-            succ: BlockId(1),
-            scratch: &["v1"],
-            spilled: &[],
-            stack: &["v0"],
-            params: &[],
-            transfer: &["v0"],
-        });
-
-        assert_eq!(
-            actions.as_slice(),
-            &[Action::StackDup(0), Action::MemStoreAbs(0)],
+                pred: BlockId(2),
+                succ: BlockId(1),
+                scratch: &["v1"],
+                spilled: &[],
+                stack: &["v0"],
+                params: &[],
+                transfer: &["v0"],
+            },
+            |v| {
+                vec![
+                    Action::StackDup(0),
+                    Action::SpillStore(v("v1"), SpillWord::Abs(0)),
+                ]
+            },
         );
     }
 
     #[test]
     fn spilled_phi_self_copy_needs_no_store() {
-        let actions = plan_edge_fixup(EdgeFixup {
-            src: r#"
+        assert_edge_fixup(
+            EdgeFixup {
+                src: r#"
 target = "evm-ethereum-osaka"
 
 func public %entry(v0.i256) -> i256 {
@@ -798,24 +805,25 @@ block3:
     return v1;
 }
 "#,
-            pred: BlockId(2),
-            succ: BlockId(1),
-            scratch: &["v1"],
-            spilled: &[],
-            stack: &["v0"],
-            params: &[],
-            transfer: &["v0"],
-        });
-
-        assert_eq!(actions.as_slice(), &[]);
+                pred: BlockId(2),
+                succ: BlockId(1),
+                scratch: &["v1"],
+                spilled: &[],
+                stack: &["v0"],
+                params: &[],
+                transfer: &["v0"],
+            },
+            |_| Vec::new(),
+        );
     }
 
     #[test]
     fn spilled_phi_store_keeps_normalized_stack_phi_source() {
         // Stack phi `v1` takes `v3`, which spilled `v4` also reads. Normalization reads `v3` for
         // `v1` and leaves it on top as `v1`'s placeholder, so `v4`'s store copies it.
-        let actions = plan_edge_fixup(EdgeFixup {
-            src: r#"
+        assert_edge_fixup(
+            EdgeFixup {
+                src: r#"
 target = "evm-ethereum-osaka"
 
 func public %entry(v0.i256) -> i256 {
@@ -840,29 +848,28 @@ block3:
     return v8;
 }
 "#,
-            pred: BlockId(2),
-            succ: BlockId(1),
-            scratch: &["v3", "v4", "v5", "v6"],
-            spilled: &[],
-            stack: &["v0"],
-            params: &["v1", "v2"],
-            transfer: &["v0"],
-        });
-
-        assert_eq!(
-            actions.as_slice(),
-            &[
-                Action::MemLoadAbs(32),
-                Action::MemLoadAbs(0),
-                Action::StackDup(0),
-                Action::MemStoreAbs(32),
-                Action::MemLoadAbs(64),
-                Action::MemStoreAbs(0),
-                Action::MemLoadAbs(64),
-                Action::MemLoadAbs(96),
-                Action::MemStoreAbs(64),
-                Action::MemStoreAbs(96),
-            ],
+                pred: BlockId(2),
+                succ: BlockId(1),
+                scratch: &["v3", "v4", "v5", "v6"],
+                spilled: &[],
+                stack: &["v0"],
+                params: &["v1", "v2"],
+                transfer: &["v0"],
+            },
+            |v| {
+                vec![
+                    Action::SpillLoad(v("v4"), SpillWord::Abs(32)),
+                    Action::SpillLoad(v("v3"), SpillWord::Abs(0)),
+                    Action::StackDup(0),
+                    Action::SpillStore(v("v4"), SpillWord::Abs(32)),
+                    Action::SpillLoad(v("v5"), SpillWord::Abs(64)),
+                    Action::SpillStore(v("v3"), SpillWord::Abs(0)),
+                    Action::SpillLoad(v("v5"), SpillWord::Abs(64)),
+                    Action::SpillLoad(v("v6"), SpillWord::Abs(96)),
+                    Action::SpillStore(v("v5"), SpillWord::Abs(64)),
+                    Action::SpillStore(v("v6"), SpillWord::Abs(96)),
+                ]
+            },
         );
     }
 }

@@ -3,7 +3,7 @@
 
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    Module,
+    BlockId, InstId, Module, ValueId,
     inst::data::SymbolRef,
     ir_writer::{IrWrite, ModuleWriter},
     module::FuncRef,
@@ -17,11 +17,11 @@ use crate::{
     object::{
         SymbolDef, SymbolId,
         lowering::{
-            BlockLowering, CodeLabel, DynSpInitLowering, FrameLowering, FuncLowering,
-            SectionLowering, SpillLocation, StableLowering, StackSlot,
+            BlockLowering, CodeLabel, CodePoint, DynSpInitLowering, FrameLowering, FuncLowering,
+            SectionLowering, SpillLocation, SpillLowering, StableLowering, StackSlot,
         },
     },
-    stackalloc::{Action, SpillStorage, StackItem},
+    stackalloc::{ActionSite, SpillStorage, SpillWord, StackItem},
 };
 
 /// The text of `funcs` of `module`, without the module's objects, whose
@@ -98,13 +98,48 @@ pub(crate) fn record_section_lowering(
                             }
                         })
                         .collect();
-                    let object_location = |obj| match final_alloc
-                        .action_load_for_loc(final_alloc.obj_loc_for_id(obj), 0)
-                    {
-                        Action::MemLoadAbs(addr) => SpillLocation::Memory(addr),
-                        Action::MemLoadFrameSlot(slot) => SpillLocation::Frame(slot),
-                        action => unreachable!("a load of a stack object is {action:?}"),
+                    let object_location = |obj| match final_alloc.spill_word(obj) {
+                        SpillWord::Abs(addr) => SpillLocation::Memory(addr),
+                        SpillWord::Frame(slot) => SpillLocation::Frame(slot),
+                        SpillWord::Obj(_) => unreachable!("a placed stack object has a word"),
                     };
+                    let positions: FxHashMap<InstId, (BlockId, u32)> = function
+                        .layout
+                        .iter_block()
+                        .flat_map(|block| {
+                            function
+                                .layout
+                                .iter_inst(block)
+                                .zip(0..)
+                                .map(move |(inst, index)| (inst, (block, index)))
+                        })
+                        .collect();
+                    let point = |site| match site {
+                        ActionSite::Entry => CodePoint::Entry,
+                        ActionSite::Before(inst) => {
+                            let (block, index) = positions[&inst];
+                            CodePoint::Before { block, index }
+                        }
+                        ActionSite::After(inst) => {
+                            let (block, index) = positions[&inst];
+                            CodePoint::After { block, index }
+                        }
+                        ActionSite::Case(inst, case) => {
+                            let (block, index) = positions[&inst];
+                            let case = u32::try_from(case).expect("br_table case overflow");
+                            CodePoint::Case { block, index, case }
+                        }
+                    };
+                    // (stores, reloads) of each value, from the code emitted.
+                    let mut accesses: FxHashMap<ValueId, (Vec<CodePoint>, Vec<CodePoint>)> =
+                        FxHashMap::default();
+                    for access in func_layout
+                        .iter()
+                        .flat_map(|layout| &layout.vcode().spill_points)
+                    {
+                        let (stores, reloads) = accesses.entry(access.value).or_default();
+                        if access.reload { reloads } else { stores }.push(point(access.site));
+                    }
                     let mut spills: Vec<_> =
                         plan.alloc
                             .spill_storage
@@ -125,6 +160,22 @@ pub(crate) fn record_section_lowering(
                             .collect();
                     spills.sort_unstable_by_key(|(value, _)| value.as_u32());
                     spills.dedup();
+                    let spills: Vec<_> = spills
+                        .into_iter()
+                        .map(|(value, location)| {
+                            let (stores, reloads) = accesses.remove(&value).unwrap_or_default();
+                            SpillLowering {
+                                value,
+                                location,
+                                stores,
+                                reloads,
+                            }
+                        })
+                        .collect();
+                    assert!(
+                        accesses.is_empty(),
+                        "{func_name}: the code stores or reloads values it does not spill"
+                    );
                     FuncLowering {
                         name: func_name.clone(),
                         offset: func_layout.map(|layout| layout.offset()),
