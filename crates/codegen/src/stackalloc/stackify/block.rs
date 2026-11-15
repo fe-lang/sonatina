@@ -60,7 +60,7 @@ enum TerminatorInfo {
     BrTable {
         scrutinee: ValueId,
         table: Vec<(ValueId, BlockId)>,
-        default: Option<BlockId>,
+        default: BlockId,
     },
 }
 
@@ -75,7 +75,9 @@ fn terminator_info(ctx: &StackifyContext<'_>, inst: InstId) -> Option<Terminator
         BranchKind::BrTable(table) => Some(TerminatorInfo::BrTable {
             scrutinee: ctx.canonicalize_value(*table.scrutinee()),
             table: table.table().to_vec(),
-            default: *table.default(),
+            default: table
+                .default()
+                .expect("machine verification requires a br_table default"),
         }),
     }
 }
@@ -310,7 +312,7 @@ impl<'d, 'a, 'ctx, O: StackifyObserver> BlockPlanner<'d, 'a, 'ctx, O> {
         inst: InstId,
         scrutinee: ValueId,
         table: Vec<(ValueId, BlockId)>,
-        default: Option<BlockId>,
+        default: BlockId,
     ) {
         self.rescue_reachability(inst, &[scrutinee]);
 
@@ -339,10 +341,8 @@ impl<'d, 'a, 'ctx, O: StackifyObserver> BlockPlanner<'d, 'a, 'ctx, O> {
             self.driver
                 .record_br_table_edge(&mut self.state, case.dest, &case.post_compare_stack);
         }
-        if let Some(default) = default {
-            self.driver
-                .record_br_table_edge(&mut self.state, default, &default_stack);
-        }
+        self.driver
+            .record_br_table_edge(&mut self.state, default, &default_stack);
 
         self.driver.observer().on_inst_br_table(inst);
     }

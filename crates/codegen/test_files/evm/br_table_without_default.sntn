@@ -1,0 +1,89 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false }
+#! evm.case: inputs_3_0
+#!   calldata: u256(3) u256(0)
+#!   expect: return u256(10) u256(100) u256(1000)
+#! evm.case: inputs_10_4
+#!   calldata: u256(10) u256(4)
+#!   expect: return u256(20) u256(200) u256(5000)
+#! evm.case: inputs_2_5
+#!   calldata: u256(2) u256(5)
+#!   expect: return u256(10) u256(300) u256(6000)
+#! evm.case: inputs_7_9
+#!   calldata: u256(7) u256(9)
+#!   expect: return u256(20) u256(100) u256(4000)
+
+target = "evm-ethereum-osaka"
+
+# A `br_table` without a default whose cases cover the scrutinee's values: a
+# comparison (cases 1 and 0), a remainder by three (cases 0, 1 and 2) and one
+# by six (cases 0 to 5). The last case is the default of the lowered table.
+
+func private %by_flag(v0.i256) -> i256 {
+    block0:
+        v1.i1 = lt v0 5.i256;
+        br_table v1 (1.i1 block1) (0.i1 block2);
+
+    block1:
+        return 10.i256;
+
+    block2:
+        return 20.i256;
+}
+
+func private %by_three(v0.i256) -> i256 {
+    block0:
+        v1.i256 = umod v0 3.i256;
+        br_table v1 (0.i256 block1) (1.i256 block2) (2.i256 block3);
+
+    block1:
+        return 100.i256;
+
+    block2:
+        return 200.i256;
+
+    block3:
+        return 300.i256;
+}
+
+func private %by_six(v0.i256) -> i256 {
+    block0:
+        v1.i256 = umod v0 6.i256;
+        br_table v1 (0.i256 block1) (1.i256 block2) (2.i256 block3) (3.i256 block4) (4.i256 block5) (5.i256 block6);
+
+    block1:
+        return 1000.i256;
+
+    block2:
+        return 2000.i256;
+
+    block3:
+        return 3000.i256;
+
+    block4:
+        return 4000.i256;
+
+    block5:
+        return 5000.i256;
+
+    block6:
+        return 6000.i256;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i256 = call %by_flag v0;
+        v3.i256 = call %by_three v1;
+        v4.i256 = call %by_six v1;
+        mstore 0.i32 v2 i256;
+        mstore 32.i32 v3 i256;
+        mstore 64.i32 v4 i256;
+        evm_return 0.i32 96.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

@@ -24,6 +24,10 @@ pub struct Br {
     z_dest: BlockId,
 }
 
+/// Jumps to the block of the case equal to `scrutinee`, or to `default` if no
+/// case is. Without a default, a scrutinee equal to no case is undefined
+/// behavior, so a table without a default whose cases all go to one block is
+/// a `jump` to it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
 #[inst(arity(at_least(2)))]

@@ -93,6 +93,13 @@ pub(crate) fn verify_machine_function(
                 EvmMachineInstKind::Br(br) => {
                     verify_machine_branch_cond(func_ref, function, inst, *br.cond())?
                 }
+                EvmMachineInstKind::BrTable(table) if table.default().is_none() => {
+                    return Err(format!(
+                        "EVM machine br_table inst{} in func {} has no default",
+                        inst.as_u32(),
+                        func_ref.as_u32()
+                    ));
+                }
                 _ => {}
             }
         }
