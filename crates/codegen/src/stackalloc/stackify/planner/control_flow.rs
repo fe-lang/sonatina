@@ -407,15 +407,13 @@ block1:
             }
 
             let mut spill_requests = BitSet::default();
-            let mut object_spill_requests = BitSet::default();
-            let forced_object_spills = BitSet::default();
+            let mut object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut mem_state = MemState {
                 spill: SpillSet::new(&spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
-                object_spill_requests: &mut object_spill_requests,
-                forced_object_spills: &forced_object_spills,
+                object_spills: &mut object_spills,
                 slots: &mut slots,
             };
             let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);

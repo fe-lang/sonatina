@@ -385,29 +385,24 @@ impl<'a> StackifyBuilder<'a> {
         // remove it from transfer regions (`T(B)` excludes `spill_set`), so future iterations
         // can rely on loads being correct.
         let mut spill_set: BitSet<ValueId> = BitSet::default();
-        let mut forced_object_spills: BitSet<ValueId> = BitSet::default();
         let mut search_scratch = NormalizeSearchScratch::with_cache(std::mem::take(cache));
         loop {
             let checkpoint = observer.checkpoint();
             let mut slots: SpillSlotPools = SpillSlotPools::default();
 
-            let (mut alloc, spill_obj, spill_requests, object_spill_requests) =
-                Self::plan_iteration(
-                    &ctx,
-                    observer,
-                    SpillSet::new(&spill_set),
-                    &forced_object_spills,
-                    &mut slots,
-                    &mut search_scratch,
-                );
+            let (mut alloc, spill_obj, spill_requests, object_spills) = Self::plan_iteration(
+                &ctx,
+                observer,
+                SpillSet::new(&spill_set),
+                &mut slots,
+                &mut search_scratch,
+            );
 
-            let spill_stable = spill_requests.is_subset(&spill_set);
-            let object_spills_stable = object_spill_requests.is_subset(&forced_object_spills);
-            if spill_stable && object_spills_stable {
+            if spill_requests.is_subset(&spill_set) {
                 Self::finalize_spill_storage(
                     &ctx,
                     SpillSet::new(&spill_set),
-                    &forced_object_spills,
+                    &object_spills,
                     &mut slots,
                     &mut alloc,
                     &spill_obj,
@@ -419,7 +414,6 @@ impl<'a> StackifyBuilder<'a> {
 
             observer.rollback(checkpoint);
             spill_set.union_with(&spill_requests);
-            forced_object_spills.union_with(&object_spill_requests);
         }
     }
 
@@ -427,7 +421,6 @@ impl<'a> StackifyBuilder<'a> {
         ctx: &StackifyContext<'_>,
         observer: &mut O,
         spill: SpillSet<'_>,
-        forced_object_spills: &BitSet<ValueId>,
         slots: &mut SpillSlotPools,
         search_scratch: &mut NormalizeSearchScratch,
     ) -> (
@@ -436,13 +429,13 @@ impl<'a> StackifyBuilder<'a> {
         BitSet<ValueId>,
         BitSet<ValueId>,
     ) {
-        let mut object_spill_requests: BitSet<ValueId> = BitSet::default();
+        let mut object_spills: BitSet<ValueId> = BitSet::default();
         let mut arg_free_slots: FreeSlotPools = FreeSlotPools::default();
         for &arg in ctx.func.arg_values.iter() {
             let arg = ctx.canonicalize_value(arg);
             if let Some(spilled) = spill.spilled(arg)
                 && ctx.remat_actions[arg].is_none()
-                && !must_use_object_storage(&ctx.scratch_barred, forced_object_spills, arg)
+                && !must_use_object_storage(&ctx.scratch_barred, &object_spills, arg)
                 && slots
                     .scratch
                     .try_ensure_slot(
@@ -453,7 +446,7 @@ impl<'a> StackifyBuilder<'a> {
                     )
                     .is_none()
             {
-                object_spill_requests.insert(arg);
+                object_spills.insert(arg);
             }
         }
 
@@ -483,8 +476,7 @@ impl<'a> StackifyBuilder<'a> {
             spill,
             spill_obj: &spill_obj,
             spill_requests: &mut spill_requests,
-            object_spill_requests: &mut object_spill_requests,
-            forced_object_spills,
+            object_spills: &mut object_spills,
             slots,
         };
         let mut planner = FunctionPlanner::new(
@@ -498,13 +490,13 @@ impl<'a> StackifyBuilder<'a> {
         );
         planner.plan_blocks();
 
-        (alloc, spill_obj, spill_requests, object_spill_requests)
+        (alloc, spill_obj, spill_requests, object_spills)
     }
 
     fn finalize_spill_storage(
         ctx: &StackifyContext<'_>,
         spill: SpillSet<'_>,
-        forced_object_spills: &BitSet<ValueId>,
+        object_spills: &BitSet<ValueId>,
         slots: &mut SpillSlotPools,
         alloc: &mut StackifyAlloc,
         spill_obj: &SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
@@ -518,7 +510,7 @@ impl<'a> StackifyBuilder<'a> {
         for value in spill.bitset().iter() {
             if ctx.remat_actions[value].is_some() {
                 spill_storage[value] = Some(SpillStorage::Rematerialized);
-            } else if must_use_object_storage(&ctx.scratch_barred, forced_object_spills, value) {
+            } else if must_use_object_storage(&ctx.scratch_barred, object_spills, value) {
                 let obj = spill_obj[value].expect("object spill missing stack object id");
                 spill_storage[value] = Some(SpillStorage::Object(obj));
             } else if let Some(slot) = scratch_slots[value] {
