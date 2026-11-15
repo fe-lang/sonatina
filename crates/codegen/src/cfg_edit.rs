@@ -1158,39 +1158,27 @@ pub(crate) fn simplify_trivial_phis_in_block(func: &mut Function, block: BlockId
     changed
 }
 
+/// The one value among `phi_inst`'s inputs other than its own result. A phi with no such input
+/// is in a block that no path from the entry reaches, and goes when that block does.
+pub(crate) fn trivial_phi_input(func: &Function, phi_inst: InstId) -> Option<ValueId> {
+    let phi_value = func.dfg.inst_result(phi_inst)?;
+    let mut inputs = func
+        .dfg
+        .cast_phi(phi_inst)?
+        .args()
+        .iter()
+        .map(|&(value, _)| value)
+        .filter(|&value| value != phi_value);
+    let first = inputs.next()?;
+    inputs.all(|value| value == first).then_some(first)
+}
+
 pub(crate) fn simplify_trivial_phi(func: &mut Function, phi_inst: InstId) -> bool {
-    let phi_value = func.dfg.inst_result(phi_inst).expect("phi has no result");
-    let ty = func.dfg.value_ty(phi_value);
-
-    let phi = func.dfg.cast_phi(phi_inst).unwrap();
-    let arg = match phi.args().first() {
-        None => func.dfg.make_undef_value(ty),
-        Some(&(first, _)) if phi.args().iter().all(|(value, _)| *value == first) => {
-            if first == phi_value {
-                func.dfg.make_undef_value(ty)
-            } else {
-                first
-            }
-        }
-        Some(_) => {
-            let mut non_self = None;
-            for &(value, _) in phi.args() {
-                if value == phi_value {
-                    continue;
-                }
-
-                match non_self {
-                    Some(existing) if existing != value => return false,
-                    Some(_) => {}
-                    None => non_self = Some(value),
-                }
-            }
-
-            non_self.unwrap_or_else(|| func.dfg.make_undef_value(ty))
-        }
+    let Some(input) = trivial_phi_input(func, phi_inst) else {
+        return false;
     };
-
-    func.dfg.change_to_alias(phi_value, arg);
+    let phi_value = func.dfg.inst_result(phi_inst).expect("phi has no result");
+    func.dfg.change_to_alias(phi_value, input);
     InstInserter::at_location(CursorLocation::At(phi_inst)).remove_inst(func);
     true
 }
@@ -2163,6 +2151,61 @@ block2:
             let branch_info = editor.func().dfg.branch_info(new_term).unwrap();
             let branch_succs: Vec<_> = branch_info.dests().into_iter().collect();
             assert_eq!(branch_succs, vec![*b1, *b1]);
+        });
+    }
+
+    #[test]
+    fn phis_left_without_inputs_go_with_their_blocks() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1) -> i32 {
+block0:
+    br v0 block1 block3;
+
+block1:
+    v1.i32 = phi (7.i32 block0) (v1 block1);
+    br v0 block1 block2;
+
+block2:
+    v2.i32 = phi (v1 block1);
+    v3.i32 = add v2 1.i32;
+    return v3;
+
+block3:
+    return 9.i32;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [b0, b1, b2, b3] = blocks.as_slice() else {
+                panic!("expected four blocks");
+            };
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let phi_args = |editor: &CfgEditor, block| {
+                let phi_inst = editor.func().layout.first_inst_of(block).unwrap();
+                editor.func().dfg.cast_phi(phi_inst).unwrap().args().len()
+            };
+
+            // The loop's phi keeps only itself, and the exit's phi nothing.
+            assert!(editor.remove_succ(*b0, *b1));
+            assert_eq!(phi_args(&editor, *b1), 1);
+            assert!(editor.remove_succ(*b1, *b2));
+            assert_eq!(phi_args(&editor, *b2), 0);
+            assert!(
+                editor
+                    .func()
+                    .dfg
+                    .value_ids()
+                    .all(|value| !matches!(editor.func().dfg.value(value), Value::Undef { .. }))
+            );
+
+            assert!(editor.delete_blocks_unreachable(&[*b1, *b2]));
+            let blocks: Vec<_> = editor.func().layout.iter_block().collect();
+            assert_eq!(blocks, [*b0, *b3]);
         });
     }
 }

@@ -723,8 +723,6 @@ impl SccpSolver {
     fn try_fold_phi(&self, func: &mut Function, inst: InstId) -> bool {
         let block = func.layout.inst_block(inst);
         let phi_value = func.dfg.inst_result(inst).expect("phi has no result");
-        let phi_ty = func.dfg.value_ty(phi_value);
-
         let reachable_preds: BTreeSet<_> = func
             .dfg
             .cast_phi(inst)
@@ -735,7 +733,7 @@ impl SccpSolver {
             .filter(|pred| self.is_reachable(func, *pred, block))
             .collect();
 
-        let (changed, fold_arg, phi_empty) = func.dfg.edit_phi(inst, |phi| {
+        let (changed, fold_arg) = func.dfg.edit_phi(inst, |phi| {
             let old_len = phi.args().len();
             phi.retain(|pred| reachable_preds.contains(&pred));
             let changed = old_len != phi.args().len();
@@ -748,26 +746,15 @@ impl SccpSolver {
                 );
             }
 
-            (
-                changed,
-                (phi.args().len() == 1).then(|| phi.args()[0].0),
-                phi.args().is_empty(),
-            )
+            let fold_arg = match phi.args().as_slice() {
+                &[(arg, _)] if arg != phi_value => Some(arg),
+                _ => None,
+            };
+            (changed, fold_arg)
         });
 
-        let fold_arg = if fold_arg.is_none() && phi_empty {
-            Some(func.dfg.make_undef_value(phi_ty))
-        } else {
-            fold_arg
-        };
-
-        // Remove phi function if it has 0 or 1 arguments.
+        // Remove phi function if it has one argument.
         if let Some(phi_arg) = fold_arg {
-            let phi_arg = if phi_arg == phi_value {
-                func.dfg.make_undef_value(phi_ty)
-            } else {
-                phi_arg
-            };
             if Self::alias_preserves_index_immediate_validity(func, phi_value, phi_arg) {
                 func.dfg.change_to_alias(phi_value, phi_arg);
                 InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);

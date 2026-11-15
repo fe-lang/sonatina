@@ -13,7 +13,7 @@ use sonatina_triple::Architecture;
 
 use crate::{
     analysis::definedness::{UndefTaint, insert_before, is_defined_source, is_scalar},
-    cfg_edit::{CfgEditor, CleanupMode},
+    cfg_edit::{CfgEditor, CleanupMode, trivial_phi_input},
     optim::const_eval::{
         ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys, eval_const_path_subtree,
     },
@@ -2283,7 +2283,7 @@ impl AggregateScalarize {
             if !func.layout.is_inst_inserted(phi_inst) {
                 continue;
             }
-            let Some(replacement) = trivial_phi_replacement(func, phi_inst) else {
+            let Some(replacement) = trivial_phi_input(func, phi_inst) else {
                 continue;
             };
             // The phi is its own user when a back edge carries it unchanged.
@@ -3123,41 +3123,6 @@ fn eq_before_inst(func: &mut Function, inst: InstId, lhs: ValueId, rhs: ValueId)
 
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
     matches!(func.dfg.value(value), Value::Undef { .. })
-}
-
-fn trivial_phi_replacement(func: &mut Function, phi_inst: InstId) -> Option<ValueId> {
-    let phi_value = func.dfg.inst_result(phi_inst)?;
-    let ty = func.dfg.value_ty(phi_value);
-    let phi = func.dfg.cast_phi(phi_inst)?;
-
-    let replacement = match phi.args().first() {
-        None => func.dfg.make_undef_value(ty),
-        Some(&(first, _)) if phi.args().iter().all(|(value, _)| *value == first) => {
-            if first == phi_value {
-                func.dfg.make_undef_value(ty)
-            } else {
-                first
-            }
-        }
-        Some(_) => {
-            let mut non_self = None;
-            for &(value, _) in phi.args() {
-                if value == phi_value {
-                    continue;
-                }
-
-                match non_self {
-                    Some(existing) if existing != value => return None,
-                    Some(_) => {}
-                    None => non_self = Some(value),
-                }
-            }
-
-            non_self.unwrap_or_else(|| func.dfg.make_undef_value(ty))
-        }
-    };
-
-    Some(replacement)
 }
 
 fn replace_scalar_phi_value(
