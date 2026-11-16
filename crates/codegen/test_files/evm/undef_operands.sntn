@@ -1,0 +1,57 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false }
+#! evm.case: phi_defined
+#!   calldata: u256(7)
+#!   expect: return u256(7) u256(0) u256(0) u256(7) u256(7) u256(7) u256(0)
+#! evm.case: phi_undef
+#!   calldata: u256(5)
+#!   expect: return u256(5) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0)
+
+target = "evm-ethereum-osaka"
+
+# Every `undef` operand that reaches the stack is pushed as zero: return
+# operands, a phi's operand on an edge, call arguments and instruction
+# operands. None is reloaded from a spill word that nothing stores.
+
+func private %triple(v0.i256) -> (i256, i256, i256) {
+    block0:
+        return (v0, undef.i256, undef.i256);
+}
+
+func private %sum(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = add v0 v1;
+        return v2;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        (v1.i256, v2.i256, v3.i256) = call %triple v0;
+        v4.i1 = eq v0 7.i256;
+        br v4 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v5.i256 = phi (v1 block1) (undef.i256 block2);
+        v6.i256 = call %sum undef.i256 v5;
+        v7.i256 = add v6 undef.i256;
+        mstore 0.i32 v1 i256;
+        mstore 32.i32 v2 i256;
+        mstore 64.i32 v3 i256;
+        mstore 96.i32 v5 i256;
+        mstore 128.i32 v6 i256;
+        mstore 160.i32 v7 i256;
+        mstore 192.i32 undef.i256 i256;
+        evm_return 0.i32 224.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

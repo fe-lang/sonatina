@@ -205,7 +205,7 @@ fn verify_machine_type(
     ty: Type,
     context: &str,
 ) -> Result<(), String> {
-    if matches!(ty, Type::I256 | Type::Unit) {
+    if ty == Type::I256 {
         Ok(())
     } else {
         let name = function
@@ -213,7 +213,7 @@ fn verify_machine_type(
             .get_sig(func_ref)
             .map_or_else(|| format!("{func_ref:?}"), |sig| format!("%{}", sig.name()));
         Err(format!(
-            "EVM machine {context} must be i256 or unit, found {ty:?} in {name}"
+            "EVM machine {context} must be i256, found {ty:?} in {name}"
         ))
     }
 }
