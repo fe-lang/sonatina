@@ -6,64 +6,59 @@ input_file: test_files/evm/undef_unit_phis.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 43 bytes
-  total: 43 bytes
+  section runtime: 38 bytes
+  total: 38 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
-  second: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
+  second: ir_blocks=1 ir_insts=1 vcode_ops=3 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  entry: ir_blocks=4 ir_insts=11 vcode_ops=32 fixups=5 imm_bytes=2
+  entry: ir_blocks=4 ir_insts=11 vcode_ops=28 fixups=5 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21326 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=186
+  case ok: calldata_len=32 success reason=Return gas_used=21312 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=172
 
 
 --------------- DEBUG ---------------
 
-// func private %second(v0.i256, v1.i256) -> i256
+// func private %second(v0.i256) -> i256
 second:
   block0:
     JUMPDEST
-    POP  // return v1;
-    SWAP1
+    SWAP1  // return v0;
     JUMP
 
 // func public %entry()
 entry:
   block0:
-    PUSH0  // v4.i256 = evm_calldata_load v3;
+    PUSH0  // v2.i256 = evm_calldata_load v1;
     CALLDATALOAD
     PUSH0  // jump block2;
   block2:
     JUMPDEST
-    PUSH1 0x1 (1)  // v6.i256 = add v2 v5;
+    PUSH1 0x1 (1)  // v4.i256 = add v0 v3;
     ADD
-    DUP2  // v7.i256 = lt v6 v4;
+    DUP2  // v5.i256 = lt v4 v2;
     DUP2
     LT
-    PUSH1 block2  // br v7 block1 block3;
+    PUSH1 block2  // br v5 block1 block3;
     JUMPI
   block3:
-    SWAP1  // v8.i256 = call %second v3 v6;
+    SWAP1  // v6.i256 = call %second v4;
     POP
-    PUSH0
-    SWAP1
     PUSH1 `pc + (4)`
-    SWAP2
+    SWAP1
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH0  // v9.i256 = call %second v3 v8;
+    PUSH1 `pc + (4)`  // v7.i256 = call %second v6;
     SWAP1
-    PUSH1 `pc + (4)`
-    SWAP2
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH0  // evm_mstore v3 v9;
+    PUSH0  // evm_mstore v1 v7;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v3 32.i256;
+    PUSH1 0x20 (32)  // evm_return v1 32.i256;
     PUSH0
     RETURN

@@ -1,0 +1,26 @@
+#! evm.error: cannot lower wide for EVM: aggregate returns require 0 hidden out parameters, leaving 17 direct call operands
+
+target = "evm-ethereum-osaka"
+
+# A call takes at most 16 stack operands, so a function with 17 word arguments
+# does not compile.
+
+func private %wide(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256, v8.i256, v9.i256, v10.i256, v11.i256, v12.i256, v13.i256, v14.i256, v15.i256, v16.i256) -> i256 {
+    block0:
+        v17.i256 = add v0 v16;
+        return v17;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = call %wide v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0;
+        mstore 0.i32 v1 i256;
+        evm_return 0.i32 32.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

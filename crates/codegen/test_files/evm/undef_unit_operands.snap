@@ -6,43 +6,41 @@ input_file: test_files/evm/undef_unit_operands.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 45 bytes
-  total: 45 bytes
+  section runtime: 40 bytes
+  total: 40 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
-  second: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
+  second: ir_blocks=1 ir_insts=1 vcode_ops=3 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  forward: ir_blocks=1 ir_insts=2 vcode_ops=9 fixups=2 imm_bytes=0
+  forward: ir_blocks=1 ir_insts=2 vcode_ops=8 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  entry: ir_blocks=1 ir_insts=6 vcode_ops=24 fixups=4 imm_bytes=2
+  entry: ir_blocks=1 ir_insts=6 vcode_ops=21 fixups=4 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21277 gas_refunded=0 logs=0 output=call len=64 tx_gas=21140 runtime_gas=137
+  case ok: calldata_len=32 success reason=Return gas_used=21263 gas_refunded=0 logs=0 output=call len=64 tx_gas=21140 runtime_gas=123
 
 
 --------------- DEBUG ---------------
 
-// func private %second(v0.i256, v1.i256) -> i256
+// func private %second(v0.i256) -> i256
 second:
   block0:
     JUMPDEST
-    POP  // return v1;
-    SWAP1
+    SWAP1  // return v0;
     JUMP
 
-// func private %forward(v0.i256, v1.i256) -> i256
+// func private %forward(v0.i256) -> i256
 forward:
   block0:
     JUMPDEST
-    SWAP1  // v2.i256 = call %second v0 v1;
-    PUSH1 `pc + (4)`
-    SWAP2
+    PUSH1 `pc + (4)`  // v1.i256 = call %second v0;
+    SWAP1
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    SWAP1  // return v2;
+    SWAP1  // return v1;
     JUMP
 
 // func public %entry()
@@ -50,17 +48,14 @@ entry:
   block0:
     PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH0  // v2.i256 = call %second v0 v1;
+    PUSH1 `pc + (4)`  // v2.i256 = call %second v1;
     SWAP1
-    PUSH1 `pc + (4)`
-    SWAP2
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH0  // v3.i256 = call %forward v0 v2;
-    DUP2
+    DUP1  // v3.i256 = call %forward v2;
     PUSH1 `pc + (4)`
-    SWAP2
+    SWAP1
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST

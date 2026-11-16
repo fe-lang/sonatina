@@ -107,7 +107,11 @@ impl AggregateExpandAbi {
                 .copied()
                 .map(|ty| self.expand_type(module, ty))
                 .collect();
-            if !args.iter().chain(&rets).any(|exp| exp.is_aggregate) {
+            if args
+                .iter()
+                .chain(&rets)
+                .all(|exp| exp.scalar_tys.as_slice() == [exp.original_ty])
+            {
                 continue;
             }
 
@@ -134,6 +138,8 @@ impl AggregateExpandAbi {
         plans
     }
 
+    /// An aggregate expands to its runtime leaves and a scalar `unit`, which
+    /// holds nothing, to no operand at all.
     fn expand_type(&mut self, module: &Module, ty: Type) -> TypeExpansion {
         let is_aggregate = shape::is_supported_aggregate_ty(&module.ctx, ty);
         let scalar_tys = if is_aggregate {
@@ -142,6 +148,8 @@ impl AggregateExpandAbi {
                 .into_iter()
                 .map(|leaf| leaf.ty)
                 .collect()
+        } else if ty.is_unit() {
+            SmallVec::new()
         } else {
             SmallVec::from_slice(&[ty])
         };
@@ -170,6 +178,15 @@ impl AggregateExpandAbi {
         let mut new_args = SmallVec::new();
 
         for (&old_arg, expansion) in old_args.iter().zip(&plan.args) {
+            if expansion.scalar_tys.is_empty() {
+                let undef = func.dfg.make_undef_value(expansion.original_ty);
+                func.dfg.change_to_alias(old_arg, undef);
+                func.dfg.values[old_arg] = Value::Undef {
+                    ty: expansion.original_ty,
+                };
+                continue;
+            }
+
             if !expansion.is_aggregate {
                 let idx = new_args.len();
                 func.dfg.values[old_arg] = Value::Arg {
@@ -177,15 +194,6 @@ impl AggregateExpandAbi {
                     idx,
                 };
                 new_args.push(old_arg);
-                continue;
-            }
-
-            if expansion.scalar_tys.is_empty() {
-                let undef = func.dfg.make_undef_value(expansion.original_ty);
-                func.dfg.change_to_alias(old_arg, undef);
-                func.dfg.values[old_arg] = Value::Undef {
-                    ty: expansion.original_ty,
-                };
                 continue;
             }
 
@@ -302,24 +310,13 @@ impl AggregateExpandAbi {
         let old_results = func.dfg.inst_results(inst).to_vec();
         let mut next_scalar_result = 0usize;
         for (&old_result, expansion) in old_results.iter().zip(&plan.rets) {
-            let replacement = if expansion.is_aggregate {
-                let leaf_count = expansion.scalar_tys.len();
-                let replacement = if leaf_count == 0 {
-                    func.dfg.make_undef_value(expansion.original_ty)
-                } else {
-                    self.rebuild_aggregate_from_leaves(
-                        func,
-                        inst,
-                        expansion.original_ty,
-                        &new_results[next_scalar_result..next_scalar_result + leaf_count],
-                    )
-                };
-                next_scalar_result += leaf_count;
-                replacement
-            } else {
-                let replacement = new_results[next_scalar_result];
-                next_scalar_result += 1;
-                replacement
+            let leaves =
+                &new_results[next_scalar_result..next_scalar_result + expansion.scalar_tys.len()];
+            next_scalar_result += leaves.len();
+            let replacement = match leaves {
+                [] => func.dfg.make_undef_value(expansion.original_ty),
+                [scalar] if !expansion.is_aggregate => *scalar,
+                _ => self.rebuild_aggregate_from_leaves(func, inst, expansion.original_ty, leaves),
             };
             func.dfg.change_to_alias(old_result, replacement);
         }
@@ -341,11 +338,11 @@ impl AggregateExpandAbi {
         value: ValueId,
         expansion: &TypeExpansion,
     ) -> SmallVec<[ValueId; 4]> {
-        if !expansion.is_aggregate {
-            return SmallVec::from_slice(&[value]);
-        }
         if expansion.scalar_tys.is_empty() {
             return SmallVec::new();
+        }
+        if !expansion.is_aggregate {
+            return SmallVec::from_slice(&[value]);
         }
 
         let mut reconstructor = AggregateValueReconstructor::new(&mut self.layout_cache);
@@ -435,13 +432,13 @@ fn collect_abi_runtime_leaf_slices(
     Some(())
 }
 
-/// Count actual operands after AggregateExpandAbi. Scalar unit formals remain
-/// one operand even though they occupy no runtime bytes; empty aggregates expand away.
+/// Count actual operands after AggregateExpandAbi. Scalar unit formals and
+/// empty aggregates expand away.
 pub(crate) fn abi_arg_operand_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
     if shape::is_supported_aggregate_ty(module, ty) {
         abi_leaf_count(module, ty)
     } else {
-        Some(1)
+        Some(usize::from(!ty.is_unit()))
     }
 }
 

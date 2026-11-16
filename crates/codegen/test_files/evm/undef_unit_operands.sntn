@@ -5,8 +5,8 @@
 
 target = "evm-ethereum-osaka"
 
-# A scalar `unit` argument takes a stack word like any other, so an
-# `undef.unit` argument is pushed as zero.
+# A scalar `unit` argument takes no stack word, so an `undef.unit` argument
+# pushes nothing.
 
 func private %second(v0.unit, v1.i256) -> i256 {
     block0:

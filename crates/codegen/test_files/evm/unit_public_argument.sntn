@@ -1,0 +1,26 @@
+#! evm.error: unsupported machine type Unit
+
+target = "evm-ethereum-osaka"
+
+# ABI expansion drops the unit arguments of private functions only, so a
+# public function's unit argument reaches machine lowering, which takes no
+# unit value.
+
+func public %second(v0.unit, v1.i256) -> i256 {
+    block0:
+        return v1;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = call %second undef.unit v0;
+        mstore 0.i32 v1 i256;
+        evm_return 0.i32 32.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

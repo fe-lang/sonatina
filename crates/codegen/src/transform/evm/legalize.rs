@@ -207,6 +207,41 @@ pub(crate) fn lower_late_freezes(func: &mut Function) {
     }
 }
 
+/// Removes the phis, loads and stores of `unit`, which hold no bits. A use of a
+/// removed result reads `undef.unit` instead. ABI expansion has already dropped
+/// unit arguments and results, so with these gone no unit value reaches machine
+/// lowering, whatever earlier passes made.
+pub fn erase_unit_values(func: &mut Function) {
+    let insts: Vec<_> = func
+        .layout
+        .iter_block()
+        .flat_map(|block| func.layout.iter_inst(block))
+        .filter(|&inst| {
+            func.dfg.is_phi(inst)
+                && func
+                    .dfg
+                    .inst_result(inst)
+                    .is_some_and(|result| func.dfg.value_ty(result).is_unit())
+                || func
+                    .dfg
+                    .downcast::<&Mload>(inst)
+                    .is_some_and(|load| load.ty().is_unit())
+                || func
+                    .dfg
+                    .downcast::<&Mstore>(inst)
+                    .is_some_and(|store| store.ty().is_unit())
+        })
+        .collect();
+    for &inst in &insts {
+        if let Some(result) = func.dfg.inst_result(inst) {
+            let undef = func.dfg.make_undef_value(Type::Unit);
+            func.dfg.change_to_alias(result, undef);
+        }
+        func.layout.remove_inst(inst);
+    }
+    func.erase_insts(&insts);
+}
+
 pub(crate) fn legalize_evm_section(module: &Module, funcs: &[FuncRef]) {
     assert!(
         matches!(module.ctx.triple.architecture, Architecture::Evm),

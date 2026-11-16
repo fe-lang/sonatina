@@ -6,8 +6,8 @@
 target = "evm-ethereum-osaka"
 
 # Loop phis of type unit that take `undef.unit` on entry and each other on the
-# backedge are words like any other, so they are pushed as zero, not loaded from
-# a spill word nothing stores.
+# backedge hold nothing, so they take no stack word: nothing is pushed for them,
+# and nothing is loaded from a spill word nothing stores.
 
 func private %second(v0.unit, v1.i256) -> i256 {
     block0:

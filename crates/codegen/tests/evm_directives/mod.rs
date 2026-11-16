@@ -67,6 +67,23 @@ pub(crate) fn parse_evm_config(module_comments: &[String]) -> Result<EvmConfig, 
     Ok(cfg)
 }
 
+/// The text that the error must contain when a fixture's compilation is
+/// expected to fail: `#! evm.error: <text>`.
+pub(crate) fn parse_evm_error(module_comments: &[String]) -> Result<Option<String>, String> {
+    let mut errors = module_comments
+        .iter()
+        .filter_map(|raw| raw.strip_prefix("#!")?.trim().strip_prefix("evm.error:"))
+        .map(str::trim);
+    let error = errors.next();
+    if errors.next().is_some() {
+        return Err("duplicate `evm.error:`".to_string());
+    }
+    match error {
+        Some("") => Err("evm.error: missing error text".to_string()),
+        error => Ok(error.map(str::to_string)),
+    }
+}
+
 pub(crate) fn parse_evm_cases(module_comments: &[String]) -> Result<Vec<EvmCase>, String> {
     let mut cases: Vec<EvmCaseBuilder> = Vec::new();
     let mut current: Option<EvmCaseBuilder> = None;

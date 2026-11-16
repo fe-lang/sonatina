@@ -431,12 +431,11 @@ mod tests {
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
 
     #[test]
-    fn reserves_fresh_object_outputs_and_counts_unit_operands() {
+    fn reserves_fresh_object_outputs_and_ignores_unit_operands() {
         for (extra_ty, extra_count, fresh_return, exposed_sibling, promoted) in [
             ("i256", 11, true, false, 1),
             ("i256", 12, true, false, 0),
-            ("unit", 12, false, false, 1),
-            ("unit", 13, false, false, 0),
+            ("unit", 13, false, false, 1),
             ("i256", 11, true, true, 1),
             ("i256", 12, true, true, 0),
         ] {
@@ -540,7 +539,7 @@ block0:
             let args = module.ctx.func_sig(read, |sig| sig.args().len());
             assert_eq!(
                 args,
-                extra_count
+                if extra_ty == "unit" { 0 } else { extra_count }
                     + if promoted == 1 { 4 } else { 1 }
                     + usize::from(fresh_return && (!exposed_sibling || promoted == 1))
             );

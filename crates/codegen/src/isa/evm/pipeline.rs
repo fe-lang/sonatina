@@ -18,8 +18,8 @@ use crate::{
             assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,
         },
         evm::{
-            ConstDataLower, legalize_evm_section, lower_keccak256_words, lower_late_freezes,
-            reuse_terminal_word_buffers,
+            ConstDataLower, erase_unit_values, legalize_evm_section, lower_keccak256_words,
+            lower_late_freezes, reuse_terminal_word_buffers,
         },
     },
 };
@@ -68,7 +68,7 @@ impl<'a> EvmPipeline<'a> {
         let _span = info_span!(
             "sonatina.codegen.evm.pipeline.run",
             funcs = ctx.funcs.len(),
-            phases = if optional_cleanup { 8 } else { 5 }
+            phases = if optional_cleanup { 9 } else { 6 }
         )
         .entered();
 
@@ -117,6 +117,11 @@ impl<'a> EvmPipeline<'a> {
             "keccak_words_lowering",
             "mandatory",
             EvmPipelineContext::run_keccak_words_lowering,
+        )?;
+        ctx.run_phase(
+            "unit_erasure",
+            "mandatory",
+            EvmPipelineContext::run_unit_erasure,
         )?;
 
         Ok(EvmPipelineArtifacts {
@@ -412,5 +417,41 @@ impl EvmPipelineContext<'_> {
             summaries
         });
         Ok(())
+    }
+
+    /// Runs last, so that no pass can make a unit value after it. It only
+    /// removes instructions that move no pointer, so the pointer escape
+    /// summaries stay valid.
+    fn run_unit_erasure(&mut self) -> Result<(), String> {
+        for &func in &self.funcs {
+            self.module().func_store.modify(func, erase_unit_values);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        isa::evm::test_util::{osaka_backend, prepare_root},
+        test_support::{lookup_func, parse_test_module},
+    };
+
+    /// The fixture `unit_values.sntn` compiles and runs with late cleanup
+    /// `Off`. Fixtures reach `Speed` and `Size` only after the generic
+    /// optimizer, which removes these unit values first, so this runs those
+    /// late cleanup passes over them directly. Machine lowering rejects a unit
+    /// value, so compiling shows none survived.
+    #[test]
+    fn late_cleanup_profiles_compile_unit_values() {
+        let module = parse_test_module(include_str!("../../../test_files/evm/unit_values.sntn"));
+        let entry = lookup_func(&module, "entry");
+        for profile in [LateCleanupProfile::Speed, LateCleanupProfile::Size] {
+            let backend = osaka_backend().with_late_cleanup_profile(profile);
+            if let Err(err) = prepare_root(&module, &backend, entry) {
+                panic!("{profile:?}: {err}");
+            }
+        }
     }
 }
