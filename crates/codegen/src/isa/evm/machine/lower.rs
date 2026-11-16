@@ -324,11 +324,13 @@ impl FuncLowerCtx<'_> {
             // so the last case takes the values no other case does: one comparison fewer, and
             // no path falls through the table. A machine `br_table` always has a default.
             EvmInstKind::BrTable(table) => {
-                let (&(_, last), init) =
-                    table.table().split_last().ok_or("br_table has no case")?;
                 let (default, table_cases) = match *table.default() {
                     Some(default) => (default, table.table().as_slice()),
-                    None => (last, init),
+                    None => {
+                        let (&(_, last), init) =
+                            table.table().split_last().ok_or("br_table has no case")?;
+                        (last, init)
+                    }
                 };
                 let default = self.machine_block(default)?;
                 if table_cases.is_empty() {

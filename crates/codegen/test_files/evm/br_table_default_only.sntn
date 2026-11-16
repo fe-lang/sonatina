@@ -1,0 +1,24 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false }
+#! evm.case: ok
+#!   calldata: u256(3)
+#!   expect: return u256(10)
+
+target = "evm-ethereum-osaka"
+
+# A `br_table` with a default and no cases lowers to a jump to the default.
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        br_table v0 block1;
+
+    block1:
+        mstore 0.i32 10.i256 i256;
+        evm_return 0.i32 32.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
