@@ -2,6 +2,7 @@ use sonatina_filecheck::{
     FileCheckRunner,
     adce::AdceTransform,
     aggregate_combine::AggregateCombineTransform,
+    aggregate_expand_abi::AggregateExpandAbiTransform,
     aggregate_scalarize::AggregateScalarizeTransform,
     bool_phi_fold::BoolPhiFoldTransform,
     branch_canonicalize::BranchCanonicalizeTransform,
@@ -104,6 +105,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(CodeSinkTransform::default());
+    runner.run();
+
+    runner.attach_transformer(AggregateExpandAbiTransform);
     runner.run();
 
     runner.print_results();

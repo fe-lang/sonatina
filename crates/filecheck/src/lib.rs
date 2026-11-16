@@ -1,5 +1,6 @@
 pub mod adce;
 pub mod aggregate_combine;
+pub mod aggregate_expand_abi;
 pub mod aggregate_scalarize;
 pub mod bool_phi_fold;
 pub mod branch_canonicalize;
@@ -32,10 +33,11 @@ use std::{
     time,
 };
 
-use sonatina_ir::{Function, ir_writer::FuncWriter, module::FuncRef};
+use sonatina_ir::{Function, Module, ir_writer::FuncWriter, module::FuncRef};
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_verifier::{
     ParseVerifyError, VerificationLevel, VerifierConfig, parse_and_verify_module, verify_function,
+    verify_function_signature,
 };
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use walkdir::WalkDir;
@@ -44,6 +46,11 @@ pub(crate) const FIXTURE_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixt
 
 pub trait FuncTransform {
     fn transform(&mut self, func: &mut Function);
+
+    /// Runs once over the whole module before its functions are transformed
+    /// and checked, for a pass that rewrites signatures and call sites across
+    /// functions. Each checked function prints with its signature.
+    fn transform_module(&mut self, _module: &Module) {}
 
     fn test_root(&self) -> PathBuf;
 }
@@ -157,6 +164,7 @@ impl<'a> FileChecker<'a> {
         sonatina_codegen::analysis::func_behavior::analyze_module(&parsed_module.module);
 
         let module = &parsed_module.module;
+        self.transformer.transform_module(module);
 
         module
             .funcs()
@@ -172,8 +180,12 @@ impl<'a> FileChecker<'a> {
         let (func_ir, func_name, verify_err) =
             parsed_module.module.func_store.modify(func_ref, |func| {
                 self.transformer.transform(func);
-                let verify_report =
+                let mut verify_report =
                     verify_function(&parsed_module.module.ctx, func_ref, func, &verify_cfg);
+                verify_report.diagnostics.extend(
+                    verify_function_signature(&parsed_module.module.ctx, func_ref, &verify_cfg)
+                        .diagnostics,
+                );
                 (
                     FuncWriter::with_debug_provider(func, func_ref, &parsed_module.debug)
                         .dump_string(),
