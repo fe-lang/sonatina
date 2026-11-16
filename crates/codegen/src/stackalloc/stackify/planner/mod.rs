@@ -194,16 +194,6 @@ impl<'a> MemPlan<'a> {
         // (should be verified when finalizing the spill set).
         Action::MemLoadObj(self.spill_obj[v].expect("spilled value missing stack object id"))
     }
-
-    fn emit_store_if_stored_at_depth(&mut self, v: ValueId, depth: u8, actions: &mut Actions) {
-        // A rematerialized value is recomputed at each load.
-        if self.spill_set().stored(v).is_none() || self.remat_actions[v].is_some() {
-            return;
-        }
-
-        actions.push(Action::StackDup(depth));
-        self.emit_store_for_spilled_value(v, actions);
-    }
 }
 
 /// Planning context for a single instruction/edge.
@@ -237,9 +227,13 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     }
 
     pub(super) fn emit_store_if_stored_at_depth(&mut self, v: ValueId, depth: usize) {
+        // A rematerialized value is recomputed at each load.
+        if self.mem.spill_set().stored(v).is_none() || self.mem.remat_actions[v].is_some() {
+            return;
+        }
         debug_assert!(depth < self.ctx.reach.dup_max, "DUP out of range");
-        self.mem
-            .emit_store_if_stored_at_depth(v, depth as u8, self.actions);
+        self.actions.push(Action::StackDup(depth as u8));
+        self.mem.emit_store_for_spilled_value(v, self.actions);
     }
 
     fn push_value_from_spill_slot_or_mark(&mut self, load_from: ValueId, stack_as: ValueId) {
