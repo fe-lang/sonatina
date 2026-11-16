@@ -1,5 +1,5 @@
 use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{Function, InstId, ValueId};
 
 use crate::{
@@ -115,12 +115,11 @@ impl StackifyAlloc {
     }
 
     pub(crate) fn validate_spill_storage(&self) {
+        let objects: FxHashSet<StackObjId> = self.object_spills().map(|(_, obj)| obj).collect();
         self.for_each_action(|action| {
             if let Action::MemLoadObj(id) | Action::MemStoreObj(id) = action {
                 assert!(
-                    self.spill_storage.values().any(
-                        |storage| matches!(storage, Some(SpillStorage::Object(obj)) if obj == id)
-                    ),
+                    objects.contains(id),
                     "stackify emitted object action for non-object spill {}",
                     id.as_u32()
                 );

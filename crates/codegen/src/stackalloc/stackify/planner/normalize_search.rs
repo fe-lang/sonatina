@@ -6046,14 +6046,16 @@ func public %f() {
         } {
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut reloaded = BitSet::default();
             let mut object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
             let mut mem_state = MemState {
-                spill: SpillSet::new(&spill_set),
+                spill: SpillSet::new(&spill_set, &spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
+                reloaded: &mut reloaded,
                 object_spills: &mut object_spills,
                 slots: &mut slots,
             };
@@ -6095,14 +6097,16 @@ func public %f() {
         } {
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut reloaded = BitSet::default();
             let mut object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
             let mut mem_state = MemState {
-                spill: SpillSet::new(&spill_set),
+                spill: SpillSet::new(&spill_set, &spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
+                reloaded: &mut reloaded,
                 object_spills: &mut object_spills,
                 slots: &mut slots,
             };

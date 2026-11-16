@@ -17,13 +17,13 @@
 //!   needs the old value. Stores waiting on a stack phi's read follow normalization, and copy
 //!   cycles are broken one at a time by holding one old value on the stack, so the fixup's stack
 //!   growth stays bounded however many phis it copies.
-//! - When a value cannot be duplicated from within `DUP16` reach, it is added to `spill_set`,
-//!   assigned a stack object, and reloaded from memory; `spill_set` is discovered via a
-//!   monotone fixed point.
+//! - When a value cannot be duplicated from within `DUP16` reach, it is added to `spill_set`
+//!   and reloaded from memory; `spill_set` is discovered via a monotone fixed point. Only the
+//!   spilled values the final plan reloads are stored and assigned a stack object.
 //! - Scratch spill slots use block liveness plus phi-edge interference, because phi sources and
 //!   results are simultaneous edge assignments even though normal liveness treats phi operands as
 //!   predecessor-tail uses.
-//! - Every non-rematerialized spilled value gets its own stack object. Final spill words are
+//! - Every stored, non-rematerialized spilled value gets its own stack object. Final spill words are
 //!   shared only between objects whose emitted loads and stores never overlap
 //!   (`isa::evm::machine::final_spills`).
 //!
