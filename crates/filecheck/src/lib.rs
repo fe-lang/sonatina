@@ -9,6 +9,7 @@ pub mod checked_arith_elim;
 pub mod coalesce_object_copies;
 pub mod code_sink;
 pub mod compare_sub_fusion;
+pub mod erase_unit_values;
 pub mod gvn;
 pub mod hoist_insert_chains;
 pub mod if_convert;
