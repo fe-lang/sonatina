@@ -385,12 +385,11 @@ impl FinalSpillChoiceCtx<'_> {
     /// reserve only shifts each function's frame words by its delta over the
     /// committed reserve, and the section aggregates are recomputed directly.
     ///
-    /// Two second-order feedback paths are deliberately approximated by
-    /// holding them at their base-placement values (a trial reserve cannot
-    /// change them exactly without a full replan): private-static-malloc
-    /// extra scratch, and transient-malloc flips induced by new fixed-slot
-    /// effects. Set SONATINA_SPILL_SCORE_XCHECK=1 in a debug build to
-    /// cross-check against the full replan.
+    /// One second-order feedback path is deliberately approximated by holding
+    /// it at its base-placement value (a trial reserve cannot change it
+    /// exactly without a full replan): private-static-malloc extra scratch.
+    /// Set SONATINA_SPILL_SCORE_XCHECK=1 in a debug build to cross-check
+    /// against the full replan.
     fn score(
         &self,
         choices: &FxHashMap<FuncRef, OptionalFinalSpillPlacement>,
@@ -463,14 +462,11 @@ impl FinalSpillChoiceCtx<'_> {
         let chain =
             memory_plan::compute_stable_chain_layout(self.schedule, |func| trial_words(func).1);
 
-        let has_stackify_fixed_slot_spills = !self.base_fixed_slot_effects.is_empty()
-            || reserves.values().any(|reserve| reserve.scratch_words != 0);
         let arena_base = choose_arena_base(
             self.fixed_reservations,
             ArenaBaseFacts {
                 has_dynamic_frames,
-                has_stackify_fixed_slot_spills,
-                backend_spill_scratch_reserve_words: reserve_scratch_peak,
+                has_stackify_fixed_slot_spills: !self.base_fixed_slot_effects.is_empty(),
                 has_heap_mallocs: self.base_placement.has_heap_mallocs,
             },
         );
@@ -506,12 +502,6 @@ impl FinalSpillChoiceCtx<'_> {
         reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
     ) -> FinalSpillChoiceScore {
         let replan = &self.replan;
-        let mut fixed_slot_effects = self.base_fixed_slot_effects.clone();
-        for (&func, reserve) in reserves {
-            if reserve.scratch_words != 0 {
-                fixed_slot_effects.insert(func);
-            }
-        }
 
         let placement = compute_semantic_memory_placement(
             replan.source_module,
@@ -524,7 +514,7 @@ impl FinalSpillChoiceCtx<'_> {
             },
             replan.pre_analyses,
             replan.ptr_escape,
-            &fixed_slot_effects,
+            self.base_fixed_slot_effects,
             replan.backend,
             &BackendSpillPlan {
                 reserves: reserves.clone(),

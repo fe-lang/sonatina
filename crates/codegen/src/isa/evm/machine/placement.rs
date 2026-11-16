@@ -361,7 +361,6 @@ pub(crate) fn compute_semantic_memory_placement(
         ArenaBaseFacts {
             has_dynamic_frames,
             has_stackify_fixed_slot_spills: !fixed_slot_effects.is_empty(),
-            backend_spill_scratch_reserve_words: backend_spill_scratch_reserve_peak,
             has_heap_mallocs,
         },
     );
