@@ -105,17 +105,14 @@ fn lower_signature(module: &ModuleCtx, sig: &Signature) -> Result<Signature, Str
     Ok(Signature::new(sig.name(), sig.linkage(), &args, &ret_tys))
 }
 
+/// Every machine value is a stack word. A scalar `unit` value, which only an argument or a phi
+/// carries, takes a word whose contents nothing reads.
 fn machine_type(module: &ModuleCtx, ty: Type) -> Result<Type, String> {
-    if ty.is_pointer(module) {
-        return Ok(Type::I256);
-    }
     match ty {
-        Type::Unit => Ok(Type::Unit),
-        Type::I1 | Type::I256 => Ok(Type::I256),
-        Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 | Type::EnumTag(_) => {
-            Ok(Type::I256)
+        Type::Compound(_) if !ty.is_pointer(module) => {
+            Err(format!("unsupported machine type {ty:?}"))
         }
-        Type::Compound(_) => Err(format!("unsupported machine type {ty:?}")),
+        _ => Ok(Type::I256),
     }
 }
 
@@ -913,11 +910,10 @@ impl FuncLowerCtx<'_> {
                 Ok(lowered)
             }
             // `undef` may be any value, and zero is the cheapest to push. A machine `undef` has
-            // no definition, so stackify would reload it from a spill word nothing stores. A
-            // scalar `unit` operand still takes a stack word, so it is pushed as zero too.
+            // no definition, so stackify would reload it from a spill word nothing stores.
             Value::Undef { ty } => {
-                machine_type(self.source_module, *ty)?;
-                let lowered = self.i256_imm(0);
+                let imm = lower_immediate(Immediate::zero(Type::I256), *ty, self.source_module)?;
+                let lowered = self.machine.dfg.make_imm_value(imm);
                 self.map.values[value] = Some(lowered);
                 Ok(lowered)
             }
@@ -1211,19 +1207,13 @@ fn source_lowering_order(source: &Function, cfg: &ControlFlowGraph) -> Vec<Block
 
 fn lower_immediate(imm: Immediate, ty: Type, module: &ModuleCtx) -> Result<Immediate, String> {
     let ty = machine_type(module, ty)?;
-    Ok(match ty {
-        Type::I256 => {
-            let bits = scalar_bits(imm.ty()).unwrap_or(256);
-            let imm = if bits < 256 {
-                I256::from(imm.as_i256().to_u256() & ((U256::one() << bits) - U256::one()))
-            } else {
-                imm.as_i256()
-            };
-            Immediate::from_i256(imm, Type::I256)
-        }
-        Type::Unit => return Err("unit immediate cannot be lowered".to_string()),
-        _ => unreachable!("machine_type only returns unit/i256"),
-    })
+    let bits = scalar_bits(imm.ty()).unwrap_or(256);
+    let imm = if bits < 256 {
+        I256::from(imm.as_i256().to_u256() & ((U256::one() << bits) - U256::one()))
+    } else {
+        imm.as_i256()
+    };
+    Ok(Immediate::from_i256(imm, ty))
 }
 
 fn word_bits(ty: Type, module: &ModuleCtx) -> Option<u16> {

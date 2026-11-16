@@ -24,7 +24,7 @@ evm:
 
 --------------- DEBUG ---------------
 
-// func private %second(v0.unit, v1.i256) -> i256
+// func private %second(v0.i256, v1.i256) -> i256
 second:
   block0:
     JUMPDEST
@@ -32,7 +32,7 @@ second:
     SWAP1
     JUMP
 
-// func private %forward(v0.unit, v1.i256) -> i256
+// func private %forward(v0.i256, v1.i256) -> i256
 forward:
   block0:
     JUMPDEST

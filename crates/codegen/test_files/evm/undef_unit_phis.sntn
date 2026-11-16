@@ -1,0 +1,41 @@
+#! evm.config: { vcode: true }
+#! evm.case: ok
+#!   calldata: u256(3)
+#!   expect: return u256(3)
+
+target = "evm-ethereum-osaka"
+
+# Loop phis of type unit that take `undef.unit` on entry and each other on the
+# backedge are words like any other, so they are pushed as zero, not loaded from
+# a spill word nothing stores.
+
+func private %second(v0.unit, v1.i256) -> i256 {
+    block0:
+        return v1;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        jump block1;
+
+    block1:
+        v1.unit = phi (undef.unit block0) (v2 block1);
+        v2.unit = phi (undef.unit block0) (v1 block1);
+        v3.i256 = phi (0.i256 block0) (v4 block1);
+        v4.i256 = add v3 1.i256;
+        v5.i1 = lt v4 v0;
+        br v5 block1 block2;
+
+    block2:
+        v6.i256 = call %second v1 v4;
+        v7.i256 = call %second v2 v6;
+        mstore 0.i32 v7 i256;
+        evm_return 0.i32 32.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

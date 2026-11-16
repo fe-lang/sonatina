@@ -278,7 +278,7 @@ fn expect_machine_rejects(src: &str) {
         let err = verify_machine_function(func, function)
             .expect_err("high-level IR should be rejected by machine verifier");
         assert!(
-            err.contains("unsupported instruction") || err.contains("must be i256 or unit"),
+            err.contains("unsupported instruction") || err.contains("must be i256,"),
             "{err}"
         );
     });
@@ -344,7 +344,7 @@ fn machine_verify_rejects_i1_compare_result() {
     module.func_store.view(func_ref, |function| {
         let err = verify_machine_function(func_ref, function)
             .expect_err("machine IR should reject i1 compare results");
-        assert!(err.contains("must be i256 or unit"), "{err}");
+        assert!(err.contains("must be i256,"), "{err}");
     });
 }
 
@@ -376,7 +376,7 @@ fn machine_verify_rejects_i1_word_operand() {
     module.func_store.view(func_ref, |function| {
         let err = verify_machine_function(func_ref, function)
             .expect_err("machine IR should reject i1 operands");
-        assert!(err.contains("must be i256 or unit"), "{err}");
+        assert!(err.contains("must be i256,"), "{err}");
     });
 }
 
@@ -716,7 +716,7 @@ fn machine_verify_rejects_high_level_ops_and_pointer_values() {
         let err = verify_machine_function(func_ref, function)
             .expect_err("pointer-typed high-level IR should be rejected");
         assert!(
-            err.contains("must be i256 or unit") || err.contains("unsupported instruction"),
+            err.contains("must be i256,") || err.contains("unsupported instruction"),
             "{err}"
         );
     });
