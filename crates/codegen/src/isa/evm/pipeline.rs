@@ -429,3 +429,29 @@ impl EvmPipelineContext<'_> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        isa::evm::test_util::{osaka_backend, prepare_root},
+        test_support::{lookup_func, parse_test_module},
+    };
+
+    /// The fixture `unit_values.sntn` compiles and runs with late cleanup
+    /// `Off`. Fixtures reach `Speed` and `Size` only after the generic
+    /// optimizer, which removes these unit values first, so this runs those
+    /// late cleanup passes over them directly. Machine lowering rejects a unit
+    /// value, so compiling shows none survived.
+    #[test]
+    fn late_cleanup_profiles_compile_unit_values() {
+        let module = parse_test_module(include_str!("../../../test_files/evm/unit_values.sntn"));
+        let entry = lookup_func(&module, "entry");
+        for profile in [LateCleanupProfile::Speed, LateCleanupProfile::Size] {
+            let backend = osaka_backend().with_late_cleanup_profile(profile);
+            if let Err(err) = prepare_root(&module, &backend, entry) {
+                panic!("{profile:?}: {err}");
+            }
+        }
+    }
+}

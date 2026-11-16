@@ -105,11 +105,11 @@ fn lower_signature(module: &ModuleCtx, sig: &Signature) -> Result<Signature, Str
     Ok(Signature::new(sig.name(), sig.linkage(), &args, &ret_tys))
 }
 
-/// Every machine value is a stack word. A scalar `unit` value, which only an argument or a phi
-/// carries, takes a word whose contents nothing reads.
+/// Every machine value is a stack word. ABI expansion and `erase_unit_values` remove every `unit`
+/// value, which holds no bits, before machine lowering.
 fn machine_type(module: &ModuleCtx, ty: Type) -> Result<Type, String> {
     match ty {
-        Type::Compound(_) if !ty.is_pointer(module) => {
+        Type::Unit | Type::Compound(_) if !ty.is_pointer(module) => {
             Err(format!("unsupported machine type {ty:?}"))
         }
         _ => Ok(Type::I256),
@@ -455,10 +455,6 @@ impl FuncLowerCtx<'_> {
             .source_module
             .size_of(*mstore.ty())
             .map_err(|err| format!("invalid mstore type in machine lowering: {err:?}"))?;
-        if size == 0 {
-            self.map.insts[source_inst] = None;
-            return Ok(());
-        }
         if size != WORD_BYTES as usize {
             return Err(format!(
                 "machine lowering expected 32-byte mstore, got {size}"

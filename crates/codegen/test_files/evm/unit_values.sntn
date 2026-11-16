@@ -1,0 +1,47 @@
+#! evm.config: { vcode: true }
+#! evm.case: ok
+#!   calldata: u256(3)
+#!   expect: return u256(3)
+
+target = "evm-ethereum-osaka"
+
+# Unit parameters and results, a unit loop phi, a unit load and store, and a
+# unit struct field all compile to no stack word. Machine lowering rejects a
+# unit value, so compiling shows none reached it.
+
+type @with_unit = { unit, i256 };
+
+func private %pick(v0.unit, v1.i256) -> (unit, i256) {
+    block0:
+        return (v0, v1);
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        jump block1;
+
+    block1:
+        v1.unit = phi (undef.unit block0) (v3 block1);
+        v2.i256 = phi (0.i256 block0) (v5 block1);
+        (v3.unit, v4.i256) = call %pick v1 v2;
+        v5.i256 = add v4 1.i256;
+        v6.i1 = lt v5 v0;
+        br v6 block1 block2;
+
+    block2:
+        mstore 0.i32 v1 unit;
+        v7.unit = mload 0.i32 unit;
+        v8.@with_unit = insert_value undef.@with_unit 0.i8 v7;
+        v9.@with_unit = insert_value v8 1.i8 v5;
+        v10.unit = extract_value v9 0.i8;
+        (v11.unit, v12.i256) = call %pick v10 v5;
+        mstore 0.i32 v12 i256;
+        evm_return 0.i32 32.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
