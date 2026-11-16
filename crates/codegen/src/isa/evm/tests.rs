@@ -81,6 +81,9 @@ fn fixtures_store_exactly_the_spills_they_reload() {
     assert!(!paths.is_empty());
     let check = |path: &std::path::PathBuf| {
         let source = std::fs::read_to_string(path).unwrap();
+        if source.contains("#! evm.error:") {
+            return Vec::new();
+        }
         let reach = source
             .split_once("stack_reach:")
             .and_then(|(_, rest)| {

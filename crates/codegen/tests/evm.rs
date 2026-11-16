@@ -2126,6 +2126,13 @@ fn test_evm(fixture: Fixture<&str>) {
 
     let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments)
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
+    let expected_error = evm_directives::parse_evm_error(&parsed.debug.module_comments)
+        .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
+    assert!(
+        expected_error.is_none() || cases.is_empty(),
+        "{}: a fixture that expects `evm.error` runs no `evm.case`",
+        fixture.path()
+    );
 
     run_opt_pipeline(&mut parsed.module, opt_pipeline);
     prune_unreachable_funcs_for_optimized_evm_snapshots(&mut parsed.module, opt_pipeline);
@@ -2175,14 +2182,27 @@ fn test_evm(fixture: Fixture<&str>) {
         EvmOptPipeline::O0 | EvmOptPipeline::O1 => ImmediateMaterializationMode::Gas,
     });
 
-    let prepared = backend
-        .prepare_section(SectionWorkModule::from_roots(
-            &parsed.module,
-            func_order[0],
-            &func_order[1..],
-            &[],
-        ))
-        .unwrap();
+    let prepared = backend.prepare_section(SectionWorkModule::from_roots(
+        &parsed.module,
+        func_order[0],
+        &func_order[1..],
+        &[],
+    ));
+    if let Some(expected) = expected_error {
+        let Err(err) = prepared else {
+            panic!(
+                "{}: compiled, expected an error containing `{expected}`",
+                fixture.path()
+            );
+        };
+        assert!(
+            err.contains(&expected),
+            "{}: expected an error containing `{expected}`, got `{err}`",
+            fixture.path()
+        );
+        return;
+    }
+    let prepared = prepared.unwrap();
 
     let mem_plan = if emit_mem_plan_detail {
         backend.snapshot_mem_plan_detail(&prepared)
