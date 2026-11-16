@@ -1,0 +1,45 @@
+#! evm.config: { vcode: true }
+#! evm.case: ok
+#!   calldata: u256(10) u256(3)
+#!   expect: return u256(7) u256(42) u256(7)
+
+target = "evm-ethereum-osaka"
+
+# Scalar `unit` parameters and arguments take no stack word, and the other
+# arguments keep their order: `%diff` subtracts its second word from its first.
+
+func private %diff(v0.unit, v1.i256, v2.unit, v3.i256) -> i256 {
+    block0:
+        v4.i256 = sub v1 v3;
+        return v4;
+}
+
+func private %only_unit(v0.unit) -> i256 {
+    block0:
+        return 42.i256;
+}
+
+func private %forward(v0.i256, v1.unit, v2.i256) -> i256 {
+    block0:
+        v3.i256 = call %diff v1 v0 v1 v2;
+        return v3;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i256 = call %diff undef.unit v0 undef.unit v1;
+        v3.i256 = call %only_unit undef.unit;
+        v4.i256 = call %forward v0 undef.unit v1;
+        mstore 0.i32 v2 i256;
+        mstore 32.i32 v3 i256;
+        mstore 64.i32 v4 i256;
+        evm_return 0.i32 96.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
