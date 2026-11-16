@@ -320,19 +320,31 @@ impl FuncLowerCtx<'_> {
                     control_flow::Br::new(self.is, cond, nz_dest, z_dest),
                 )
             }
+            // A scrutinee equal to no case of a table without a default is undefined behavior,
+            // so the last case takes the values no other case does: one comparison fewer, and
+            // no path falls through the table. A machine `br_table` always has a default.
             EvmInstKind::BrTable(table) => {
+                let (default, table_cases) = match *table.default() {
+                    Some(default) => (default, table.table().as_slice()),
+                    None => {
+                        let (&(_, last), init) =
+                            table.table().split_last().ok_or("br_table has no case")?;
+                        (last, init)
+                    }
+                };
+                let default = self.machine_block(default)?;
+                if table_cases.is_empty() {
+                    return self
+                        .insert_no_result(source_inst, control_flow::Jump::new(self.is, default));
+                }
                 let scrutinee = self.lower_value(*table.scrutinee())?;
-                let default = table
-                    .default()
-                    .map(|block| self.machine_block(block))
-                    .transpose()?;
-                let mut cases = Vec::with_capacity(table.table().len());
-                for &(value, block) in table.table() {
+                let mut cases = Vec::with_capacity(table_cases.len());
+                for &(value, block) in table_cases {
                     cases.push((self.lower_value(value)?, self.machine_block(block)?));
                 }
                 self.insert_no_result(
                     source_inst,
-                    control_flow::BrTable::new(self.is, scrutinee, default, cases),
+                    control_flow::BrTable::new(self.is, scrutinee, Some(default), cases),
                 )
             }
             EvmInstKind::Call(call) => {

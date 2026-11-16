@@ -108,7 +108,10 @@ impl EvmMachineFunctionLowering<'_> {
             }
             EvmMachineInstKind::BrTable(br) => {
                 let table = br.table().clone();
-                let default = (*br.default()).map(|dest| self.canonical_block_target(dest));
+                let default = self.canonical_block_target(
+                    br.default()
+                        .expect("machine verification requires a br_table default"),
+                );
 
                 assert!(!table.is_empty(), "empty br_table");
                 assert_eq!(
@@ -132,10 +135,8 @@ impl EvmMachineFunctionLowering<'_> {
                     ctx.push(OpCode::JUMPI);
                 }
 
-                if let Some(dest) = default
-                    && !ctx.is_next_block(dest)
-                {
-                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(dest));
+                if !ctx.is_next_block(default) {
+                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(default));
                     ctx.push(OpCode::JUMP);
                 }
             }
