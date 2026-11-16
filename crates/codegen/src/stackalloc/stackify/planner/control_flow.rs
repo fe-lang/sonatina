@@ -380,7 +380,7 @@ block1:
                 scc,
                 StackifyReachability::new(16),
             );
-            ctx.scratch_spill_slots = (edge.scratch.len() + edge.spilled.len()) as u32;
+            ctx.scratch_barred = vec![BitSet::default(); edge.scratch.len() + edge.spilled.len()];
 
             let spill_set: BitSet<ValueId> = edge
                 .scratch
@@ -399,7 +399,7 @@ block1:
                         spilled,
                         &ctx.spill_slot_interference,
                         &mut free_slots.scratch,
-                        Some(ctx.scratch_spill_slots),
+                        &ctx.scratch_barred,
                     ),
                     Some(slot as u32),
                     "{name} gets its own scratch slot"
@@ -407,15 +407,13 @@ block1:
             }
 
             let mut spill_requests = BitSet::default();
-            let mut object_spill_requests = BitSet::default();
-            let forced_object_spills = BitSet::default();
+            let mut object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut mem_state = MemState {
                 spill: SpillSet::new(&spill_set),
                 spill_obj: &spill_obj,
                 spill_requests: &mut spill_requests,
-                object_spill_requests: &mut object_spill_requests,
-                forced_object_spills: &forced_object_spills,
+                object_spills: &mut object_spills,
                 slots: &mut slots,
             };
             let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.remat_actions, &mut free_slots);

@@ -6,8 +6,8 @@ input_file: test_files/evm/dyn_frame_entry_block_loop.sntn
 evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 266 bytes
-  total: 266 bytes
+  section runtime: 220 bytes
+  total: 220 bytes
 
 functions:
   mem: global_dyn_base=0xc0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=1
@@ -19,7 +19,7 @@ functions:
     mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=1
 
 evm:
-  case one_level: calldata_len=192 success reason=Return gas_used=23949 gas_refunded=0 logs=0 output=call len=32 tx_gas=21840 runtime_gas=2109
+  case one_level: calldata_len=192 success reason=Return gas_used=23590 gas_refunded=0 logs=0 output=call len=32 tx_gas=21840 runtime_gas=1750
 
 
 --------------- DEBUG ---------------

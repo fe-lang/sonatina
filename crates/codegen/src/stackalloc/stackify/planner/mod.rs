@@ -26,16 +26,21 @@ use super::{
 /// Storage-eligibility policy, owned in one place and shared by `MemPlan` and the entry-arg
 /// scratch pre-pass in the builder.
 ///
-/// A spilled value must use arena (object) storage rather than a reusable scratch slot when there
-/// are no scratch slots, when it is live across a scratch clobber, or when a previous fixed-point
-/// iteration already forced object storage for it.
+/// A spilled value must use arena (object) storage rather than a reusable scratch slot when every
+/// scratch slot bars it (`scratch_barred` has an entry per slot), or once the plan found no free
+/// slot for it (`object_spills`).
+///
+/// Invariant: using a scratch slot never changes what the program observes. On EVM the slots are
+/// memory `[0, 64)`, which the IR may use too, so a slot bars every value live across an IR write
+/// or a call that may write the slot, and every value whose spill store may run while IR data in
+/// the slot is live: possibly read after the store, here, in a callee, or in a caller after a
+/// return, without a write of it in between (`isa::evm::fixed_slots`).
 pub(super) fn must_use_object_storage(
-    scratch_spill_slots: u32,
-    scratch_live_values: &BitSet<ValueId>,
-    forced_object_spills: &BitSet<ValueId>,
+    scratch_barred: &[BitSet<ValueId>],
+    object_spills: &BitSet<ValueId>,
     v: ValueId,
 ) -> bool {
-    scratch_spill_slots == 0 || scratch_live_values.contains(v) || forced_object_spills.contains(v)
+    object_spills.contains(v) || scratch_barred.iter().all(|barred| barred.contains(v))
 }
 
 /// Driver-owned memory-planning state, grouped so `MemPlan::new` takes it in one reborrow rather
@@ -48,8 +53,9 @@ pub(super) struct MemState<'a> {
     pub(super) spill_obj:
         &'a SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
     pub(super) spill_requests: &'a mut BitSet<ValueId>,
-    pub(super) object_spill_requests: &'a mut BitSet<ValueId>,
-    pub(super) forced_object_spills: &'a BitSet<ValueId>,
+    /// The spilled values this plan found no free scratch slot for. Such a value has no slot yet,
+    /// so every store and load of it planned from then on uses its object.
+    pub(super) object_spills: &'a mut BitSet<ValueId>,
     pub(super) slots: &'a mut SpillSlotPools,
 }
 
@@ -58,16 +64,14 @@ pub(super) struct MemPlanSnapshot {
     free_slots: FreeSlotPools,
     slots: SpillSlotPools,
     spill_requests: BitSet<ValueId>,
-    object_spill_requests: BitSet<ValueId>,
+    object_spills: BitSet<ValueId>,
 }
 
 pub(super) struct MemPlan<'a> {
-    scratch_live_values: &'a BitSet<ValueId>,
-    scratch_spill_slots: u32,
+    scratch_barred: &'a [BitSet<ValueId>],
     spill_obj: &'a SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
     remat_actions: &'a SecondaryMap<ValueId, Option<Action>>,
-    object_spill_requests: &'a mut BitSet<ValueId>,
-    forced_object_spills: &'a BitSet<ValueId>,
+    object_spills: &'a mut BitSet<ValueId>,
     free_slots: &'a mut FreeSlotPools,
     slots: &'a mut SpillSlotPools,
     spill_slot_interference: &'a SpillSlotInterference,
@@ -82,12 +86,10 @@ impl<'a> MemPlan<'a> {
         free_slots: &'a mut FreeSlotPools,
     ) -> Self {
         Self {
-            scratch_live_values: &ctx.scratch_live_values,
-            scratch_spill_slots: ctx.scratch_spill_slots,
+            scratch_barred: &ctx.scratch_barred,
             spill_obj: mem.spill_obj,
             remat_actions,
-            object_spill_requests: &mut *mem.object_spill_requests,
-            forced_object_spills: mem.forced_object_spills,
+            object_spills: &mut *mem.object_spills,
             free_slots,
             slots: &mut *mem.slots,
             spill_slot_interference: &ctx.spill_slot_interference,
@@ -104,7 +106,7 @@ impl<'a> MemPlan<'a> {
             free_slots: self.free_slots.clone(),
             slots: self.slots.clone(),
             spill_requests: self.spill.spill_requests().clone(),
-            object_spill_requests: (*self.object_spill_requests).clone(),
+            object_spills: (*self.object_spills).clone(),
         }
     }
 
@@ -112,20 +114,11 @@ impl<'a> MemPlan<'a> {
         *self.free_slots = snapshot.free_slots;
         *self.slots = snapshot.slots;
         self.spill.restore_spill_requests(snapshot.spill_requests);
-        *self.object_spill_requests = snapshot.object_spill_requests;
+        *self.object_spills = snapshot.object_spills;
     }
 
     fn must_use_object_storage(&self, v: ValueId) -> bool {
-        must_use_object_storage(
-            self.scratch_spill_slots,
-            self.scratch_live_values,
-            self.forced_object_spills,
-            v,
-        )
-    }
-
-    fn request_object_storage(&mut self, v: ValueId) {
-        self.object_spill_requests.insert(v);
+        must_use_object_storage(self.scratch_barred, self.object_spills, v)
     }
 
     fn emit_store_for_spilled_value(&mut self, v: ValueId, actions: &mut Actions) {
@@ -146,7 +139,7 @@ impl<'a> MemPlan<'a> {
                 spilled,
                 self.spill_slot_interference,
                 &mut self.free_slots.scratch,
-                Some(self.scratch_spill_slots),
+                self.scratch_barred,
             ) {
                 actions.push(
                     SpillStorage::Scratch(slot)
@@ -155,7 +148,7 @@ impl<'a> MemPlan<'a> {
                 );
                 return;
             }
-            self.request_object_storage(v);
+            self.object_spills.insert(v);
         }
 
         let obj = self.spill_obj[v].expect("spilled value missing stack object id");
@@ -186,7 +179,7 @@ impl<'a> MemPlan<'a> {
             if let Some(slot) = self.slots.scratch.slot_for(v) {
                 return Action::MemLoadAbs(slot * 32);
             }
-            self.request_object_storage(v);
+            self.object_spills.insert(v);
         }
 
         // Invariant: every spilled value has a `StackObjId` assigned by stackify's builder

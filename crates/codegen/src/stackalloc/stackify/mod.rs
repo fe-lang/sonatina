@@ -127,8 +127,7 @@ mod tests {
             );
 
             let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16)
-                .with_scratch_live_values(scratch_live_values.clone())
-                .with_scratch_spills(2)
+                .with_scratch_slots(vec![scratch_live_values.clone(); 2])
                 .compute();
 
             for v in function.dfg.value_ids() {

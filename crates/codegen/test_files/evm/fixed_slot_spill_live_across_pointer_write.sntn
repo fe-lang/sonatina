@@ -1,0 +1,119 @@
+#! evm.config: { mem_plan_detail: true }
+#! evm.case: integer_address_0
+#!   calldata: u256(0x0000000000000000000000000000000000000000000000000000000000001000) u256(0x0000000000000000000000000000000000000000000000000000000000000000) u256(0x0000000000000000000000000000000000000000000000000000000000000002)
+#!   expect: return u256(0x0000000000000000000000000000000000000000000000000000000000024166)
+#! evm.case: integer_address_32
+#!   calldata: u256(0x0000000000000000000000000000000000000000000000000000000000001000) u256(0x0000000000000000000000000000000000000000000000000000000000000020) u256(0x0000000000000000000000000000000000000000000000000000000000000002)
+#!   expect: return u256(0x0000000000000000000000000000000000000000000000000000000000024166)
+
+# Both callees keep spilled values live across a store through a computed address.
+# `%through_allocation` stores into its alloca at a run-time index, which cannot touch
+# the fixed slots, so the spills may take them. `%through_integer` stores through an
+# integer that is 0 or 32 at run time, so its spills must avoid the fixed slots.
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    v2.i256 = evm_calldata_load 64.i256;
+    v4.i256 = call %through_integer v0 v1;
+    v3.i256 = call %through_allocation v0 v2;
+    v5.i256 = add v3 v4;
+    evm_mstore 0.i256 v5;
+    evm_return 0.i256 32.i256;
+}
+
+func private %through_allocation(v0.i256, v1.i256) -> i256 {
+block0:
+    v90.*[i256; 4] = alloca [i256; 4];
+    v91.*i256 = gep v90 0.i256 v1;
+    v11.i256 = add v0 1.i256;
+    v12.i256 = add v0 2.i256;
+    v13.i256 = add v0 3.i256;
+    v14.i256 = add v0 4.i256;
+    v15.i256 = add v0 5.i256;
+    v16.i256 = add v0 6.i256;
+    v17.i256 = add v0 7.i256;
+    v18.i256 = add v0 8.i256;
+    v19.i256 = add v0 9.i256;
+    v20.i256 = add v0 10.i256;
+    v21.i256 = add v0 11.i256;
+    v22.i256 = add v0 12.i256;
+    v23.i256 = add v0 13.i256;
+    v24.i256 = add v0 14.i256;
+    v25.i256 = add v0 15.i256;
+    v26.i256 = add v0 16.i256;
+    v27.i256 = add v0 17.i256;
+    v28.i256 = add v0 18.i256;
+    mstore v91 7.i256 i256;
+    v100.i256 = mload v91 i256;
+    v201.i256 = add v100 v11;
+    v202.i256 = add v201 v12;
+    v203.i256 = add v202 v13;
+    v204.i256 = add v203 v14;
+    v205.i256 = add v204 v15;
+    v206.i256 = add v205 v16;
+    v207.i256 = add v206 v17;
+    v208.i256 = add v207 v18;
+    v209.i256 = add v208 v19;
+    v210.i256 = add v209 v20;
+    v211.i256 = add v210 v21;
+    v212.i256 = add v211 v22;
+    v213.i256 = add v212 v23;
+    v214.i256 = add v213 v24;
+    v215.i256 = add v214 v25;
+    v216.i256 = add v215 v26;
+    v217.i256 = add v216 v27;
+    v218.i256 = add v217 v28;
+    return v218;
+}
+
+func private %through_integer(v0.i256, v1.i256) -> i256 {
+block0:
+    v11.i256 = add v0 1.i256;
+    v12.i256 = add v0 2.i256;
+    v13.i256 = add v0 3.i256;
+    v14.i256 = add v0 4.i256;
+    v15.i256 = add v0 5.i256;
+    v16.i256 = add v0 6.i256;
+    v17.i256 = add v0 7.i256;
+    v18.i256 = add v0 8.i256;
+    v19.i256 = add v0 9.i256;
+    v20.i256 = add v0 10.i256;
+    v21.i256 = add v0 11.i256;
+    v22.i256 = add v0 12.i256;
+    v23.i256 = add v0 13.i256;
+    v24.i256 = add v0 14.i256;
+    v25.i256 = add v0 15.i256;
+    v26.i256 = add v0 16.i256;
+    v27.i256 = add v0 17.i256;
+    v28.i256 = add v0 18.i256;
+    evm_mstore v1 9.i256;
+    v100.i256 = evm_mload v1;
+    v201.i256 = add v100 v11;
+    v202.i256 = add v201 v12;
+    v203.i256 = add v202 v13;
+    v204.i256 = add v203 v14;
+    v205.i256 = add v204 v15;
+    v206.i256 = add v205 v16;
+    v207.i256 = add v206 v17;
+    v208.i256 = add v207 v18;
+    v209.i256 = add v208 v19;
+    v210.i256 = add v209 v20;
+    v211.i256 = add v210 v21;
+    v212.i256 = add v211 v22;
+    v213.i256 = add v212 v23;
+    v214.i256 = add v213 v24;
+    v215.i256 = add v214 v25;
+    v216.i256 = add v215 v26;
+    v217.i256 = add v216 v27;
+    v218.i256 = add v217 v28;
+    return v218;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

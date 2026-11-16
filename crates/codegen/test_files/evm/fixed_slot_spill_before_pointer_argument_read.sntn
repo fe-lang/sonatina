@@ -1,0 +1,117 @@
+#! evm.config: { mem_plan_detail: true }
+#! evm.case: reads_through_arguments
+#!   calldata: u256(0x0000000000000000000000000000000000000000000000000000000000001000)
+#!   expect: return u256(0x0000000000000000000000000000000000000000000000000000000000039203)
+
+# Both callees spill under pressure and then read through their pointer argument.
+# Every call of `%sum_at` passes an alloca, so the read cannot touch the fixed slots
+# and its spills may take them. `%sum_at_any` is also called with address 0, where the
+# IR keeps a word, so its spills must avoid the fixed slots.
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.*i256 = alloca i256;
+    mstore v1 v0 i256;
+    evm_mstore 0.i256 v0;
+    v3.*i256 = int_to_ptr 0.i256 *i256;
+    v4.i256 = call %sum_at_any v3 v0;
+    v5.i256 = call %sum_at_any v1 v0;
+    v2.i256 = call %sum_at v1 v0;
+    v6.i256 = add v2 v4;
+    v7.i256 = add v6 v5;
+    evm_mstore 0.i256 v7;
+    evm_return 0.i256 32.i256;
+}
+
+func private %sum_at(v0.*i256, v1.i256) -> i256 {
+block0:
+    v11.i256 = add v1 1.i256;
+    v12.i256 = add v1 2.i256;
+    v13.i256 = add v1 3.i256;
+    v14.i256 = add v1 4.i256;
+    v15.i256 = add v1 5.i256;
+    v16.i256 = add v1 6.i256;
+    v17.i256 = add v1 7.i256;
+    v18.i256 = add v1 8.i256;
+    v19.i256 = add v1 9.i256;
+    v20.i256 = add v1 10.i256;
+    v21.i256 = add v1 11.i256;
+    v22.i256 = add v1 12.i256;
+    v23.i256 = add v1 13.i256;
+    v24.i256 = add v1 14.i256;
+    v25.i256 = add v1 15.i256;
+    v26.i256 = add v1 16.i256;
+    v27.i256 = add v1 17.i256;
+    v28.i256 = add v1 18.i256;
+    v100.i256 = mload v0 i256;
+    v201.i256 = add v100 v11;
+    v202.i256 = add v201 v12;
+    v203.i256 = add v202 v13;
+    v204.i256 = add v203 v14;
+    v205.i256 = add v204 v15;
+    v206.i256 = add v205 v16;
+    v207.i256 = add v206 v17;
+    v208.i256 = add v207 v18;
+    v209.i256 = add v208 v19;
+    v210.i256 = add v209 v20;
+    v211.i256 = add v210 v21;
+    v212.i256 = add v211 v22;
+    v213.i256 = add v212 v23;
+    v214.i256 = add v213 v24;
+    v215.i256 = add v214 v25;
+    v216.i256 = add v215 v26;
+    v217.i256 = add v216 v27;
+    v218.i256 = add v217 v28;
+    return v218;
+}
+
+func private %sum_at_any(v0.*i256, v1.i256) -> i256 {
+block0:
+    v11.i256 = add v1 1.i256;
+    v12.i256 = add v1 2.i256;
+    v13.i256 = add v1 3.i256;
+    v14.i256 = add v1 4.i256;
+    v15.i256 = add v1 5.i256;
+    v16.i256 = add v1 6.i256;
+    v17.i256 = add v1 7.i256;
+    v18.i256 = add v1 8.i256;
+    v19.i256 = add v1 9.i256;
+    v20.i256 = add v1 10.i256;
+    v21.i256 = add v1 11.i256;
+    v22.i256 = add v1 12.i256;
+    v23.i256 = add v1 13.i256;
+    v24.i256 = add v1 14.i256;
+    v25.i256 = add v1 15.i256;
+    v26.i256 = add v1 16.i256;
+    v27.i256 = add v1 17.i256;
+    v28.i256 = add v1 18.i256;
+    v100.i256 = mload v0 i256;
+    v201.i256 = add v100 v11;
+    v202.i256 = add v201 v12;
+    v203.i256 = add v202 v13;
+    v204.i256 = add v203 v14;
+    v205.i256 = add v204 v15;
+    v206.i256 = add v205 v16;
+    v207.i256 = add v206 v17;
+    v208.i256 = add v207 v18;
+    v209.i256 = add v208 v19;
+    v210.i256 = add v209 v20;
+    v211.i256 = add v210 v21;
+    v212.i256 = add v211 v22;
+    v213.i256 = add v212 v23;
+    v214.i256 = add v213 v24;
+    v215.i256 = add v214 v25;
+    v216.i256 = add v215 v26;
+    v217.i256 = add v216 v27;
+    v218.i256 = add v217 v28;
+    v300.i256 = add v218 1.i256;
+    return v300;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

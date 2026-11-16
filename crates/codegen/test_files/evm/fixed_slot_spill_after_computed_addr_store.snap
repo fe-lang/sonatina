@@ -1,0 +1,167 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/fixed_slot_spill_after_computed_addr_store.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 185 bytes
+  total: 185 bytes
+
+functions:
+  mem: global_dyn_base=0x1a0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=8
+  entry: ir_blocks=1 ir_insts=48 vcode_ops=142 fixups=0 imm_bytes=33
+    mem: scratch_words=0 stable_words=8 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=8
+
+evm:
+  case reads_stored_word: calldata_len=96 success reason=Return gas_used=21867 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=459
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v90.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    PUSH1 0x20 (32)  // v92.i256 = evm_calldata_load v91;
+    CALLDATALOAD
+    PUSH1 0x40 (64)  // v2.i256 = evm_calldata_load v1;
+    CALLDATALOAD
+    MUL  // v3.i256 = mul v2 v92;
+    DUP1
+    PUSH2 0x120 (288)
+    MSTORE
+    DUP2  // evm_mstore v3 v90;
+    DUP2
+    MSTORE
+    PUSH1 0x1 (1)  // v5.i256 = add v90 v4;
+    DUP3
+    ADD
+    DUP1
+    PUSH2 0x140 (320)
+    MSTORE
+    PUSH1 0x2 (2)  // v7.i256 = add v90 v6;
+    DUP4
+    ADD
+    DUP1
+    PUSH2 0x160 (352)
+    MSTORE
+    PUSH1 0x3 (3)  // v9.i256 = add v90 v8;
+    DUP5
+    ADD
+    DUP1
+    PUSH2 0x180 (384)
+    MSTORE
+    PUSH1 0x4 (4)  // v11.i256 = add v90 v10;
+    DUP6
+    ADD
+    PUSH1 0x5 (5)  // v13.i256 = add v90 v12;
+    DUP7
+    ADD
+    PUSH1 0x6 (6)  // v15.i256 = add v90 v14;
+    DUP8
+    ADD
+    PUSH1 0x7 (7)  // v17.i256 = add v90 v16;
+    DUP9
+    ADD
+    PUSH1 0x8 (8)  // v19.i256 = add v90 v18;
+    DUP10
+    ADD
+    PUSH1 0x9 (9)  // v100.i256 = add v90 v20;
+    DUP11
+    ADD
+    PUSH1 0xa (10)  // v201.i256 = add v90 v200;
+    DUP12
+    ADD
+    PUSH1 0xb (11)  // v203.i256 = add v90 v202;
+    DUP13
+    ADD
+    PUSH1 0xc (12)  // v205.i256 = add v90 v204;
+    DUP14
+    ADD
+    PUSH1 0xd (13)  // v207.i256 = add v90 v206;
+    DUP15
+    ADD
+    PUSH1 0xe (14)  // v209.i256 = add v90 v208;
+    DUP16
+    ADD
+    DUP16  // v211.i256 = add v90 v210;
+    PUSH1 0xf (15)
+    ADD
+    SWAP16  // v213.i256 = add v90 v212;
+    DUP1
+    PUSH1 0x10 (16)
+    ADD
+    PUSH1 0x11 (17)  // v215.i256 = add v90 v214;
+    DUP3
+    ADD
+    PUSH1 0x12 (18)  // v217.i256 = add v90 v216;
+    DUP4
+    ADD
+    PUSH1 0x13 (19)  // v219.i256 = add v90 v218;
+    DUP5
+    ADD
+    SWAP4  // v46.i256 = add v90 20.i256;
+    PUSH1 0x14 (20)
+    ADD
+    PUSH2 0x120 (288)  // v47.i256 = evm_mload v3;
+    MLOAD
+    MLOAD
+    PUSH2 0x140 (320)  // v48.i256 = add v47 v5;
+    MLOAD
+    ADD
+    PUSH2 0x160 (352)  // v49.i256 = add v48 v7;
+    MLOAD
+    ADD
+    PUSH2 0x180 (384)  // v50.i256 = add v49 v9;
+    MLOAD
+    ADD
+    SWAP1  // v51.i256 = add v50 v11;
+    SWAP16
+    ADD
+    SWAP1  // v52.i256 = add v51 v13;
+    SWAP14
+    ADD
+    SWAP1  // v53.i256 = add v52 v15;
+    SWAP12
+    ADD
+    SWAP1  // v54.i256 = add v53 v17;
+    SWAP10
+    ADD
+    SWAP1  // v55.i256 = add v54 v19;
+    SWAP8
+    ADD
+    SWAP1  // v56.i256 = add v55 v100;
+    SWAP6
+    ADD
+    SWAP1  // v57.i256 = add v56 v201;
+    SWAP4
+    ADD
+    SWAP1  // v58.i256 = add v57 v203;
+    SWAP2
+    ADD
+    ADD  // v59.i256 = add v58 v205;
+    ADD  // v60.i256 = add v59 v207;
+    ADD  // v61.i256 = add v60 v209;
+    SWAP1  // v62.i256 = add v61 v211;
+    SWAP10
+    ADD
+    ADD  // v63.i256 = add v62 v213;
+    ADD  // v64.i256 = add v63 v215;
+    ADD  // v65.i256 = add v64 v217;
+    SWAP1  // v66.i256 = add v65 v219;
+    SWAP6
+    ADD
+    SWAP4  // v67.i256 = add v66 v46;
+    POP
+    POP
+    POP
+    POP
+    ADD
+    PUSH2 0x100 (256)  // evm_mstore 256.i256 v67;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 256.i256 v91;
+    PUSH2 0x100 (256)
+    RETURN
