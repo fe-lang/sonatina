@@ -424,6 +424,9 @@ impl FuncLowerCtx<'_> {
             EvmInstKind::EvmKeccak256Words(_) => {
                 Err("evm_keccak256_words must be lowered before machine lowering".to_string())
             }
+            EvmInstKind::Freeze(_) => {
+                Err("freeze must be lowered before machine lowering".to_string())
+            }
             _ => self.lower_structural(source_inst),
         }
     }

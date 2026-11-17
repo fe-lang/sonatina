@@ -218,10 +218,12 @@ fn low_mask_bits(func: &Function, value: ValueId) -> Option<u16> {
         .find(|&bits| ones == low_mask(bits))
 }
 
-/// EVM values are concrete words and no later pass chooses a value per use,
-/// so a frozen value is its argument, and `freeze undef` is zero, or the
-/// null pointer. Returns the value that now stands for the freeze's result.
-fn lower_freeze(func: &mut Function, inst: InstId) -> ValueId {
+/// Lowers `freeze undef` to zero, or the null pointer, and leaves a freeze of
+/// any other value alone. That freeze stays until [`lower_late_freezes`]: IR
+/// passes run after legalization, and to them its argument may be
+/// unspecified where its result is not. Returns the value that now stands
+/// for the freeze's result, or `None` if the freeze stays.
+fn lower_frozen_undef(func: &mut Function, inst: InstId) -> Option<ValueId> {
     let arg = *func.dfg.downcast::<&Freeze>(inst).expect("a freeze").arg();
     let result = func.dfg.inst_result(inst).expect("freeze has a result");
     let replacement = match *func.dfg.value(arg) {
@@ -229,20 +231,20 @@ fn lower_freeze(func: &mut Function, inst: InstId) -> ValueId {
             let zero = func.dfg.make_imm_value(I256::zero());
             let null = IntToPtr::new_unchecked(func.inst_set(), zero, ty);
             func.dfg.replace_inst(inst, Box::new(null));
-            return result;
+            return Some(result);
         }
         Value::Undef { ty } => func.dfg.make_imm_value(Immediate::zero(ty)),
-        _ => arg,
+        _ => return None,
     };
     func.dfg.change_to_alias(result, replacement);
     func.layout.remove_inst(inst);
     func.erase_inst(inst);
-    replacement
+    Some(replacement)
 }
 
-/// Lowers the freezes passes insert after legalization, such as scalarizing a
-/// slot read before its first store, which machine lowering cannot take.
-/// Lowering a freeze replaces its result in a later freeze of it.
+/// Lowers every freeze once no IR pass is left: machine lowering picks zero
+/// for each `undef`, so a frozen value is its argument there. Lowering a
+/// freeze replaces its result in a later freeze of it.
 pub(crate) fn lower_late_freezes(func: &mut Function) {
     let freezes: Vec<_> = func
         .layout
@@ -251,7 +253,13 @@ pub(crate) fn lower_late_freezes(func: &mut Function) {
         .filter(|&inst| func.dfg.downcast::<&Freeze>(inst).is_some())
         .collect();
     for inst in freezes {
-        lower_freeze(func, inst);
+        if lower_frozen_undef(func, inst).is_none() {
+            let arg = *func.dfg.downcast::<&Freeze>(inst).expect("a freeze").arg();
+            let result = func.dfg.inst_result(inst).expect("freeze has a result");
+            func.dfg.change_to_alias(result, arg);
+            func.layout.remove_inst(inst);
+            func.erase_inst(inst);
+        }
     }
 }
 
@@ -2681,12 +2689,13 @@ impl<'a> FunctionLegalizer<'a> {
         }
     }
 
-    /// Lowers a freeze. The zero that replaces `freeze undef` may be an immediate no value had
+    /// Lowers `freeze undef`. The zero that replaces it may be an immediate no value had
     /// before; it takes the freeze's width.
     fn rewrite_freeze(&mut self, inst: InstId) {
         let width = self.single_result_width(inst);
-        let lowered = lower_freeze(self.func, inst);
-        if self.width_of(lowered).is_none() {
+        if let Some(lowered) = lower_frozen_undef(self.func, inst)
+            && self.width_of(lowered).is_none()
+        {
             self.provenance[lowered] = width;
         }
     }
@@ -2920,6 +2929,48 @@ block0:
             dump_func(function, func_ref)
         });
         assert!(dumped.contains("return 0.i256;"), "{dumped}");
+    }
+
+    /// A freeze of a value that may be unspecified stays until the last IR
+    /// pass: `br v2` would branch on `undef` on the path from `block1`.
+    const FROZEN_PHI: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v2.i256 = phi (undef.i256 block1) (v1 block2);
+    v3.i256 = freeze v2;
+    br v3 block4 block5;
+block4:
+    return 1.i256;
+block5:
+    return 2.i256;
+}
+"#;
+
+    #[test]
+    fn freezes_of_values_stay_through_legalization() {
+        let dumped = legalize_and_dump(FROZEN_PHI, "entry");
+        assert!(dumped.contains("v3.i256 = freeze v2;"), "{dumped}");
+        assert!(dumped.contains("br v3 block4 block5;"), "{dumped}");
+    }
+
+    #[test]
+    fn late_freezes_of_values_lower_to_their_argument() {
+        let parsed = parse(FROZEN_PHI);
+        let func_ref = find_func(&parsed, "entry");
+        let dumped = parsed.module.func_store.modify(func_ref, |function| {
+            super::lower_late_freezes(function);
+            dump_func(function, func_ref)
+        });
+        assert!(!dumped.contains("freeze"), "{dumped}");
+        assert!(dumped.contains("br v2 block4 block5;"), "{dumped}");
     }
 
     #[test]

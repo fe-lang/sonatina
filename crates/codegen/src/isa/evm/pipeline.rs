@@ -68,7 +68,7 @@ impl<'a> EvmPipeline<'a> {
         let _span = info_span!(
             "sonatina.codegen.evm.pipeline.run",
             funcs = ctx.funcs.len(),
-            phases = if optional_cleanup { 9 } else { 6 }
+            phases = if optional_cleanup { 10 } else { 7 }
         )
         .entered();
 
@@ -113,6 +113,11 @@ impl<'a> EvmPipeline<'a> {
                 EvmPipelineContext::run_raw_memory_cleanup,
             )?;
         }
+        ctx.run_phase(
+            "freeze_lowering",
+            "mandatory",
+            EvmPipelineContext::run_freeze_lowering,
+        )?;
         ctx.run_phase(
             "keccak_words_lowering",
             "mandatory",
@@ -301,7 +306,6 @@ impl EvmPipelineContext<'_> {
         }
 
         for &func in &self.funcs {
-            self.module().func_store.modify(func, lower_late_freezes);
             self.module().func_store.view(func, |function| {
                 validate_supported_lowering_ir(func, function)
             })?;
@@ -395,6 +399,15 @@ impl EvmPipelineContext<'_> {
     /// Word hashes stay pure values through every optimization round above;
     /// only now do they become the memory hash the EVM executes, before
     /// memory planning places the preimages.
+    /// Runs after the last IR pass, which could take the unspecified argument
+    /// of a freeze as any value.
+    fn run_freeze_lowering(&mut self) -> Result<(), String> {
+        for &func in &self.funcs {
+            self.module().func_store.modify(func, lower_late_freezes);
+        }
+        Ok(())
+    }
+
     fn run_keccak_words_lowering(&mut self) -> Result<(), String> {
         let mut changed = false;
         {
