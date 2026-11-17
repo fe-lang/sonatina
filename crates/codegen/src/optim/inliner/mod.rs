@@ -9,11 +9,8 @@ use sonatina_ir::{
 };
 
 use crate::{
-    analysis::{definedness::UndefTaint, func_behavior::blocks_that_may_reach_commit},
-    domtree::DomTree,
-    loop_analysis::LoopTree,
-    module_analysis,
-    transform::aggregate::scalarize::AggregateScalarize,
+    analysis::func_behavior::blocks_that_may_reach_commit, domtree::DomTree,
+    loop_analysis::LoopTree, module_analysis, transform::aggregate::scalarize::AggregateScalarize,
 };
 
 use super::{
@@ -327,7 +324,6 @@ impl Inliner {
             for caller_ref in caller_order {
                 let caller_cold = module.ctx.func_hints(caller_ref).contains(FuncHints::COLD);
                 let mut reachable_blocks: Option<FxHashSet<BlockId>> = None;
-                let mut taint: Option<UndefTaint> = None;
                 let mut forced_recursive_inline_succeeded = false;
                 let sites = sites_by_caller
                     .get(&caller_ref)
@@ -462,8 +458,7 @@ impl Inliner {
                             |callee| trivial::materialize_plan(callee, &plan_summary),
                         );
                         module.func_store.modify(caller_ref, |caller| {
-                            let taint = taint.get_or_insert_with(|| UndefTaint::new(caller));
-                            trivial::apply_plan(caller, site.call_inst, plan, taint, &mut stats)
+                            trivial::apply_plan(caller, site.call_inst, plan, &mut stats)
                         })
                     } else {
                         None
@@ -568,7 +563,6 @@ impl Inliner {
                         continue;
                     }
 
-                    let taint = taint.get_or_insert_with(|| UndefTaint::new(&caller_func));
                     let full_result = if let Some(callee) = snapshot_callee {
                         full::try_inline_callsite_full(
                             module,
@@ -577,7 +571,6 @@ impl Inliner {
                             site.callee,
                             (cost::SummaryKey::Snapshot(site.callee), callee),
                             &mut validated_callees,
-                            taint,
                         )
                     } else {
                         module.func_store.view(site.callee, |callee| {
@@ -588,7 +581,6 @@ impl Inliner {
                                 site.callee,
                                 (cost::SummaryKey::Live(site.callee), callee),
                                 &mut validated_callees,
-                                taint,
                             )
                         })
                     };
@@ -658,8 +650,7 @@ impl Inliner {
                         Err(full::FullInlineFail::CallGone)
                         | Err(full::FullInlineFail::NotCall)
                         | Err(full::FullInlineFail::CalleeMismatch)
-                        | Err(full::FullInlineFail::MalformedCallee)
-                        | Err(full::FullInlineFail::UndefinedEnum) => {}
+                        | Err(full::FullInlineFail::MalformedCallee) => {}
                     }
                 }
 
@@ -894,8 +885,7 @@ fn caller_order_bottom_up_scc(
 #[cfg(test)]
 mod tests {
     use super::{
-        InlineStats, InlinerConfig, UndefTaint, collect_iteration_call_data, cost::SummaryKey,
-        full, trivial,
+        InlineStats, InlinerConfig, collect_iteration_call_data, cost::SummaryKey, full, trivial,
     };
     use crate::analysis::func_behavior;
     use rustc_hash::FxHashSet;
@@ -962,8 +952,7 @@ func public %caller(v0.i256) {{
                 trivial::materialize_plan(callee, &summary)
             });
             let changes = module.func_store.modify(caller, |func| {
-                let taint = UndefTaint::new(func);
-                trivial::apply_plan(func, site.call_inst, plan, &taint, &mut stats).unwrap()
+                trivial::apply_plan(func, site.call_inst, plan, &mut stats).unwrap()
             });
             changes.apply(&mut counts);
             counts.retain(|_, count| *count != 0);
@@ -1021,7 +1010,6 @@ func public %caller(v0.i256) {{
                 .find(|site| site.callee == callee)
                 .unwrap();
             let mut caller_func = module.func_store.remove(caller).unwrap();
-            let taint = UndefTaint::new(&caller_func);
             let result = module
                 .func_store
                 .view(callee, |callee_func| {
@@ -1032,7 +1020,6 @@ func public %caller(v0.i256) {{
                         callee,
                         (SummaryKey::Live(callee), callee_func),
                         &mut FxHashSet::default(),
-                        &taint,
                     )
                 })
                 .expect("fixture inlines");
