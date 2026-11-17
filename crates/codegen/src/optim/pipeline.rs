@@ -2262,7 +2262,7 @@ func private %entry(v0.i256, v1.i1) -> i256 {
                 .expect("loop load should exist before LICM");
             let lp = lpt.loops().next().expect("loop should exist");
             assert!(
-                object_memory.read_is_loop_invariant(func, &cfg, &lpt, lp, load),
+                object_memory.read_is_loop_invariant(func, &cfg, &domtree, &lpt, lp, load),
                 "object-memory analysis should mark the loop load as invariant before LICM"
             );
         });
