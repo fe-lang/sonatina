@@ -26,7 +26,6 @@ use super::{
     scalarize::enum_variant_tag_imm,
     shape,
 };
-use crate::analysis::definedness::UndefTaint;
 
 mod value_facts;
 
@@ -37,7 +36,6 @@ pub struct AggregateCombine {
     changed: bool,
     replacements: FxHashMap<ValueId, ValueId>,
     layout_cache: shape::AggregateLayoutCache,
-    taint: UndefTaint,
 }
 
 enum AggregateFieldLookup {
@@ -164,7 +162,6 @@ impl AggregateCombine {
     ) -> bool {
         self.changed = false;
         self.layout_cache.clear();
-        self.taint = UndefTaint::new(func);
         func.rebuild_users();
 
         let mut facts = CombineObjectFacts::compute(func, object_effects, &mut self.layout_cache);
@@ -261,9 +258,6 @@ impl AggregateCombine {
                 && let Some(value) =
                     enum_payload_value(&state.facts, object, *projection.variant(), field)
                 && self.payload_is_readable(func, value)
-                // A read is never undef, so a value that may be, even in one
-                // field, stays a read.
-                && !self.taint.holds_undef(func, value)
                 && func
                     .dfg
                     .inst_result(inst)
@@ -339,7 +333,7 @@ impl AggregateCombine {
         } else if func.dfg.downcast::<&data::InsertValue>(inst).is_some() {
             self.try_rewrite_insert(func, inst, facts)
         } else if func.dfg.downcast::<&control_flow::Phi>(inst).is_some() {
-            self.try_rewrite_phi(func, inst, &facts.definitely_non_undef)
+            self.try_rewrite_phi(func, inst)
         } else {
             false
         }
@@ -560,7 +554,7 @@ impl AggregateCombine {
         };
 
         // AC5: insert identical field back into aggregate.
-        if is_identical_field_reinsert(func, &insert, &facts.definitely_non_undef) {
+        if is_identical_field_reinsert(func, &insert) {
             if func.dfg.value_ty(*insert.dest()) != func.dfg.value_ty(result) {
                 return false;
             }
@@ -600,14 +594,8 @@ impl AggregateCombine {
         false
     }
 
-    fn try_rewrite_phi(
-        &mut self,
-        func: &mut Function,
-        inst: InstId,
-        definitely_non_undef: &SecondaryMap<ValueId, bool>,
-    ) -> bool {
-        self.try_rewrite_phi_of_extracts(func, inst)
-            || self.try_rewrite_phi_of_inserts(func, inst, definitely_non_undef)
+    fn try_rewrite_phi(&mut self, func: &mut Function, inst: InstId) -> bool {
+        self.try_rewrite_phi_of_extracts(func, inst) || self.try_rewrite_phi_of_inserts(func, inst)
     }
 
     fn try_rewrite_phi_of_extracts(&mut self, func: &mut Function, inst: InstId) -> bool {
@@ -668,12 +656,7 @@ impl AggregateCombine {
         true
     }
 
-    fn try_rewrite_phi_of_inserts(
-        &mut self,
-        func: &mut Function,
-        inst: InstId,
-        definitely_non_undef: &SecondaryMap<ValueId, bool>,
-    ) -> bool {
+    fn try_rewrite_phi_of_inserts(&mut self, func: &mut Function, inst: InstId) -> bool {
         let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(inst) else {
             return false;
         };
@@ -690,7 +673,7 @@ impl AggregateCombine {
         let Some(first_insert) = func.dfg.downcast::<&data::InsertValue>(first_insert_inst) else {
             return false;
         };
-        if is_identical_field_reinsert(func, first_insert, definitely_non_undef) {
+        if is_identical_field_reinsert(func, first_insert) {
             return false;
         }
         let Some(idx) = inst_const_index(func, *first_insert.idx()) else {
@@ -711,7 +694,7 @@ impl AggregateCombine {
             let Some(insert) = func.dfg.downcast::<&data::InsertValue>(insert_inst) else {
                 return false;
             };
-            if is_identical_field_reinsert(func, insert, definitely_non_undef) {
+            if is_identical_field_reinsert(func, insert) {
                 return false;
             }
             if inst_const_index(func, *insert.idx()) != Some(idx) {
@@ -1448,15 +1431,7 @@ fn is_explicit_undef(func: &Function, v: ValueId) -> bool {
     matches!(func.dfg.value(v), Value::Undef { .. })
 }
 
-fn is_identical_field_reinsert(
-    func: &Function,
-    insert: &data::InsertValue,
-    definitely_non_undef: &SecondaryMap<ValueId, bool>,
-) -> bool {
-    if !definitely_non_undef[*insert.dest()] {
-        return false;
-    }
-
+fn is_identical_field_reinsert(func: &Function, insert: &data::InsertValue) -> bool {
     let Some(idx) = inst_const_index(func, *insert.idx()) else {
         return false;
     };

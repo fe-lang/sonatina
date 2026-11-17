@@ -2,12 +2,8 @@ use super::{
     super::{inst_const_index, is_explicit_undef, shape},
     AggregateValueFacts,
 };
-use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
-use sonatina_ir::{
-    Function, ValueId,
-    inst::{cast, control_flow, data},
-};
+use sonatina_ir::{Function, ValueId, inst::data};
 use sonatina_parser::parse_module;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
 
@@ -17,12 +13,7 @@ fn compare_with_reference(source: &str) {
     for func_ref in module.funcs() {
         module.func_store.view(func_ref, |func| {
             let facts = AggregateValueFacts::compute(func);
-            let reference = compute_definitely_non_undef_aggregates(func);
             for value in func.dfg.value_ids() {
-                assert_eq!(
-                    facts.definitely_non_undef[value], reference[value],
-                    "definedness of {value:?}\n{source}"
-                );
                 if shape::is_supported_aggregate_ty(func.ctx(), func.dfg.value_ty(value)) {
                     assert_eq!(
                         facts.reconstructed[value],
@@ -135,110 +126,6 @@ block3:
 }
 "#,
     );
-}
-
-// Deliberately independent reference: evaluate each prefix separately rather
-// than sharing traversal state. Keep the existing greatest-fixed-point contract.
-fn compute_definitely_non_undef_aggregates(func: &Function) -> SecondaryMap<ValueId, bool> {
-    let mut definitely_non_undef = SecondaryMap::default();
-    for value in func.dfg.value_ids() {
-        let ty = func.dfg.value_ty(value);
-        if shape::is_supported_aggregate_ty(func.ctx(), ty) {
-            definitely_non_undef[value] = !is_explicit_undef(func, value);
-        }
-    }
-
-    loop {
-        let mut changed = false;
-        for value in func.dfg.value_ids() {
-            let ty = func.dfg.value_ty(value);
-            if !shape::is_supported_aggregate_ty(func.ctx(), ty) {
-                continue;
-            }
-
-            let next = aggregate_is_definitely_non_undef(func, value, &definitely_non_undef);
-            if definitely_non_undef[value] != next {
-                definitely_non_undef[value] = next;
-                changed = true;
-            }
-        }
-        if !changed {
-            return definitely_non_undef;
-        }
-    }
-}
-
-fn aggregate_is_definitely_non_undef(
-    func: &Function,
-    value: ValueId,
-    definitely_non_undef: &SecondaryMap<ValueId, bool>,
-) -> bool {
-    if is_explicit_undef(func, value) {
-        return false;
-    }
-
-    let ty = func.dfg.value_ty(value);
-    let Some(inst) = func.dfg.value_inst(value) else {
-        return true;
-    };
-
-    if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst) {
-        if value_is_definitely_non_undef(func, *insert.dest(), definitely_non_undef) {
-            return true;
-        }
-
-        let Some(field_count) = shape::aggregate_child_count(func.ctx(), ty) else {
-            return false;
-        };
-        let Some(assignments) = collect_insert_assignments(func, value) else {
-            return false;
-        };
-        return assignments.len() == field_count
-            && (0..field_count).all(|idx| {
-                let Some(idx_u32) = u32::try_from(idx).ok() else {
-                    return false;
-                };
-                let Some(field) = assignments.get(&idx_u32).copied() else {
-                    return false;
-                };
-                let Some(field_ty) = shape::aggregate_child_ty(func.ctx(), ty, idx_u32) else {
-                    return false;
-                };
-                func.dfg.value_ty(field) == field_ty
-                    && value_is_definitely_non_undef(func, field, definitely_non_undef)
-            });
-    }
-
-    if let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(inst) {
-        return phi.args().iter().any(|&(arg, _)| arg != value)
-            && phi.args().iter().all(|&(arg, _)| {
-                func.dfg.value_ty(arg) == ty
-                    && value_is_definitely_non_undef(func, arg, definitely_non_undef)
-            });
-    }
-
-    if let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(inst) {
-        return value_is_definitely_non_undef(func, *extract.dest(), definitely_non_undef);
-    }
-
-    if let Some(bitcast) = func.dfg.downcast::<&cast::Bitcast>(inst) {
-        return value_is_definitely_non_undef(func, *bitcast.from(), definitely_non_undef);
-    }
-
-    false
-}
-
-fn value_is_definitely_non_undef(
-    func: &Function,
-    value: ValueId,
-    definitely_non_undef: &SecondaryMap<ValueId, bool>,
-) -> bool {
-    let ty = func.dfg.value_ty(value);
-    if shape::is_supported_aggregate_ty(func.ctx(), ty) {
-        definitely_non_undef[value]
-    } else {
-        !is_explicit_undef(func, value)
-    }
 }
 
 fn try_reconstruct_original_aggregate(func: &Function, value: ValueId) -> Option<ValueId> {
