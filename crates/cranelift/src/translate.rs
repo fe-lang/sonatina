@@ -1590,12 +1590,12 @@ fn translate_function(
                 }
                 NativeInstKind::Call(call) => {
                     let callee = *call.callee();
-                    let clif_func_id = func_id_map
+                    let clif_func_id = *func_id_map
                         .get(&callee)
                         .ok_or_else(|| format!("unknown callee {callee:?}"))?;
-                    let clif_func_ref =
-                        clif_module.declare_func_in_func(*clif_func_id, builder.func);
                     if tail_calls.is_tail_call(func_ref, inst_id) {
+                        let clif_func_ref =
+                            clif_module.declare_func_in_func(clif_func_id, builder.func);
                         // An indirect result goes to the caller's own buffer.
                         let mut call_args: Vec<_> = sret_ptr.into_iter().collect();
                         call_args.extend(tail_call_args(
@@ -1683,6 +1683,20 @@ fn translate_function(
                         call_args.push(value);
                     }
 
+                    let clif_func_ref = match module
+                        .ctx
+                        .func_sig(callee, |sig| sig.is_variadic().then(|| sig.clone()))
+                    {
+                        Some(sig) => variadic_callee(
+                            &module.ctx,
+                            &sig,
+                            clif_func_id,
+                            &mut call_args,
+                            clif_module,
+                            &mut builder,
+                        ),
+                        None => clif_module.declare_func_in_func(clif_func_id, builder.func),
+                    };
                     let clif_call = builder.ins().call(clif_func_ref, &call_args);
                     if let Some(sret_addr) = sret_slot {
                         let result = ir_results[0];

@@ -1,5 +1,11 @@
-use cranelift_codegen::ir::{self as clif, ArgumentPurpose};
-use cranelift_module::Module as ClifModule;
+use std::iter;
+
+use cranelift_codegen::{
+    ir::{self as clif, ArgumentPurpose, InstBuilder},
+    isa::CallConv,
+};
+use cranelift_frontend::FunctionBuilder;
+use cranelift_module::{FuncId, Module as ClifModule};
 use sonatina_ir::{Linkage, Signature, Type, module::ModuleCtx};
 use sonatina_triple::TargetTriple;
 
@@ -49,7 +55,66 @@ pub(super) fn validate_cranelift_signature(ctx: &ModuleCtx, sig: &Signature) -> 
             sig.name()
         ));
     }
+    if sig.is_variadic() && ctx.triple == TargetTriple::SP1 {
+        return Err(format!(
+            "SP1 does not support variadic functions: {}",
+            sig.name()
+        ));
+    }
     Ok(())
+}
+
+/// The function a call to the variadic `sig`, `func_id` in the object,
+/// calls: its symbol, with a signature of the call's own that passes the
+/// fixed arguments as `sig` does and the call's extra arguments after them.
+/// `args` are the call's arguments, which this arranges for that signature.
+///
+/// Apple's AArch64 convention passes every extra argument on the stack, in
+/// an eight-byte slot of its own. The verifier gives each fixed argument one
+/// of x0-x7, so zeros fill the rest of them, and each extra argument widens
+/// to `i64`. Other conventions pass extra arguments as they do fixed ones.
+/// On x86-64 System V, `%al` should bound the vector registers the call
+/// uses; it stays unset, and a callee that reads it at most saves vector
+/// registers it need not.
+pub(super) fn variadic_callee(
+    ctx: &ModuleCtx,
+    sig: &Signature,
+    func_id: FuncId,
+    args: &mut Vec<clif::Value>,
+    clif_module: &impl ClifModule,
+    builder: &mut FunctionBuilder,
+) -> clif::FuncRef {
+    let mut clif_sig = sonatina_sig_to_clif(ctx, sig, clif_module);
+    let fixed = clif_sig.params.len();
+    let mut extras = args.split_off(fixed);
+    if clif_sig.call_conv == CallConv::AppleAarch64 {
+        let padding = 8usize.saturating_sub(sig.args().len());
+        args.extend(iter::repeat_with(|| builder.ins().iconst(clif::types::I64, 0)).take(padding));
+        for extra in &mut extras {
+            if builder.func.dfg.value_type(*extra) != clif::types::I64 {
+                *extra = builder.ins().uextend(clif::types::I64, *extra);
+            }
+        }
+    }
+    args.extend(extras);
+    clif_sig.params.extend(
+        args[fixed..]
+            .iter()
+            .map(|&arg| clif::AbiParam::new(builder.func.dfg.value_type(arg))),
+    );
+    let signature = builder.import_signature(clif_sig);
+    let name = builder
+        .func
+        .declare_imported_user_function(clif::UserExternalName {
+            namespace: 0,
+            index: func_id.as_u32(),
+        });
+    builder.import_function(clif::ExtFuncData {
+        name: clif::ExternalName::user(name),
+        signature,
+        colocated: false,
+        patchable: false,
+    })
 }
 
 pub(super) fn sonatina_sig_to_clif(

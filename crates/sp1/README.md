@@ -47,9 +47,9 @@ A zero return denotes success.
 
 Memory is little-endian with 64-bit pointers; i128/i256 have 16-byte alignment.
 The existing [native value/reference ABI](https://github.com/fe-lang/sonatina/blob/main/crates/cranelift/README.md) applies
-to internal Sonatina calls. External C interop is limited to fixed, non-variadic
-u32/i32, u64/i64 and pointer arguments, with no result or one scalar/pointer
-result. RV64 sign-extends 32-bit arguments and results, including u32 values.
+to internal Sonatina calls. External C interop is limited to fixed u32/i32,
+u64/i64 and pointer arguments, with no result or one scalar/pointer result;
+the backend rejects variadic imports. RV64 sign-extends 32-bit arguments and results, including u32 values.
 Do not assume C compatibility for aggregate, narrow-integer, or i128 signatures.
 
 The runtime exports only these guest I/O adapters:

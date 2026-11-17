@@ -756,3 +756,54 @@ func public %third() -> i8 {
         assert_eq!(unsafe { third() }, 33, "{level:?}");
     }
 }
+
+#[test]
+fn variadic_calls_pass_extra_arguments_to_snprintf() {
+    // Ten extra arguments after three fixed ones cross the six argument
+    // registers of x86-64 System V. On AArch64 macOS every extra argument
+    // goes on the stack in an eight-byte slot, after padding fills x3-x7.
+    // `v6` comes from an `i64` with high bits set, which `%d` must ignore.
+    let source = r#"
+declare external %snprintf(*i8, i64, *i8, ...) -> i32;
+
+func public %format(v0.*i8, v1.i64, v2.*i8, v3.*i8, v4.*i8, v5.i64) -> i32 {
+    block0:
+        v6.i32 = trunc v5 i32;
+        v7.i32 = call %snprintf v0 v1 v2 -7.i32 1099511627779.i64 v3 v6 -1234567890123.i64 2147483647.i32 v4 -9223372036854775808.i64 -2147483648.i32 9.i64;
+        return v7;
+}
+"#;
+    let expected =
+        "-7 1099511627779 abc 5 -1234567890123 2147483647 xyz -9223372036854775808 -2147483648 9";
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let format: unsafe extern "C" fn(
+            *mut u8,
+            i64,
+            *const u8,
+            *const u8,
+            *const u8,
+            i64,
+        ) -> i32 = unsafe { std::mem::transmute(artifact.function_address("format").unwrap()) };
+        let mut buffer = [0xffu8; 128];
+        let written = unsafe {
+            format(
+                buffer.as_mut_ptr(),
+                buffer.len() as i64,
+                c"%d %lld %s %d %lld %d %s %lld %d %lld".as_ptr().cast(),
+                c"abc".as_ptr().cast(),
+                c"xyz".as_ptr().cast(),
+                0x1_0000_0005,
+            )
+        };
+        let text = std::ffi::CStr::from_bytes_until_nul(&buffer).unwrap();
+        assert_eq!(text.to_str().unwrap(), expected, "{level:?}");
+        assert_eq!(written as usize, expected.len(), "{level:?}");
+    }
+}
