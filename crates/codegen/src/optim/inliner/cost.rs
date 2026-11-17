@@ -597,7 +597,13 @@ fn compute_inlinee_summary(
     for block in reachable_rpo {
         blocks += 1;
         for inst_id in func.layout.iter_inst(block) {
-            insts += 1;
+            // An `agg.make` costs what the `insert_value` chain on undef
+            // building the same value does: one instruction per operand.
+            let weight = func
+                .dfg
+                .downcast::<&data::AggMake>(inst_id)
+                .map_or(1, |make| make.values().len());
+            insts += weight;
 
             if func.dfg.downcast::<&data::ObjLoad>(inst_id).is_some() {
                 scalarization.object_load_count += 1;
@@ -620,6 +626,11 @@ fn compute_inlinee_summary(
                 && is_scalarizable_aggregate_value(func, *insert.dest())
             {
                 scalarization.aggregate_insert_count += 1;
+            } else if func.dfg.downcast::<&data::AggMake>(inst_id).is_some()
+                && let Some(result) = func.dfg.inst_result(inst_id)
+                && is_scalarizable_aggregate_value(func, result)
+            {
+                scalarization.aggregate_insert_count += weight;
             } else if let Some(extract) = func.dfg.downcast::<&data::ExtractValue>(inst_id)
                 && is_scalarizable_aggregate_value(func, *extract.dest())
             {
@@ -649,7 +660,7 @@ fn compute_inlinee_summary(
                 continue;
             }
 
-            base_cost += func.dfg.effect_cost_class(inst_id).base_cost();
+            base_cost += func.dfg.effect_cost_class(inst_id).base_cost() * weight as i32;
         }
     }
 
@@ -680,15 +691,16 @@ pub(super) fn loaded_field_reconstruction(
     func: &Function,
     scalarizable_returns: &[bool],
 ) -> (usize, Vec<bool>) {
+    let writes_fields = |inst| {
+        func.dfg.downcast::<&data::InsertValue>(inst).is_some()
+            || func.dfg.downcast::<&data::AggMake>(inst).is_some()
+    };
     // Most callees have no loaded field to reconstruct anywhere; skip the CFG.
     if !func
         .layout
         .iter_all_insts()
         .any(|inst| func.dfg.downcast::<&data::ObjLoad>(inst).is_some())
-        || !func
-            .layout
-            .iter_all_insts()
-            .any(|inst| func.dfg.downcast::<&data::InsertValue>(inst).is_some())
+        || !func.layout.iter_all_insts().any(writes_fields)
     {
         return (0, Vec::new());
     }
@@ -703,11 +715,7 @@ pub(super) fn loaded_field_reconstruction(
         .copied()
         .filter(|&inst| func.dfg.downcast::<&data::ObjLoad>(inst).is_some())
         .collect();
-    if loads.is_empty()
-        || !insts
-            .iter()
-            .any(|&inst| func.dfg.downcast::<&data::InsertValue>(inst).is_some())
-    {
+    if loads.is_empty() || !insts.iter().copied().any(writes_fields) {
         return (0, Vec::new());
     }
     let scalarizable =
@@ -720,28 +728,49 @@ pub(super) fn loaded_field_reconstruction(
             }
         }
     }
-    let count = insts
-        .iter()
-        .filter_map(|&inst| {
-            let insert = func.dfg.downcast::<&data::InsertValue>(inst)?;
-            if !scalarizable[func.dfg.inst_result(inst)?] {
+    // The fields inserts and `agg.make`s write: the aggregate, the field's
+    // index and its value.
+    let mut writes = Vec::new();
+    for &inst in &insts {
+        if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst)
+            && let Some(result) = func.dfg.inst_result(inst)
+        {
+            writes.push((
+                result,
+                shape::const_u32(&func.dfg, *insert.idx()),
+                *insert.value(),
+            ));
+        } else if let Some(make) = func.dfg.downcast::<&data::AggMake>(inst)
+            && let Some(result) = func.dfg.inst_result(inst)
+        {
+            writes.extend(
+                (0..)
+                    .zip(make.values())
+                    .map(|(index, &value)| (result, Some(index), value)),
+            );
+        }
+    }
+    let count = writes
+        .into_iter()
+        .filter_map(|(result, index, value)| {
+            if !scalarizable[result] {
                 return None;
             }
-            let aggregate_ty = func.dfg.value_ty(*insert.dest());
-            if !func.dfg.value_ty(*insert.value()).is_integral()
+            let aggregate_ty = func.dfg.value_ty(result);
+            if !func.dfg.value_ty(value).is_integral()
                 || !shape::is_supported_aggregate_ty(func.ctx(), aggregate_ty)
             {
                 return None;
             }
-            let load_inst = func.dfg.value_inst(*insert.value())?;
+            let load_inst = func.dfg.value_inst(value)?;
             let load = func.dfg.downcast::<&data::ObjLoad>(load_inst)?;
             let projection_inst = func.dfg.value_inst(*load.object())?;
             let projection = func.dfg.downcast::<&data::ObjProj>(projection_inst)?;
-            let [object, index] = projection.values().as_slice() else {
+            let [object, field] = projection.values().as_slice() else {
                 return None;
             };
-            let field = shape::const_u32(&func.dfg, *index)?;
-            (shape::const_u32(&func.dfg, *insert.idx()) == Some(field)
+            let field = shape::const_u32(&func.dfg, *field)?;
+            (index == Some(field)
                 && objref_element_ty(func.ctx(), func.dfg.value_ty(*object)) == Some(aggregate_ty)
                 && loads.remove(&load_inst))
             .then_some(())
