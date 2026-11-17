@@ -14,7 +14,8 @@ use sonatina_ir::{
         cast::{self, Bitcast, IntToPtr, PtrToInt},
         cmp::{self, Eq, IsZero, Ne, Sgt, Slt},
         data::{
-            Alloca, ExtractValue, Freeze, InsertValue, MemAllocDynamic, Memcopy, Mload, Mstore,
+            AggMake, Alloca, ExtractValue, Freeze, InsertValue, MemAllocDynamic, Memcopy, Mload,
+            Mstore,
         },
         downcast,
         evm::{
@@ -226,6 +227,10 @@ fn bool_word_copies(func: &Function, bool_member_reads: &FxHashSet<InstId>) -> F
                             && *insert.dest() != value
                             && *insert.idx() != value
                     })
+                    || func
+                        .dfg
+                        .downcast::<&AggMake>(user)
+                        .is_some_and(|make| make.values().contains(&value))
             })
         })
         .collect()
@@ -862,6 +867,11 @@ impl<'a> FunctionLegalizer<'a> {
             return;
         }
         let is = self.evm_inst_set();
+
+        if let Some(make) = downcast::<&AggMake>(is, self.func.dfg.inst(inst)).cloned() {
+            self.legalize_agg_make(inst, make);
+            return;
+        }
 
         if let Some((lhs, rhs)) =
             downcast::<&Uaddsat>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
@@ -3359,6 +3369,32 @@ impl<'a> FunctionLegalizer<'a> {
             Type::I256,
             Some(ScalarWidth::Full256),
         )
+    }
+
+    /// Builds an `agg.make` of the legalized type, whose `i1` members are words: an `i1`
+    /// operand is the word it was copied from or widens through a `bitcast`, as one inserted
+    /// does. An `undef.i1` becomes `undef.i256`; memory legalization stores nothing for it, as
+    /// for any `undef` operand, and a read keeps the low bit of whatever word the slot holds, an
+    /// `i1` either way.
+    fn legalize_agg_make(&mut self, inst: InstId, make: AggMake) {
+        let values = make
+            .values()
+            .iter()
+            .map(|&value| {
+                if self.func.dfg.value_ty(value) != Type::I1 {
+                    value
+                } else if matches!(self.func.dfg.value(value), Value::Undef { .. }) {
+                    self.func.dfg.make_undef_value(Type::I256)
+                } else {
+                    self.word_from_bool(inst, value)
+                }
+            })
+            .collect();
+        let ty = self.types.legalize_type(self.ctx, *make.ty());
+        self.func.dfg.replace_inst(
+            inst,
+            Box::new(AggMake::new_unchecked(self.evm_inst_set(), ty, values)),
+        );
     }
 
     /// Widens an `i1` put into an aggregate, whose `i1` members are words.

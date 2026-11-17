@@ -1,0 +1,125 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/narrow_aggregate_reads_agg_make.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @P = {i8, i8};
+type @words = {i256, i256, i256};
+type @fields = {i8, i1, i8};
+type @outer = {@fields, i8};
+
+func public %entry() {
+    block0:
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i1 = gt v1 0.i256;
+        v0.i256 = evm_calldata_load 0.i32;
+        mstore 4096.i32 v0 i256;
+        call %store_make;
+        v3.i256 = call %read;
+        mstore 0.i32 v3 i256;
+        call %dirty;
+        v4.i256 = call %phi_read v2;
+        mstore 32.i32 v4 i256;
+        call %dirty;
+        v6.i256 = call %nested_read v2;
+        mstore 64.i32 v6 i256;
+        call %dirty;
+        v5.i256 = evm_calldata_load 64.i32;
+        v7.i256 = call %dynamic_read v2 v5;
+        mstore 96.i32 v7 i256;
+        evm_return 0.i32 128.i32;
+}
+
+func inline(never) private %store_make() {
+    block0:
+        v0.@P = agg.make @P undef.i8 0.i8;
+        mstore 4096.i32 v0 @P;
+        return;
+}
+
+func inline(never) private %read() -> i256 {
+    block0:
+        v0.@P = mload 4096.i32 @P;
+        v1.i8 = extract_value v0 0.i8;
+        v2.i8 = freeze v1;
+        v3.i256 = zext v2 i256;
+        return v3;
+}
+
+func inline(never) private %dirty() {
+    block0:
+        v3.*@words = alloca @words;
+        evm_sstore 0.i256 v3;
+        return;
+}
+
+func inline(never) private %phi_read(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v1.@fields = agg.make @fields undef.i8 1.i1 0.i8;
+        jump block3;
+
+    block2:
+        v2.@fields = agg.make @fields undef.i8 0.i1 0.i8;
+        jump block3;
+
+    block3:
+        v3.@fields = phi (v1 block1) (v2 block2);
+        v4.i8 = extract_value v3 0.i8;
+        v5.i8 = freeze v4;
+        v6.i256 = zext v5 i256;
+        return v6;
+}
+
+func inline(never) private %nested_read(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v1.@outer = agg.make @outer undef.@fields 0.i8;
+        jump block3;
+
+    block2:
+        v2.@fields = agg.make @fields 0.i8 1.i1 0.i8;
+        v3.@outer = agg.make @outer v2 0.i8;
+        jump block3;
+
+    block3:
+        v4.@outer = phi (v1 block1) (v3 block2);
+        v5.@fields = extract_value v4 0.i8;
+        v6.i8 = extract_value v5 0.i8;
+        v7.i8 = freeze v6;
+        v8.i256 = zext v7 i256;
+        return v8;
+}
+
+func inline(never) private %dynamic_read(v0.i1, v1.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.[i8; 3] = agg.make [i8; 3] undef.i8 0.i8 0.i8;
+        jump block3;
+
+    block2:
+        v3.[i8; 3] = agg.make [i8; 3] 0.i8 0.i8 0.i8;
+        jump block3;
+
+    block3:
+        v4.[i8; 3] = phi (v2 block1) (v3 block2);
+        v5.i8 = extract_value v4 v1;
+        v6.i8 = freeze v5;
+        v7.i256 = zext v6 i256;
+        return v7;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
