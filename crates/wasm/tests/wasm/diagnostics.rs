@@ -82,6 +82,35 @@ func public %f() -> i32 {
 }
 
 #[test]
+fn variadic_imports_are_rejected() {
+    let text = message(
+        "declare external %printf(*i8, ...) -> i32;
+func public %f(v0.*i8) -> i32 {
+    block0:
+        v1.i32 = call %printf v0 1.i32;
+        return v1;
+}",
+    );
+    assert!(
+        text.contains("function `printf`") && text.contains("variadic"),
+        "{text}"
+    );
+
+    let text = message(
+        "declare external %malloc(i32, ...) -> *i8;
+func public %f() -> *i8 {
+    block0:
+        v0.*i8 = call %malloc 8.i32;
+        return v0;
+}",
+    );
+    assert!(
+        text.contains("`malloc`") && text.contains("another signature"),
+        "{text}"
+    );
+}
+
+#[test]
 fn global_variables_must_be_private() {
     for (linkage, word) in [("public", "public"), ("external", "external")] {
         let initializer = if linkage == "external" { "" } else { " = 3" };

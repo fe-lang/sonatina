@@ -886,6 +886,7 @@ fn is_memory_copy_declaration(module: &Module, func_ref: FuncRef, name: &str) ->
         matches!(sig.args(), [dst, src, len]
             if is_pointer(*dst) && is_pointer(*src) && matches!(len, Type::I32 | Type::I64))
             && matches!(sig.ret_tys(), [ret] if is_pointer(*ret))
+            && !sig.is_variadic()
     })
 }
 
@@ -902,15 +903,18 @@ fn heap_call_target(
 ) -> Result<CallTarget, WasmError> {
     let ctx = &module.ctx;
     let is_pointer = |ty: Type| ty.is_pointer(ctx);
-    let matches = module.ctx.func_sig(func_ref, |sig| match name {
-        "malloc" => {
-            matches!(sig.args(), [size] if *size == Type::I32)
-                && matches!(sig.ret_tys(), [ret] if is_pointer(*ret))
-        }
-        _ => {
-            matches!(sig.args(), [address] if is_pointer(*address))
-                && matches!(sig.ret_tys(), [] | [Type::Unit])
-        }
+    let matches = module.ctx.func_sig(func_ref, |sig| {
+        !sig.is_variadic()
+            && match name {
+                "malloc" => {
+                    matches!(sig.args(), [size] if *size == Type::I32)
+                        && matches!(sig.ret_tys(), [ret] if is_pointer(*ret))
+                }
+                _ => {
+                    matches!(sig.args(), [address] if is_pointer(*address))
+                        && matches!(sig.ret_tys(), [] | [Type::Unit])
+                }
+            }
     });
     if !matches {
         let expected = if name == "malloc" {
@@ -948,6 +952,11 @@ fn declared_signature(
     external: bool,
 ) -> Result<DeclaredSignature, WasmError> {
     module.ctx.func_sig(func_ref, |sig| {
+        if sig.is_variadic() {
+            return Err(unsupported(format!(
+                "function `{name}`: variadic functions are not supported"
+            )));
+        }
         let sret = indirect_return_storage(&module.ctx, sig.ret_tys());
         if sig.ret_tys().len() > 1
             && sig
