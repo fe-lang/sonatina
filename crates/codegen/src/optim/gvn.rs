@@ -30,7 +30,9 @@ use crate::{
         definedness::value_may_be_undef,
         known_bits::{KnownBits, KnownBitsQuery},
     },
+    bitset::BitSet,
     cfg_edit::{CfgEditor, CleanupMode},
+    cfg_scc::CfgSccAnalysis,
     domtree::{DomTree, DominatorTreeTraversable},
     optim::{
         adce::divergent_blocks,
@@ -142,6 +144,9 @@ pub struct GvnSolver {
     always_avail: Vec<ValueId>,
 
     may_be_undef_cache: RefCell<FxHashMap<ValueId, bool>>,
+
+    /// The blocks on a CFG cycle.
+    cyclic_blocks: BitSet<BlockId>,
 }
 
 struct GvnExprFacts<'a, 'b> {
@@ -184,6 +189,7 @@ impl GvnSolver {
             value_phi_table: FxHashMap::default(),
             always_avail: Vec::default(),
             may_be_undef_cache: RefCell::default(),
+            cyclic_blocks: BitSet::default(),
         }
     }
     /// The main entry point of the struct.
@@ -212,6 +218,18 @@ impl GvnSolver {
         if func.layout.entry_block().is_none() {
             return false;
         }
+
+        let mut sccs = CfgSccAnalysis::new();
+        sccs.compute(cfg);
+        self.cyclic_blocks = domtree
+            .rpo()
+            .iter()
+            .copied()
+            .filter(|&block| {
+                sccs.scc_of(block)
+                    .is_some_and(|scc| sccs.scc_data(scc).is_cycle)
+            })
+            .collect();
 
         // Make dummy INITIAL_CLASS to which all values belong before congruence finding.
         self.classes.push(ClassData {
@@ -438,6 +456,7 @@ impl GvnSolver {
         self.value_phi_table.clear();
         self.always_avail.clear();
         self.may_be_undef_cache.borrow_mut().clear();
+        self.cyclic_blocks.clear();
     }
 
     fn mark_touched(next_touched: &mut SecondaryMap<BlockId, bool>, block: BlockId) -> bool {
@@ -2110,17 +2129,16 @@ impl<'a, 'b> ValuePhiFinder<'a, 'b> {
 
     /// Whether `value`, as an instruction pairs it with `phi`, may be paired with each argument
     /// of `phi` on that argument's edge. It may if it is defined before `phi`'s block, so it is
-    /// the same instance on every edge; or if no argument comes in on a backedge, so each was
-    /// computed earlier in the same pass. An argument on a backedge comes from the previous
-    /// pass: paired with a `value` defined in the loop, `lt x x` would compare two iterations.
+    /// the same instance on every edge; or if `phi`'s block is on no CFG cycle, so it runs once
+    /// and each argument was computed earlier in the same pass. On a cycle, an argument may come
+    /// from the previous pass around it, even with no backedge into the block, as in an
+    /// irreducible cycle: paired with a `value` defined in the cycle, `lt x x` would compare two
+    /// passes.
     fn pairs_with(&self, func: &Function, value: ValueId, phi: &ValuePhiInsn) -> bool {
         func.dfg.value_inst(value).is_none_or(|inst| {
             self.domtree
                 .strictly_dominates(func.layout.inst_block(inst), phi.block)
-        }) || phi
-            .args
-            .iter()
-            .all(|&(_, pred)| !self.domtree.dominates(phi.block, pred))
+        }) || !self.solver.cyclic_blocks.contains(phi.block)
     }
 
     /// Returns the `ValuePhi` if the value is defined by the phi insn or the class of the value

@@ -1,0 +1,77 @@
+#! Phi-of-ops pairs `x` with the arguments of a phi in a block on a CFG cycle only if
+#! `x` is defined before that block. An irreducible cycle has no backedge into
+#! either of its entry blocks, but an argument there may still come from the
+#! previous pass around it, and `lt x x` would compare two passes.
+
+target = "evm-ethereum-osaka"
+
+func private %next() -> i256 {
+block0:
+    v0.i256 = evm_sload 0.i256;
+    v1.i256 = sub v0 1.i256;
+    evm_sstore 0.i256 v1;
+    return v0;
+}
+
+# Whether some value `%next` returns is below the one two calls before it, in a
+# cycle entered at either block.
+# sameln: func public %irreducible_descending(v0.i1) -> i256 {
+# check:      v5.i1 = lt v4 v3;
+# nextln:     br v5 block3 block1;
+func public %irreducible_descending(v0.i1) -> i256 {
+block0:
+    br v0 block1 block2;
+block1:
+    v2.i256 = phi (0.i256 block0) (v4 block2);
+    jump block2;
+block2:
+    v3.i256 = phi (0.i256 block0) (v2 block1);
+    v4.i256 = call %next;
+    v5.i1 = lt v4 v3;
+    br v5 block3 block1;
+block3:
+    return 1.i256;
+}
+
+# The overflow check of a running sum, in the same cycle.
+# sameln: func public %irreducible_sum(v0.i1, v1.i256) -> i256 {
+# check:      v5.i1 = lt v4 v3;
+# nextln:     br v5 block3 block1;
+func public %irreducible_sum(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+block1:
+    v2.i256 = phi (0.i256 block0) (v4 block2);
+    jump block2;
+block2:
+    v3.i256 = phi (0.i256 block0) (v2 block1);
+    v4.i256 = add v3 v1;
+    v5.i1 = lt v4 v3;
+    br v5 block3 block1;
+block3:
+    return 1.i256;
+}
+
+# A merge in a loop body whose phi takes the header phi, the previous `v5`.
+# sameln: func public %loop_merge(v0.i256) -> i256 {
+# check:      v6.i1 = lt v5 v4;
+# nextln:     br v6 block5 block1;
+func public %loop_merge(v0.i256) -> i256 {
+block0:
+    jump block1;
+block1:
+    v1.i256 = phi (0.i256 block0) (v5 block4);
+    v2.i1 = lt v1 v0;
+    br v2 block2 block3;
+block2:
+    jump block4;
+block3:
+    jump block4;
+block4:
+    v4.i256 = phi (v1 block2) (0.i256 block3);
+    v5.i256 = call %next;
+    v6.i1 = lt v5 v4;
+    br v6 block5 block1;
+block5:
+    return 1.i256;
+}
