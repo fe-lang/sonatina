@@ -1,0 +1,51 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/agg_make.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @slice = {i256, i256};
+type @empty = {};
+type @outer = {@slice, i256, @empty};
+type @wrap = {@slice};
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i256 = evm_calldata_load 64.i32;
+        jump block3;
+
+    block3:
+        v65.i256 = phi (v0 block0) (v67 block4);
+        v67.i256 = phi (v1 block0) (v65 block4);
+        v42.i256 = phi (v2 block0) (v47 block4);
+        v54.i1 = is_zero v42;
+        br v54 block5 block4;
+
+    block4:
+        v47.i256 = sub v42 1.i256;
+        jump block3;
+
+    block5:
+        v52.i256 = mul v67 100.i256;
+        v53.i256 = add v52 v65;
+        v19.i256 = add v0 v1;
+        mstore 0.i32 v19 i256;
+        v21.[i256; 3] = agg.make [i256; 3] v0 v1 v19;
+        v22.i256 = extract_value v21 v2;
+        mstore 32.i32 v22 i256;
+        v25.i256 = add v0 1.i256;
+        v33.i256 = add v1 v25;
+        mstore 64.i32 v33 i256;
+        mstore 96.i32 v53 i256;
+        evm_return 0.i8 -128.i8;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

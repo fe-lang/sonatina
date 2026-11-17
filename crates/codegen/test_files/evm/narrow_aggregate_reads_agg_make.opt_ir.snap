@@ -57,42 +57,28 @@ func inline(never) private %dirty() {
 
 func inline(never) private %phi_read(v0.i1) -> i256 {
     block0:
-        br v0 block1 block2;
-
-    block1:
-        v1.@fields = agg.make @fields undef.i8 1.i1 0.i8;
-        jump block3;
+        br v0 block3 block2;
 
     block2:
-        v2.@fields = agg.make @fields undef.i8 0.i1 0.i8;
         jump block3;
 
     block3:
-        v3.@fields = phi (v1 block1) (v2 block2);
-        v4.i8 = extract_value v3 0.i8;
-        v5.i8 = freeze v4;
+        v12.i8 = phi (undef.i8 block0) (undef.i8 block2);
+        v5.i8 = freeze v12;
         v6.i256 = zext v5 i256;
         return v6;
 }
 
 func inline(never) private %nested_read(v0.i1) -> i256 {
     block0:
-        br v0 block1 block2;
-
-    block1:
-        v1.@outer = agg.make @outer undef.@fields 0.i8;
-        jump block3;
+        br v0 block3 block2;
 
     block2:
-        v2.@fields = agg.make @fields 0.i8 1.i1 0.i8;
-        v3.@outer = agg.make @outer v2 0.i8;
         jump block3;
 
     block3:
-        v4.@outer = phi (v1 block1) (v3 block2);
-        v5.@fields = extract_value v4 0.i8;
-        v6.i8 = extract_value v5 0.i8;
-        v7.i8 = freeze v6;
+        v12.i8 = phi (undef.i8 block0) (0.i8 block2);
+        v7.i8 = freeze v12;
         v8.i256 = zext v7 i256;
         return v8;
 }
