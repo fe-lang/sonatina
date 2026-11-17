@@ -1873,6 +1873,62 @@ impl VerifyInst for data::Gep {
     }
 }
 
+impl VerifyInst for data::AggMake {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let compound = match *self.ty() {
+            Type::Compound(cmpd_ref) => verifier
+                .ctx
+                .with_ty_store(|store| store.get_compound(cmpd_ref).cloned()),
+            _ => None,
+        };
+        // A struct's field types, or an array's element type for every index.
+        let (count, fields, elem) = match compound {
+            Some(CompoundType::Struct(data)) => (data.fields.len(), data.fields, Type::Unit),
+            Some(CompoundType::Array { elem, len }) => (len, Vec::new(), elem),
+            _ => {
+                verifier.emit(
+                    Diagnostic::error(
+                        DiagnosticCode::InstOperandTypeMismatch,
+                        "agg.make type must be a struct or array",
+                        location,
+                    )
+                    .with_note(format!("found {:?}", self.ty())),
+                );
+                return;
+            }
+        };
+        if count != self.values().len() {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "agg.make operand count does not match the type's fields",
+                    location.clone(),
+                )
+                .with_note(format!("expected {count}, found {}", self.values().len())),
+            );
+        }
+        for (index, &value) in self.values().iter().enumerate().take(count) {
+            let expected_ty = fields.get(index).copied().unwrap_or(elem);
+            if let Some(actual_ty) = verifier.value_ty(value)
+                && actual_ty != expected_ty
+            {
+                verifier.emit(
+                    Diagnostic::error(
+                        DiagnosticCode::InstOperandTypeMismatch,
+                        "agg.make operand type does not match its field type",
+                        location.clone(),
+                    )
+                    .with_note(format!(
+                        "operand {index}: expected {expected_ty:?}, found {actual_ty:?}"
+                    )),
+                );
+            }
+        }
+        verifier.expect_result_ty(inst_id, *self.ty(), location);
+    }
+}
+
 impl VerifyInst for data::InsertValue {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         let location = verifier.inst_location(inst_id);

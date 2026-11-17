@@ -2665,6 +2665,12 @@ fn translate_function(
                         value_map.insert(result, addr);
                     }
                 }
+                NativeInstKind::AggMake(_) => {
+                    return Err(
+                        "`agg.make` is not supported by the host-native Cranelift backend"
+                            .to_string(),
+                    );
+                }
                 NativeInstKind::GetFunctionPtr(_)
                 | NativeInstKind::SymAddr(_)
                 | NativeInstKind::SymSize(_) => {

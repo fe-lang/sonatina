@@ -92,6 +92,7 @@ pub trait Interpret {
         inst::data::Gep,
         inst::data::GetFunctionPtr,
         inst::data::Alloca,
+        inst::data::AggMake,
         inst::data::InsertValue,
         inst::data::ExtractValue,
         inst::data::SymAddr,

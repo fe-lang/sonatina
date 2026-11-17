@@ -161,6 +161,21 @@ impl Interpret for Alloca {
     }
 }
 
+impl Interpret for AggMake {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+        let fields = self
+            .values()
+            .iter()
+            .map(|&value| state.lookup_val(value))
+            .collect();
+        single_result(EvalValue::Aggregate {
+            fields,
+            ty: *self.ty(),
+        })
+    }
+}
+
 impl Interpret for InsertValue {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
@@ -346,6 +361,29 @@ mod tests {
         assert_eq!(
             ExtractValue::new(&TestHasInst, dest, idx).interpret(&mut state),
             single_result(EvalValue::Undef)
+        );
+    }
+
+    #[test]
+    fn agg_make_builds_fields_in_order() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let pair_ty = dfg
+            .ctx
+            .with_ty_store_mut(|store| store.make_struct("pair", &[Type::I32, Type::I64], false));
+        let first = dfg.make_value(Value::Arg {
+            ty: Type::I32,
+            idx: 0,
+        });
+        let second = dfg.make_undef_value(Type::I64);
+        let mut state = TestState::with_dfg(dfg, [(first, EvalValue::Imm(Immediate::I32(7)))]);
+
+        assert_eq!(
+            AggMake::new(&TestHasInst, pair_ty, smallvec![first, second]).interpret(&mut state),
+            single_result(EvalValue::Aggregate {
+                fields: vec![EvalValue::Imm(Immediate::I32(7)), EvalValue::Undef],
+                ty: pair_ty,
+            })
         );
     }
 }

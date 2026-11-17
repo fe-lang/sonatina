@@ -367,7 +367,8 @@ fn gives_wider_word(kind: EvmInstKind<'_>, width: ScalarWidth) -> bool {
         | EvmInstKind::SymAddr(_)
         | EvmInstKind::SymSize(_)
         | EvmInstKind::Alloca(_)
-        | EvmInstKind::InsertValue(_) => false,
+        | EvmInstKind::InsertValue(_)
+        | EvmInstKind::AggMake(_) => false,
         // Objects, constant references and enums are lowered before EVM legalization.
         EvmInstKind::ObjAlloc(_)
         | EvmInstKind::ConstRef(_)
@@ -693,6 +694,7 @@ fn operand_uses(kind: EvmInstKind<'_>) -> Option<&'static [OperandUse]> {
         | EvmInstKind::EnumProj(_)
         | EvmInstKind::ObjMaterializeStack(_)
         | EvmInstKind::ObjFromPtr(_)
+        | EvmInstKind::AggMake(_)
         | EvmInstKind::InsertValue(_)
         | EvmInstKind::ExtractValue(_)
         | EvmInstKind::EvmStop(_)

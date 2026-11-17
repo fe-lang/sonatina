@@ -351,6 +351,17 @@ pub struct MemAllocDynamic {
     size: ValueId,
 }
 
+/// Builds a value of struct or array type `ty` from `values`, one per field
+/// or element in order. An `undef` operand leaves its field unspecified; a
+/// type without fields takes no operands.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(arity(at_least(1)))]
+#[inst(text = "agg.make")]
+pub struct AggMake {
+    ty: Type,
+    values: SmallVec<[ValueId; 4]>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct InsertValue {
     dest: ValueId,

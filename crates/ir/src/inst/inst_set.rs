@@ -98,6 +98,7 @@ define_inst_set_base! {
         data::ObjMaterializeStack,
         data::ObjFromPtr,
         data::MemAllocDynamic,
+        data::AggMake,
         data::InsertValue,
         data::ExtractValue,
         control_flow::Call,

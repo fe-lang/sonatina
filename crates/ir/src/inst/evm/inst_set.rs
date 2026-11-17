@@ -85,6 +85,7 @@ pub struct EvmInstSet(
     data::ObjMaterializeStack,
     data::ObjFromPtr,
     data::MemAllocDynamic,
+    data::AggMake,
     data::InsertValue,
     data::ExtractValue,
     logic::Not,

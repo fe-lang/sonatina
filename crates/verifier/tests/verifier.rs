@@ -1588,6 +1588,136 @@ func public %bad_extract() -> unit {
 }
 
 #[test]
+fn agg_make_builds_structs_and_arrays() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @s = {i32, i64};
+type @nested = {@s, [i8; 2]};
+type @empty = {};
+
+func public %f(v0.i32) -> @nested {
+    block0:
+        v1.@s = agg.make @s v0 undef.i64;
+        v2.[i8; 2] = agg.make [i8; 2] 1.i8 2.i8;
+        v3.@nested = agg.make @nested v1 v2;
+        v4.@empty = agg.make @empty;
+        v5.[i8; 0] = agg.make [i8; 0];
+        return v3;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let report = verify_module(
+        &parsed.module,
+        &VerifierConfig::for_level(VerificationLevel::Full),
+    );
+    assert!(!report.has_errors(), "{report}");
+}
+
+#[test]
+fn agg_make_operands_must_match_fields() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @s = {i32, i64};
+type @e = enum { #A, #B(i32) };
+
+func public %too_few(v0.i32) -> unit {
+    block0:
+        v1.@s = agg.make @s v0;
+        return;
+}
+
+func public %wrong_field(v0.i32) -> unit {
+    block0:
+        v1.@s = agg.make @s v0 v0;
+        return;
+}
+
+func public %wrong_element(v0.i32) -> unit {
+    block0:
+        v1.[i8; 2] = agg.make [i8; 2] 1.i8 v0;
+        return;
+}
+
+func public %enum_type() -> unit {
+    block0:
+        v1.@e = agg.make @e;
+        return;
+}
+
+func public %wrong_result(v0.i32) -> unit {
+    block0:
+        v1.[i32; 1] = agg.make [i64; 1] 1.i64;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let report = verify_module(
+        &parsed.module,
+        &VerifierConfig::for_level(VerificationLevel::Standard),
+    );
+    for message in [
+        "agg.make operand count does not match the type's fields",
+        "agg.make operand type does not match its field type",
+        "agg.make type must be a struct or array",
+        "instruction result types do not match expected types",
+    ] {
+        assert!(
+            has_message(&report, message),
+            "expected `{message}`, got {report}"
+        );
+    }
+    assert_eq!(
+        report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message
+                == "agg.make operand type does not match its field type")
+            .count(),
+        2,
+        "{report}"
+    );
+}
+
+#[test]
+fn agg_make_fields_keep_enum_variant_proofs() {
+    let src = |variant: &str| {
+        format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+type @W = {{ @E, i256 }};
+func public %f(v0.i256) -> i256 {{
+block0:
+ v1.@E = enum.make @E {variant};
+ v2.@W = agg.make @W v1 5.i256;
+ v3.@E = extract_value v2 0.i32;
+ v4.i256 = enum.extract v3 #Some 0.i8;
+ return v4;
+}}
+"#
+        )
+    };
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let proved = parse_module(&src("#Some (v0)")).expect("module should parse");
+    let report = verify_module(&proved.module, &cfg);
+    assert!(!report.has_errors(), "{report}");
+
+    let unproved = parse_module(&src("#None ()")).expect("module should parse");
+    let report = verify_module(&unproved.module, &cfg);
+    assert!(
+        has_message(
+            &report,
+            "enum.extract requires a proven active variant at the use site"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
 fn negative_const_and_object_indices_are_rejected() {
     let src = r#"
 target = "evm-ethereum-london"

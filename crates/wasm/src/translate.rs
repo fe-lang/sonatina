@@ -2602,6 +2602,7 @@ impl<'a> FunctionTranslator<'a> {
             NativeInstKind::GetFunctionPtr(_)
             | NativeInstKind::SymAddr(_)
             | NativeInstKind::SymSize(_) => return Err(self.unsupported_inst(op)),
+            NativeInstKind::AggMake(_) => return Err(self.unsupported_inst(op)),
 
             // Enums take the layout of the target: the tag at offset zero and
             // every variant's fields from one shared payload offset.
