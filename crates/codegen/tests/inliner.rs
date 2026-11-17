@@ -605,6 +605,35 @@ func public %caller_noreturn() {
 }
 
 #[test]
+fn full_inliner_rejects_return_of_wrong_arity() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %bad(v0.i32) -> i32 {
+    block0:
+        return;
+}
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %bad v0;
+        return v1;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+    func_behavior::analyze_module(module);
+
+    let stats = Inliner::new(full_inliner_test_config()).run(module);
+
+    let dumped = dump_module(module);
+    assert_eq!(stats.full_calls_inlined, 0, "{dumped}");
+    assert!(dumped.contains("call %bad"), "{dumped}");
+}
+
+#[test]
 fn single_callsite_splices_large_single_block_even_with_tight_cap() {
     let source = r#"
 target = "evm-ethereum-london"
