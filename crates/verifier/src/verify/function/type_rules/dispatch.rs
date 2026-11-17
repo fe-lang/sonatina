@@ -12,7 +12,13 @@ use sonatina_ir::{
 
 use crate::{
     diagnostic::{Diagnostic, DiagnosticCode},
-    verify::type_utils::{is_const_ref_ty, is_integral_or_pointer, is_obj_ref_ty, is_pointer_ty},
+    verify::{
+        module_invariants::{has_enum_in_signature, has_obj_ref_in_signature},
+        type_utils::{
+            is_const_ref_ty, is_integral_or_pointer, is_obj_ref_ty, is_pointer_ty,
+            is_variadic_arg_ty,
+        },
+    },
 };
 
 use super::FunctionVerifier;
@@ -1945,6 +1951,17 @@ impl VerifyInst for data::GetFunctionPtr {
             );
             return;
         };
+        if sig.is_variadic() {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "get_function_ptr cannot take the address of a variadic function",
+                    location,
+                )
+                .with_note(format!("callee is {}", sig.name())),
+            );
+            return;
+        }
         let Some(result_ty) = verifier.inst_result_ty(inst_id) else {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstResultTypeMismatch,
@@ -1989,6 +2006,19 @@ impl VerifyInst for data::SymAddr {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         let location = verifier.inst_location(inst_id);
         verifier.verify_symbol_ref(self.sym(), location.clone());
+        if let data::SymbolRef::Func(func) = self.sym()
+            && let Some(sig) = verifier.ctx.get_sig(*func)
+            && sig.is_variadic()
+        {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "sym_addr cannot take the address of a variadic function",
+                    location.clone(),
+                )
+                .with_note(format!("function is {}", sig.name())),
+            );
+        }
         verifier.expect_result_ty(inst_id, verifier.ctx.type_layout.pointer_repl(), location);
     }
 
@@ -2108,7 +2138,9 @@ impl VerifyInst for control_flow::Call {
             ));
             return;
         };
-        if self.args().len() != callee_sig.args().len() {
+        let (fixed, variadic) = (callee_sig.args().len(), callee_sig.is_variadic());
+        if self.args().len() < fixed || !variadic && self.args().len() > fixed {
+            let at_least = if variadic { "at least " } else { "" };
             verifier.emit(
                 Diagnostic::error(
                     DiagnosticCode::CallArityMismatch,
@@ -2116,8 +2148,7 @@ impl VerifyInst for control_flow::Call {
                     verifier.inst_location(inst_id),
                 )
                 .with_note(format!(
-                    "expected {}, found {}",
-                    callee_sig.args().len(),
+                    "expected {at_least}{fixed}, found {}",
                     self.args().len()
                 )),
             );
@@ -2138,6 +2169,34 @@ impl VerifyInst for control_flow::Call {
                     )),
                 );
             }
+        }
+        // Passes see no parameter for an extra argument of a variadic call,
+        // so it must not carry an object reference.
+        let extras = match self.args().get(fixed..) {
+            Some(extras) if variadic => extras,
+            _ => &[],
+        };
+        for (index, &arg) in (fixed..).zip(extras) {
+            let Some(ty) = verifier.value_ty(arg) else {
+                continue;
+            };
+            let message = if !is_variadic_arg_ty(verifier.ctx, ty) {
+                "variadic call argument must be i32, i64 or a pointer"
+            } else if has_obj_ref_in_signature(verifier.ctx, ty) {
+                "variadic call argument must not point to object references"
+            } else if has_enum_in_signature(verifier.ctx, ty) {
+                "variadic call argument must not point to first-class enums or enum tags"
+            } else {
+                continue;
+            };
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::CallArgTypeMismatch,
+                    message,
+                    verifier.inst_location(inst_id),
+                )
+                .with_note(format!("arg {index}: found {ty:?}")),
+            );
         }
         verifier.expect_result_tys(
             inst_id,

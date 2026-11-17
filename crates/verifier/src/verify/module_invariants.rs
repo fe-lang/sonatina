@@ -23,7 +23,7 @@ use crate::{
     report::VerificationReport,
 };
 
-use super::type_utils::{is_pointer_ty, is_type_valid, iter_nested_types};
+use super::type_utils::{is_pointer_ty, is_type_valid, is_variadic_arg_ty, iter_nested_types};
 
 pub(super) fn collect_module_invariants(
     module: &Module,
@@ -674,9 +674,38 @@ pub(super) fn collect_signature_invariants(
             );
         }
     }
+    if !sig.is_variadic() {
+        return;
+    }
+    if !sig.linkage().is_external() {
+        report.push(
+            Diagnostic::error(
+                DiagnosticCode::InvalidSignature,
+                "only an external function can be variadic",
+                Location::Function(func_ref),
+            ),
+            cfg.max_diagnostics,
+        );
+    }
+    for (index, &ty) in sig.args().iter().enumerate() {
+        if !is_variadic_arg_ty(ctx, ty) {
+            report.push(
+                Diagnostic::error(
+                    DiagnosticCode::InvalidSignature,
+                    "a variadic function's fixed arguments must be i32, i64 or pointers",
+                    Location::Type {
+                        func: Some(func_ref),
+                        ty,
+                    },
+                )
+                .with_note(format!("signature arg {index}")),
+                cfg.max_diagnostics,
+            );
+        }
+    }
 }
 
-fn has_obj_ref_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {
+pub(super) fn has_obj_ref_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {
     let mut visited = FxHashSet::default();
     let mut stack = vec![ty];
 
@@ -711,7 +740,7 @@ fn has_obj_ref_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {
     false
 }
 
-fn has_enum_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {
+pub(super) fn has_enum_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {
     let mut visited = FxHashSet::default();
     let mut stack = vec![ty];
 

@@ -87,7 +87,10 @@ impl ModuleBuilder {
     pub fn declare_function(&self, sig: Signature) -> Result<FuncRef, BuilderError> {
         if let Some(func_ref) = self.declared_funcs.get(sig.name()) {
             return self.ctx.func_sig(*func_ref, |func_sig| {
-                if func_sig.args() == sig.args() && func_sig.ret_tys() == sig.ret_tys() {
+                if func_sig.args() == sig.args()
+                    && func_sig.ret_tys() == sig.ret_tys()
+                    && func_sig.is_variadic() == sig.is_variadic()
+                {
                     Ok(*func_ref)
                 } else {
                     Err(BuilderError::ConflictingFunctionDeclaration)
@@ -330,6 +333,22 @@ mod tests {
             Err(BuilderError::ConflictingFunctionDeclaration) => (),
             _ => panic!("Expected conflicting function declaration error"),
         }
+    }
+
+    #[test]
+    fn test_declare_function_variadic_conflict() {
+        let builder = test_module_builder();
+
+        let fixed = Signature::new_single("open", Linkage::External, &[Type::I32], Type::I32);
+        let mut variadic = fixed.clone();
+        variadic.set_variadic(true);
+
+        let func_ref = builder.declare_function(variadic.clone()).unwrap();
+        assert_eq!(builder.declare_function(variadic).unwrap(), func_ref);
+        assert!(matches!(
+            builder.declare_function(fixed),
+            Err(BuilderError::ConflictingFunctionDeclaration)
+        ));
     }
 
     #[test]

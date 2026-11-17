@@ -680,7 +680,10 @@ impl ModuleLinker {
 
         let linked_func_linkage = self.builder.sig(linked_func_ref, |linked_sig| {
             // Validates the signature.
-            if sig.args() != linked_sig.args() || sig.ret_tys() != linked_sig.ret_tys() {
+            if sig.args() != linked_sig.args()
+                || sig.ret_tys() != linked_sig.ret_tys()
+                || sig.is_variadic() != linked_sig.is_variadic()
+            {
                 return Err(LinkError::InconsistentFuncSignature {
                     name: sig.name().to_string(),
                 });
@@ -811,6 +814,28 @@ mod tests {
         assert!(
             result.is_ok(),
             "Expected successful link for Public + External"
+        );
+    }
+
+    #[test]
+    fn test_linker_variadic_declarations_must_agree() {
+        let fixed = Signature::new_single("open", Linkage::External, &[Type::I32], Type::I32);
+        let mut variadic = fixed.clone();
+        variadic.set_variadic(true);
+        let module = |sig: &Signature| {
+            let builder = test_module_builder();
+            builder.declare_function(sig.clone()).unwrap();
+            builder.build()
+        };
+
+        let (linked, _) = LinkedModule::link(vec![module(&variadic), module(&variadic)]).unwrap();
+        let open = linked.module.funcs()[0];
+        assert!(linked.module.ctx.func_sig(open, Signature::is_variadic));
+
+        let result = LinkedModule::link(vec![module(&variadic), module(&fixed)]);
+        assert!(
+            matches!(result, Err(LinkError::InconsistentFuncSignature { name }) if name == "open"),
+            "Expected InconsistentFuncSignature error for variadic and fixed 'open'"
         );
     }
 

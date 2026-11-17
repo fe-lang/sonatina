@@ -169,3 +169,9 @@ pub(super) fn is_const_ref_ty(ctx: &ModuleCtx, ty: Type) -> bool {
 pub(super) fn is_integral_or_pointer(ctx: &ModuleCtx, ty: Type) -> bool {
     ty.is_integral() || is_pointer_ty(ctx, ty)
 }
+
+/// Whether `ty` can pass to a C variadic function, as a fixed or an extra
+/// argument: each takes one integer register or stack slot.
+pub(super) fn is_variadic_arg_ty(ctx: &ModuleCtx, ty: Type) -> bool {
+    matches!(ty, Type::I32 | Type::I64) || is_pointer_ty(ctx, ty)
+}

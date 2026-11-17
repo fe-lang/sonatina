@@ -165,6 +165,12 @@ impl State for Machine {
         let caller_action = mem::replace(&mut self.action, Action::Continue);
 
         let func = self.funcs.get(&func_ref).unwrap();
+        if func.layout.entry_block().is_none() {
+            let name = self
+                .module_ctx
+                .func_sig(func_ref, |sig| sig.name().to_string());
+            panic!("the interpreter cannot call %{name}, which has no body");
+        }
         let new_frame = Frame::new(func_ref, func, args);
         self.frames.push(new_frame);
 
