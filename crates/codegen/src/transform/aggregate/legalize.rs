@@ -817,17 +817,7 @@ impl AggregateLowerToMemoryLegalize {
         if shape::is_supported_aggregate_ty(module, result_ty) {
             let dst_ptr = self.materialized_ptr(func, result, module);
             let mut builder = BeforeCursor::new_before_inst(func, inst);
-            if is_explicit_undef(func, src_value) {
-                let undef = func.dfg.make_undef_value(result_ty);
-                self.emit_copy_aggregate_value_to_ptr(
-                    func,
-                    module,
-                    &mut builder,
-                    undef,
-                    dst_ptr,
-                    result_ty,
-                );
-            } else {
+            if !is_explicit_undef(func, src_value) {
                 let src_ptr = self.materialized_ptr(func, src_value, module);
                 let elem_ptr =
                     self.emit_gep_array_element_ptr(func, &mut builder, src_ptr, idx_value, elem);
@@ -1489,22 +1479,6 @@ impl AggregateLowerToMemoryLegalize {
         false
     }
 
-    fn emit_store_undef_to_leaves(
-        &self,
-        func: &mut Function,
-        builder: &mut BeforeCursor,
-        dst_ptr: ValueId,
-        leaves: &[shape::AggregateLeaf],
-    ) {
-        for leaf in leaves {
-            if leaf.size_bytes == 0 {
-                continue;
-            }
-            let undef = func.dfg.make_undef_value(leaf.ty);
-            self.emit_store_scalar_to_path(func, builder, dst_ptr, &leaf.path, undef, leaf.ty);
-        }
-    }
-
     fn emit_copy_aggregate_value_to_ptr(
         &mut self,
         func: &mut Function,
@@ -1515,11 +1489,6 @@ impl AggregateLowerToMemoryLegalize {
         agg_ty: Type,
     ) {
         let shape = self.shape_or_panic(module, agg_ty);
-        if is_explicit_undef(func, value) {
-            self.emit_store_undef_to_leaves(func, builder, dst_ptr, &shape.leaves);
-            return;
-        }
-
         self.emit_copy_aggregate_value_to_leaves(
             func,
             module,
@@ -1695,11 +1664,6 @@ impl AggregateLowerToMemoryLegalize {
 
         let dst_leaves =
             &dst_shape.leaves[dst.slice.first_leaf..dst.slice.first_leaf + dst.slice.leaf_count];
-        if is_explicit_undef(func, value) {
-            self.emit_store_undef_to_leaves(func, builder, dst.ptr, dst_leaves);
-            return;
-        }
-
         self.emit_copy_aggregate_value_to_leaves(
             func,
             module,
@@ -1727,8 +1691,6 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         if is_explicit_undef(func, src.value) {
-            let undef = func.dfg.make_undef_value(dst.ty);
-            self.emit_copy_aggregate_value_to_ptr(func, module, builder, undef, dst.ptr, dst.ty);
             return;
         }
 
