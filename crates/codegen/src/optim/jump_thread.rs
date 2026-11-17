@@ -9,8 +9,8 @@
 //!   their incoming values from `P`: a phi whose incoming value is a
 //!   constant, `is_zero` of one, or `enum.tag` of a phi whose incoming value
 //!   is an `enum.make`;
-//! - `c` is defined above `B`, cannot be undef, and the edge `P -> B`, or an
-//!   edge that every path into `P` takes, leaves a branch on `c`.
+//! - `c` is defined above `B`, and the edge `P -> B`, or an edge that every
+//!   path into `P` takes, leaves a branch on `c`.
 //!
 //! The edge `P -> B` is retargeted straight to that successor: `B`'s other
 //! instructions, which must be pure and few, are recomputed at the end of `P`
@@ -54,7 +54,6 @@ use super::simplify_expr::{
     ConstantFacts, ExprFactProvider, SimplifiedResult, simplify_inst_with_facts,
 };
 use crate::{
-    analysis::definedness::value_may_be_undef,
     cfg_edit::{CfgEditor, CleanupMode, clone_inst_before, defined_in, remove_phi_incoming_from},
     domtree::DomTree,
 };
@@ -165,12 +164,9 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
     let cond = if defined_in(func, cond, block) {
         Cond::Local(cond)
     } else {
-        // A condition that may be undef is chosen apart at each branch on
-        // it, so an earlier branch tells nothing of this one. A block every
-        // path into which knows the condition is left to branch folding.
-        if value_may_be_undef(func, cond, &mut FxHashMap::default(), |_| None)
-            || known_into(func, editor.cfg(), domtree, cond, block).is_some()
-        {
+        // A block every path into which knows the condition is left to
+        // branch folding.
+        if known_into(func, editor.cfg(), domtree, cond, block).is_some() {
             return None;
         }
         Cond::Dominating(cond)

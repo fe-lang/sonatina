@@ -7,10 +7,7 @@
 //! Rekha R. Pai.: Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA:
 //! APLAS 2015 pp49-65: <https://link.springer.com/chapter/10.1007/978-3-319-26529-2_4>
 
-use std::{
-    cell::{OnceCell, RefCell},
-    collections::BTreeSet,
-};
+use std::{cell::OnceCell, collections::BTreeSet};
 
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -26,10 +23,7 @@ use sonatina_ir::{
 };
 
 use crate::{
-    analysis::{
-        definedness::value_may_be_undef,
-        known_bits::{KnownBits, KnownBitsQuery},
-    },
+    analysis::known_bits::{KnownBits, KnownBitsQuery},
     bitset::BitSet,
     cfg_edit::{CfgEditor, CleanupMode},
     cfg_scc::CfgSccAnalysis,
@@ -143,15 +137,12 @@ pub struct GvnSolver {
     /// Hold always available values, i.e. immediates, globals, or function arguments.
     always_avail: Vec<ValueId>,
 
-    may_be_undef_cache: RefCell<FxHashMap<ValueId, bool>>,
-
     /// The blocks on a CFG cycle.
     cyclic_blocks: BitSet<BlockId>,
 }
 
 struct GvnExprFacts<'a, 'b> {
     func: &'a Function,
-    solver: &'b GvnSolver,
     known_bits: &'b KnownBitsQuery,
 }
 
@@ -168,14 +159,6 @@ impl ExprFactProvider for GvnExprFacts<'_, '_> {
         debug_assert_eq!(func.dfg.value_ty(v), self.func.dfg.value_ty(v));
         self.known_bits.for_value(func, v)
     }
-
-    fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool {
-        self.solver.same_non_undef(self.func, lhs, rhs)
-    }
-
-    fn may_be_undef(&self, v: ValueId) -> bool {
-        self.solver.may_be_undef(self.func, v)
-    }
 }
 
 impl GvnSolver {
@@ -188,7 +171,6 @@ impl GvnSolver {
             blocks: SecondaryMap::default(),
             value_phi_table: FxHashMap::default(),
             always_avail: Vec::default(),
-            may_be_undef_cache: RefCell::default(),
             cyclic_blocks: BitSet::default(),
         }
     }
@@ -455,7 +437,6 @@ impl GvnSolver {
         self.blocks.clear();
         self.value_phi_table.clear();
         self.always_avail.clear();
-        self.may_be_undef_cache.borrow_mut().clear();
         self.cyclic_blocks.clear();
     }
 
@@ -985,11 +966,7 @@ impl GvnSolver {
         result_idx: usize,
     ) -> Option<GvnInsn> {
         let simplified = {
-            let facts = GvnExprFacts {
-                func,
-                solver: self,
-                known_bits,
-            };
+            let facts = GvnExprFacts { func, known_bits };
             simplify_key_with_facts(func, insn_expr, &facts).result(result_idx)
         };
         if let Some(result_ty) = insn_expr.result_tys().get(result_idx).copied()
@@ -1121,10 +1098,10 @@ impl GvnSolver {
         rhs: ValueId,
     ) -> Option<ValueId> {
         let (add_lhs, add_rhs) = self.binary_args_of_value(func, lhs, BinaryInstKind::Add)?;
-        if self.same_congruent_non_undef(func, add_rhs, rhs) {
+        if self.is_congruent_value(add_rhs, rhs) {
             return Some(add_lhs);
         }
-        if self.same_congruent_non_undef(func, add_lhs, rhs) {
+        if self.is_congruent_value(add_lhs, rhs) {
             return Some(add_rhs);
         }
 
@@ -1148,8 +1125,7 @@ impl GvnSolver {
         rhs: ValueId,
     ) -> Option<ValueId> {
         let (sub_lhs, sub_rhs) = self.binary_args_of_value(func, lhs, BinaryInstKind::Sub)?;
-        self.same_congruent_non_undef(func, sub_rhs, rhs)
-            .then_some(sub_lhs)
+        self.is_congruent_value(sub_rhs, rhs).then_some(sub_lhs)
     }
 
     fn binary_args_of_value(
@@ -1174,25 +1150,6 @@ impl GvnSolver {
         (matches!(insn_expr.kind(), InstClassKind::Binary(expr_kind) if expr_kind == kind))
             .then_some(())
             .and_then(|_| insn_expr.binary_args())
-    }
-
-    fn same_non_undef(&self, func: &Function, lhs: ValueId, rhs: ValueId) -> bool {
-        lhs == rhs && !self.may_be_undef(func, lhs)
-    }
-
-    fn same_congruent_non_undef(&self, func: &Function, lhs: ValueId, rhs: ValueId) -> bool {
-        self.is_congruent_value(lhs, rhs)
-            && !self.may_be_undef(func, lhs)
-            && !self.may_be_undef(func, rhs)
-    }
-
-    fn may_be_undef(&self, func: &Function, value: ValueId) -> bool {
-        value_may_be_undef(
-            func,
-            value,
-            &mut self.may_be_undef_cache.borrow_mut(),
-            |_| None,
-        )
     }
 
     fn simplified_result_to_gvn(

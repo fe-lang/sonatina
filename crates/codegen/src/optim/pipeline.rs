@@ -1831,7 +1831,7 @@ func private %entry(v0.i256) -> i256 {
     }
 
     #[test]
-    fn sccp_compare_contradiction_requires_defined_operands() {
+    fn sccp_folds_compare_contradiction_on_maybe_undef_operands() {
         let source = r#"
 target = "evm-ethereum-london"
 
@@ -1859,7 +1859,7 @@ func private %entry() -> i256 {
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
-            assert!(dumped.contains("return 1.i256;"), "{dumped}");
+            assert!(!dumped.contains("return 1.i256;"), "{dumped}");
             assert!(dumped.contains("return 2.i256;"), "{dumped}");
         });
     }
@@ -2632,7 +2632,7 @@ func private %entry(v0.i1, v1.i32) -> i32 {
     }
 
     #[test]
-    fn gvn_does_not_fold_self_cmp_when_value_may_be_undef() {
+    fn gvn_folds_self_cmp_when_value_may_be_undef() {
         let source = r#"
 target = "evm-ethereum-london"
 
@@ -2659,14 +2659,8 @@ func private %entry() -> i256 {
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
-            assert!(
-                dumped.contains("return 1.i256;"),
-                "then branch should remain reachable:\n{dumped}"
-            );
-            assert!(
-                dumped.contains("return 2.i256;"),
-                "else branch should remain reachable when eq compares maybe-undef value:\n{dumped}"
-            );
+            assert!(dumped.contains("return 1.i256;"), "{dumped}");
+            assert!(!dumped.contains("return 2.i256;"), "{dumped}");
         });
     }
 
@@ -2699,7 +2693,7 @@ func private %entry(v0.i256) -> i256 {
     }
 
     #[test]
-    fn gvn_compare_contradiction_requires_defined_operands() {
+    fn gvn_folds_compare_contradiction_on_maybe_undef_operands() {
         let source = r#"
 target = "evm-ethereum-london"
 
@@ -2727,7 +2721,7 @@ func private %entry() -> i256 {
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
-            assert!(dumped.contains("return 1.i256;"), "{dumped}");
+            assert!(!dumped.contains("return 1.i256;"), "{dumped}");
             assert!(dumped.contains("return 2.i256;"), "{dumped}");
         });
     }

@@ -1084,7 +1084,7 @@ func public %entry() -> i256 {
 }
 
 #[test]
-fn sccp_preserves_maybe_undef_saturating_zero_identities() {
+fn sccp_folds_maybe_undef_saturating_zero_identities() {
     let (module, func_ref) = parse_test_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -1116,18 +1116,14 @@ func public %entry(v0.i1) -> i8 {
         FuncWriter::new(func_ref, func).dump_string()
     });
     assert!(
-        dumped.contains("usubsat"),
-        "maybe-undef usubsat should not fold to zero:\n{dumped}"
-    );
-    assert!(
-        dumped.contains("umulsat"),
-        "maybe-undef umulsat should not fold to zero:\n{dumped}"
+        !dumped.contains("usubsat") && !dumped.contains("umulsat"),
+        "saturating zero identities fold whatever the other operand:\n{dumped}"
     );
     assert_fast_verified(&module);
 }
 
 #[test]
-fn sccp_preserves_maybe_undef_one_sided_evm_folds() {
+fn sccp_folds_maybe_undef_one_sided_evm_folds() {
     let (module, func_ref) = parse_test_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -1164,17 +1160,17 @@ func public %entry(v0.i1) -> i256 {
     });
     assert_eq!(
         dumped.matches("evm_add_mod").count(),
-        1,
+        0,
         "unexpected SCCP output:\n{dumped}"
     );
     assert_eq!(
         dumped.matches("evm_exp").count(),
-        2,
+        0,
         "unexpected SCCP output:\n{dumped}"
     );
     assert_eq!(
         dumped.matches("evm_byte").count(),
-        1,
+        0,
         "unexpected SCCP output:\n{dumped}"
     );
     assert_fast_verified(&module);
@@ -1636,7 +1632,7 @@ func public %entry(v0.i256, v1.i256) -> i256 {
 }
 
 #[test]
-fn gvn_preserves_maybe_undef_saturating_zero_identities() {
+fn gvn_folds_maybe_undef_saturating_zero_identities() {
     let (module, func_ref) = parse_test_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -1669,18 +1665,14 @@ func public %entry(v0.i1) -> i8 {
         FuncWriter::new(func_ref, func).dump_string()
     });
     assert!(
-        dumped.contains("usubsat"),
-        "maybe-undef usubsat should not fold to zero:\n{dumped}"
-    );
-    assert!(
-        dumped.contains("umulsat"),
-        "maybe-undef umulsat should not fold to zero:\n{dumped}"
+        !dumped.contains("usubsat") && !dumped.contains("umulsat"),
+        "saturating zero identities fold whatever the other operand:\n{dumped}"
     );
     assert_fast_verified(&module);
 }
 
 #[test]
-fn gvn_preserves_maybe_undef_one_sided_evm_folds() {
+fn gvn_folds_maybe_undef_one_sided_evm_folds() {
     let (module, func_ref) = parse_test_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -1718,17 +1710,17 @@ func public %entry(v0.i1) -> i256 {
     });
     assert_eq!(
         dumped.matches("evm_add_mod").count(),
-        1,
+        0,
         "unexpected GVN output:\n{dumped}"
     );
     assert_eq!(
         dumped.matches("evm_exp").count(),
-        2,
+        0,
         "unexpected GVN output:\n{dumped}"
     );
     assert_eq!(
         dumped.matches("evm_byte").count(),
-        1,
+        0,
         "unexpected GVN output:\n{dumped}"
     );
     assert_fast_verified(&module);

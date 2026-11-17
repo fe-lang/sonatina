@@ -368,7 +368,7 @@ block5:
     }
 
     #[test]
-    fn incoming_paths_keep_undef_dependent_checks() {
+    fn incoming_paths_drop_undef_dependent_checks() {
         let output = optimized(
             r#"
 target = "evm-ethereum-osaka"
@@ -396,10 +396,10 @@ block5:
 }
 "#,
         );
-        // Main still treats undef as a separate choice at each use. A guard
-        // on v11 therefore cannot establish a bound for its later uses.
-        assert!(output.contains("umulo"), "{output}");
-        assert!(output.contains("uaddo"), "{output}");
+        // Where `v11` is unspecified the branches on it are undefined, so on
+        // each incoming path its compares bound the checks as for `v0`.
+        assert!(!output.contains("umulo"), "{output}");
+        assert!(!output.contains("uaddo"), "{output}");
     }
 
     #[test]
@@ -532,7 +532,7 @@ func public %test() -> i1 {
     }
 
     #[test]
-    fn guarded_subtraction_keeps_undef_dependent_checks() {
+    fn guarded_subtraction_drops_undef_dependent_checks() {
         let text = optimized(
             r#"
 target = "evm-ethereum-osaka"
@@ -551,12 +551,12 @@ func public %test() -> i1 {
 }
 "#,
         );
-        // Each use of `v1` may see a different value, so the comparison
-        // proves nothing about the subtraction.
-        assert!(text.contains("usubo"), "{text}");
+        // Where `v1` is unspecified the branch on the comparison is
+        // undefined, so the comparison holds for the subtraction.
+        assert!(!text.contains("usubo"), "{text}");
     }
     #[test]
-    fn guarded_subtraction_keeps_intrinsically_undefined_checks() {
+    fn guarded_subtraction_drops_checks_after_divisions() {
         for operation in [
             "udiv", "sdiv", "umod", "smod", "evm_udiv", "evm_sdiv", "evm_umod", "evm_smod",
         ] {
@@ -579,12 +579,9 @@ func public %test() -> i1 {{
 }}
 "#
                 ));
-                let defined = operation.starts_with("evm_") || divisor == "7.i256";
-                assert_eq!(
-                    text.contains("usubo"),
-                    !defined,
-                    "{operation} {divisor}: {text}"
-                );
+                // Whatever a division by zero gives, the branch on the
+                // comparison holds for the subtraction it guards.
+                assert!(!text.contains("usubo"), "{operation} {divisor}: {text}");
             }
         }
     }

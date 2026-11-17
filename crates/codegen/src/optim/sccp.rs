@@ -13,7 +13,7 @@ use sonatina_ir::{
     BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{
-        arith, cast, cmp,
+        cast, cmp,
         control_flow::{BranchInfo, BranchKind},
         data, downcast,
     },
@@ -36,7 +36,6 @@ use crate::{
 #[derive(Debug)]
 pub struct SccpSolver {
     lattice: SecondaryMap<ValueId, LatticeCell>,
-    may_be_undef: SecondaryMap<ValueId, bool>,
     reachable_edges: FxHashSet<FlowEdge>,
     reachable_blocks: SecondaryMap<BlockId, bool>,
 
@@ -55,7 +54,6 @@ impl SccpSolver {
     pub fn new() -> Self {
         Self {
             lattice: SecondaryMap::default(),
-            may_be_undef: SecondaryMap::default(),
             reachable_edges: FxHashSet::default(),
             reachable_blocks: SecondaryMap::default(),
             flow_work: Vec::default(),
@@ -145,7 +143,6 @@ impl SccpSolver {
 
     pub fn clear(&mut self) {
         self.lattice.clear();
-        self.may_be_undef.clear();
         self.reachable_edges.clear();
         self.reachable_blocks.clear();
         self.flow_work.clear();
@@ -223,18 +220,14 @@ impl SccpSolver {
         let phi = func.dfg.cast_phi(inst).unwrap();
 
         let mut eval_result = LatticeCell::Bot;
-        let mut eval_may_be_undef = false;
         for (val, from) in phi.args() {
             if self.is_reachable(func, *from, block) {
-                let v_cell = self.cell_of(func, *val);
-                eval_result = eval_result.join(v_cell);
-                eval_may_be_undef |= self.may_be_undef_of(func, *val);
+                eval_result = eval_result.join(self.cell_of(func, *val));
             }
         }
 
         let phi_value = func.dfg.inst_result(inst).unwrap();
         self.set_lattice_cell(phi_value, eval_result);
-        self.set_may_be_undef(phi_value, eval_may_be_undef);
     }
 
     fn eval_insts_in(
@@ -296,13 +289,7 @@ impl SccpSolver {
             is_edge_executable: &is_edge_executable,
             aux_deps: &mut aux_deps,
         };
-        let simplified = simplify_inst(
-            func,
-            &self.lattice,
-            &self.may_be_undef,
-            inst_id,
-            &mut simplify_ctx,
-        );
+        let simplified = simplify_inst(func, &self.lattice, inst_id, &mut simplify_ctx);
         self.update_aux_deps(inst_id, &aux_deps.value_deps, &aux_deps.edge_deps);
         if simplified.len() != inst_results.len() {
             debug_assert_eq!(
@@ -323,17 +310,14 @@ impl SccpSolver {
                         .normalize_const_imm_for_value(func, result, imm)
                         .map(LatticeCell::Const)
                         .unwrap_or(LatticeCell::Top);
-                    result_states[idx] = Some((cell, false));
+                    result_states[idx] = Some(cell);
                 }
                 SimplifyAction::Copy(src) => {
-                    let src_cell =
-                        self.normalize_cell_for_value(func, result, self.cell_of(func, src));
-                    result_states[idx] = Some((src_cell, self.may_be_undef_of(func, src)));
+                    result_states[idx] =
+                        Some(self.normalize_cell_for_value(func, result, self.cell_of(func, src)));
                 }
                 SimplifyAction::BuildIsZero(arg) => {
-                    if !self.may_be_undef_of(func, arg)
-                        && let Some(imm) = self.cell_of(func, arg).to_imm()
-                    {
+                    if let Some(imm) = self.cell_of(func, arg).to_imm() {
                         let cell = self
                             .normalize_const_imm_for_value(
                                 func,
@@ -342,7 +326,7 @@ impl SccpSolver {
                             )
                             .map(LatticeCell::Const)
                             .unwrap_or(LatticeCell::Top);
-                        result_states[idx] = Some((cell, false));
+                        result_states[idx] = Some(cell);
                     } else {
                         all_results_simplified = false;
                     }
@@ -355,18 +339,12 @@ impl SccpSolver {
 
         if all_results_simplified {
             for (&result, state) in inst_results.iter().zip(result_states) {
-                let (cell, may_be_undef) =
-                    state.expect("all simplified SCCP results must have a state");
+                let cell = state.expect("all simplified SCCP results must have a state");
                 self.set_lattice_cell(result, cell);
-                self.set_may_be_undef(result, may_be_undef);
             }
             return;
         }
 
-        let mut operand_may_be_undef = false;
-        inst.for_each_value(&mut |value| {
-            operand_may_be_undef |= self.may_be_undef_of(func, value);
-        });
         if let Some(insert) = downcast::<&data::InsertValue>(func.inst_set(), inst) {
             // The scalar lattice cannot retain aggregate fields. Match the
             // interpreter's operand lookups without allocating an aggregate.
@@ -386,20 +364,13 @@ impl SccpSolver {
                     CompoundType::Struct(data) => data.fields.len(),
                     _ => unreachable!("insert_value requires an array or struct"),
                 });
-            let in_bounds = index.is_some_and(|index| index < count);
-            if in_bounds {
+            if index.is_some_and(|index| index < count) {
                 state.lookup_val(*insert.value());
             }
-            let cell = state.nonconst_result_cell();
-            let may_be_undef = operand_may_be_undef || !in_bounds && !state.used_has_top;
-            self.set_lattice_cell(inst_results[0], cell);
-            self.set_may_be_undef(inst_results[0], may_be_undef);
+            self.set_lattice_cell(inst_results[0], state.nonconst_result_cell());
             return;
         }
 
-        let result_may_divide_by_zero = self.is_arith_div_or_rem_by_zero(func, inst_id);
-        // A frozen value is one fixed value, whatever its argument.
-        let frozen = downcast::<&data::Freeze>(func.inst_set(), inst).is_some();
         {
             let mut cell_state = CellState::new(&self.lattice, &func.dfg);
             let value = InstDowncast::map(func.inst_set(), inst, |i: &dyn Interpret| {
@@ -424,46 +395,21 @@ impl SccpSolver {
                 }
 
                 let eval_value = value.as_ref().and_then(|values| values.get(idx));
-                let cell = match eval_value {
+                result_states[idx] = Some(match eval_value {
                     Some(EvalValue::Imm(value)) => self
                         .normalize_const_imm_for_value(func, result, *value)
                         .map(LatticeCell::Const)
                         .unwrap_or(LatticeCell::Top),
                     Some(_) => cell_state.nonconst_result_cell(),
                     None => LatticeCell::Top,
-                };
-                let may_be_undef = !frozen
-                    && (operand_may_be_undef
-                        || result_may_divide_by_zero
-                        || (eval_value.is_some_and(EvalValue::is_undef)
-                            && !cell_state.used_has_top));
-                result_states[idx] = Some((cell, may_be_undef));
+                });
             }
         }
 
         for (&result, state) in inst_results.iter().zip(result_states) {
-            let (cell, may_be_undef) = state.expect("every SCCP result must have a final state");
+            let cell = state.expect("every SCCP result must have a final state");
             self.set_lattice_cell(result, cell);
-            self.set_may_be_undef(result, may_be_undef);
         }
-    }
-
-    fn is_arith_div_or_rem_by_zero(&self, func: &Function, inst_id: InstId) -> bool {
-        let inst = func.dfg.inst(inst_id);
-        let is = func.inst_set();
-
-        let Some(rhs) = downcast::<&arith::Udiv>(is, inst)
-            .map(|i| *i.rhs())
-            .or_else(|| downcast::<&arith::Sdiv>(is, inst).map(|i| *i.rhs()))
-            .or_else(|| downcast::<&arith::Umod>(is, inst).map(|i| *i.rhs()))
-            .or_else(|| downcast::<&arith::Smod>(is, inst).map(|i| *i.rhs()))
-        else {
-            return false;
-        };
-
-        self.cell_of(func, rhs)
-            .to_imm()
-            .is_some_and(|imm| imm.is_zero())
     }
 
     fn eval_branch(&mut self, func: &Function, inst: InstId, bi: &dyn BranchInfo) {
@@ -609,13 +555,7 @@ impl SccpSolver {
                 is_edge_executable: &is_edge_executable,
                 aux_deps: &mut aux_deps,
             };
-            let simplified = simplify_inst(
-                func,
-                &self.lattice,
-                &self.may_be_undef,
-                inst,
-                &mut simplify_ctx,
-            );
+            let simplified = simplify_inst(func, &self.lattice, inst, &mut simplify_ctx);
             debug_assert_eq!(
                 simplified.len(),
                 inst_results.len(),
@@ -866,14 +806,6 @@ impl SccpSolver {
         }
     }
 
-    fn set_may_be_undef(&mut self, value: ValueId, may_be_undef: bool) {
-        let old = self.may_be_undef.get(value).copied().unwrap_or_default();
-        if old != may_be_undef {
-            self.may_be_undef[value] = may_be_undef;
-            self.push_ssa_work(value);
-        }
-    }
-
     fn update_aux_deps(
         &mut self,
         inst: InstId,
@@ -935,7 +867,6 @@ impl SccpSolver {
     fn set_inst_results_top(&mut self, results: &[ValueId]) {
         for &result in results {
             self.set_lattice_cell(result, LatticeCell::Top);
-            self.set_may_be_undef(result, false);
         }
     }
 
@@ -953,14 +884,6 @@ impl SccpSolver {
             Value::Arg { .. } | Value::Inst { .. } => {
                 self.lattice.get(value).copied().unwrap_or_default()
             }
-        }
-    }
-
-    fn may_be_undef_of(&self, func: &Function, value: ValueId) -> bool {
-        match func.dfg.value(value) {
-            Value::Undef { .. } => true,
-            Value::Arg { .. } | Value::Immediate { .. } | Value::Global { .. } => false,
-            Value::Inst { .. } => self.may_be_undef.get(value).copied().unwrap_or_default(),
         }
     }
 
@@ -1204,6 +1127,7 @@ mod tests {
         I256, Linkage, Signature, Type,
         builder::test_util::{test_isa, test_module_builder},
         inst::{
+            arith,
             cast::{Bitcast, IntToPtr, PtrToInt},
             control_flow::Return,
             data::{Gep, Mstore},
@@ -1249,7 +1173,7 @@ mod tests {
                     LatticeCell::Top,
                     LatticeCell::Const(Immediate::I256(I256::from(7))),
                 ] {
-                    cases.extend((0..8).map(|undef| ([base, index, field], undef)));
+                    cases.push([base, index, field]);
                 }
             }
         }
@@ -1284,33 +1208,25 @@ mod tests {
             module.func_store.view(module.funcs()[0], |func| {
                 let const_paths = analyze_const_paths(func, &collect_constref_value_tys(func));
                 let known_bits = KnownBitsQuery::new(func);
-                for &(cells, undef) in &cases {
+                for &cells in &cases {
                     let mut solver = SccpSolver::new();
                     for (idx, cell) in cells.into_iter().enumerate() {
-                        let value = ValueId::from_u32(idx as u32 + 3);
-                        solver.lattice[value] = cell;
-                        solver.may_be_undef[value] = undef & (1 << idx) != 0;
+                        solver.lattice[ValueId::from_u32(idx as u32 + 3)] = cell;
                     }
                     for block in func.layout.iter_block() {
                         for inst in func.layout.iter_inst(block) {
                             let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst) else {
                                 continue;
                             };
-                            let operand_undef = [*insert.dest(), *insert.idx(), *insert.value()]
-                                .into_iter()
-                                .any(|value| solver.may_be_undef_of(func, value));
                             let mut state = CellState::new(&solver.lattice, &func.dfg);
                             let concrete = insert.interpret(&mut state);
                             assert!(concrete[0].as_imm().is_none());
                             let expected_cell = state.nonconst_result_cell();
-                            let expected_undef =
-                                operand_undef || concrete[0].is_undef() && !state.used_has_top;
                             solver.eval_inst(func, inst, &const_paths, &known_bits);
                             let result = func.dfg.inst_result(inst).unwrap();
                             assert_eq!(
-                                (solver.lattice[result], solver.may_be_undef[result]),
-                                (expected_cell, expected_undef),
-                                "{ty}, {inst:?}, {cells:?}, undef mask {undef}"
+                                solver.lattice[result], expected_cell,
+                                "{ty}, {inst:?}, {cells:?}"
                             );
                         }
                     }

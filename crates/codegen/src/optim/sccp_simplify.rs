@@ -1,7 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Function, Immediate, InstId, Value, ValueId,
+    BlockId, Function, Immediate, InstId, ValueId,
     inst::{BinaryInstKind, InstClassKind, data, downcast},
 };
 
@@ -85,21 +85,9 @@ fn known_imm(
         })
 }
 
-fn known_non_undef_imm(
-    func: &Function,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
-    may_be_undef: &SecondaryMap<ValueId, bool>,
-    v: ValueId,
-) -> Option<Immediate> {
-    (!is_may_be_undef(func, may_be_undef, v))
-        .then(|| known_imm(func, lattice, v))
-        .flatten()
-}
-
 struct SccpExprFacts<'a, 'b> {
     func: &'a Function,
     lattice: &'b SecondaryMap<ValueId, LatticeCell>,
-    may_be_undef: &'b SecondaryMap<ValueId, bool>,
     known_bits: &'b KnownBitsQuery,
 }
 
@@ -116,46 +104,6 @@ impl ExprFactProvider for SccpExprFacts<'_, '_> {
         debug_assert_eq!(func.dfg.value_ty(v), self.func.dfg.value_ty(v));
         self.known_bits.for_value(func, v)
     }
-
-    fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool {
-        same_non_undef(self.func, self.lattice, self.may_be_undef, lhs, rhs)
-    }
-
-    fn may_be_undef(&self, v: ValueId) -> bool {
-        is_may_be_undef(self.func, self.may_be_undef, v)
-    }
-}
-
-fn is_explicit_undef(func: &Function, v: ValueId) -> bool {
-    matches!(func.dfg.get_value(v), Some(Value::Undef { .. }))
-}
-
-fn is_may_be_undef(
-    func: &Function,
-    may_be_undef: &SecondaryMap<ValueId, bool>,
-    v: ValueId,
-) -> bool {
-    is_explicit_undef(func, v) || may_be_undef.get(v).copied().unwrap_or_default()
-}
-
-fn same_non_undef(
-    func: &Function,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
-    may_be_undef: &SecondaryMap<ValueId, bool>,
-    lhs: ValueId,
-    rhs: ValueId,
-) -> bool {
-    if lhs != rhs {
-        return false;
-    }
-    if is_may_be_undef(func, may_be_undef, lhs) {
-        return false;
-    }
-    if func.dfg.value_imm(lhs).is_some() {
-        return true;
-    }
-
-    !matches!(lattice.get(lhs), Some(LatticeCell::Bot) | None)
 }
 
 fn simplify_gep_all_zero(
@@ -180,7 +128,6 @@ fn simplify_gep_all_zero(
 fn simplify_const_load(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
-    may_be_undef: &SecondaryMap<ValueId, bool>,
     object: ValueId,
     ctx: &mut SimplifyCtx<'_>,
 ) -> SimplifyAction {
@@ -195,12 +142,8 @@ fn simplify_const_load(
                 ctx.aux_deps.value_deps.push(value);
             }
         }
-        if is_may_be_undef(func, may_be_undef, object) {
-            return SimplifyAction::NoChange;
-        }
-
         return eval_const_path_domain_immediate(func.ctx(), &path, |value| {
-            known_non_undef_imm(func, lattice, may_be_undef, value)
+            known_imm(func, lattice, value)
         })
         .map_or(SimplifyAction::NoChange, SimplifyAction::Const);
     }
@@ -215,21 +158,18 @@ fn simplify_zext_i1_compare_action(
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
-    simplify_zext_i1_compare(func, kind, lhs, rhs, |value| {
-        (!facts.may_be_undef(value))
-            .then(|| facts.known_imm(value))
-            .flatten()
-    })
-    .map_or(SimplifyAction::NoChange, |rewrite| match rewrite {
-        ZextI1CompareRewrite::Copy(value) => SimplifyAction::Copy(value),
-        ZextI1CompareRewrite::IsZero(value) => SimplifyAction::BuildIsZero(value),
-    })
+    simplify_zext_i1_compare(func, kind, lhs, rhs, |value| facts.known_imm(value)).map_or(
+        SimplifyAction::NoChange,
+        |rewrite| match rewrite {
+            ZextI1CompareRewrite::Copy(value) => SimplifyAction::Copy(value),
+            ZextI1CompareRewrite::IsZero(value) => SimplifyAction::BuildIsZero(value),
+        },
+    )
 }
 
 pub(super) fn simplify_inst(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
-    may_be_undef: &SecondaryMap<ValueId, bool>,
     inst_id: InstId,
     ctx: &mut SimplifyCtx<'_>,
 ) -> SimplifyResults {
@@ -240,7 +180,6 @@ pub(super) fn simplify_inst(
     let facts = SccpExprFacts {
         func,
         lattice,
-        may_be_undef,
         known_bits: ctx.known_bits,
     };
 
@@ -275,13 +214,7 @@ pub(super) fn simplify_inst(
                 return wrap_action(SimplifyAction::Copy(arg));
             }
             if let Some(i) = downcast::<&data::ConstLoad>(is, inst) {
-                return wrap_action(simplify_const_load(
-                    func,
-                    lattice,
-                    may_be_undef,
-                    *i.object(),
-                    ctx,
-                ));
+                return wrap_action(simplify_const_load(func, lattice, *i.object(), ctx));
             }
             if let Some(i) = downcast::<&data::Gep>(is, inst) {
                 return wrap_action(simplify_gep_all_zero(func, lattice, i.values().as_slice()));
@@ -331,7 +264,6 @@ block0:
             );
             let inst = and_inst.expect("missing and");
             let lattice = SecondaryMap::<_, LatticeCell>::default();
-            let may_be_undef = SecondaryMap::<_, bool>::default();
             let constref_value_tys = collect_constref_value_tys(func);
             let const_paths = analyze_const_paths(func, &constref_value_tys);
             let known_bits = KnownBitsQuery::new(func);
@@ -343,7 +275,7 @@ block0:
                 is_edge_executable: &is_edge_executable,
                 aux_deps: &mut aux_deps,
             };
-            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
+            let simplified = simplify_inst(func, &lattice, inst, &mut simplify_ctx);
             let and_args = func.dfg.inst(inst).collect_values();
             let [value, _mask] = and_args.as_slice() else {
                 panic!("and should have two args");
@@ -376,7 +308,6 @@ block0:
             )
             .expect("missing eq");
             let lattice = SecondaryMap::<_, LatticeCell>::default();
-            let may_be_undef = SecondaryMap::<_, bool>::default();
             let constref_value_tys = collect_constref_value_tys(func);
             let const_paths = analyze_const_paths(func, &constref_value_tys);
             let known_bits = KnownBitsQuery::new(func);
@@ -388,7 +319,7 @@ block0:
                 is_edge_executable: &is_edge_executable,
                 aux_deps: &mut aux_deps,
             };
-            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
+            let simplified = simplify_inst(func, &lattice, inst, &mut simplify_ctx);
             assert!(matches!(simplified.as_slice(), [SimplifyAction::Copy(value)] if *value == func.arg_values[0]));
         });
     }
@@ -415,7 +346,6 @@ block0:
             )
             .expect("missing ne");
             let lattice = SecondaryMap::<_, LatticeCell>::default();
-            let may_be_undef = SecondaryMap::<_, bool>::default();
             let constref_value_tys = collect_constref_value_tys(func);
             let const_paths = analyze_const_paths(func, &constref_value_tys);
             let known_bits = KnownBitsQuery::new(func);
@@ -427,7 +357,7 @@ block0:
                 is_edge_executable: &is_edge_executable,
                 aux_deps: &mut aux_deps,
             };
-            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
+            let simplified = simplify_inst(func, &lattice, inst, &mut simplify_ctx);
             assert!(matches!(simplified.as_slice(), [SimplifyAction::BuildIsZero(value)] if *value == func.arg_values[0]));
         });
     }
@@ -457,7 +387,6 @@ block0:
                 I256::from(U256::one() << 200),
                 Type::I256,
             ));
-            let may_be_undef = SecondaryMap::<_, bool>::default();
             let constref_value_tys = collect_constref_value_tys(func);
             let const_paths = analyze_const_paths(func, &constref_value_tys);
             let known_bits = KnownBitsQuery::new(func);
@@ -469,7 +398,7 @@ block0:
                 is_edge_executable: &is_edge_executable,
                 aux_deps: &mut aux_deps,
             };
-            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
+            let simplified = simplify_inst(func, &lattice, inst, &mut simplify_ctx);
             assert!(matches!(simplified.as_slice(), [SimplifyAction::NoChange]));
         });
     }
@@ -495,7 +424,6 @@ block0:
         module.func_store.view(func_ref, |func| {
             let inst = find_const_load_inst(func);
             let lattice = SecondaryMap::<_, LatticeCell>::default();
-            let may_be_undef = SecondaryMap::<_, bool>::default();
             let constref_value_tys = collect_constref_value_tys(func);
             let const_paths = analyze_const_paths(func, &constref_value_tys);
             let known_bits = KnownBitsQuery::new(func);
@@ -507,7 +435,7 @@ block0:
                 is_edge_executable: &is_edge_executable,
                 aux_deps: &mut aux_deps,
             };
-            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
+            let simplified = simplify_inst(func, &lattice, inst, &mut simplify_ctx);
             assert!(matches!(
                 simplified.as_slice(),
                 [SimplifyAction::Const(Immediate::I256(value))] if *value == I256::from(7)
@@ -536,7 +464,6 @@ block0:
         module.func_store.view(func_ref, |func| {
             let inst = find_const_load_inst(func);
             let lattice = SecondaryMap::<_, LatticeCell>::default();
-            let may_be_undef = SecondaryMap::<_, bool>::default();
             let constref_value_tys = collect_constref_value_tys(func);
             let const_paths = analyze_const_paths(func, &constref_value_tys);
             let known_bits = KnownBitsQuery::new(func);
@@ -548,7 +475,7 @@ block0:
                 is_edge_executable: &is_edge_executable,
                 aux_deps: &mut aux_deps,
             };
-            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
+            let simplified = simplify_inst(func, &lattice, inst, &mut simplify_ctx);
             assert!(matches!(simplified.as_slice(), [SimplifyAction::NoChange]));
         });
     }
