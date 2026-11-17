@@ -356,6 +356,15 @@ pub(super) fn try_inline_callsite_full(
                 }
             }
         }
+        // The region starts with the inlined call, already counted as removed.
+        let func = editor.func();
+        call_changes.removed.extend(
+            dead.iter()
+                .flat_map(|&block| func.layout.iter_inst(block))
+                .filter(|&inst| inst != call_inst)
+                .filter_map(|inst| func.dfg.call_info(inst))
+                .map(|call| call.callee()),
+        );
         editor.delete_blocks_unreachable(&dead);
     }
 

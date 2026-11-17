@@ -893,8 +893,12 @@ fn caller_order_bottom_up_scc(
 
 #[cfg(test)]
 mod tests {
-    use super::{InlineStats, InlinerConfig, UndefTaint, collect_iteration_call_data, trivial};
+    use super::{
+        InlineStats, InlinerConfig, UndefTaint, collect_iteration_call_data, cost::SummaryKey,
+        full, trivial,
+    };
     use crate::analysis::func_behavior;
+    use rustc_hash::FxHashSet;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     #[test]
@@ -962,6 +966,78 @@ func public %caller(v0.i256) {{
                 trivial::apply_plan(func, site.call_inst, plan, &taint, &mut stats).unwrap()
             });
             changes.apply(&mut counts);
+            counts.retain(|_, count| *count != 0);
+            let (_, actual_counts) = collect_iteration_call_data(&module, &funcs);
+            assert_eq!(counts, actual_counts, "{source}");
+            let report =
+                verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+            assert!(!report.has_errors(), "{report}");
+        }
+    }
+
+    #[test]
+    fn full_call_changes_match_rewritten_ir() {
+        for (callee, caller) in [
+            (
+                "func private %callee(v0.i256) {\nblock0:\n    evm_revert 0.i256 0.i256;\n}",
+                "block0:\n    call %callee v0;\n    v2.i256 = call %target v0;\n    return;",
+            ),
+            (
+                "func private %callee(v0.i256) {\nblock0:\n    v1.i256 = call %target v0;\n    evm_revert 0.i256 0.i256;\n}",
+                "block0:\n    v1.i1 = lt v0 1.i256;\n    br v1 block1 block3;\nblock1:\n    call %callee v0;\n    jump block2;\nblock2:\n    v2.i256 = call %target v0;\n    jump block3;\nblock3:\n    v3.i256 = call %target v0;\n    return;",
+            ),
+            (
+                "func private %callee(v0.i256) -> i256 {\nblock0:\n    v1.i256 = call %target v0;\n    return v1;\n}",
+                "block0:\n    v1.i256 = call %callee v0;\n    v2.i256 = call %target v1;\n    return;",
+            ),
+        ] {
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+func private %target(v0.i256) -> i256 {{
+    block0:
+        return v0;
+}}
+{callee}
+func public %caller(v0.i256) {{
+{caller}
+}}
+"#
+            );
+            let module = sonatina_parser::parse_module(&source).unwrap().module;
+            func_behavior::analyze_module(&module);
+            let funcs = module.funcs();
+            let func = |name: &str| {
+                funcs
+                    .iter()
+                    .copied()
+                    .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == name))
+                    .unwrap()
+            };
+            let (callee, caller) = (func("callee"), func("caller"));
+            let (sites, mut counts) = collect_iteration_call_data(&module, &funcs);
+            let site = sites[&caller]
+                .iter()
+                .find(|site| site.callee == callee)
+                .unwrap();
+            let mut caller_func = module.func_store.remove(caller).unwrap();
+            let taint = UndefTaint::new(&caller_func);
+            let result = module
+                .func_store
+                .view(callee, |callee_func| {
+                    full::try_inline_callsite_full(
+                        &module,
+                        &mut caller_func,
+                        site.call_inst,
+                        callee,
+                        (SummaryKey::Live(callee), callee_func),
+                        &mut FxHashSet::default(),
+                        &taint,
+                    )
+                })
+                .expect("fixture inlines");
+            module.func_store.restore(caller, caller_func);
+            result.call_changes.apply(&mut counts);
             counts.retain(|_, count| *count != 0);
             let (_, actual_counts) = collect_iteration_call_data(&module, &funcs);
             assert_eq!(counts, actual_counts, "{source}");
