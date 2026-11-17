@@ -9,13 +9,13 @@ use crate::{
     cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
     post_domtree::{PDTIdom, PostDomTree},
-    stackalloc::{Action, Allocator},
+    stackalloc::{Action, ActionSite, Allocator},
 };
 
 use super::module::FuncMachineMap;
 use crate::isa::evm::{
     DYN_SP_SLOT, MachineFuncPlan, ObjLoc,
-    emit::{fold_stack_actions, split_at_continuation},
+    emit::{block_action_sites, emits_after, fold_stack_actions, split_at_continuation},
     prepare::value_imm_u32,
     ptr_provenance::Provenance,
 };
@@ -329,13 +329,7 @@ fn simulate_lazy_frame(
         plan,
         active: false,
     };
-    sim.site(
-        FrameSite::EnterFunction,
-        fold_stack_actions(&alloc.enter_function(function))
-            .into_iter()
-            .enumerate(),
-    )?;
-    let mut active_at_entry = FxHashMap::from_iter([(entry_block, sim.active)]);
+    let mut active_at_entry = FxHashMap::from_iter([(entry_block, false)]);
     let mut worklist = vec![entry_block];
     let mut frame_active_calls = FxHashSet::default();
 
@@ -343,32 +337,35 @@ fn simulate_lazy_frame(
         sim.active = active_at_entry[&block];
         sim.before_site(FrameSite::BlockEntry(block));
 
-        for inst in function.layout.iter_inst(block) {
-            let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            if matches!(data, EvmMachineInstKind::Phi(_)) {
-                continue;
-            }
-            sim.site(FrameSite::PreInst(inst), pre_site_actions(alloc, inst))?;
-            if let EvmMachineInstKind::BrTable(br) = &data
-                && !sim.active
-                && (0..br.table().len())
-                    .any(|case| actions_touch_frame(alloc.br_table_case(inst, case)))
-            {
-                return None;
-            }
-            if function.dfg.is_return(inst) && sim.active {
-                return None;
-            }
-            if matches!(data, EvmMachineInstKind::Call(_)) && sim.active {
-                frame_active_calls.insert(inst);
-            }
-            if emits_post_site(alloc, inst, &data) {
-                sim.site(
+        for (site, actions) in block_action_sites(function, alloc, block) {
+            match site {
+                ActionSite::Entry => sim.site(
+                    FrameSite::EnterFunction,
+                    fold_stack_actions(&actions).into_iter().enumerate(),
+                )?,
+                ActionSite::Before(inst) => {
+                    sim.site(FrameSite::PreInst(inst), pre_site_actions(&actions))?;
+                    if function.dfg.is_return(inst) && sim.active {
+                        return None;
+                    }
+                    if sim.active
+                        && matches!(
+                            machine_isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                            EvmMachineInstKind::Call(_)
+                        )
+                    {
+                        frame_active_calls.insert(inst);
+                    }
+                }
+                ActionSite::Case(..) => {
+                    if !sim.active && actions_touch_frame(&actions) {
+                        return None;
+                    }
+                }
+                ActionSite::After(inst) => sim.site(
                     FrameSite::PostInst(inst),
-                    fold_stack_actions(alloc.post_inst(inst))
-                        .into_iter()
-                        .enumerate(),
-                )?;
+                    fold_stack_actions(&actions).into_iter().enumerate(),
+                )?,
             }
         }
 
@@ -430,11 +427,9 @@ impl FrameActivity<'_> {
     }
 }
 
-/// The folded actions emission runs at `inst`'s pre-instruction site, numbered
-/// as plans address them: a call's actions resume numbering after its
-/// continuation push.
-fn pre_site_actions(alloc: &dyn Allocator, inst: InstId) -> Vec<(usize, Action)> {
-    let actions = alloc.pre_inst(inst);
+/// The folded actions of a pre-instruction site, numbered as plans address
+/// them: a call's actions resume numbering after its continuation push.
+fn pre_site_actions(actions: &[Action]) -> Vec<(usize, Action)> {
     match split_at_continuation(actions) {
         Some((prefix, suffix)) => fold_stack_actions(prefix)
             .into_iter()
@@ -445,21 +440,6 @@ fn pre_site_actions(alloc: &dyn Allocator, inst: InstId) -> Vec<(usize, Action)>
             .into_iter()
             .enumerate()
             .collect(),
-    }
-}
-
-/// Whether emission runs `inst`'s post-instruction site. No code follows a
-/// terminator or a call without a continuation, and phis emit nothing.
-fn emits_post_site(alloc: &dyn Allocator, inst: InstId, data: &EvmMachineInstKind) -> bool {
-    match data {
-        EvmMachineInstKind::Phi(_)
-        | EvmMachineInstKind::Jump(_)
-        | EvmMachineInstKind::Br(_)
-        | EvmMachineInstKind::BrTable(_)
-        | EvmMachineInstKind::Unreachable(_)
-        | EvmMachineInstKind::Return(_) => false,
-        EvmMachineInstKind::Call(_) => split_at_continuation(alloc.pre_inst(inst)).is_some(),
-        _ => true,
     }
 }
 
@@ -477,49 +457,55 @@ fn collect_dep_points(
         seen: FxHashSet::default(),
     };
 
-    deps.push_actions(
-        function.layout.entry_block()?,
-        FrameSite::EnterFunction,
-        fold_stack_actions(&alloc.enter_function(function))
-            .into_iter()
-            .enumerate(),
-    );
-
     let machine_isa = sonatina_ir::isa::evm::EvmMachine::new(function.dfg.ctx.triple);
     let mut dyn_sp_reads = Vec::new();
+    // Phis run no actions, so their values need the frame only where their
+    // inputs are defined and their results used.
     for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
+        for (site, actions) in block_action_sites(function, alloc, block) {
+            let inst = match site {
+                ActionSite::Entry => {
+                    let actions = fold_stack_actions(&actions);
+                    deps.push_actions(
+                        block,
+                        FrameSite::EnterFunction,
+                        actions.into_iter().enumerate(),
+                    );
+                    continue;
+                }
+                // Emission runs case compares without transitions of their own.
+                ActionSite::Case(..) if actions_touch_frame(&actions) => return None,
+                ActionSite::Case(..) => continue,
+                ActionSite::After(inst) => {
+                    let actions = fold_stack_actions(&actions);
+                    deps.push_actions(
+                        block,
+                        FrameSite::PostInst(inst),
+                        actions.into_iter().enumerate(),
+                    );
+                    continue;
+                }
+                ActionSite::Before(inst) => inst,
+            };
             let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
             if let EvmMachineInstKind::EvmMload(load) = &data
                 && value_imm_u32(function, *load.addr()) == Some(DYN_SP_SLOT as u32)
             {
                 dyn_sp_reads.push((block, inst));
             }
-            // Phis emit no code, so their values need the frame only where
-            // their inputs are defined and their results used.
-            if matches!(data, EvmMachineInstKind::Phi(_)) {
-                continue;
-            }
-            // Emission runs case compares without transitions of their own.
-            if let EvmMachineInstKind::BrTable(br) = &data
-                && (0..br.table().len())
-                    .any(|case| actions_touch_frame(alloc.br_table_case(inst, case)))
-            {
-                return None;
-            }
 
             let pre = FrameSite::PreInst(inst);
-            deps.push_actions(block, pre, pre_site_actions(alloc, inst));
+            deps.push_actions(block, pre, pre_site_actions(&actions));
 
-            let post_site = emits_post_site(alloc, inst, &data);
             // A call without a continuation never returns, so the frame it
             // uses stays entered: its post site, where the exit would go, is
             // never emitted.
-            let inst_exit = if post_site || matches!(data, EvmMachineInstKind::Call(_)) {
-                FrameInjectionPoint::BeforeSite(FrameSite::PostInst(inst))
-            } else {
-                FrameInjectionPoint::AfterSite(pre)
-            };
+            let inst_exit =
+                if emits_after(alloc, inst, &data) || matches!(data, EvmMachineInstKind::Call(_)) {
+                    FrameInjectionPoint::BeforeSite(FrameSite::PostInst(inst))
+                } else {
+                    FrameInjectionPoint::AfterSite(pre)
+                };
             if roots.root_def_insts.contains(&inst) {
                 deps.push(block, FrameInjectionPoint::BeforeSite(pre), inst_exit);
             }
@@ -543,16 +529,6 @@ fn collect_dep_points(
                         );
                     }
                 }
-            }
-
-            if post_site {
-                deps.push_actions(
-                    block,
-                    FrameSite::PostInst(inst),
-                    fold_stack_actions(alloc.post_inst(inst))
-                        .into_iter()
-                        .enumerate(),
-                );
             }
         }
     }

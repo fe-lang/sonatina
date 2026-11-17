@@ -16,6 +16,20 @@ pub use stackify::{StackifyAlloc, StackifyBuilder, StackifySearchProfile};
 
 pub type Actions = SmallVec<[Action; 2]>;
 
+/// Where the actions of an [`Allocator`] run.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ActionSite {
+    /// At function entry ([`Allocator::enter_function`]).
+    Entry,
+    /// Before `inst`'s opcodes ([`Allocator::pre_inst`]).
+    Before(InstId),
+    /// After `inst`'s opcodes ([`Allocator::post_inst`]).
+    After(InstId),
+    /// Before the comparison of case `case` of the `br_table` `inst`
+    /// ([`Allocator::br_table_case`]).
+    Case(InstId, usize),
+}
+
 pub trait Allocator {
     /// Actions to run at function entry (function-argument spill stores).
     fn enter_function(&self, function: &Function) -> Actions;
