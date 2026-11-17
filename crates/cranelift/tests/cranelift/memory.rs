@@ -2856,3 +2856,77 @@ block0:
         assert_eq!(&words[12..16], &[x, 0, 0, x], "{level:?}");
     }
 }
+
+#[test]
+fn agg_make_builds_values_in_registers_and_storage() {
+    // `@Pair` is held in registers and `@Outer` in storage; `%partial` leaves
+    // a scalar and an aggregate field `undef`. Padding and `undef` fields are
+    // not checked.
+    let source = r#"
+type @Pair = { i64, i64 };
+type @Gap = { i8, i64 };
+type @Outer = { @Pair, [i64; 3], @Gap };
+func public %pair(v0.i64, v1.i64, v2.*@Pair) {
+block0:
+    v3.@Pair = agg.make @Pair v1 v0;
+    mstore v2 v3 @Pair;
+    return;
+}
+func public %outer(v0.i64, v1.i64, v2.*@Outer) {
+block0:
+    v3.@Pair = agg.make @Pair v0 v1;
+    v4.[i64; 3] = agg.make [i64; 3] v1 7.i64 v0;
+    v5.i8 = trunc v0 i8;
+    v6.@Gap = agg.make @Gap v5 v1;
+    v7.@Outer = agg.make @Outer v3 v4 v6;
+    mstore v2 v7 @Outer;
+    return;
+}
+func public %partial(v0.i64, v1.i64, v2.*@Outer) {
+block0:
+    v3.@Pair = agg.make @Pair v0 undef.i64;
+    v4.i8 = trunc v1 i8;
+    v5.@Gap = agg.make @Gap v4 v0;
+    v6.@Outer = agg.make @Outer v3 undef.[i64; 3] v5;
+    v7.@Pair = extract_value v6 0.i64;
+    v8.i64 = extract_value v7 0.i64;
+    v9.@Pair = agg.make @Pair v8 v1;
+    v10.@Outer = insert_value v6 0.i64 v9;
+    mstore v2 v10 @Outer;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let address = |name| artifact.function_address(name).unwrap();
+        let pair: unsafe extern "C" fn(i64, i64, *mut i64) =
+            unsafe { std::mem::transmute(address("pair")) };
+        let outer: unsafe extern "C" fn(i64, i64, *mut i64) =
+            unsafe { std::mem::transmute(address("outer")) };
+        let partial: unsafe extern "C" fn(i64, i64, *mut i64) =
+            unsafe { std::mem::transmute(address("partial")) };
+        for (a, b) in [(11, 22), (-1, i64::MIN), (0x1234, i64::MAX)] {
+            let mut words = [0; 2];
+            unsafe { pair(a, b, words.as_mut_ptr()) };
+            assert_eq!(words, [b, a], "{level:?}");
+
+            let mut words = [0x5555; 7];
+            unsafe { outer(a, b, words.as_mut_ptr()) };
+            assert_eq!(&words[..5], &[a, b, b, 7, a], "{level:?}");
+            assert_eq!(words[5] & 0xff, a & 0xff, "{level:?}");
+            assert_eq!(words[6], b, "{level:?}");
+
+            let mut words = [0x5555; 7];
+            unsafe { partial(a, b, words.as_mut_ptr()) };
+            assert_eq!(&words[..2], &[a, b], "{level:?}");
+            assert_eq!(words[5] & 0xff, b & 0xff, "{level:?}");
+            assert_eq!(words[6], a, "{level:?}");
+        }
+    }
+}

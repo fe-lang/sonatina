@@ -933,13 +933,42 @@ impl FunctionTranslator<'_> {
                 .and_then(|result| dfg.users(result).copied().next())
                 .filter(|&next| self.continues_in_place(block, current, next));
         }
-        // The written ranges cover the aggregate if, in order of their
-        // starts, each begins within those before it.
-        written.sort_unstable();
-        let end = written.into_iter().try_fold(0, |end, (start, stop)| {
-            (start <= end).then_some(end.max(stop))
-        });
-        Ok(end == Some(size))
+        Ok(covers(written, size))
+    }
+
+    /// `agg.make`: a new aggregate in a slot of the frame, with each field
+    /// stored from its operand. As for an insert chain on undef, the bytes
+    /// no stored field covers are zero: padding, and `undef` fields.
+    pub(super) fn agg_make(
+        &mut self,
+        wb: waffle::Block,
+        inst_id: InstId,
+        values: &[ValueId],
+    ) -> Result<(), WasmError> {
+        let ty = self.result_ty(inst_id)?;
+        let (size, align) = self.layout_of(ty)?;
+        let slot = self.slot(size, align)?;
+        let address = self.slot_address(wb, slot)?;
+        let mut fields = Vec::new();
+        for (idx, &value) in values.iter().enumerate() {
+            if matches!(self.function.dfg.value(value), Value::Undef { .. }) {
+                continue;
+            }
+            let (offset, elem_ty) = self.element_offset(ty, idx)?;
+            let (elem_size, _) = self.layout_of(elem_ty)?;
+            fields.push((offset, elem_size, elem_ty, value));
+        }
+        let written = fields
+            .iter()
+            .map(|&(offset, elem_size, ..)| (offset, offset + elem_size))
+            .collect();
+        if !covers(written, size) {
+            self.fill_zero(wb, address, size);
+        }
+        for (offset, _, elem_ty, value) in fields {
+            self.store_value(wb, "agg.make", elem_ty, address, offset, value)?;
+        }
+        self.define(inst_id, 0, address, ty)
     }
 
     pub(super) fn extract_value(
@@ -1284,4 +1313,14 @@ fn immediate_value(imm: Immediate, signed: bool) -> Option<i128> {
         }
         _ => return None,
     })
+}
+
+/// Whether the byte ranges `written` cover `0..size`: in order of their
+/// starts, each begins within those before it.
+fn covers(mut written: Vec<(u32, u32)>, size: u32) -> bool {
+    written.sort_unstable();
+    let end = written.into_iter().try_fold(0, |end, (start, stop)| {
+        (start <= end).then_some(end.max(stop))
+    });
+    end == Some(size)
 }

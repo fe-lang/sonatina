@@ -228,6 +228,7 @@ fn kind_needs_runtime(kind: &NativeInstKind<'_>) -> bool {
             | NativeInstKind::ObjLoad(_)
             | NativeInstKind::ObjStore(_)
             | NativeInstKind::ObjMaterializeStack(_)
+            | NativeInstKind::AggMake(_)
             | NativeInstKind::InsertValue(_)
             | NativeInstKind::ExtractValue(_)
             | NativeInstKind::EnumMake(_)
@@ -2481,6 +2482,7 @@ impl<'a> FunctionTranslator<'a> {
             NativeInstKind::SymAddr(i) if let SymbolRef::Global(gv) = i.sym() => {
                 self.global_address(*wb, inst_id, op, *gv)?
             }
+            NativeInstKind::AggMake(i) => self.agg_make(*wb, inst_id, i.values())?,
             NativeInstKind::InsertValue(i) => {
                 self.insert_value(block, *wb, inst_id, *i.dest(), *i.idx(), *i.value())?
             }
@@ -2602,7 +2604,6 @@ impl<'a> FunctionTranslator<'a> {
             NativeInstKind::GetFunctionPtr(_)
             | NativeInstKind::SymAddr(_)
             | NativeInstKind::SymSize(_) => return Err(self.unsupported_inst(op)),
-            NativeInstKind::AggMake(_) => return Err(self.unsupported_inst(op)),
 
             // Enums take the layout of the target: the tag at offset zero and
             // every variant's fields from one shared payload offset.

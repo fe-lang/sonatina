@@ -550,6 +550,7 @@ impl Plan {
                     NativeInstKind::Mload(_)
                     | NativeInstKind::ObjLoad(_)
                     | NativeInstKind::Call(_)
+                    | NativeInstKind::AggMake(_)
                     | NativeInstKind::EnumMake(_)
                     | NativeInstKind::Sha256Compress(_) => Some(position[inst]),
                     NativeInstKind::InsertValue(insert) => {

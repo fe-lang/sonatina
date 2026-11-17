@@ -2102,26 +2102,16 @@ fn translate_function(
                         ));
                     }
 
-                    if frame.inserts_in_place(inst_id) {
-                        // The value was built in this field.
-                    } else if uses_indirect_value_representation(&module.ctx, value_ty) {
-                        let field_addr = builder.ins().iadd_imm_s(result_addr, i64::from(offset));
-                        store_indirect(
-                            function,
-                            *insert.value(),
-                            field_addr,
-                            value_ty,
-                            &value_map,
-                            target_config,
-                            &mut builder,
-                        )?;
-                    } else {
-                        store_value(
+                    // Unless the value was built in this field.
+                    if !frame.inserts_in_place(inst_id) {
+                        store_field(
                             function,
                             *insert.value(),
                             result_addr,
                             offset,
+                            value_ty,
                             &value_map,
+                            target_config,
                             &mut builder,
                         )?;
                     }
@@ -2444,6 +2434,50 @@ fn translate_function(
                     emit_trap(&mut builder, TrapCode::user(1).unwrap());
                 }
                 NativeInstKind::Phi(_) => continue,
+                NativeInstKind::AggMake(make)
+                    if let Some(result) = function.dfg.inst_result(inst_id)
+                        && let Some(parts) =
+                            register_parts(&module.ctx, function.dfg.value_ty(result)) =>
+                {
+                    let result_ty = function.dfg.value_ty(result);
+                    let mut values = zero_parts(&module.ctx, &parts, &mut builder)?;
+                    for (idx, &field) in make.values().iter().enumerate() {
+                        let (offset, ty) = aggregate_elem_offset(&module.ctx, result_ty, idx)?;
+                        let field_values =
+                            field_part_values(function, field, &value_map, &mut builder)?;
+                        replace_parts(
+                            &parts,
+                            &mut values,
+                            offset as u32,
+                            value_storage_size(ty, &module.ctx)?,
+                            &field_values,
+                        )?;
+                    }
+                    value_map.insert_parts(result, values);
+                }
+                NativeInstKind::AggMake(make) => {
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let result_ty = function.dfg.value_ty(result);
+                        let addr =
+                            storage_address(&frame, function, result, &value_map, &mut builder)?;
+                        // Padding is not part of the value, so it keeps
+                        // whatever it holds.
+                        for (idx, &field) in make.values().iter().enumerate() {
+                            let (offset, ty) = aggregate_elem_offset(&module.ctx, result_ty, idx)?;
+                            store_field(
+                                function,
+                                field,
+                                addr,
+                                offset,
+                                ty,
+                                &value_map,
+                                target_config,
+                                &mut builder,
+                            )?;
+                        }
+                        value_map.insert(result, addr);
+                    }
+                }
                 NativeInstKind::EnumMake(make)
                     if let Some(result) = function.dfg.inst_result(inst_id)
                         && let Some(parts) =
@@ -2664,12 +2698,6 @@ fn translate_function(
                         let addr = builder.ins().iadd_imm_s(base, i64::from(offset));
                         value_map.insert(result, addr);
                     }
-                }
-                NativeInstKind::AggMake(_) => {
-                    return Err(
-                        "`agg.make` is not supported by the host-native Cranelift backend"
-                            .to_string(),
-                    );
                 }
                 NativeInstKind::GetFunctionPtr(_)
                 | NativeInstKind::SymAddr(_)
