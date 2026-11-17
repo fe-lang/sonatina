@@ -200,7 +200,8 @@ impl State for Machine {
         frame.prev_block.unwrap()
     }
 
-    // Memory never written holds zeros; a read is never undef.
+    // Memory never written reads as zero, which refines the unspecified value
+    // it holds.
     fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue {
         let Some(addr) = addr.as_imm().and_then(nonnegative_imm_usize) else {
             return EvalValue::Undef.fixed(&self.module_ctx, ty);
@@ -394,7 +395,7 @@ mod tests {
         let mut machine = Machine::new(test_module_builder().build());
         machine.memory = vec![1, 2, 3, 4];
 
-        // A read is never undef; memory it cannot reach reads as zero.
+        // Memory it cannot reach reads as zero.
         assert_eq!(
             machine.load(EvalValue::Imm(Immediate::I8(-1)), Type::I8),
             EvalValue::Imm(Immediate::I8(0))

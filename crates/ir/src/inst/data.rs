@@ -150,10 +150,11 @@ pub struct Sha256Compress {
     block: ValueId,
 }
 
-/// Returns `arg` with one fixed value: where `arg` is undefined, every use of
-/// the result still sees the same, arbitrary value. Memory reads, call results
-/// and parameters are never undefined, so a transform that replaces one with
-/// a value that may be undefined freezes that value.
+/// Returns `arg` when it is specified, and otherwise some concrete value, the
+/// same for every use of the result. A transform that adds a branch, address
+/// or variant-assumption use of a value that may be unspecified, or makes a
+/// result depend on an operand it did not depend on, freezes that operand.
+/// See `docs/undef.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Freeze {
     arg: ValueId,

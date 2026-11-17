@@ -163,8 +163,8 @@ pub trait State {
     fn dfg(&self) -> &DataFlowGraph;
 
     /// The value `freeze` gives for `value` of type `ty`. Running code fixes
-    /// undef to zero; an abstract state, whose undef can stand for a value it
-    /// does not know yet, keeps it.
+    /// an unspecified value to zero; an abstract state, whose `Undef` can
+    /// stand for a value it does not know yet, keeps it.
     fn freeze(&mut self, value: EvalValue, ty: Type) -> EvalValue {
         value.fixed(&self.dfg().ctx, ty)
     }
@@ -204,10 +204,11 @@ pub enum EvalValue {
 }
 
 impl EvalValue {
-    /// One fixed value of `ty` for `self`, as `freeze`, memory reads and call
-    /// boundaries never pass undef on: an undefined scalar becomes zero, and
-    /// each field of a struct or array is fixed in turn, keeping those already
-    /// set.
+    /// One concrete value of `ty` for `self`: an unspecified scalar becomes
+    /// zero, and each field of a struct or array is fixed in turn, keeping
+    /// those already set. `freeze` gives it; the interpreter also fixes
+    /// values at memory reads and call boundaries, where a concrete value
+    /// refines the unspecified one.
     pub fn fixed(self, ctx: &ModuleCtx, ty: Type) -> Self {
         let field_tys = match ty.resolve_compound(ctx) {
             Some(CompoundType::Struct(s)) => s.fields,
