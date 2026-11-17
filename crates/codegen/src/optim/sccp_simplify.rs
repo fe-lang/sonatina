@@ -263,11 +263,16 @@ pub(super) fn simplify_inst(
             }
         }
         InstClassKind::Phi | InstClassKind::Opaque => {
-            // A value that is never undef is already one fixed value.
+            // A constant, or what another freeze gives, is specified already.
+            // Parameters, call results and reads may be unspecified.
             if let Some(freeze) = downcast::<&data::Freeze>(is, inst)
-                && !facts.may_be_undef(*freeze.arg())
+                && let arg = *freeze.arg()
+                && (facts.known_imm(arg).is_some()
+                    || func.dfg.value_inst(arg).is_some_and(|inst| {
+                        downcast::<&data::Freeze>(is, func.dfg.inst(inst)).is_some()
+                    }))
             {
-                return wrap_action(SimplifyAction::Copy(*freeze.arg()));
+                return wrap_action(SimplifyAction::Copy(arg));
             }
             if let Some(i) = downcast::<&data::ConstLoad>(is, inst) {
                 return wrap_action(simplify_const_load(
