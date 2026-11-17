@@ -163,14 +163,14 @@ func public %main() -> i256 {
     let mut module = parse_module(source).expect("module should parse").module;
     Inliner::new(InlinerConfig::default()).run(&mut module);
     let inlined = ModuleWriter::new(&module).dump_string();
-    assert!(inlined.contains("freeze undef.*i256"), "{inlined}");
+    assert!(inlined.contains("ptr_to_int undef.*i256"), "{inlined}");
 
     let backend = evm_backend();
     let main = find_func(&module, "main");
     let prepared = prepare_root(&module, &backend, main).expect("prepare should succeed");
     backend
         .lower_function(&prepared, main)
-        .expect("lowering should take the frozen pointer");
+        .expect("lowering should take the undef pointer");
 }
 
 #[test]
