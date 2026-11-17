@@ -376,7 +376,7 @@ func public %test() -> i1 {
     }
 
     #[test]
-    fn guarded_subtraction_keeps_undef_dependent_checks() {
+    fn guarded_subtraction_drops_undef_dependent_checks() {
         let text = optimized(
             r#"
 target = "evm-ethereum-osaka"
@@ -395,12 +395,12 @@ func public %test() -> i1 {
 }
 "#,
         );
-        // Each use of `v1` may see a different value, so the comparison
-        // proves nothing about the subtraction.
-        assert!(text.contains("usubo"), "{text}");
+        // Where `v1` is unspecified the branch on the comparison is
+        // undefined, so the comparison holds for the subtraction.
+        assert!(!text.contains("usubo"), "{text}");
     }
     #[test]
-    fn guarded_subtraction_keeps_intrinsically_undefined_checks() {
+    fn guarded_subtraction_drops_checks_after_divisions() {
         for operation in [
             "udiv", "sdiv", "umod", "smod", "evm_udiv", "evm_sdiv", "evm_umod", "evm_smod",
         ] {
@@ -423,12 +423,9 @@ func public %test() -> i1 {{
 }}
 "#
                 ));
-                let defined = operation.starts_with("evm_") || divisor == "7.i256";
-                assert_eq!(
-                    text.contains("usubo"),
-                    !defined,
-                    "{operation} {divisor}: {text}"
-                );
+                // Whatever a division by zero gives, the branch on the
+                // comparison holds for the subtraction it guards.
+                assert!(!text.contains("usubo"), "{operation} {divisor}: {text}");
             }
         }
     }

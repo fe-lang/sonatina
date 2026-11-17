@@ -1,7 +1,4 @@
-use rustc_hash::FxHashSet;
-use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, InstId, ValueId, inst::control_flow::BranchKind,
-};
+use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId, inst::control_flow::BranchKind};
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
@@ -56,7 +53,7 @@ impl RangeBranchSimplify {
                     continue;
                 }
 
-                if let Some(plan) = plan_branch(func, block, &env, inst, analysis.maybe_undef()) {
+                if let Some(plan) = plan_branch(func, block, &env, inst) {
                     self.plans.push(plan);
                 }
 
@@ -87,14 +84,13 @@ fn plan_branch(
     block: BlockId,
     env: &RangeEnv,
     term: InstId,
-    maybe_undef: &FxHashSet<ValueId>,
 ) -> Option<RewritePlan> {
     let branch = func.dfg.branch_info(term)?;
     let BranchKind::Br(br) = branch.branch_kind() else {
         return None;
     };
 
-    let truth = condition_truth_in_env(func, env, *br.cond(), maybe_undef)?;
+    let truth = condition_truth_in_env(func, env, *br.cond())?;
     Some(RewritePlan {
         block,
         term,

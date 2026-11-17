@@ -1,0 +1,23 @@
+#! `eq x x` is 1 even where `x` may be unspecified: an unspecified `x` makes
+#! the comparison unspecified, which 1 refines.
+
+target = "evm-ethereum-london"
+
+# sameln: func public %self_identity_unspecified(v0.i1) -> i1 {
+# not: eq
+# check: return 1.i1;
+func public %self_identity_unspecified(v0.i1) -> i1 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i8 = phi (undef.i8 block1) (undef.i8 block2);
+        v2.i1 = eq v1 v1;
+        return v2;
+}

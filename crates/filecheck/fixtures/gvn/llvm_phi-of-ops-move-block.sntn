@@ -21,11 +21,11 @@ target = "evm-ethereum-london"
 # nextln:         jump block3;
 # nextln:
 # nextln:     block4:
+# nextln:         v17.i1 = phi (v2 block1) (1.i1 block2);
 # nextln:         v16.i1 = phi (0.i1 block1) (1.i1 block2);
 # nextln:         v5.i32 = phi (0.i32 block1) (-1.i32 block2);
-# nextln:         v7.i1 = or v2 v16;
 # nextln:         v8.i32 = add v1 -1.i32;
-# nextln:         br v7 block1 block5;
+# nextln:         br v17 block1 block5;
 # nextln:
 # nextln:     block5:
 # nextln:         return;
@@ -73,11 +73,11 @@ func public %llvm_test(v0.*i32, v100.*i64) -> unit {
 # nextln:         jump block5;
 # nextln:
 # nextln:     block5:
+# nextln:         v13.i1 = phi (v2 block1) (1.i1 block2) (1.i1 block4);
 # nextln:         v12.i1 = phi (0.i1 block1) (1.i1 block2) (1.i1 block4);
 # nextln:         v3.i32 = phi (0.i32 block1) (-1.i32 block2) (-1.i32 block4);
-# nextln:         v5.i1 = or v2 v12;
 # nextln:         v6.i32 = add v1 -1.i32;
-# nextln:         br v5 block1 block6;
+# nextln:         br v13 block1 block6;
 # nextln:
 # nextln:     block6:
 # nextln:         return;
