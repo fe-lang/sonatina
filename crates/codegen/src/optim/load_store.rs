@@ -15,10 +15,7 @@ use sonatina_ir::{
 };
 
 use super::dead_malloc::eliminate_dead_mallocs;
-use crate::{
-    analysis::definedness::UndefTaint,
-    transform::aggregate::{MemoryReach, ObjectEffectSummaryMap, RawObjectAccesses},
-};
+use crate::transform::aggregate::{MemoryReach, ObjectEffectSummaryMap, RawObjectAccesses};
 
 mod absolute;
 use absolute::{AbsoluteLocations, absolute_interval};
@@ -367,7 +364,6 @@ impl LoadStoreSolver {
             .into_iter()
             .rev()
             .collect();
-        let taint = UndefTaint::new(func);
 
         let mut in_states = SecondaryMap::<sonatina_ir::BlockId, AvailState>::new();
         let mut out_states = SecondaryMap::<sonatina_ir::BlockId, AvailState>::new();
@@ -420,7 +416,7 @@ impl LoadStoreSolver {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    transfer_forward(func, inst, analysis, objects, &mut state, &taint, false);
+                    transfer_forward(func, inst, analysis, objects, &mut state, false);
                 }
 
                 if !out_valid[block] || state != out_states[block] {
@@ -446,7 +442,7 @@ impl LoadStoreSolver {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
-                if transfer_forward(func, inst, analysis, objects, &mut state, &taint, true) {
+                if transfer_forward(func, inst, analysis, objects, &mut state, true) {
                     changed = true;
                 }
             }
@@ -737,7 +733,6 @@ fn transfer_forward(
     analysis: &mut MemoryAccessAnalysis,
     objects: &RawObjectAccesses,
     state: &mut AvailState,
-    taint: &UndefTaint,
     rewrite: bool,
 ) -> bool {
     let effects = memory_effects(func, inst, objects);
@@ -800,11 +795,7 @@ fn transfer_forward(
         }
 
         kill_aliasing_key(state, analysis, &key);
-        // A read is never undef, so it cannot take a stored value that may be,
-        // even in one field; the first read then serves the later ones.
-        if !taint.holds_undef(func, stored_value) {
-            state.exact.insert(key, stored_value);
-        }
+        state.exact.insert(key, stored_value);
     }
 
     false
@@ -1392,14 +1383,13 @@ block0:
         }
     }
 
+    /// A read gives what the store wrote, unspecified fields included.
     #[test]
-    fn reads_keep_stored_aggregates_with_undefined_fields() {
-        // A read is never undef, so a nested field that is stays behind the read.
-        let dumped = forward_pair_read("undef.i256");
-        assert!(dumped.contains("mload v1 @nested;"), "{dumped}");
-
-        let dumped = forward_pair_read("v0");
-        assert!(!dumped.contains("mload"), "{dumped}");
+    fn reads_take_stored_aggregates_with_undefined_fields() {
+        for field in ["undef.i256", "v0"] {
+            let dumped = forward_pair_read(field);
+            assert!(!dumped.contains("mload"), "{field}: {dumped}");
+        }
     }
 
     #[test]
@@ -1439,14 +1429,12 @@ block0:
         let mut state = AvailState::default();
         state.exact.insert(key.clone(), dead_load);
 
-        let taint = UndefTaint::new(&builder.func);
         assert!(!transfer_forward(
             &mut builder.func,
             live_inst,
             &mut analysis,
             &RawObjectAccesses::default(),
             &mut state,
-            &taint,
             true,
         ));
         assert!(builder.func.layout.is_inst_inserted(live_inst));

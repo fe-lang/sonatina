@@ -649,12 +649,8 @@ impl GvnSolver {
     ) -> Option<GvnInsn> {
         let read = object_memory?.read_state(insn)?;
         let key = read.key();
-        // Forwarding the carried value needs ObjectMemory's proof that the
-        // demanded contents are defined, including reconstructed aggregates
-        // and immutable load snapshots; it is stronger than the generic SSA
-        // walk. Reads of the same contents return the same bits either way.
-        if !read.may_be_undef()
-            && let CarrierSource::Value(value) = key.source
+        // A read of exactly the carried slice gives the carried value.
+        if let CarrierSource::Value(value) = key.source
             && key.carrier_slice == key.read_slice
             && func.dfg.value_ty(value) == func.dfg.value_ty(inst_result)
         {
