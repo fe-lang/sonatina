@@ -611,10 +611,11 @@ impl GvnSolver {
 
             // We need to recompute value phi for the class to reflect reachability changes and
             // leader changes.
-            value_phi_changed |= self.recompute_value_phi(func, known_bits, inst_result, class);
+            value_phi_changed |=
+                self.recompute_value_phi(func, domtree, known_bits, inst_result, class);
             class
-        } else if let Some(value_phi) =
-            ValuePhiFinder::new(self, known_bits, inst_result).compute_value_phi(func, &gvn_insn)
+        } else if let Some(value_phi) = ValuePhiFinder::new(self, domtree, known_bits, inst_result)
+            .compute_value_phi(func, &gvn_insn)
         {
             if let Some(class) = self.value_phi_table.get(&value_phi) {
                 *class
@@ -669,6 +670,7 @@ impl GvnSolver {
     fn recompute_value_phi(
         &mut self,
         func: &mut Function,
+        domtree: &DomTree,
         known_bits: &KnownBitsQuery,
         inst_result: ValueId,
         class: Class,
@@ -678,7 +680,7 @@ impl GvnSolver {
         // revisited. Recomputing from different members can alternate between a
         // value phi and None forever, preventing the solver from reaching a fixpoint.
         let canonical_insn = self.classes[class].gvn_insn.clone();
-        let value_phi = ValuePhiFinder::new(self, known_bits, inst_result)
+        let value_phi = ValuePhiFinder::new(self, domtree, known_bits, inst_result)
             .compute_value_phi(func, &canonical_insn);
         self.update_class_value_phi(class, value_phi)
     }
@@ -1793,6 +1795,7 @@ struct GvnBlock {
 /// `Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA`.
 struct ValuePhiFinder<'a, 'b> {
     solver: &'a mut GvnSolver,
+    domtree: &'b DomTree,
     known_bits: &'b KnownBitsQuery,
     /// Hold visited values to prevent infinite loop in `get_phi_of`.
     visited: FxHashSet<ValueId>,
@@ -1804,6 +1807,7 @@ struct ValuePhiFinder<'a, 'b> {
 impl<'a, 'b> ValuePhiFinder<'a, 'b> {
     fn new(
         solver: &'a mut GvnSolver,
+        domtree: &'b DomTree,
         known_bits: &'b KnownBitsQuery,
         inst_result: ValueId,
     ) -> Self {
@@ -1811,6 +1815,7 @@ impl<'a, 'b> ValuePhiFinder<'a, 'b> {
         visited.insert(inst_result);
         Self {
             solver,
+            domtree,
             known_bits,
             visited,
             visited_queries: FxHashSet::default(),
@@ -1919,6 +1924,9 @@ impl<'a, 'b> ValuePhiFinder<'a, 'b> {
         // lhs := PhiInsn(lhs_arg1: block1, .., lhs_argN: blockN, phi_block)
         // rhs := rhs_value
         // args := [((lhs_arg1, rhs_value): block1), .., ((lhs_argN, rhs_value), blockN), phi_block)]
+        // `rhs_value` is the instance the instruction uses, so it pairs with a phi argument only
+        // if that argument is not an older instance of it or of anything computed from it: see
+        // `pairs_with`.
         //
         // 3. In case rhs is a phi insn and lhs is a value.
         // Same as 2.
@@ -1944,25 +1952,33 @@ impl<'a, 'b> ValuePhiFinder<'a, 'b> {
                 (args, lhs_phi.block)
             }
 
-            (ValuePhi::PhiInsn(lhs_phi), ValuePhi::Value(rhs_value)) => (
-                lhs_phi
-                    .args
-                    .into_iter()
-                    .map(|(phi_arg, block)| ((phi_arg, ValuePhi::Value(rhs_value)), block))
-                    .collect(),
-                lhs_phi.block,
-            ),
+            (ValuePhi::PhiInsn(lhs_phi), ValuePhi::Value(rhs_value))
+                if self.pairs_with(func, rhs_value, &lhs_phi) =>
+            {
+                (
+                    lhs_phi
+                        .args
+                        .into_iter()
+                        .map(|(phi_arg, block)| ((phi_arg, ValuePhi::Value(rhs_value)), block))
+                        .collect(),
+                    lhs_phi.block,
+                )
+            }
 
-            (ValuePhi::Value(lhs_value), ValuePhi::PhiInsn(rhs_phi)) => (
-                rhs_phi
-                    .args
-                    .into_iter()
-                    .map(|(phi_arg, block)| ((ValuePhi::Value(lhs_value), phi_arg), block))
-                    .collect(),
-                rhs_phi.block,
-            ),
+            (ValuePhi::Value(lhs_value), ValuePhi::PhiInsn(rhs_phi))
+                if self.pairs_with(func, lhs_value, &rhs_phi) =>
+            {
+                (
+                    rhs_phi
+                        .args
+                        .into_iter()
+                        .map(|(phi_arg, block)| ((ValuePhi::Value(lhs_value), phi_arg), block))
+                        .collect(),
+                    rhs_phi.block,
+                )
+            }
 
-            (ValuePhi::Value(_), ValuePhi::Value(_)) => return None,
+            _ => return None,
         };
 
         let mut result = ValuePhiInsn::with_capacity(phi_block, args.len());
@@ -2090,6 +2106,21 @@ impl<'a, 'b> ValuePhiFinder<'a, 'b> {
         let result = self.compute_value_phi(func, &query);
         self.visited_queries.remove(&query);
         result
+    }
+
+    /// Whether `value`, as an instruction pairs it with `phi`, may be paired with each argument
+    /// of `phi` on that argument's edge. It may if it is defined before `phi`'s block, so it is
+    /// the same instance on every edge; or if no argument comes in on a backedge, so each was
+    /// computed earlier in the same pass. An argument on a backedge comes from the previous
+    /// pass: paired with a `value` defined in the loop, `lt x x` would compare two iterations.
+    fn pairs_with(&self, func: &Function, value: ValueId, phi: &ValuePhiInsn) -> bool {
+        func.dfg.value_inst(value).is_none_or(|inst| {
+            self.domtree
+                .strictly_dominates(func.layout.inst_block(inst), phi.block)
+        }) || phi
+            .args
+            .iter()
+            .all(|&(_, pred)| !self.domtree.dominates(phi.block, pred))
     }
 
     /// Returns the `ValuePhi` if the value is defined by the phi insn or the class of the value
@@ -3155,7 +3186,7 @@ func private %entry(v0.i1) -> i32 {
             let result = func.dfg.inst_result(add).unwrap();
             let canonical = GvnInsn::expr(inst_to_gvn_key(func, add), 0);
             let known_bits = KnownBitsQuery::new(func);
-            let value_phi = ValuePhiFinder::new(&mut solver, &known_bits, result)
+            let value_phi = ValuePhiFinder::new(&mut solver, &domtree, &known_bits, result)
                 .compute_value_phi(func, &canonical)
                 .unwrap();
             let class = solver.make_class(canonical, Some(value_phi.clone()));
@@ -3233,7 +3264,9 @@ func private %entry(v0.i1) -> i32 {
             solver.assign_class(phi_value, class);
 
             let known_bits = KnownBitsQuery::new(func);
-            let mut finder = ValuePhiFinder::new(&mut solver, &known_bits, func.arg_values[0]);
+            let domtree = DomTree::new();
+            let mut finder =
+                ValuePhiFinder::new(&mut solver, &domtree, &known_bits, func.arg_values[0]);
             assert!(finder.get_phi_of(func, phi_value).is_some());
             assert!(finder.get_phi_of(func, phi_value).is_some());
         });
@@ -3293,7 +3326,9 @@ func private %entry(v0.i1) -> i32 {
             solver.assign_class(phi_value, class);
 
             let known_bits = KnownBitsQuery::new(func);
-            let mut finder = ValuePhiFinder::new(&mut solver, &known_bits, func.arg_values[0]);
+            let domtree = DomTree::new();
+            let mut finder =
+                ValuePhiFinder::new(&mut solver, &domtree, &known_bits, func.arg_values[0]);
             assert_eq!(finder.get_phi_of(func, phi_value), None);
         });
     }
@@ -3358,7 +3393,9 @@ func private %entry(v0.i1) -> i32 {
             solver.assign_class(phi_value, class);
 
             let known_bits = KnownBitsQuery::new(func);
-            let mut finder = ValuePhiFinder::new(&mut solver, &known_bits, func.arg_values[0]);
+            let domtree = DomTree::new();
+            let mut finder =
+                ValuePhiFinder::new(&mut solver, &domtree, &known_bits, func.arg_values[0]);
             assert_eq!(finder.get_phi_of(func, phi_value), None);
         });
     }
