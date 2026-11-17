@@ -460,9 +460,12 @@ impl AggregateScalarize {
                 promoted.leaf_vars.push(var);
                 let init = match promoted.init {
                     // Fresh memory holds arbitrary but fixed bits, which every
-                    // read before the first store sees alike.
+                    // read before the first store sees alike: zero.
+                    RootInit::UndefFresh if leaf.ty.is_integral() || leaf.ty.is_enum_tag() => {
+                        func.dfg.make_imm_value(Immediate::zero(leaf.ty))
+                    }
                     RootInit::UndefFresh if is_scalar(func, leaf.ty) => {
-                        self.insert_frozen_undef_leaf(func, promoted, leaf.ty)
+                        self.insert_null_leaf(func, promoted, leaf.ty)
                     }
                     RootInit::UndefFresh => func.dfg.make_undef_value(leaf.ty),
                     RootInit::LoadLiveIn => {
@@ -2044,9 +2047,14 @@ impl AggregateScalarize {
             let Some(shape) = self.aggregate_shape(module, enum_ty) else {
                 return;
             };
+            // The leaves only other variants use hold zero; a pointer has no immediate.
             let mut leaves = LeafValues::new();
             for leaf in &shape.leaves {
-                leaves.push(func.dfg.make_undef_value(leaf.ty));
+                leaves.push(if leaf.ty.is_integral() || leaf.ty.is_enum_tag() {
+                    func.dfg.make_imm_value(Immediate::zero(leaf.ty))
+                } else {
+                    func.dfg.make_undef_value(leaf.ty)
+                });
             }
             let Some(tag_slice) = shape::enum_tag_slice(module, enum_ty) else {
                 return;
@@ -2722,7 +2730,7 @@ impl AggregateScalarize {
         shape::is_leaf_reifiable_ty(module, ty) || scalarizable[value]
     }
 
-    fn insert_frozen_undef_leaf(
+    fn insert_null_leaf(
         &self,
         func: &mut Function,
         promoted: &PromotableRoot,
@@ -2736,11 +2744,13 @@ impl AggregateScalarize {
                 CursorLocation::At,
             );
         let mut cursor = InstInserter::at_location(loc);
-        let undef = func.dfg.make_undef_value(ty);
-        let freeze =
-            cursor.insert_inst_data(func, data::Freeze::new_unchecked(func.inst_set(), undef));
-        let result = cursor.make_result(func, freeze, ty);
-        cursor.attach_result(func, freeze, result);
+        let zero = func.dfg.make_imm_value(I256::zero());
+        let null = cursor.insert_inst_data(
+            func,
+            cast::IntToPtr::new_unchecked(func.inst_set(), zero, ty),
+        );
+        let result = cursor.make_result(func, null, ty);
+        cursor.attach_result(func, null, result);
         result
     }
 
@@ -3389,11 +3399,9 @@ mod tests {
 
     /// A fresh slot's seed: one arbitrary value, `freeze undef`.
     fn is_fresh_seed(func: &Function, value: ValueId) -> bool {
-        func.dfg.value_inst(value).is_some_and(|inst| {
-            func.dfg
-                .downcast::<&data::Freeze>(inst)
-                .is_some_and(|freeze| matches!(func.dfg.value(*freeze.arg()), Value::Undef { .. }))
-        })
+        func.dfg
+            .value_imm(value)
+            .is_some_and(|imm| imm.as_i256() == I256::zero())
     }
 
     #[test]
@@ -3803,7 +3811,7 @@ func private %f(v0.i1, v1.{ty}, v2.{ty}) -> {ty} {{
     }
 
     #[test]
-    fn scalarize_scalar_loop_local_reseeds_undef() {
+    fn scalarize_scalar_loop_local_reseeds_zero() {
         let dumped = scalarize_verified(
             r#"
 target = "evm-ethereum-osaka"
@@ -3829,7 +3837,8 @@ func private %f() -> i256 {
 "#,
         );
         assert!(!dumped.contains("obj."), "{dumped}");
-        assert!(dumped.contains("undef.i256"), "{dumped}");
+        assert!(!dumped.contains("undef"), "{dumped}");
+        assert!(dumped.contains("(0.i256 block"), "{dumped}");
         assert!(dumped.contains("9.i256 block2"), "{dumped}");
     }
 
@@ -5202,7 +5211,7 @@ func private %pair(v0.i1) -> @Pair {
     }
 
     #[test]
-    fn scalarize_non_entry_alloca_merges_store_and_undef_paths() {
+    fn scalarize_non_entry_alloca_merges_store_and_fresh_paths() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -5270,7 +5279,7 @@ func private %f(v0.i1) -> i256 {
 
             assert!(
                 found,
-                "expected scalar phi merging stored and `freeze undef` paths"
+                "expected scalar phi merging stored and fresh zero paths"
             );
         });
     }
@@ -5354,7 +5363,7 @@ func private %f() -> i256 {
 
             assert!(
                 found,
-                "loop-local promoted alloca should re-seed to `freeze undef` at its alloca point"
+                "loop-local promoted alloca should re-seed to zero at its alloca point"
             );
         });
     }

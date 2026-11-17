@@ -270,8 +270,8 @@ func public %scalarize_reject_dynamic_index(v0.i8) -> i256 {
 
 # sameln: func public %scalarize_skip_aggregate_store_from_arg(v0.@slice) -> i256 {
 # check:     block0:
-# check:         v10.i256 = extract_value v0 0.i256;
-# check:         return v10;
+# check:         v6.i256 = extract_value v0 0.i256;
+# check:         return v6;
 func public %scalarize_skip_aggregate_store_from_arg(v0.@slice) -> i256 {
     block0:
         v1.*@slice = alloca @slice;

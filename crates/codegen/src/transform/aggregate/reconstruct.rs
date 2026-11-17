@@ -392,8 +392,14 @@ fn enum_child_value_from_source(
             else {
                 return Some(None);
             };
+            // Another variant's field holds zero, as `enum.make` lowers.
             if *enum_make.variant() != variant {
-                return Some(Some(func.dfg.make_undef_value(child_ty)));
+                let other = if child_ty.is_integral() || child_ty.is_enum_tag() {
+                    func.dfg.make_imm_value(Immediate::zero(child_ty))
+                } else {
+                    func.dfg.make_undef_value(child_ty)
+                };
+                return Some(Some(other));
             }
             // The verifier checks that `enum.make` gives every field of its variant.
             return Some(Some(enum_make.values()[field as usize]));

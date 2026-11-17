@@ -158,9 +158,9 @@ func private %main_root() {
         jump block83;
 
     block83:
-        v431.i256 = phi (0.i256 block81) (512.i256 block82) (0.i256 block84);
+        v401.i256 = phi (0.i256 block81) (512.i256 block82) (0.i256 block84);
         v328.i256 = and v307 -130561.i256;
-        v332.i256 = or v328 v431;
+        v332.i256 = or v328 v401;
         v333.i256 = and v332 -8589803521.i256;
         v336.i256 = or v333 262144.i256;
         v338.i256 = and v336 -2.i256;
