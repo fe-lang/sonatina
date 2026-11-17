@@ -999,6 +999,10 @@ pub(crate) fn compute_provenance(
                     EvmInstKind::Bitcast(bc) => {
                         let _ = next.union_with(&info.value[*bc.from()]);
                     }
+                    // Freezes reach memory legalization; lowering makes each its argument.
+                    EvmInstKind::Freeze(freeze) => {
+                        let _ = next.union_with(&info.value[*freeze.arg()]);
+                    }
                     EvmInstKind::BlackBox(black_box) => {
                         let _ = next.union_with(&info.value[*black_box.arg()]);
                     }
