@@ -2268,13 +2268,23 @@ impl<'a> FunctionLegalizer<'a> {
         }
     }
 
-    /// `else ^ ((then ^ else) & -cond)`: the operands are normalized to the
-    /// result's width, and so is their masked difference.
+    /// `else ^ ((then ^ else) & -cond)` on frozen arms: the result depends on
+    /// both, and an unspecified arm would make it unspecified where the other
+    /// is chosen. The operands are normalized to the result's width, and so is
+    /// their masked difference.
     fn rewrite_select(&mut self, inst: InstId, cond: ValueId, then: ValueId, otherwise: ValueId) {
         let Some(width) = self.single_result_width(inst) else {
             return;
         };
         let ty = self.func.dfg.value_ty(then);
+        let mut freeze = |value| {
+            if self.func.dfg.value_is_imm(value) {
+                return value;
+            }
+            let width = self.width_of(value);
+            self.insert_before_one(inst, Freeze::new(self.evm_inst_set(), value), ty, width)
+        };
+        let (then, otherwise) = (freeze(then), freeze(otherwise));
         let mask = self.bool_to_mask_i256(inst, cond);
         let delta = self.insert_before_one(
             inst,
@@ -2971,6 +2981,33 @@ block5:
         });
         assert!(!dumped.contains("freeze"), "{dumped}");
         assert!(dumped.contains("br v2 block4 block5;"), "{dumped}");
+    }
+
+    /// The xor form depends on both arms: unfrozen, `undef` in the arm not
+    /// chosen would make the branch on the result undefined.
+    #[test]
+    fn selects_freeze_their_arms() {
+        let dumped = legalize_and_dump(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1, v1.i256) -> i256 {
+block0:
+    v2.i256 = select v0 v1 undef.i256;
+    br v2 block1 block2;
+block1:
+    return 1.i256;
+block2:
+    return 2.i256;
+}
+"#,
+            "entry",
+        );
+        assert!(dumped.contains("= freeze v1;"), "{dumped}");
+        assert!(dumped.contains("= freeze undef.i256;"), "{dumped}");
+        assert!(!dumped.contains("select"), "{dumped}");
+        assert!(!dumped.contains("xor v1"), "{dumped}");
+        assert!(!dumped.contains("xor undef"), "{dumped}");
     }
 
     #[test]
