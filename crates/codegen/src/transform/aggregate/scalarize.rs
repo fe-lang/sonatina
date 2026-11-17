@@ -3397,7 +3397,7 @@ mod tests {
         }
     }
 
-    /// A fresh slot's seed: one arbitrary value, `freeze undef`.
+    /// A fresh slot's seed: zero.
     fn is_fresh_seed(func: &Function, value: ValueId) -> bool {
         func.dfg
             .value_imm(value)
