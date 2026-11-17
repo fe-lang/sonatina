@@ -9,6 +9,7 @@ use crate::{
 };
 
 use super::{
+    block::operand_order_for_stackify,
     builder::StackifyContext,
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
@@ -282,6 +283,50 @@ fn sort_values_desc(
         value_key(*b, dom_depth, def_info).cmp(&value_key(*a, dom_depth, def_info))
     });
     values
+}
+
+/// The values no instruction can take from the stack after their definition: each use lies in a
+/// block entered through a merge from the defining block. A block with one predecessor inherits
+/// its stack, but the stack carries no spilled value into a merge (`live_in_non_params`), so every
+/// use of such a value reloads it once it is stored.
+pub(super) fn compute_merge_separated(
+    func: &Function,
+    cfg: &ControlFlowGraph,
+    dom: &DomTree,
+    def_info: &SecondaryMap<ValueId, Option<DefInfo>>,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+    phi_out_sources: &SecondaryMap<BlockId, BitSet<ValueId>>,
+) -> BitSet<ValueId> {
+    let mut separated: BitSet<ValueId> = def_info
+        .iter()
+        .filter_map(|(value, info)| info.is_some().then_some(value))
+        .collect();
+    for block in func
+        .layout
+        .iter_block()
+        .filter(|&block| dom.is_reachable(block))
+    {
+        let uses = func
+            .layout
+            .iter_inst(block)
+            .filter(|&inst| !func.dfg.is_phi(inst))
+            .flat_map(|inst| operand_order_for_stackify(func, inst, value_aliases))
+            .chain(phi_out_sources[block].iter());
+        for (value, info) in uses.filter_map(|value| Some((value, def_info[value]?))) {
+            // Walk up the predecessors whose stacks `block` inherits.
+            let mut inherited_from = block;
+            while inherited_from != info.def_block && cfg.pred_num_of(inherited_from) == 1 {
+                inherited_from = *cfg
+                    .preds_of(inherited_from)
+                    .next()
+                    .expect("one predecessor");
+            }
+            if inherited_from == info.def_block {
+                separated.remove(value);
+            }
+        }
+    }
+    separated
 }
 
 pub(super) fn compute_phi_out_sources(
