@@ -4488,7 +4488,7 @@ block0:
                 assert!(
                     memory
                         .read_state(load)
-                        .is_none_or(|read| !read.may_be_undef())
+                        .is_none_or(|read| !read.uninitialized())
                 );
                 AggregateScalarize::default().run_for_func(
                     func_ref,

@@ -118,11 +118,11 @@ func public %entry() {
         br v8 block4 block5;
 
     block3:
-        v45.i256 = evm_return_data_size;
-        v46.*i8 = evm_malloc v45;
-        v47.i256 = ptr_to_int v46 i256;
-        evm_return_data_copy v47 0.i256 v45;
-        evm_revert v47 v45;
+        v44.i256 = evm_return_data_size;
+        v45.*i8 = evm_malloc v44;
+        v46.i256 = ptr_to_int v45 i256;
+        evm_return_data_copy v46 0.i256 v44;
+        evm_revert v46 v44;
 
     block4:
         evm_revert 0.i256 0.i256;
@@ -144,21 +144,21 @@ func public %entry() {
         v15.*i8 = evm_malloc 4.i256;
         v16.i256 = ptr_to_int v15 i256;
         mstore v16 -21432072031172259149098304932151112453092825142662437103785846030156425068544.i256 i256;
-        v24.i256 = evm_call 100000.i256 v9 0.i256 v16 4.i256 0.i256 0.i256;
-        v25.i256 = evm_return_data_size;
-        v26.*i8 = evm_malloc v25;
-        v27.i256 = ptr_to_int v26 i256;
-        evm_return_data_copy v27 0.i256 v25;
-        v28.i1 = is_zero v24;
-        br v28 block11 block12;
+        v23.i256 = evm_call 100000.i256 v9 0.i256 v16 4.i256 0.i256 0.i256;
+        v24.i256 = evm_return_data_size;
+        v25.*i8 = evm_malloc v24;
+        v26.i256 = ptr_to_int v25 i256;
+        evm_return_data_copy v26 0.i256 v24;
+        v27.i1 = is_zero v23;
+        br v27 block11 block12;
 
     block11:
-        evm_revert v27 v25;
+        evm_revert v26 v24;
 
     block12:
-        v43.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v9 100000.i256 0.i256;
-        v44.i1 = eq v43 1.i256;
-        br v44 block1 block13;
+        v42.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v9 100000.i256 0.i256;
+        v43.i1 = eq v42 1.i256;
+        br v43 block1 block13;
 
     block13:
         evm_revert 0.i256 0.i256;

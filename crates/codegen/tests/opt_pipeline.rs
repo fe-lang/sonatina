@@ -2253,10 +2253,101 @@ func public %entry(v0.i64) -> i64 {
     assert_eq!(body.matches("obj.load").count(), 1, "{ir}");
 }
 
+/// A call result may be an unspecified reference too, even from a callee
+/// that returns a fresh object, so a read through one that nothing accesses
+/// before the loop stays in it.
+#[test]
+fn licm_keeps_reads_through_a_call_result_the_loop_alone_accesses() {
+    let source = r#"
+target = "x86_64-unknown-native"
+
+type @code = { i64, i64 };
+
+func private %make(v0.i64) -> objref<@code> {
+    block0:
+        v1.objref<@code> = obj.alloc @code;
+        v2.objref<i64> = obj.proj v1 0.i64;
+        obj.store v2 v0;
+        v3.objref<i64> = obj.proj v1 1.i64;
+        obj.store v3 v0;
+        return v1;
+}
+
+func public %run(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.objref<@code> = call %make v0;
+        v3.objref<i64> = obj.proj v2 1.i64;
+        jump block1;
+    block1:
+        v4.i64 = phi (0.i64 block0) (v7 block2);
+        v5.i64 = obj.load v3;
+        v6.i1 = lt v4 v5;
+        br v6 block2 block3;
+    block2:
+        v7.i64 = add v4 v1;
+        jump block1;
+    block3:
+        return v4;
+}
+"#;
+    let mut parsed = parse_module(source).unwrap();
+    verify_module_or_panic(
+        &parsed.module,
+        &VerifierConfig::for_level(VerificationLevel::Full),
+    );
+    let mut pipeline = Pipeline::new();
+    pipeline.add_step(Step::FuncPasses(vec![Pass::Licm]));
+    pipeline.run(&mut parsed.module);
+    let text = ModuleWriter::new(&parsed.module).dump_string();
+    let run = text.split("func public %run").nth(1).unwrap();
+    let header = run.split("block1:").nth(1).unwrap();
+    assert!(header.contains("obj.load v3"), "{text}");
+}
+
+/// A parameter may be unspecified, and a preheader read runs where the loop
+/// may never read, so a read through a parameter that nothing accesses
+/// before the loop stays in it.
+#[test]
+fn licm_keeps_reads_through_a_parameter_the_loop_alone_accesses() {
+    let source = r#"
+target = "x86_64-unknown-native"
+
+type @code = { i64, i64 };
+
+func private %run(noalias v0.objref<@code>, v1.i64) -> i64 {
+    block0:
+        v2.objref<i64> = obj.proj v0 1.i64;
+        jump block1;
+    block1:
+        v3.i64 = phi (0.i64 block0) (v6 block2);
+        v4.i64 = obj.load v2;
+        v5.i1 = lt v3 v4;
+        br v5 block2 block3;
+    block2:
+        v6.i64 = add v3 v1;
+        jump block1;
+    block3:
+        return v3;
+}
+"#;
+    let mut parsed = parse_module(source).unwrap();
+    verify_module_or_panic(
+        &parsed.module,
+        &VerifierConfig::for_level(VerificationLevel::Full),
+    );
+    let mut pipeline = Pipeline::new();
+    pipeline.add_step(Step::FuncPasses(vec![Pass::Licm]));
+    pipeline.run(&mut parsed.module);
+    let text = ModuleWriter::new(&parsed.module).dump_string();
+    let header = text.split("block1:").nth(1).unwrap();
+    assert!(header.contains("obj.load v2"), "{text}");
+}
+
 #[test]
 fn licm_hoists_reads_of_an_argument_another_noalias_argument_cannot_write() {
     // The loop writes `pc` through `v0` and reads `len` through `v1`. Only a
-    // `noalias` `v0` rules out that the write changes `len`.
+    // `noalias` `v0` rules out that the write changes `len`. The read of `len`
+    // before the loop shows `v1` specified in the preheader.
     for noalias in [false, true] {
         let marker = if noalias { "noalias " } else { "" };
         let source = format!(
@@ -2270,6 +2361,7 @@ func private %run({marker}v0.objref<@vm>, v1.objref<@code>) -> i64 {{
     block0:
         v2.objref<i64> = obj.proj v0 0.i64;
         v3.objref<i64> = obj.proj v1 1.i64;
+        v8.i64 = obj.load v3;
         jump block1;
     block1:
         v4.i64 = obj.load v2;

@@ -5,7 +5,10 @@ use sonatina_ir::{
     inst::{control_flow, data},
 };
 
-use crate::loop_analysis::{Loop, LoopTree};
+use crate::{
+    domtree::DomTree,
+    loop_analysis::{Loop, LoopTree},
+};
 
 use super::{
     LocalObjectArgInfo, ObjectEffectSummaryMap, RootInit,
@@ -56,7 +59,7 @@ pub(crate) struct ObjectReadGvnKey {
 pub(crate) struct ObjectReadState {
     read_slice: ObjectSlice,
     key: ObjectReadGvnKey,
-    may_be_undef: bool,
+    uninitialized: bool,
 }
 
 impl ObjectReadState {
@@ -64,8 +67,8 @@ impl ObjectReadState {
         self.key
     }
 
-    pub(crate) fn may_be_undef(self) -> bool {
-        self.may_be_undef
+    pub(crate) fn uninitialized(self) -> bool {
+        self.uninitialized
     }
 
     pub(crate) fn read_slice(self) -> ObjectSlice {
@@ -359,6 +362,7 @@ impl ObjectMemoryAnalysis {
         &self,
         func: &Function,
         cfg: &ControlFlowGraph,
+        domtree: &DomTree,
         lpt: &LoopTree,
         lp: Loop,
         inst: InstId,
@@ -366,9 +370,63 @@ impl ObjectMemoryAnalysis {
         let Some(read) = self.read_state(inst) else {
             return false;
         };
-        // Facts established inside the loop cannot justify a preheader read.
-        // This also checks ancestor enum guards in the sparse subtree state.
-        if read.may_be_undef()
+        // The preheader may run where the loop never reads, so the object
+        // must be specified there. An allocation is; a parameter or a call
+        // result may not be, unless an access or variant assumption through
+        // it runs on every path into the loop.
+        let root = read.read_slice().root;
+        let header = lpt.loop_header(lp);
+        let accessed_before_loop = || {
+            let dfg = &func.dfg;
+            let mut pending = vec![root];
+            let mut seen = FxHashSet::default();
+            while let Some(object) = pending.pop() {
+                if !seen.insert(object) {
+                    continue;
+                }
+                for &user in dfg.users(object) {
+                    let projected = dfg
+                        .downcast::<&data::ObjProj>(user)
+                        .map(|proj| proj.values()[0])
+                        .or_else(|| dfg.downcast::<&data::ObjIndex>(user).map(|i| *i.object()))
+                        .or_else(|| dfg.downcast::<&data::EnumProj>(user).map(|i| *i.object()));
+                    let assumed = dfg
+                        .downcast::<&data::EnumAssertVariantRef>(user)
+                        .map(|i| *i.object());
+                    if projected == Some(object) || assumed == Some(object) {
+                        pending.extend_from_slice(dfg.inst_results(user));
+                    }
+                    let accessed = assumed
+                        .or_else(|| dfg.downcast::<&data::ObjLoad>(user).map(|i| *i.object()))
+                        .or_else(|| dfg.downcast::<&data::ObjStore>(user).map(|i| *i.object()))
+                        .or_else(|| dfg.downcast::<&data::EnumGetTag>(user).map(|i| *i.object()))
+                        .or_else(|| dfg.downcast::<&data::EnumSetTag>(user).map(|i| *i.object()))
+                        .or_else(|| {
+                            dfg.downcast::<&data::EnumWriteVariant>(user)
+                                .map(|i| *i.object())
+                        });
+                    if accessed == Some(object)
+                        && func.layout.is_inst_inserted(user)
+                        && domtree.strictly_dominates(func.layout.inst_block(user), header)
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        };
+        let allocated = func
+            .dfg
+            .value_inst(root)
+            .is_some_and(|inst| func.dfg.downcast::<&data::ObjAlloc>(inst).is_some());
+        // The slice must also be initialized at the header, by facts from
+        // outside the loop. For an enum payload that is the evidence its
+        // variant holds there, so the hoisted read assumes no variant earlier
+        // than the source; this also checks ancestor enum guards in the
+        // sparse subtree state. For other slices it is only conservative:
+        // reading a slot no store wrote gives the unspecified value.
+        if !allocated && !accessed_before_loop()
+            || read.uninitialized()
             || !slice_initialization(
                 func,
                 &self.block_entry_states[lpt.loop_header(lp)],
@@ -850,7 +908,7 @@ fn record_read_state(
         ObjectReadState {
             read_slice: slice,
             key,
-            may_be_undef: !slice_initialization(func, state, slice).defined(func.ctx()),
+            uninitialized: !slice_initialization(func, state, slice).defined(func.ctx()),
         },
     );
 }
@@ -1242,7 +1300,7 @@ block0:
                 let after = memory.read_state(loads[1]).unwrap();
                 assert_ne!(before.key(), after.key());
                 assert!(
-                    after.may_be_undef(),
+                    after.uninitialized(),
                     "an aliased coordinate does not prove initialization"
                 );
                 let store = func.layout.next_inst_of(loads[0]).unwrap();
@@ -1339,8 +1397,8 @@ block0:
                 ),
                 &[],
                 |_, memory, loads| {
-                    assert!(memory.read_state(loads[0]).unwrap().may_be_undef());
-                    assert!(!memory.read_state(loads[1]).unwrap().may_be_undef());
+                    assert!(memory.read_state(loads[0]).unwrap().uninitialized());
+                    assert!(!memory.read_state(loads[1]).unwrap().uninitialized());
                 },
             );
         }
@@ -1369,11 +1427,11 @@ block0:
                 &[],
                 |_, memory, loads| {
                     assert_eq!(
-                        memory.read_state(loads[0]).unwrap().may_be_undef(),
+                        memory.read_state(loads[0]).unwrap().uninitialized(),
                         expected_undef
                     );
                     assert_eq!(
-                        memory.read_state(loads[1]).unwrap().may_be_undef(),
+                        memory.read_state(loads[1]).unwrap().uninitialized(),
                         expected_undef
                     );
                 },
@@ -1403,7 +1461,7 @@ block0:
                 let before = memory.read_state(loads[0]).unwrap();
                 let after = memory.read_state(loads[1]).unwrap();
                 assert_eq!(before.key(), after.key());
-                assert!(!after.may_be_undef());
+                assert!(!after.uninitialized());
                 let store = func.layout.next_inst_of(loads[0]).unwrap();
                 assert!(!memory.inst_clobbers_slice(store, before.read_slice()));
             },
@@ -1440,9 +1498,62 @@ block0:
                         .map(|&load| memory.read_state(load).unwrap())
                         .collect();
                     assert_ne!(reads[0].key(), reads[2].key());
-                    assert!(reads[2].may_be_undef());
+                    assert!(reads[2].uninitialized());
                     assert_eq!(reads[1].key(), reads[3].key());
-                    assert!(!reads[3].may_be_undef());
+                    assert!(!reads[3].uninitialized());
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn call_result_roots_need_an_access_before_the_loop() {
+        // A call result starts uninitialized, so only a write through it
+        // before the loop lets the read hoist, and that write is an access.
+        for (before, invariant) in [("", false), ("obj.store v4 7.i256;", true)] {
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+type @Pair = {{ i256, i256 }};
+func private %make(v0.i256) -> objref<@Pair> {{
+block0:
+    v1.objref<@Pair> = obj.alloc @Pair;
+    obj.store v1 undef.@Pair;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    obj.store v2 v0;
+    v3.objref<i256> = obj.proj v1 1.i8;
+    obj.store v3 v0;
+    return v1;
+}}
+func private %f(v0.i256, v1.i1) -> i256 {{
+block0:
+    v2.objref<@Pair> = call %make v0;
+    v4.objref<i256> = obj.proj v2 1.i8;
+    {before}
+    jump block1;
+block1:
+    v5.i256 = obj.load v4;
+    br v1 block1 block2;
+block2:
+    return v5;
+}}
+"#
+                ),
+                &[],
+                |func, memory, loads| {
+                    let mut cfg = ControlFlowGraph::new();
+                    cfg.compute(func);
+                    let mut domtree = DomTree::new();
+                    domtree.compute(&cfg);
+                    let mut loops = LoopTree::new();
+                    loops.compute(&cfg, &domtree);
+                    let lp = loops.loops().next().unwrap();
+                    let load = *loads.last().unwrap();
+                    assert_eq!(
+                        memory.read_is_loop_invariant(func, &cfg, &domtree, &loops, lp, load),
+                        invariant
+                    );
                 },
             );
         }
@@ -1450,6 +1561,7 @@ block0:
 
     #[test]
     fn loop_alias_write_blocks_invariance_but_sibling_write_does_not() {
+        // The read of `v4` before the loop shows `v0` specified there.
         for (destination, invariant) in [("v1", false), ("v4", true)] {
             check_memory(
                 &format!(
@@ -1460,6 +1572,7 @@ func private %f(v0.objref<@Pair>, v1.objref<i256>, v2.i1) -> i256 {{
 block0:
     v3.objref<i256> = obj.proj v0 0.i8;
     v4.objref<i256> = obj.proj v0 1.i8;
+    v6.i256 = obj.load v4;
     jump block1;
 block1:
     v5.i256 = obj.load v3;
@@ -1480,7 +1593,7 @@ block2:
                     loops.compute(&cfg, &domtree);
                     let lp = loops.loops().next().unwrap();
                     assert_eq!(
-                        memory.read_is_loop_invariant(func, &cfg, &loops, lp, loads[0]),
+                        memory.read_is_loop_invariant(func, &cfg, &domtree, &loops, lp, loads[1]),
                         invariant
                     );
                 },
@@ -1576,7 +1689,7 @@ block0:
             |_, memory, loads| {
                 assert_eq!(loads.len(), 2);
                 for &load in loads {
-                    assert!(!memory.read_state(load).unwrap().may_be_undef());
+                    assert!(!memory.read_state(load).unwrap().uninitialized());
                 }
             },
         );
@@ -1612,14 +1725,14 @@ block0:
                 &[],
                 |_, memory, loads| {
                     assert_eq!(
-                        memory.read_state(loads[0]).unwrap().may_be_undef(),
+                        memory.read_state(loads[0]).unwrap().uninitialized(),
                         undefined
                     );
                     assert_eq!(
-                        memory.read_state(loads[1]).unwrap().may_be_undef(),
+                        memory.read_state(loads[1]).unwrap().uninitialized(),
                         undefined
                     );
-                    assert!(!memory.read_state(loads[2]).unwrap().may_be_undef());
+                    assert!(!memory.read_state(loads[2]).unwrap().uninitialized());
                 },
             );
         }
@@ -1644,7 +1757,7 @@ block0:
 "#,
             &[],
             |_, memory, loads| {
-                assert!(!memory.read_state(loads[0]).unwrap().may_be_undef());
+                assert!(!memory.read_state(loads[0]).unwrap().uninitialized());
             },
         );
     }
@@ -1667,8 +1780,8 @@ block0:
 "#,
             &[0],
             |_, memory, loads| {
-                assert!(memory.read_state(loads[0]).unwrap().may_be_undef());
-                assert!(!memory.read_state(loads[1]).unwrap().may_be_undef());
+                assert!(memory.read_state(loads[0]).unwrap().uninitialized());
+                assert!(!memory.read_state(loads[1]).unwrap().uninitialized());
             },
         );
     }
@@ -1696,7 +1809,7 @@ block0:
                 selected,
                 |func, memory, loads| {
                     let read = memory.read_state(loads[0]).unwrap();
-                    assert_eq!(read.may_be_undef(), undefined);
+                    assert_eq!(read.uninitialized(), undefined);
                     let assertion = func
                         .layout
                         .iter_all_insts()
@@ -1735,7 +1848,7 @@ block0:
                 &[],
                 |_, memory, loads| {
                     assert_eq!(
-                        memory.read_state(loads[0]).unwrap().may_be_undef(),
+                        memory.read_state(loads[0]).unwrap().uninitialized(),
                         undefined
                     );
                 },
@@ -1766,7 +1879,7 @@ block3:
 "#,
             &[],
             |_, memory, loads| {
-                assert!(!memory.read_state(loads[0]).unwrap().may_be_undef());
+                assert!(!memory.read_state(loads[0]).unwrap().uninitialized());
             },
         );
     }
@@ -1791,7 +1904,7 @@ block0:
                     .iter_all_insts()
                     .find(|&inst| func.dfg.downcast::<&data::EnumGetTag>(inst).is_some())
                     .unwrap();
-                assert!(memory.read_state(tag).unwrap().may_be_undef());
+                assert!(memory.read_state(tag).unwrap().uninitialized());
             },
         );
     }
@@ -1822,7 +1935,7 @@ block0:
             ),
             &[],
             |_, memory, loads| {
-                assert!(memory.read_state(loads[0]).unwrap().may_be_undef());
+                assert!(memory.read_state(loads[0]).unwrap().uninitialized());
             },
         );
     }
