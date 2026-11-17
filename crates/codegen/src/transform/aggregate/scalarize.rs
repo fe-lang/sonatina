@@ -2452,22 +2452,11 @@ impl AggregateScalarize {
             return false;
         }
 
-        for inst in &dead_insts {
-            if let Some(result) = func.dfg.inst_result(*inst) {
-                let undef = func.dfg.make_undef_value(func.dfg.value_ty(result));
-                func.dfg.change_to_alias(result, undef);
-            }
+        // Only dead instructions use a dead result.
+        for &inst in &dead_insts {
+            func.layout.remove_inst(inst);
         }
-        func.rebuild_users();
-
-        for block in func.layout.iter_block().collect::<Vec<_>>() {
-            for inst in func.layout.iter_inst(block).collect::<Vec<_>>() {
-                if dead_insts.contains(&inst) {
-                    InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-                }
-            }
-        }
-
+        func.erase_insts(&dead_insts);
         true
     }
 
