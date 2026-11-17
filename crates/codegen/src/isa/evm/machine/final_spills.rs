@@ -13,7 +13,7 @@ use sonatina_ir::{
 use crate::{
     bitset::BitSet,
     module_analysis::CallGraphSchedule,
-    stackalloc::{Action, ActionSite, StackifyAlloc},
+    stackalloc::{Action, ActionSite, Actions, StackifyAlloc},
 };
 
 use crate::isa::evm::memory_plan::align_up_to_word;
@@ -633,6 +633,26 @@ pub(crate) fn allocate_final_spills(
     )?;
 
     alloc.remap_stack_objects(&remap);
+    // A spilled phi that now shares a word with its source may be stored from a reload of that
+    // word, which only writes back what the word holds.
+    let skip_same_word = |actions: Actions| {
+        let mut kept = Actions::new();
+        for action in actions {
+            if let Action::MemStoreObj(obj) = action
+                && kept.last() == Some(&Action::MemLoadObj(obj))
+            {
+                kept.pop();
+            } else {
+                kept.push(action);
+            }
+        }
+        kept
+    };
+    alloc.rewrite_action_lists(
+        |_, actions| skip_same_word(actions),
+        |_, actions| skip_same_word(actions),
+        &skip_same_word,
+    );
     for (value, old_obj) in spills.spilled_values {
         let new_obj = remap[&old_obj];
         alloc.set_spill_object(value, new_obj);
