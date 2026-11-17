@@ -127,17 +127,45 @@ pub fn run_dead_arg_elim(
     }
 
     let old_sigs = rewrite_declared_signatures(module, &final_plans);
-    for (&func_ref, plan) in &final_plans {
-        module.func_store.modify(func_ref, |function| {
-            rewrite_function(function, plan);
-        });
-    }
+    let removed_args: Vec<_> = final_plans
+        .iter()
+        .map(|(&func_ref, plan)| {
+            let removed = module
+                .func_store
+                .modify(func_ref, |function| rewrite_function(function, plan));
+            (func_ref, removed)
+        })
+        .collect();
 
     let funcs = module.funcs();
     for func_ref in funcs {
         stats.rewritten_calls += module
             .func_store
             .modify(func_ref, |function| rewrite_calls(function, &final_plans));
+    }
+
+    // No root uses a removed argument, so whatever still uses one is dead.
+    for (func_ref, mut values) in removed_args {
+        module.func_store.modify(func_ref, |function| {
+            function.rebuild_users();
+            let mut dead = Vec::new();
+            while let Some(value) = values.pop() {
+                for &user in function.dfg.users(value) {
+                    if function.layout.is_inst_inserted(user) && !dead.contains(&user) {
+                        assert!(
+                            !is_dead_arg_root_inst(function, user),
+                            "a root uses a removed argument"
+                        );
+                        dead.push(user);
+                        values.extend_from_slice(function.dfg.inst_results(user));
+                    }
+                }
+            }
+            for &inst in &dead {
+                function.layout.remove_inst(inst);
+            }
+            function.erase_insts(&dead);
+        });
     }
 
     propagate_signature_rewrite_types(module, &old_sigs);
@@ -358,13 +386,15 @@ fn collect_plans(
     plans
 }
 
-fn rewrite_function(function: &mut Function, plan: &FuncPlan) {
+/// Rewrites `function`'s arguments by `plan` and returns the removed ones.
+fn rewrite_function(function: &mut Function, plan: &FuncPlan) -> Vec<ValueId> {
     let old_args = function.arg_values.clone();
     let old_arg_tys: Vec<_> = old_args
         .iter()
         .map(|&arg| function.dfg.value_ty(arg))
         .collect();
     let mut new_args = SmallVec::new();
+    let mut removed = Vec::new();
     for ((&arg, &keep), ty) in old_args.iter().zip(plan.keep_args.iter()).zip(old_arg_tys) {
         if keep {
             let idx = new_args.len();
@@ -372,9 +402,11 @@ fn rewrite_function(function: &mut Function, plan: &FuncPlan) {
             new_args.push(arg);
         } else {
             function.dfg.values[arg] = Value::Undef { ty };
+            removed.push(arg);
         }
     }
     function.arg_values = new_args;
+    removed
 }
 
 fn rewrite_calls(function: &mut Function, plans: &FxHashMap<FuncRef, FuncPlan>) -> usize {
@@ -706,7 +738,7 @@ func public %entry(v0.i256) -> i256 {
         assert_eq!(stats.removed_args, 1);
         assert_sig(&parsed.module, "caller", 0, 1);
         let dumped = dump_module(&parsed.module);
-        assert!(dumped.contains("v1.i256 = call %pure undef.i256;"));
+        assert!(!dumped.contains("call %pure"), "{dumped}");
         assert!(dumped.contains("v1.i256 = call %caller;"));
         assert_verified(&parsed.module);
     }
@@ -975,7 +1007,7 @@ func public %entry(v0.i256) -> i256 {
     }
 
     #[test]
-    fn rewrites_removed_formal_to_undef_in_body() {
+    fn deletes_dead_users_of_removed_formal() {
         let parsed = parse_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -991,7 +1023,7 @@ func private %drop_first(v0.i256, v1.i256) -> i256 {
         run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         let dumped = dump_function(&parsed.module, "drop_first");
-        assert!(dumped.contains("v2.i256 = add undef.i256 1.i256;"));
+        assert!(!dumped.contains("add"), "{dumped}");
         assert_verified(&parsed.module);
     }
 }
