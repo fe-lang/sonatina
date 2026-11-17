@@ -1,0 +1,95 @@
+#! An `extract_value` of an `agg.make` is the operand at its index; the
+#! `agg.make` goes once nothing reads it.
+
+target = "evm-ethereum-london"
+
+type @pair = { i32, i64 };
+type @empty = {};
+
+# sameln: func public %extract_fields(v0.i32) -> i64 {
+# nextln:     block0:
+# nextln:         v4.i32 = add v0 1.i32;
+# nextln:         v5.i64 = sext v4 i64;
+# nextln:         v6.i64 = add 7.i64 v5;
+# nextln:         return v6;
+func public %extract_fields(v0.i32) -> i64 {
+    block0:
+        v1.@pair = agg.make @pair v0 7.i64;
+        v2.i64 = extract_value v1 1.i32;
+        v3.i32 = extract_value v1 0.i32;
+        v4.i32 = add v3 1.i32;
+        v5.i64 = sext v4 i64;
+        v6.i64 = add v2 v5;
+        return v6;
+}
+
+# sameln: func public %constant_array() -> i8 {
+# nextln:     block0:
+# nextln:         return 3.i8;
+func public %constant_array() -> i8 {
+    block0:
+        v0.[i8; 3] = agg.make [i8; 3] 1.i8 2.i8 3.i8;
+        v1.i8 = extract_value v0 2.i32;
+        return v1;
+}
+
+# sameln: func public %dynamic_index(v0.i32) -> i8 {
+# nextln:     block0:
+# nextln:         v1.[i8; 2] = agg.make [i8; 2] 1.i8 2.i8;
+# nextln:         v2.i8 = extract_value v1 v0;
+# nextln:         return v2;
+func public %dynamic_index(v0.i32) -> i8 {
+    block0:
+        v1.[i8; 2] = agg.make [i8; 2] 1.i8 2.i8;
+        v2.i8 = extract_value v1 v0;
+        return v2;
+}
+
+# sameln: func public %zero_sized() -> @empty {
+# nextln:     block0:
+# nextln:         v0.@empty = agg.make @empty;
+# nextln:         return v0;
+func public %zero_sized() -> @empty {
+    block0:
+        v0.@empty = agg.make @empty;
+        return v0;
+}
+
+# The field is 0 until the edge from block3 runs, after the extract's
+# aggregate has been evaluated, and then overdefined. The extract follows the
+# field, not only its aggregate, so the branch on it keeps both successors.
+# sameln: func public %late_field(v0.i1) -> i32 {
+# check:     block6:
+# nextln:         br v4 block4 block5;
+# check:     block4:
+# nextln:         return 1.i32;
+# check:     block5:
+# nextln:         return 2.i32;
+func public %late_field(v0.i1) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i32 = phi (0.i32 block0) (v1 block2) (v5 block3);
+        v6.i1 = phi (0.i1 block0) (1.i1 block2) (0.i1 block3);
+        v2.@pair = agg.make @pair v1 7.i64;
+        v3.i32 = extract_value v2 0.i32;
+        v4.i1 = eq v3 0.i32;
+        br v6 block3 block2;
+
+    block2:
+        br v0 block1 block6;
+
+    block3:
+        v5.i32 = add v1 1.i32;
+        jump block1;
+
+    block6:
+        br v4 block4 block5;
+
+    block4:
+        return 1.i32;
+
+    block5:
+        return 2.i32;
+}

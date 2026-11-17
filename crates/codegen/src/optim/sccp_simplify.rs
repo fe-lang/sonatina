@@ -213,6 +213,21 @@ pub(super) fn simplify_inst(
             {
                 return wrap_action(SimplifyAction::Copy(arg));
             }
+            if let Some(extract) = downcast::<&data::ExtractValue>(is, inst)
+                && let Some(make) = func
+                    .dfg
+                    .value_inst(*extract.dest())
+                    .and_then(|make| downcast::<&data::AggMake>(is, func.dfg.inst(make)))
+                && let Some(index) = facts
+                    .known_imm(*extract.idx())
+                    .and_then(Immediate::to_nonnegative_usize)
+                && let Some(&field) = make.values().get(index)
+            {
+                // The field is not an operand of the extract: reevaluate it
+                // when the field changes.
+                ctx.aux_deps.value_deps.push(field);
+                return wrap_action(SimplifyAction::Copy(field));
+            }
             if let Some(i) = downcast::<&data::ConstLoad>(is, inst) {
                 return wrap_action(simplify_const_load(func, lattice, *i.object(), ctx));
             }

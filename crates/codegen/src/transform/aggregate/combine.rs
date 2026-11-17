@@ -1468,6 +1468,14 @@ fn walk_insert_chain_for_field(
     let Some(def_inst) = func.dfg.value_inst(aggregate) else {
         return AggregateFieldLookup::BaseNeedsExtract(aggregate);
     };
+    if let Some(make) = func.dfg.downcast::<&data::AggMake>(def_inst) {
+        return make
+            .values()
+            .get(target_idx as usize)
+            .map_or(AggregateFieldLookup::Unknown, |&field| {
+                AggregateFieldLookup::Found(field)
+            });
+    }
     let Some(insert) = func.dfg.downcast::<&data::InsertValue>(def_inst) else {
         return AggregateFieldLookup::BaseNeedsExtract(aggregate);
     };
