@@ -79,18 +79,9 @@ fn tag_imm(ctx: &ModuleCtx, variant: EnumVariantRef) -> Immediate {
 }
 
 fn rewrite_declared_signatures(module: &Module, lowerer: &mut impl TypeRewrite) -> bool {
-    // Declaration maps iterate in hash order; rewriting in that order would
-    // create lowered types in a different order on each run.
-    let mut funcs: Vec<_> = module
-        .ctx
-        .declared_funcs
-        .iter()
-        .map(|entry| *entry.key())
-        .collect();
-    funcs.sort_unstable();
     let mut changed = false;
 
-    for func in funcs {
+    for func in module.ctx.declared_func_refs() {
         let Some(sig) = module.ctx.get_sig(func) else {
             continue;
         };

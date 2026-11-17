@@ -1,0 +1,60 @@
+target = "evm-ethereum-osaka"
+
+type @a = { i256, i256 };
+type @b = { i256, i8 };
+type @c = { i8, i256, i8 };
+
+func private %make_a(v0.i256) -> objref<@a> {
+block0:
+    v1.objref<@a> = obj.alloc @a;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    obj.store v2 v0;
+    return v1;
+}
+
+func private %make_b(v0.i256) -> objref<@b> {
+block0:
+    v1.objref<@b> = obj.alloc @b;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    obj.store v2 v0;
+    return v1;
+}
+
+func private %make_c(v0.i256) -> objref<@c> {
+block0:
+    v1.objref<@c> = obj.alloc @c;
+    v2.objref<i256> = obj.proj v1 1.i8;
+    obj.store v2 v0;
+    return v1;
+}
+
+func private %use_a(v0.*(i256) -> objref<@a>) -> i256 {
+block0:
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+
+func private %use_b(v0.*(i256) -> objref<@b>) -> i256 {
+block0:
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+
+func private %use_c(v0.*(i256) -> objref<@c>) -> i256 {
+block0:
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+
+func public %take_makers() -> i256 {
+block0:
+    v0.*(i256) -> objref<@a> = get_function_ptr %make_a;
+    v1.*(i256) -> objref<@b> = get_function_ptr %make_b;
+    v2.*(i256) -> objref<@c> = get_function_ptr %make_c;
+    v3.i256 = call %use_a v0;
+    v4.i256 = call %use_b v1;
+    v5.i256 = call %use_c v2;
+    v6.i256 = add v3 v4;
+    v7.i256 = add v6 v5;
+    return v7;
+}

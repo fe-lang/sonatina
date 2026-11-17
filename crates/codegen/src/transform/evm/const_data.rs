@@ -1104,13 +1104,7 @@ fn fresh_global_symbol(store: &GlobalVariableStore, base: &str) -> String {
 fn rewrite_module_types(module: &Module, types: &mut ConstRefTypeLowerer) -> bool {
     let mut changed = false;
 
-    let funcs: Vec<_> = module
-        .ctx
-        .declared_funcs
-        .iter()
-        .map(|entry| *entry.key())
-        .collect();
-    for func in funcs {
+    for func in module.ctx.declared_func_refs() {
         let Some(sig) = module.ctx.get_sig(func) else {
             continue;
         };

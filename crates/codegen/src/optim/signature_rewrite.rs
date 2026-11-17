@@ -214,14 +214,7 @@ fn rewrite_signature_types(
     old_sigs: &FxHashMap<FuncRef, Signature>,
     types: &mut SignatureRewriteTypeRewriter,
 ) {
-    let funcs: Vec<_> = module
-        .ctx
-        .declared_funcs
-        .iter()
-        .map(|entry| *entry.key())
-        .collect();
-
-    for func in funcs {
+    for func in module.ctx.declared_func_refs() {
         let Some(sig) = module.ctx.get_sig(func) else {
             continue;
         };
@@ -314,10 +307,8 @@ fn collect_rewrite_class_info<P: SignatureRewritePlan>(
 ) -> FxHashMap<CompoundTypeRef, RewriteClassInfo> {
     let mut info: FxHashMap<CompoundTypeRef, RewriteClassInfo> = FxHashMap::default();
 
-    for entry in ctx.declared_funcs.iter() {
-        let func = *entry.key();
-        let sig = entry.value();
-        let old_ty = make_func_ty(ctx, sig.args(), sig.ret_tys());
+    for func in ctx.declared_func_refs() {
+        let old_ty = ctx.func_sig(func, |sig| make_func_ty(ctx, sig.args(), sig.ret_tys()));
         info.entry(old_ty).or_default().funcs.push(func);
     }
 
@@ -363,10 +354,11 @@ fn collect_rewrite_class_info_from_old_sigs(
 ) -> FxHashMap<CompoundTypeRef, RewriteClassInfo> {
     let mut info: FxHashMap<CompoundTypeRef, RewriteClassInfo> = FxHashMap::default();
 
-    for entry in ctx.declared_funcs.iter() {
-        let func = *entry.key();
-        let old_sig = old_sigs.get(&func).unwrap_or_else(|| entry.value());
-        let old_ty = make_func_ty(ctx, old_sig.args(), old_sig.ret_tys());
+    for func in ctx.declared_func_refs() {
+        let old_ty = match old_sigs.get(&func) {
+            Some(old_sig) => make_func_ty(ctx, old_sig.args(), old_sig.ret_tys()),
+            None => ctx.func_sig(func, |sig| make_func_ty(ctx, sig.args(), sig.ret_tys())),
+        };
         info.entry(old_ty).or_default().funcs.push(func);
     }
 
@@ -465,9 +457,9 @@ fn collect_non_owned_exposed_func_types(
 ) -> FxHashSet<CompoundTypeRef> {
     let mut exposed = FxHashSet::default();
 
-    for entry in module.ctx.declared_funcs.iter() {
-        let sig = entry.value();
-        if is_owned_private_signature_func(sig) {
+    for func in module.ctx.declared_func_refs() {
+        let sig = module.ctx.func_sig(func, Clone::clone);
+        if is_owned_private_signature_func(&sig) {
             continue;
         }
         for &ty in sig.args().iter().chain(sig.ret_tys().iter()) {
