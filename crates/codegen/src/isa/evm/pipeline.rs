@@ -396,9 +396,6 @@ impl EvmPipelineContext<'_> {
         Ok(())
     }
 
-    /// Word hashes stay pure values through every optimization round above;
-    /// only now do they become the memory hash the EVM executes, before
-    /// memory planning places the preimages.
     /// Runs after the last IR pass, which could take the unspecified argument
     /// of a freeze as any value.
     fn run_freeze_lowering(&mut self) -> Result<(), String> {
@@ -408,6 +405,9 @@ impl EvmPipelineContext<'_> {
         Ok(())
     }
 
+    /// Word hashes stay pure values through every optimization round above;
+    /// only now do they become the memory hash the EVM executes, before
+    /// memory planning places the preimages.
     fn run_keccak_words_lowering(&mut self) -> Result<(), String> {
         let mut changed = false;
         {
