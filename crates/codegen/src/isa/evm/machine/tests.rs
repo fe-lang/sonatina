@@ -381,6 +381,38 @@ fn machine_verify_rejects_i1_word_operand() {
 }
 
 #[test]
+fn machine_verify_rejects_undef_operand() {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            "machine_undef",
+            Linkage::Public,
+            &[Type::I256],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let block = builder.append_block();
+    builder.switch_to_block(block);
+    let arg = builder.func.arg_values[0];
+    let undef = builder.make_undef_value(Type::I256);
+    let sum = builder.insert_inst(Add::new(is, arg, undef), Type::I256);
+    builder.insert_inst_no_result(Return::new_single(is, sum));
+    builder.seal_all();
+    builder.finish();
+
+    let module = mb.build();
+    module.func_store.view(func_ref, |function| {
+        let err = verify_machine_function(func_ref, function)
+            .expect_err("machine IR should reject undef operands");
+        assert!(err.contains("`undef` operand"), "{err}");
+    });
+}
+
+#[test]
 fn machine_verify_accepts_word_typed_comparison() {
     let mb = machine_builder();
     let func_ref = mb
