@@ -75,8 +75,8 @@ fn check_function(function: &Function, effects: &ObjectEffectSummaryMap) -> Resu
                 continue;
             };
             // A returned SSA aggregate also returns the references that its
-            // `insert_value` and `enum.make` operands put in fields no later
-            // `insert_value` overwrites. Each value carries the constant
+            // `insert_value`, `agg.make` and `enum.make` operands put in fields
+            // no later `insert_value` overwrites. Each value carries the constant
             // indices overwritten above it; a dynamic index may overwrite any
             // field, so nothing below it is certainly returned.
             let mut returned: Vec<(ValueId, SmallVec<[u32; 4]>)> = ret
@@ -118,6 +118,13 @@ fn check_function(function: &Function, effects: &ObjectEffectSummaryMap) -> Resu
                         }
                         returned.push((*insert.dest(), overwritten));
                     }
+                } else if let Some(make) = function.dfg.downcast::<&data::AggMake>(def) {
+                    returned.extend(
+                        (0..)
+                            .zip(make.values())
+                            .filter(|(index, _)| !overwritten.contains(index))
+                            .map(|(_, &value)| (value, SmallVec::new())),
+                    );
                 } else if let Some(make) = function.dfg.downcast::<&data::EnumMake>(def) {
                     returned.extend(make.values().iter().map(|&value| (value, SmallVec::new())));
                 } else if let Some(phi) = function.dfg.downcast::<&control_flow::Phi>(def) {
@@ -313,6 +320,14 @@ block0:
     obj.store v0 v2;
     return;
 }"#,
+            r#"type @pair = { i64, objref<i64> };
+func private %f(v0.objref<@pair>) {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    v2.@pair = agg.make @pair 7.i64 v1;
+    obj.store v0 v2;
+    return;
+}"#,
             // A reference loaded from memory has unknown provenance.
             r#"func private %f(v0.objref<objref<i64>>) -> objref<i64> {
 block0:
@@ -357,6 +372,15 @@ block0:
     v3.@pair = insert_value v2 0.i64 7.i64;
     v4.@pair = insert_value v3 1.i64 v0;
     return v4;
+}"#,
+            // A later insert overwrites the field `agg.make` filled.
+            r#"type @pair = { i64, objref<i64> };
+func private %f(v0.objref<i64>) -> @pair {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    v2.@pair = agg.make @pair 7.i64 v1;
+    v3.@pair = insert_value v2 1.i64 v0;
+    return v3;
 }"#,
             // A loop-carried aggregate holds only an argument's reference.
             r#"type @pair = { i64, objref<i64> };
@@ -430,6 +454,16 @@ block0:
     v1.@pair = insert_value undef.@pair 1.i64 v0;
     v2.@pair = insert_value v1 0.i64 7.i64;
     return v2;
+}"#,
+            r#"type @pair = { i64, objref<i64> };
+type @outer = { @pair, i64 };
+func private %f() -> @outer {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.@pair = agg.make @pair 7.i64 v0;
+    v2.@pair = insert_value v1 0.i64 8.i64;
+    v3.@outer = agg.make @outer v2 9.i64;
+    return v3;
 }"#,
             r#"func private %f(v0.i64) -> [*i64; 2] {
 block0:

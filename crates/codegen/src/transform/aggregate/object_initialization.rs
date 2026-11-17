@@ -294,7 +294,14 @@ impl ValueInitialization<'_> {
         };
         let data = func.dfg.inst(inst);
         let is = func.inst_set();
-        if let Some(insert) = downcast::<&data::InsertValue>(is, data) {
+        if let Some(make) = downcast::<&data::AggMake>(is, data) {
+            let mut result = InitializedValue::new(ty, false);
+            for (index, &field) in (0..).zip(make.values()) {
+                let field = self.value(field);
+                result.children.insert_mut(index, field);
+            }
+            return result;
+        } else if let Some(insert) = downcast::<&data::InsertValue>(is, data) {
             let mut base = self.value(*insert.dest());
             if let Some(index) = shape::const_u32(&func.dfg, *insert.idx()) {
                 let field = self.value(*insert.value());

@@ -921,6 +921,7 @@ block0:
         for publish in [
             "v2.objref<*i256> = obj.alloc *i256;\n    obj.store v2 v1;",
             "v2.@Holder = insert_value undef.@Holder 0.i256 v1;",
+            "v2.@Holder = agg.make @Holder v1;",
         ] {
             check(
                 &format!(

@@ -729,6 +729,10 @@ fn compute_summary_for_func(
                         .or_else(|| {
                             downcast::<&data::EnumMake>(function.inst_set(), inst_data)
                                 .map(|make| make.values().as_slice())
+                        })
+                        .or_else(|| {
+                            downcast::<&data::AggMake>(function.inst_set(), inst_data)
+                                .map(|make| make.values().as_slice())
                         });
                 if let Some(values) = aggregate_values {
                     // Capture summaries describe references stored in objects,
@@ -2185,31 +2189,36 @@ block0:
 
     #[test]
     fn aggregate_return_reference_is_not_local_only() {
-        let module = parse_test_module(
-            r#"
+        for build in [
+            "v3.@Selection = insert_value undef.@Selection 0.i256 v2;\n\
+             v4.@Selection = insert_value v3 1.i256 42.i256;",
+            "v4.@Selection = agg.make @Selection v2 42.i256;",
+        ] {
+            let module = parse_test_module(&format!(
+                r#"
 target = "evm-ethereum-osaka"
-type @Selection = { objref<i256>, i256 };
+type @Selection = {{ objref<i256>, i256 }};
 
-func private %select(v0.objref<[i256; 2]>, v1.i256) -> @Selection {
+func private %select(v0.objref<[i256; 2]>, v1.i256) -> @Selection {{
 block0:
     v2.objref<i256> = obj.index v0 v1;
-    v3.@Selection = insert_value undef.@Selection 0.i256 v2;
-    v4.@Selection = insert_value v3 1.i256 42.i256;
+    {build}
     return v4;
-}
+}}
 
-func private %forward(v0.objref<[i256; 2]>) -> @Selection {
+func private %forward(v0.objref<[i256; 2]>) -> @Selection {{
 block0:
     v1.@Selection = call %select v0 0.i256;
     return v1;
-}
-"#,
-        );
-        let summaries = compute_object_effect_summaries(&module);
-        for name in ["select", "forward"] {
-            let summary = &summaries[&lookup_func(&module, name)];
-            assert!(!summary.arg_effects[0].local_only, "{name}");
-            assert!(summary.arg_effects[0].escapes, "{name}");
+}}
+"#
+            ));
+            let summaries = compute_object_effect_summaries(&module);
+            for name in ["select", "forward"] {
+                let summary = &summaries[&lookup_func(&module, name)];
+                assert!(!summary.arg_effects[0].local_only, "{name}: {build}");
+                assert!(summary.arg_effects[0].escapes, "{name}: {build}");
+            }
         }
     }
 
@@ -2267,6 +2276,22 @@ block0:
                  v7.i256 = extract_value v6 1.i256;\n\
                  return v7;",
                 false,
+            ),
+            (
+                "made_other_field",
+                "v5.@Outer = agg.make @Outer v4 3.i256;\n\
+                 v6.i256 = extract_value v5 1.i256;\n\
+                 return v6;",
+                false,
+            ),
+            (
+                "made_and_extracted",
+                "v5.@Outer = agg.make @Outer v4 3.i256;\n\
+                 v6.@Pair = extract_value v5 0.i256;\n\
+                 v7.objref<i256> = extract_value v6 1.i256;\n\
+                 v8.i256 = obj.load v7;\n\
+                 return v8;",
+                true,
             ),
             (
                 "variant_tag",
