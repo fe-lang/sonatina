@@ -265,3 +265,150 @@ block0:
     v5.i256 = add v4 v2;
     return v5;
 }
+
+# sameln: func public %mcopy_over_slot(v0.*i256) -> i256 {
+# check:       v3.i256 = and v2 255.i256;
+# nextln:      return v3;
+func public %mcopy_over_slot(v0.*i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 7.i256 i256;
+    evm_mcopy v1 v0 32.i256;
+    v2.i256 = mload v1 i256;
+    v3.i256 = and v2 255.i256;
+    return v3;
+}
+
+# sameln: func public %calldata_copy_over_slot() -> i256 {
+# check:       v3.i256 = and v2 255.i256;
+# nextln:      return v3;
+func public %calldata_copy_over_slot() -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 7.i256 i256;
+    evm_calldata_copy v1 4.i256 32.i256;
+    v2.i256 = mload v1 i256;
+    v3.i256 = and v2 255.i256;
+    return v3;
+}
+
+# A copy of dynamic length leaves the slot not local.
+# sameln: func public %dynamic_calldata_copy_over_slot(v0.i256) -> i256 {
+# check:       v3.i256 = and v2 255.i256;
+# nextln:      return v3;
+func public %dynamic_calldata_copy_over_slot(v0.i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 7.i256 i256;
+    evm_calldata_copy v1 4.i256 v0;
+    v2.i256 = mload v1 i256;
+    v3.i256 = and v2 255.i256;
+    return v3;
+}
+
+# sameln: func public %return_data_copy_over_slot() -> i256 {
+# check:       v3.i256 = and v2 255.i256;
+# nextln:      return v3;
+func public %return_data_copy_over_slot() -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 7.i256 i256;
+    evm_return_data_copy v1 0.i256 32.i256;
+    v2.i256 = mload v1 i256;
+    v3.i256 = and v2 255.i256;
+    return v3;
+}
+
+# The callee's return data may fill the output buffer.
+# sameln: func public %external_call_output_in_slot(v0.i256) -> i256 {
+# check:       v4.i256 = and v3 255.i256;
+func public %external_call_output_in_slot(v0.i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 7.i256 i256;
+    v2.i256 = evm_call 100000.i256 v0 0.i256 0.i256 0.i256 v1 32.i256;
+    v3.i256 = mload v1 i256;
+    v4.i256 = and v3 255.i256;
+    v5.i256 = add v4 v2;
+    return v5;
+}
+
+# sameln: func public %overlapping_store_at_offset(v0.i256) -> i256 {
+# check:       v6.i256 = and v5 255.i256;
+# nextln:      return v6;
+func public %overlapping_store_at_offset(v0.i256) -> i256 {
+block0:
+    v1.*[i256; 2] = alloca [i256; 2];
+    v7.*i256 = bitcast v1 *i256;
+    mstore v7 7.i256 i256;
+    v2.i256 = ptr_to_int v1 i256;
+    v3.i256 = add v2 16.i256;
+    v4.*i256 = int_to_ptr v3 *i256;
+    mstore v4 v0 i256;
+    v5.i256 = mload v7 i256;
+    v6.i256 = and v5 255.i256;
+    return v6;
+}
+
+# sameln: func public %store_of_other_type(v0.i8) -> i256 {
+# check:       v3.i256 = and v2 255.i256;
+# nextln:      return v3;
+func public %store_of_other_type(v0.i8) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 7.i256 i256;
+    mstore v1 v0 i8;
+    v2.i256 = mload v1 i256;
+    v3.i256 = and v2 255.i256;
+    return v3;
+}
+
+# The first iteration loads before any store.
+# sameln: func public %load_before_store_in_loop(v0.i256) -> i256 {
+# check:       v4.i256 = and v3 255.i256;
+func public %load_before_store_in_loop(v0.i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    jump block1;
+
+block1:
+    v2.i256 = phi (0.i256 block0) (v6 block2);
+    v3.i256 = mload v1 i256;
+    v4.i256 = and v3 255.i256;
+    v5.i1 = lt v2 v0;
+    br v5 block2 block3;
+
+block2:
+    v7.i256 = and v2 15.i256;
+    mstore v1 v7 i256;
+    v6.i256 = add v2 1.i256;
+    jump block1;
+
+block3:
+    return v4;
+}
+
+# Each iteration's `alloca` holds nothing the previous iteration stored.
+# sameln: func public %alloca_in_loop(v0.i256) -> i256 {
+# check:       v4.i256 = and v3 255.i256;
+func public %alloca_in_loop(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v2.i256 = phi (0.i256 block0) (v6 block2);
+    v8.i256 = phi (0.i256 block0) (v4 block2);
+    v1.*i256 = alloca i256;
+    v3.i256 = mload v1 i256;
+    v4.i256 = and v3 255.i256;
+    v5.i1 = lt v2 v0;
+    br v5 block2 block3;
+
+block2:
+    mstore v1 7.i256 i256;
+    v6.i256 = add v2 1.i256;
+    jump block1;
+
+block3:
+    return v8;
+}
