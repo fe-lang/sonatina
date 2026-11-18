@@ -50,15 +50,17 @@ use sonatina_ir::{
     },
 };
 
-use super::simplify_expr::{
-    ConstantFacts, ExprFactProvider, SimplifiedResult, simplify_inst_with_facts,
+use super::{
+    inst_size,
+    simplify_expr::{ConstantFacts, ExprFactProvider, SimplifiedResult, simplify_inst_with_facts},
 };
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode, clone_inst_before, defined_in, remove_phi_incoming_from},
     domtree::DomTree,
 };
 
-/// The most instructions of a threaded block recomputed in a predecessor.
+/// The most instructions of a threaded block recomputed in a predecessor, by
+/// `inst_size`.
 const MAX_DUPLICATED_INSTS: usize = 4;
 
 #[derive(Default)]
@@ -173,6 +175,7 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
     };
 
     let mut body = SmallVec::new();
+    let mut size = 0;
     for inst in func.layout.iter_inst(block) {
         if inst == term {
             break;
@@ -190,7 +193,8 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
             }
             continue;
         }
-        if !func.dfg.has_value_semantics(inst) || body.len() == MAX_DUPLICATED_INSTS {
+        size += inst_size(func, inst);
+        if !func.dfg.has_value_semantics(inst) || size > MAX_DUPLICATED_INSTS {
             return None;
         }
         body.push(inst);

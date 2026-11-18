@@ -39,13 +39,15 @@ use sonatina_ir::{
     inst::control_flow::{Br, BranchKind, Phi},
 };
 
+use super::inst_size;
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode, clone_inst_before, defined_in, iter_phis_in_block},
     domtree::DomTree,
     loop_analysis::LoopTree,
 };
 
-/// The most non-phi header instructions copied into the preheader and latch.
+/// The most non-phi header instructions copied into the preheader and latch,
+/// by `inst_size`.
 const MAX_HEADER_INSTS: usize = 8;
 
 #[derive(Default)]
@@ -191,6 +193,7 @@ fn plan(
     }
 
     let mut insts = SmallVec::new();
+    let mut size = 0;
     for inst in func.layout.iter_inst(header) {
         if inst == term {
             break;
@@ -201,10 +204,8 @@ fn plan(
         // The copies run exactly where the header did, so a read would be
         // safe to copy; but the body could then no longer reuse the header's
         // one read through load forwarding. Calls are too large to copy.
-        if insts.len() == MAX_HEADER_INSTS
-            || func.dfg.is_call(inst)
-            || !func.dfg.can_speculate(inst)
-        {
+        size += inst_size(func, inst);
+        if size > MAX_HEADER_INSTS || func.dfg.is_call(inst) || !func.dfg.can_speculate(inst) {
             return None;
         }
         insts.push(inst);
