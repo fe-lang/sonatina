@@ -23,6 +23,9 @@ value.
   store carry it unchanged.
 - `freeze x` is `x` when `x` is specified, and otherwise some concrete value,
   the same for every use of its result.
+- A query of chain or account state (`evm_balance`, `evm_ext_code_size`,
+  `evm_ext_code_hash`, `evm_block_hash`, `evm_blob_hash`) with an unspecified
+  operand gives the unspecified value; only its gas may differ.
 
 ## Undefined behavior
 
@@ -30,7 +33,8 @@ Using the unspecified value is undefined behavior only:
 
 - as the condition of a `br` or the scrutinee of a `br_table`;
 - as the address or object operand of a load, a store or any other access
-  through a pointer or object reference;
+  through a pointer or object reference, or as the key of `evm_sload`,
+  `evm_sstore`, `evm_tload` or `evm_tstore`;
 - as an index that selects a member or computes an address: `gep`,
   `obj.index`, `const.index`, `insert_value`, `extract_value`, the field of
   `enum.extract` or `enum.proj`;
@@ -53,13 +57,16 @@ question that this page does not settle.
 
 Every scalar a typed store writes occupies a slot; on EVM each scalar, narrow
 ones included, takes one 32-byte word, and a typed store writes all of it. A
-typed load of a slot gives what the last typed store to it wrote. A slot that
-nothing wrote, or that was last written another way, holds the unspecified
-value; a typed load does not make it a value of its type.
+typed load of a slot gives what the last typed store of the same type to it
+wrote; a store of another type writes the slot another way. A slot that nothing
+wrote, or that was last written another way, holds the unspecified value; a
+typed load does not make it a value of its type.
 
 A copy of whole slots, by `memcopy`, `evm_mcopy`, or a load and store of the
 same type, gives each destination slot the value its source slot held,
-specified or not. A slot a copy covers only in part is written another way.
+specified or not. A slot a copy covers only in part is written another way. A
+copy from code of a constant's encoding (`evm_code_copy` from a constant
+global) gives each slot the value the constant has there.
 
 A raw read of a slot that holds the unspecified value (`evm_mload`,
 `evm_keccak256`, the source of `evm_mcopy`) sees some bytes: `evm_mload` of
