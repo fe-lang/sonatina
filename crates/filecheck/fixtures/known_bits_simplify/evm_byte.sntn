@@ -1,0 +1,25 @@
+target = "evm-ethereum-osaka"
+
+# Dynamic BYTE indices still produce at most eight bits.
+# sameln: func public %drops_byte_mask(v0.i256, v1.i256) -> i256 {
+# check: v2.i256 = evm_byte v0 v1;
+# not: and
+# check: return v2;
+func public %drops_byte_mask(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i256 = evm_byte v0 v1;
+    v3.i256 = and v2 255.i256;
+    return v3;
+}
+
+# Keep the constraint when strict undef propagation makes BYTE undefined.
+# sameln: func public %keeps_undef_byte_mask(v0.i256) -> i256 {
+# check: v1.i256 = evm_byte v0 undef.i256;
+# check: v2.i256 = and v1 255.i256;
+# check: return v2;
+func public %keeps_undef_byte_mask(v0.i256) -> i256 {
+block0:
+    v1.i256 = evm_byte v0 undef.i256;
+    v2.i256 = and v1 255.i256;
+    return v2;
+}

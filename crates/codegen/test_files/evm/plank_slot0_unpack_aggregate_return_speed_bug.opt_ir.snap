@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2463
 expression: opt_ir_snapshot
 input_file: test_files/evm/plank_slot0_unpack_aggregate_return_speed_bug.sntn
 ---
@@ -59,8 +60,7 @@ func public %run() {
         v67.i256 = and v66 65535.i256;
         v69.i256 = shr 216.i256 v20;
         v70.i256 = and v69 65535.i256;
-        v72.i256 = shr 232.i256 v20;
-        v74.i256 = and v72 255.i256;
+        v74.i256 = evm_byte 2.i256 v20;
         v76.i256 = shr 240.i256 v20;
         v93.i256 = and v76 1.i256;
         v79.i256 = and v20 1461501637330902918203684832716283019655932542975.i256;

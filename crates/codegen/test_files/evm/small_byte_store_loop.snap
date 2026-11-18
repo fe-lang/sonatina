@@ -34,9 +34,9 @@ entry:
     MSTORE
     PUSH0  // v2.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    DUP1  // v4.i256 = shr v3 v2;
-    PUSH1 0x8 (8)
-    SHR
+    DUP1  // v4.i256 = evm_byte v3 v2;
+    PUSH1 0x1e (30)
+    BYTE
     PUSH1 0x1 (1)  // evm_mstore8 v5 v4;
     MSTORE8
     PUSH1 0x2 (2)  // evm_mstore8 v6 v2;

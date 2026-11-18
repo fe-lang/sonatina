@@ -1,0 +1,65 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 2461
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/word_byte_idioms.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 38 bytes
+  total: 38 bytes
+
+functions:
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
+  entry: ir_blocks=1 ir_insts=12 vcode_ops=29 fixups=0 imm_bytes=9
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case input_0: calldata_len=32 success reason=Return gas_used=21223 gas_refunded=0 logs=0 output=call len=160 tx_gas=21128 runtime_gas=95
+  case input_1: calldata_len=32 success reason=Return gas_used=21235 gas_refunded=0 logs=0 output=call len=160 tx_gas=21140 runtime_gas=95
+  case input_2: calldata_len=32 success reason=Return gas_used=21235 gas_refunded=0 logs=0 output=call len=160 tx_gas=21140 runtime_gas=95
+  case input_3: calldata_len=32 success reason=Return gas_used=21235 gas_refunded=0 logs=0 output=call len=160 tx_gas=21140 runtime_gas=95
+  case input_4: calldata_len=32 success reason=Return gas_used=21235 gas_refunded=0 logs=0 output=call len=160 tx_gas=21140 runtime_gas=95
+  case input_5: calldata_len=32 success reason=Return gas_used=21235 gas_refunded=0 logs=0 output=call len=160 tx_gas=21140 runtime_gas=95
+  case input_6: calldata_len=32 success reason=Return gas_used=21607 gas_refunded=0 logs=0 output=call len=160 tx_gas=21512 runtime_gas=95
+  case input_7: calldata_len=32 success reason=Return gas_used=21235 gas_refunded=0 logs=0 output=call len=160 tx_gas=21140 runtime_gas=95
+  case input_8: calldata_len=32 success reason=Return gas_used=21607 gas_refunded=0 logs=0 output=call len=160 tx_gas=21512 runtime_gas=95
+  case input_9: calldata_len=32 success reason=Return gas_used=21607 gas_refunded=0 logs=0 output=call len=160 tx_gas=21512 runtime_gas=95
+  case input_10: calldata_len=32 success reason=Return gas_used=21607 gas_refunded=0 logs=0 output=call len=160 tx_gas=21512 runtime_gas=95
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    DUP1  // v3.i256 = evm_byte v2 v1;
+    PUSH1 0x1e (30)
+    BYTE
+    PUSH0  // evm_mstore v0 v3;
+    MSTORE
+    DUP1  // v5.i256 = evm_byte v4 v1;
+    PUSH1 0x17 (23)
+    BYTE
+    PUSH1 0x20 (32)  // evm_mstore v6 v5;
+    MSTORE
+    DUP1  // v8.i256 = evm_byte v7 v1;
+    PUSH1 0xf (15)
+    BYTE
+    PUSH1 0x40 (64)  // evm_mstore v9 v8;
+    MSTORE
+    DUP1  // v11.i256 = evm_byte v10 v1;
+    PUSH1 0x1 (1)
+    BYTE
+    PUSH1 0x60 (96)  // evm_mstore 96.i256 v11;
+    MSTORE
+    PUSH0  // v13.i256 = evm_byte v0 v1;
+    BYTE
+    PUSH1 0x80 (128)  // evm_mstore 128.i256 v13;
+    MSTORE
+    PUSH1 0xa0 (160)  // evm_return v0 160.i256;
+    PUSH0
+    RETURN
