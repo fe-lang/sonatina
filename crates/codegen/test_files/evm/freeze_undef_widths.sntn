@@ -1,0 +1,28 @@
+#! evm.config: { opt: 0 }
+#! evm.case: widths
+#!   calldata:
+#!   expect: return u256(0) u256(0) u256(0)
+
+target = "evm-ethereum-osaka"
+
+# Lowering `freeze undef` makes a zero of the frozen width, which the widening
+# casts after it read. No other zero is in the function, so each zero is new.
+func public %entry() {
+    block0:
+        v0.i1 = freeze undef.i1;
+        v1.i256 = zext v0 i256;
+        v2.i8 = freeze undef.i8;
+        v3.i256 = zext v2 i256;
+        v4.i16 = freeze undef.i16;
+        v5.i256 = sext v4 i256;
+        mstore 32.i32 v1 i256;
+        mstore 64.i32 v3 i256;
+        mstore 96.i32 v5 i256;
+        evm_return 32.i32 96.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
