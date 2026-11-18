@@ -1,6 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 2350
+assertion_line: 2463
 expression: opt_ir_snapshot
 input_file: test_files/evm/fe_poseidon_mock_different_inputs_master_baseline.sntn
 ---
@@ -146,62 +146,35 @@ func private %mix(v0.*[i256; 3]) -> *[i256; 3] {
 
 func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
     block0:
-        v82.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v83.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v58.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v97.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v10.*i8 = evm_malloc 96.i256;
         v11.*[i256; 3] = bitcast v10 *[i256; 3];
         v13.*i256 = bitcast v11 *i256;
-        mstore v13 v82 i256;
+        mstore v13 v58 i256;
         v15.*i256 = gep v11 0.i256 1.i256;
-        mstore v15 v83 i256;
+        mstore v15 v97 i256;
         v17.*i256 = gep v11 0.i256 2.i256;
         mstore v17 0.i256 i256;
         v22.*i8 = evm_malloc 32.i256;
         mstore v22 2.i256 i256;
-        jump block17;
-
-    block17:
-        v70.i256 = phi (0.i256 block0) (v36 block3);
-        v69.*[i256; 3] = phi (v11 block0) (v34 block3);
-        v68.i256 = phi (0.i256 block0) (v39 block3);
-        v32.*[i256; 3] = call %ark v69 v70;
+        v82.*[i256; 3] = call %ark v11 0.i256;
+        v83.*[i256; 3] = call %sigma_full v82;
+        v84.*[i256; 3] = call %mix v83;
+        v32.*[i256; 3] = call %ark v84 3.i256;
         v33.*[i256; 3] = call %sigma_full v32;
         v34.*[i256; 3] = call %mix v33;
-        (v36.i256, v37.i1) = uaddo v70 3.i256;
-        br v37 block9 block3;
-
-    block3:
-        v39.i256 = add v68 1.i256;
-        v72.i1 = lt v39 2.i256;
-        br v72 block17 block4;
-
-    block4:
         v42.*i8 = evm_malloc 32.i256;
         mstore v42 2.i256 i256;
-        jump block21;
-
-    block21:
-        v64.i256 = phi (v36 block4) (v55 block7);
-        v63.*[i256; 3] = phi (v34 block4) (v54 block7);
-        v62.i256 = phi (0.i256 block4) (v58 block7);
-        v52.*[i256; 3] = call %ark v63 v64;
+        v89.*[i256; 3] = call %ark v34 6.i256;
+        v90.*[i256; 3] = call %sigma_full v89;
+        v91.*[i256; 3] = call %mix v90;
+        v52.*[i256; 3] = call %ark v91 9.i256;
         v53.*[i256; 3] = call %sigma_full v52;
         v54.*[i256; 3] = call %mix v53;
-        (v55.i256, v56.i1) = uaddo v64 3.i256;
-        br v56 block9 block7;
-
-    block7:
-        v58.i256 = add v62 1.i256;
-        v66.i1 = lt v58 2.i256;
-        br v66 block21 block8;
-
-    block8:
         v60.*i256 = bitcast v54 *i256;
         v61.i256 = mload v60 i256;
         return v61;
-
-    block9:
-        evm_revert 0.i256 0.i256;
 }
 
 func public %entry() {

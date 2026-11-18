@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2463
 expression: opt_ir_snapshot
 input_file: test_files/evm/array_iter_reverse.sntn
 ---
@@ -36,33 +37,6 @@ func private %test_view_param_local_ref_take_reverse() {
         v42.*i256 = gep v39 0.i256 1.i256;
         mstore v42 v3 i256;
         v72.*[i256; 8] = int_to_ptr v3 *[i256; 8];
-        jump block10;
-
-    block10:
-        v132.i256 = phi (0.i256 block0) (v75 block10);
-        v131.i256 = phi (0.i256 block0) (v76 block10);
-        v71.i256 = sub 7.i256 v131;
-        v73.*i256 = gep v72 0.i256 v71;
-        v74.i256 = mload v73 i256;
-        v75.i256 = add v132 v74;
-        v76.i256 = add v131 1.i256;
-        v134.i1 = lt v76 4.i256;
-        v136.i256 = zext v134 i256;
-        v138.i1 = is_zero v136;
-        br v138 block1 block10;
-
-    block1:
-        v30.i1 = eq v75 26.i256;
-        v31.i256 = zext v30 i256;
-        v77.i1 = is_zero v31;
-        v78.i256 = zext v77 i256;
-        v119.i1 = is_zero v78;
-        br v119 block18 block15;
-
-    block15:
-        evm_revert 0.i256 0.i256;
-
-    block18:
         v80.*i8 = evm_malloc 64.i256;
         v82.*@__fe_Take_1 = bitcast v80 *@__fe_Take_1;
         v83.*i256 = bitcast v82 *i256;
@@ -72,8 +46,8 @@ func private %test_view_param_local_ref_take_reverse() {
         jump block26;
 
     block26:
-        v123.i256 = phi (0.i256 block18) (v113 block26);
-        v122.i256 = phi (0.i256 block18) (v114 block26);
+        v123.i256 = phi (0.i256 block0) (v113 block26);
+        v122.i256 = phi (0.i256 block0) (v114 block26);
         v111.*i256 = gep v72 0.i256 v122;
         v112.i256 = mload v111 i256;
         v113.i256 = add v123 v112;
