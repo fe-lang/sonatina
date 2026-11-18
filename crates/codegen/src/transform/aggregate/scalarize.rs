@@ -4171,7 +4171,7 @@ func private %f(v0.i256, v1.i256) -> i256 {
                 "whole-object load replacement should preserve the non-scalarized call consumer:\n{dumped}"
             );
             assert!(
-                dumped.contains("insert_value"),
+                dumped.contains("agg.make"),
                 "whole-object load should rebuild an SSA aggregate before the call:\n{dumped}"
             );
         });

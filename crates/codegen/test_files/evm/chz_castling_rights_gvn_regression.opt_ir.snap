@@ -158,17 +158,16 @@ func private %main_root() {
         jump block83;
 
     block83:
-        v431.i256 = phi (0.i256 block81) (512.i256 block82) (0.i256 block84);
+        v429.i256 = phi (0.i256 block81) (512.i256 block82) (0.i256 block84);
         v328.i256 = and v307 -130561.i256;
-        v332.i256 = or v328 v431;
+        v332.i256 = or v328 v429;
         v333.i256 = and v332 -8589803521.i256;
         v336.i256 = or v333 262144.i256;
         v338.i256 = and v336 -2.i256;
         v339.i256 = or v338 1.i256;
         v340.i256 = extract_value v247 0.i256;
-        v342.@layout_4 = insert_value undef.@layout_4 0.i256 v340;
-        v343.@layout_4 = insert_value v342 1.i256 v339;
-        v344.@layout_5 = enum.make @layout_5 #Ok v343;
+        v341.@layout_4 = agg.make @layout_4 v340 v339;
+        v342.@layout_5 = enum.make @layout_5 #Ok v341;
         jump block2;
 
     block84:
@@ -187,14 +186,14 @@ func private %main_root() {
         jump block89;
 
     block2:
-        v348.@layout_5 = phi (v246 block60) (v344 block83);
-        enum.assert_variant v348 #Ok;
-        v1.@layout_4 = enum.extract v348 #Ok 0.i256;
+        v346.@layout_5 = phi (v246 block60) (v342 block83);
+        enum.assert_variant v346 #Ok;
+        v1.@layout_4 = enum.extract v346 #Ok 0.i256;
         v2.i256 = extract_value v1 1.i256;
-        v349.i256 = shr 1.i256 v2;
-        v350.i256 = and v349 15.i256;
-        v351.i8 = trunc v350 i8;
-        v4.i256 = zext v351 i256;
+        v347.i256 = shr 1.i256 v2;
+        v348.i256 = and v347 15.i256;
+        v349.i8 = trunc v348 i8;
+        v4.i256 = zext v349 i256;
         mstore 0.i256 v4 i256;
         evm_return 0.i256 32.i256;
 }

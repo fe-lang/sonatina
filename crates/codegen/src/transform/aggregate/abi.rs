@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, I256, Immediate, Type, Value, ValueId,
+    Function, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{control_flow, data},
     module::{FuncRef, Module, ModuleCtx},
@@ -9,7 +9,7 @@ use sonatina_ir::{
 
 use super::{
     private_abi::{self, PrivateAbiPlan},
-    reconstruct::AggregateValueReconstructor,
+    reconstruct::{AggregateValueReconstructor, insert_before_inst},
     shape,
 };
 
@@ -30,7 +30,6 @@ struct FuncPlan {
 
 #[derive(Clone, Copy)]
 pub(crate) struct AbiChildSlice {
-    idx: u32,
     ty: Type,
     first_leaf: usize,
     leaf_count: usize,
@@ -369,11 +368,11 @@ impl AggregateExpandAbi {
             return func.dfg.make_undef_value(agg_ty);
         }
 
-        let mut aggregate = func.dfg.make_undef_value(agg_ty);
+        let mut fields = SmallVec::new();
         for child in abi_child_slices(func.ctx(), agg_ty)
             .expect("aggregate reconstruction requires struct or array type")
         {
-            let child_value = if child.leaf_count == 0 {
+            fields.push(if child.leaf_count == 0 {
                 func.dfg.make_undef_value(child.ty)
             } else if shape::is_supported_aggregate_ty(func.ctx(), child.ty) {
                 self.rebuild_aggregate_from_leaves(
@@ -384,11 +383,10 @@ impl AggregateExpandAbi {
                 )
             } else {
                 scalar_leaves[child.first_leaf]
-            };
-            aggregate =
-                insert_value_before_inst(func, inst, aggregate, child.idx, child_value, agg_ty);
+            });
         }
-        aggregate
+        let make = data::AggMake::new_unchecked(func.inst_set(), agg_ty, fields);
+        insert_before_inst(func, inst, make, agg_ty)
     }
 }
 
@@ -470,11 +468,9 @@ pub(crate) fn abi_child_slices(
     let mut children = SmallVec::new();
     let mut next_leaf = 0usize;
     for idx in 0..child_count {
-        let idx = u32::try_from(idx).ok()?;
-        let ty = shape::aggregate_child_ty(module, agg_ty, idx)?;
+        let ty = shape::aggregate_child_ty(module, agg_ty, u32::try_from(idx).ok()?)?;
         let leaf_count = abi_leaf_count(module, ty)?;
         children.push(AbiChildSlice {
-            idx,
             ty,
             first_leaf: next_leaf,
             leaf_count,
@@ -482,36 +478,6 @@ pub(crate) fn abi_child_slices(
         next_leaf = next_leaf.checked_add(leaf_count)?;
     }
     Some(children)
-}
-
-fn insert_value_before_inst(
-    func: &mut Function,
-    inst: sonatina_ir::InstId,
-    dest: ValueId,
-    idx: u32,
-    value: ValueId,
-    ty: Type,
-) -> ValueId {
-    let idx_value = func
-        .dfg
-        .make_imm_value(Immediate::from_i256(I256::from(idx), Type::I256));
-    let loc = func.layout.prev_inst_of(inst).map_or(
-        CursorLocation::BlockTop(func.layout.inst_block(inst)),
-        CursorLocation::At,
-    );
-    let mut cursor = InstInserter::at_location(loc);
-    let insert_inst = cursor.insert_inst_data_from(
-        func,
-        inst,
-        data::InsertValue::new_unchecked(func.inst_set(), dest, idx_value, value),
-    );
-    let insert_value = func.dfg.make_value(Value::Inst {
-        inst: insert_inst,
-        result_idx: 0,
-        ty,
-    });
-    cursor.attach_result(func, insert_inst, insert_value);
-    insert_value
 }
 
 #[cfg(test)]

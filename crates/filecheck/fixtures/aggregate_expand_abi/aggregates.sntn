@@ -6,8 +6,7 @@ type @pair = { i256, i256 };
 
 # regex: VALUE=\bv\d+\b
 # check: func private %swap($(first=$VALUE).i256, $(second=$VALUE).i256) -> (i256, i256) {
-# check: insert_value undef.@pair 0.i256 $first;
-# check: insert_value $VALUE 1.i256 $second;
+# check: agg.make @pair $first $second;
 # check: return (v2, v1);
 func private %swap(v0.@pair) -> @pair {
     block0:
