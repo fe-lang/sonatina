@@ -30,10 +30,7 @@ use cranelift_module::{
     DataDescription, DataId, FuncId, Linkage, Module as ClifModule, ModuleReloc,
 };
 
-use sonatina_codegen::{
-    analysis::{arg_writes::ArgWrites, known_bits::KnownBitsQuery},
-    transform::aggregate::is_fresh_insert,
-};
+use sonatina_codegen::analysis::{arg_writes::ArgWrites, known_bits::KnownBitsQuery};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Type, U256,
     Value, ValueId,
@@ -2038,13 +2035,8 @@ fn translate_function(
                     value_map.insert_parts(result, values);
                 }
                 NativeInstKind::InsertValue(insert) => {
-                    // `legalize_module` folded every insert into `undef` or an
-                    // `agg.make` into an `agg.make`, but for sparse inserts
-                    // into long arrays, which copy their base like an update.
-                    debug_assert!(
-                        !is_fresh_insert(function, inst_id),
-                        "fresh insert {inst_id:?} reached translation"
-                    );
+                    // No insert into an `agg.make` is left (`check_concrete`);
+                    // an insert into a `zero` copies it like any base.
                     let Some(result) = function.dfg.inst_result(inst_id) else {
                         continue;
                     };

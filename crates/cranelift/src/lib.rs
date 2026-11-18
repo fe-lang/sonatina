@@ -22,7 +22,10 @@ use sonatina_codegen::{
     backend::{Backend, BackendOptions},
     compile::OptLevel,
     optim::Pipeline,
-    transform::aggregate::{EnumTagLower, check_frame_lifetimes, fold_fresh_aggregates},
+    transform::{
+        aggregate::{EnumTagLower, check_frame_lifetimes},
+        concrete::{check_concrete_module, concretize},
+    },
 };
 use sonatina_ir::Module;
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
@@ -258,18 +261,17 @@ impl Backend for CraneliftObjectBackend {
 }
 
 fn legalize_module(module: &Module) -> Result<(), String> {
-    // Translation assumes fresh aggregates are spelled `agg.make`: no
-    // constant-index insert into `undef` or an `agg.make` is left, but for
-    // sparse inserts into long arrays (`fold_fresh_aggregates`). The final IR
-    // phase that makes values concrete, once it exists, takes this step over.
-    fold_fresh_aggregates(module);
     EnumTagLower.run(module);
+    // Translation takes concrete IR: no `undef`, no `freeze`, and fresh
+    // aggregates spelled `agg.make` (`transform::concrete`).
+    concretize(module);
     for func in module.funcs() {
         let report = verify_function_signature(&module.ctx, func, &VerifierConfig::default());
         if report.has_errors() {
             return Err(report.to_string());
         }
     }
+    check_concrete_module(module)?;
     check_frame_lifetimes(module)
 }
 

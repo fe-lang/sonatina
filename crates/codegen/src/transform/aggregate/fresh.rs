@@ -191,13 +191,12 @@ pub(crate) fn fold_fresh_aggregates_in(func: &mut Function) -> bool {
 }
 
 /// Folds the fresh insert chains of every function in `module` into
-/// `agg.make`s. Every backend runs it on entry, so passes see fresh aggregates
-/// spelled one way, and again after optimizing, which may make new ones by
-/// substituting `undef` or an `agg.make` for an insert's base. Afterwards no
-/// constant-index `insert_value` has an `undef` or `agg.make` base, except a
-/// sparse one into an aggregate with more than [`MAX_UNWRITTEN_FIELDS`] fields
-/// it does not write ([`is_fresh_insert`]): the backends assume so. The final IR
-/// phase that makes values concrete, once it exists, takes this step over.
+/// `agg.make`s. `Compile::optimize` runs it before the pipeline, so passes see
+/// fresh aggregates spelled one way. Passes may make new ones by substituting
+/// `undef` or an `agg.make` for an insert's base; `concretize` folds those at
+/// the end. Afterwards no constant-index `insert_value` has an `undef` or
+/// `agg.make` base, except a sparse one into an aggregate with more than
+/// [`MAX_UNWRITTEN_FIELDS`] fields it does not write ([`is_fresh_insert`]).
 pub fn fold_fresh_aggregates(module: &Module) {
     for func in module.funcs() {
         module.func_store.modify(func, |function| {
