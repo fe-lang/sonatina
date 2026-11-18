@@ -464,7 +464,8 @@ const POST_INLINE_CLEANUP_PASSES: &[Pass] = &[
 enum Loops {
     /// Unroll the loops that unrolling makes no larger, without rotating.
     UnrollSmall,
-    Rotate,
+    /// Rotate, then unroll only when the estimated IR size does not grow.
+    RotateAndUnrollSmall,
     /// Rotate, then unroll the one-block loops that run a few times.
     Unroll,
 }
@@ -573,10 +574,9 @@ impl Pipeline {
     /// The optimization schedule. Without `late_rounds` it stops after the
     /// second of its four inline rounds.
     fn optimized(inliner_config: InlinerConfig, loops: Loops, late_rounds: bool) -> Self {
-        // Rotation copies each rotated loop's header, so a size-oriented
-        // pipeline only unrolls the loops that unrolling makes no larger;
-        // unrolling copies whole bodies, which otherwise only native code
-        // affords.
+        // Size-oriented code avoids rotation. EVM speed code rotates loops,
+        // then unrolls only when the estimated IR size does not grow. Native
+        // code also allows the bounded code growth of full unrolling.
         let passes = |passes: &[Pass]| {
             passes
                 .iter()
@@ -584,7 +584,7 @@ impl Pipeline {
                     Pass::LoopRotate => (loops != Loops::UnrollSmall).then_some(pass),
                     Pass::LoopUnroll => match loops {
                         Loops::UnrollSmall => Some(Pass::LoopUnrollSmall),
-                        Loops::Rotate => None,
+                        Loops::RotateAndUnrollSmall => Some(Pass::LoopUnrollSmall),
                         Loops::Unroll => Some(pass),
                     },
                     _ => Some(pass),
@@ -632,8 +632,8 @@ impl Pipeline {
     /// Size-oriented optimization pipeline preset.
     ///
     /// It uses the same aggressive pass schedule as [`Pipeline::speed`], but
-    /// keeps inlining biased toward avoiding code size growth and, instead of
-    /// rotating loops, unrolls the ones that unrolling makes no larger.
+    /// keeps inlining biased toward avoiding code size growth and skips loop
+    /// rotation. Both EVM presets limit unrolling by estimated IR size.
     pub fn size() -> Self {
         Self::optimized(size_inliner_config(), Loops::UnrollSmall, true)
     }
@@ -641,10 +641,10 @@ impl Pipeline {
     /// Speed-oriented optimization pipeline preset.
     ///
     /// Uses the same pass schedule as [`Pipeline::size`], but widens the
-    /// inliner budget for runtime speed and rotates loops instead of
-    /// unrolling them.
+    /// inliner budget for runtime speed and rotates loops before conservatively
+    /// unrolling those whose estimated IR size does not grow.
     pub fn speed() -> Self {
-        Self::optimized(speed_inliner_config(), Loops::Rotate, true)
+        Self::optimized(speed_inliner_config(), Loops::RotateAndUnrollSmall, true)
     }
 
     /// Optimization pipeline for native code, which runs on a register
@@ -2958,7 +2958,7 @@ func private %entry(v0.i32, v1.i32) -> i32 {
         );
         let rotated: Vec<_> = o2
             .iter()
-            .map(|step| step.replace("LoopUnroll, ", ""))
+            .map(|step| step.replace("LoopUnroll, ", "LoopUnrollSmall, "))
             .collect();
         assert_eq!(rotated, steps(&Pipeline::speed()));
         assert!(o2.starts_with(&o1));
@@ -3003,10 +3003,8 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                     rotates |= speed_passes.contains(&Pass::LoopRotate);
                     let unrolling: Vec<_> = speed_passes
                         .iter()
-                        .map(|&pass| match pass {
-                            Pass::LoopRotate => Pass::LoopUnrollSmall,
-                            _ => pass,
-                        })
+                        .copied()
+                        .filter(|pass| *pass != Pass::LoopRotate)
                         .collect();
                     assert_eq!(size_passes, &unrolling);
                 }
