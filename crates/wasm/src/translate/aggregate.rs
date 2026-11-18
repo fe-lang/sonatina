@@ -889,8 +889,8 @@ impl FunctionTranslator<'_> {
     }
 
     /// Whether the `insert_value` `next` writes into the storage of the
-    /// insert `source`: `source`'s result is the aggregate that `next` changes,
-    /// and `next`, in `block`, is its only user.
+    /// insert or `agg.make` `source`: `source`'s result is the aggregate that
+    /// `next` changes, and `next`, in `block`, is its only user.
     fn continues_in_place(&self, block: BlockId, source: InstId, next: InstId) -> bool {
         let dfg = &self.function.dfg;
         let insert = |inst| match native::inst_set().resolve_inst(dfg.inst(inst)) {
@@ -900,8 +900,12 @@ impl FunctionTranslator<'_> {
         let Some(result) = dfg.inst_result(source) else {
             return false;
         };
+        let made = matches!(
+            native::inst_set().resolve_inst(dfg.inst(source)),
+            NativeInstKind::AggMake(_)
+        );
         self.function.layout.inst_block(source) == block
-            && insert(source).is_some()
+            && (insert(source).is_some() || made)
             && insert(next).is_some_and(|next| *next.dest() == result)
             && dfg.users(result).copied().eq([next])
     }
