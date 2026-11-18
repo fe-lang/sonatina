@@ -181,6 +181,11 @@ impl DataFlowGraph {
         self.make_value(value_data)
     }
 
+    /// The constant `zero.ty`: the value of `ty` whose bits are all zero.
+    pub fn make_zero_value(&mut self, ty: Type) -> ValueId {
+        self.make_value(Value::Zero { ty })
+    }
+
     /// Returns inst if the value is originated from inst.
     pub fn value_inst(&self, value: ValueId) -> Option<InstId> {
         match self.value(value) {
@@ -410,7 +415,8 @@ impl DataFlowGraph {
             | Value::Arg { ty, .. }
             | Value::Immediate { ty, .. }
             | Value::Global { ty, .. }
-            | Value::Undef { ty } => *ty,
+            | Value::Undef { ty }
+            | Value::Zero { ty } => *ty,
         }
     }
 
@@ -428,7 +434,8 @@ impl DataFlowGraph {
             Value::Inst { ty, .. }
             | Value::Arg { ty, .. }
             | Value::Global { ty, .. }
-            | Value::Undef { ty } => *ty = new_ty,
+            | Value::Undef { ty }
+            | Value::Zero { ty } => *ty = new_ty,
         }
     }
 

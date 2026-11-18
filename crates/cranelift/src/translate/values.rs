@@ -72,7 +72,9 @@ pub(super) fn resolve_value(
     }
     let value = function.dfg.value(value_id);
     match value {
-        Value::Immediate { ty: Type::I256, .. } | Value::Undef { ty: Type::I256 } => Err(format!(
+        Value::Immediate { ty: Type::I256, .. }
+        | Value::Undef { ty: Type::I256 }
+        | Value::Zero { ty: Type::I256 } => Err(format!(
             "i256 value v{} has no single Cranelift value",
             value_id.0
         )),
@@ -85,7 +87,7 @@ pub(super) fn resolve_value(
                 Ok(val)
             }
         },
-        Value::Undef { ty } => {
+        Value::Undef { ty } | Value::Zero { ty } => {
             let ctx = function.ctx();
             if is_aggregate(ctx, *ty) {
                 // Aggregate consumers zero their destination (`store_indirect`)

@@ -168,7 +168,7 @@ impl RefMap {
                 *ty = self.lookup_type(*ty);
             }
 
-            Value::Undef { ty } => {
+            Value::Undef { ty } | Value::Zero { ty } => {
                 *ty = self.lookup_type(*ty);
             }
         }

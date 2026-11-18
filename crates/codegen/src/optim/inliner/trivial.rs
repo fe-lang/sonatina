@@ -22,6 +22,7 @@ enum ValueTemplate {
     Imm(Immediate),
     Global(GlobalVariableRef),
     Undef(Type),
+    Zero(Type),
 }
 
 type ReturnedTemplates = SmallVec<[ValueTemplate; 2]>;
@@ -768,6 +769,7 @@ fn materialize(
         ValueTemplate::Imm(imm) => Some(caller.dfg.make_imm_value(*imm)),
         ValueTemplate::Global(gv) => Some(caller.dfg.make_global_value(*gv)),
         ValueTemplate::Undef(ty) => Some(caller.dfg.make_undef_value(*ty)),
+        ValueTemplate::Zero(ty) => Some(caller.dfg.make_zero_value(*ty)),
     }
 }
 
@@ -777,6 +779,7 @@ fn classify_value_template(func: &Function, value: ValueId) -> Option<ValueTempl
         Value::Immediate { imm, .. } => Some(ValueTemplate::Imm(*imm)),
         Value::Global { gv, .. } => Some(ValueTemplate::Global(*gv)),
         Value::Undef { ty } => Some(ValueTemplate::Undef(*ty)),
+        Value::Zero { ty } => Some(ValueTemplate::Zero(*ty)),
         Value::Inst { .. } => None,
     }
 }
@@ -826,7 +829,10 @@ fn record_const_value(
 ) {
     if matches!(
         template,
-        ValueTemplate::Imm(..) | ValueTemplate::Global(..) | ValueTemplate::Undef(..)
+        ValueTemplate::Imm(..)
+            | ValueTemplate::Global(..)
+            | ValueTemplate::Undef(..)
+            | ValueTemplate::Zero(..)
     ) {
         const_values.entry(value_id).or_insert(template);
     }

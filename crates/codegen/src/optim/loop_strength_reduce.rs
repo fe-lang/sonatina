@@ -554,7 +554,9 @@ fn can_materialize_in_preheader_from_anchor(
     }
 
     let can_materialize = match func.dfg.value(value) {
-        Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } => true,
+        Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } | Value::Zero { .. } => {
+            true
+        }
         Value::Undef { .. } => false,
         Value::Inst { inst, .. } => {
             let inst = *inst;
@@ -606,7 +608,9 @@ fn materialize_invariant_in_preheader(
     }
 
     let materialized = match func.dfg.value(value) {
-        Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } => value,
+        Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } | Value::Zero { .. } => {
+            value
+        }
         Value::Undef { .. } => return None,
         Value::Inst { inst, .. } => {
             let inst = *inst;

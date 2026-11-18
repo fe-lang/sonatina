@@ -388,7 +388,8 @@ fn value_available_at(
         Value::Arg { .. }
         | Value::Immediate { .. }
         | Value::Global { .. }
-        | Value::Undef { .. } => true,
+        | Value::Undef { .. }
+        | Value::Zero { .. } => true,
     }
 }
 

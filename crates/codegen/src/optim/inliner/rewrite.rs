@@ -77,6 +77,7 @@ impl<'a> OperandRewriter<'a> {
             Value::Immediate { imm, .. } => self.caller.dfg.make_imm_value(*imm),
             Value::Global { gv, .. } => self.caller.dfg.make_global_value(*gv),
             Value::Undef { ty } => self.caller.dfg.make_undef_value(*ty),
+            Value::Zero { ty } => self.caller.dfg.make_zero_value(*ty),
             Value::Arg { .. } | Value::Inst { .. } => return None,
         };
 

@@ -122,6 +122,10 @@ where
         self.func.dfg.make_undef_value(ty)
     }
 
+    pub fn make_zero_value(&mut self, ty: Type) -> ValueId {
+        self.func.dfg.make_zero_value(ty)
+    }
+
     /// Return pointer value to the global variable.
     pub fn make_global_value(&mut self, gv: GlobalVariableRef) -> ValueId {
         self.func.dfg.make_global_value(gv)

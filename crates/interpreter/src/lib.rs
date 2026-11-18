@@ -153,6 +153,11 @@ impl State for Machine {
         let value = self.top_func().dfg.value(value_id);
         match value {
             Value::Immediate { imm, .. } => (*imm).into(),
+            // Fixing the unspecified value gives each part zero.
+            Value::Zero { ty } => {
+                let ty = *ty;
+                EvalValue::Undef.fixed(&self.module_ctx, ty)
+            }
             Value::Global { .. } => {
                 todo!()
             }

@@ -1,0 +1,79 @@
+target = "evm-ethereum-london"
+
+type @pair = {i32, i64};
+type @nested = {@pair, [i8; 3], i1};
+
+#[() -> 0.i64]
+func private %scalar() -> i64 {
+    block0:
+        return zero.i64;
+}
+
+#[() -> 1.i1]
+func private %scalar_is_zero() -> i1 {
+    block0:
+        v0.i1 = eq zero.i32 0.i32;
+        return v0;
+}
+
+#[() -> 0.i1]
+func private %bool() -> i1 {
+    block0:
+        return zero.i1;
+}
+
+#[() -> 0.i256]
+func private %null() -> i256 {
+    block0:
+        v0.i256 = ptr_to_int zero.*i8 i256;
+        return v0;
+}
+
+#[() -> 0.i64]
+func private %struct_field() -> i64 {
+    block0:
+        v0.i64 = extract_value zero.@pair 1.i8;
+        return v0;
+}
+
+#[() -> 0.i8]
+func private %nested_field() -> i8 {
+    block0:
+        v0.[i8; 3] = extract_value zero.@nested 1.i8;
+        v1.i8 = extract_value v0 2.i8;
+        return v1;
+}
+
+#[() -> 0.i32]
+func private %nested_struct_field() -> i32 {
+    block0:
+        v0.@pair = extract_value zero.@nested 0.i8;
+        v1.i32 = extract_value v0 0.i8;
+        return v1;
+}
+
+#[(9.i64) -> 9.i64]
+func private %insert_keeps_others(v0.i64) -> i64 {
+    block0:
+        v1.@pair = insert_value zero.@pair 1.i8 v0;
+        v2.i32 = extract_value v1 0.i8;
+        v3.i64 = sext v2 i64;
+        v4.i64 = extract_value v1 1.i8;
+        v5.i64 = add v3 v4;
+        return v5;
+}
+
+#[(77.i32) -> 0.i8]
+func private %large_array(v0.i32) -> i8 {
+    block0:
+        v1.[i8; 100000] = insert_value zero.[i8; 100000] 5.i32 1.i8;
+        v2.i8 = extract_value v1 99999.i32;
+        return v2;
+}
+
+#[() -> 0.i32]
+func private %frozen() -> i32 {
+    block0:
+        v0.i32 = freeze zero.i32;
+        return v0;
+}

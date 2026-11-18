@@ -3651,3 +3651,52 @@ func public %bad(v0.*[i32; 8], v1.*[i64; 8]) -> unit {
         "only %bad's operands are wrong, got {report}"
     );
 }
+
+#[test]
+fn zero_values_need_a_zero_of_their_type() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let ok = r#"
+target = "evm-ethereum-london"
+type @pair = {i32, [i8; 2]};
+type @flag = enum { #A(i8), #B };
+func private %pair() -> @pair {
+    block0:
+        return zero.@pair;
+}
+func private %flag() -> @flag {
+    block0:
+        return zero.@flag;
+}
+func private %null() -> *i8 {
+    block0:
+        v0.*i8 = freeze zero.*i8;
+        return v0;
+}
+"#;
+    if let Err(err) = parse_and_verify_module(ok, &cfg) {
+        panic!("zero values of inhabited types should verify: {err:?}");
+    }
+    // An enum without variants has no value, so no zero either, nor does an
+    // aggregate holding one.
+    for (ty, decls) in [
+        ("@never", "type @never = enum {};"),
+        (
+            "@holder",
+            "type @never = enum {};\ntype @holder = {i8, @never};",
+        ),
+    ] {
+        let src = format!(
+            "target = \"evm-ethereum-london\"\n{decls}\nfunc private %f() -> {ty} {{\n    block0:\n        return zero.{ty};\n}}\n"
+        );
+        let Err(ParseVerifyError::Verify(report)) = parse_and_verify_module(&src, &cfg) else {
+            panic!("zero.{ty} should fail verification");
+        };
+        assert!(
+            has_message(
+                &report,
+                "zero value of a type with no zero: an enum without variants or a function"
+            ),
+            "{report}"
+        );
+    }
+}

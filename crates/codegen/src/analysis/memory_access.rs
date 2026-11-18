@@ -648,7 +648,9 @@ impl MemoryAccessAnalysis {
                 });
             }
             Some(Value::Inst { inst, .. }) => *inst,
-            Some(Value::Undef { .. }) | None => {
+            // A null `zero` address could be `Absolute(0)`; unknown is coarser
+            // and keeps what `concretize` makes of `undef` addresses as it was.
+            Some(Value::Undef { .. } | Value::Zero { .. }) | None => {
                 return ControlFlow::Break(CanonicalAddr::unknown(value));
             }
         };
@@ -746,7 +748,7 @@ impl MemoryAccessAnalysis {
                 result_idx,
                 ty,
             }) => self.inst_value_key(func, *inst, *result_idx, *ty, visiting),
-            Some(Value::Global { .. } | Value::Undef { .. }) | None => None,
+            Some(Value::Global { .. } | Value::Undef { .. } | Value::Zero { .. }) | None => None,
         };
 
         visiting.remove(&value);

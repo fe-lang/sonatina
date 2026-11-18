@@ -1512,7 +1512,7 @@ impl<'a> FunctionTranslator<'a> {
                     other => Err(self.unsupported_type("an immediate", other.ty())),
                 }
             }
-            Value::Undef { ty } => {
+            Value::Undef { ty } | Value::Zero { ty } => {
                 // An undefined value is materialized as zero, as the native
                 // backend does.
                 match repr(&self.module.ctx, *ty) {

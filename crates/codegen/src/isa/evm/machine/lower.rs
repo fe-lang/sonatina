@@ -922,7 +922,7 @@ impl FuncLowerCtx<'_> {
             }
             // Any value refines `undef`, and zero is the cheapest to push. A machine `undef` has
             // no definition, so stackify would reload it from a spill word nothing stores.
-            Value::Undef { ty } => {
+            Value::Undef { ty } | Value::Zero { ty } => {
                 let imm = lower_immediate(Immediate::zero(Type::I256), *ty, self.source_module)?;
                 let lowered = self.machine.dfg.make_imm_value(imm);
                 self.map.values[value] = Some(lowered);

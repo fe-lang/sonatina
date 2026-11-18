@@ -831,6 +831,9 @@ impl<'a> FunctionLegalizer<'a> {
                 Value::Undef { ty } => Value::Undef {
                     ty: self.types.legalize_type(self.ctx, ty),
                 },
+                Value::Zero { ty } => Value::Zero {
+                    ty: self.types.legalize_type(self.ctx, ty),
+                },
             };
             self.func.dfg.values[value] = replacement;
         }
@@ -1297,6 +1300,7 @@ impl<'a> FunctionLegalizer<'a> {
         for (pos, (&operand, &usage)) in operands.iter().zip(uses).enumerate() {
             if usage == OperandUse::Effect
                 && self.func.dfg.value_imm(operand).is_none()
+                && !matches!(self.func.dfg.value(operand), Value::Zero { .. })
                 && let Some(ScalarWidth::Narrow(bits)) = self.width_of(operand)
             {
                 let mask = self.mask_value(bits);
@@ -3307,6 +3311,11 @@ impl<'a> FunctionLegalizer<'a> {
         let arg = *downcast::<&Freeze>(self.evm_inst_set(), self.func.dfg.inst(inst))
             .expect("a freeze")
             .arg();
+        // A `zero` is a constant, and a frozen constant is itself.
+        if matches!(self.func.dfg.value(arg), Value::Zero { .. }) {
+            self.replace_with_aliases(inst, &[arg]);
+            return;
+        }
         // A narrow word is a value of its type or holds the unspecified value, and `freeze` makes
         // it a value of its type. The mask is on a word-typed freeze, so it is not skipped on the
         // width the argument is tagged with; known bits may drop it later.
@@ -3385,6 +3394,8 @@ impl<'a> FunctionLegalizer<'a> {
                     value
                 } else if matches!(self.func.dfg.value(value), Value::Undef { .. }) {
                     self.func.dfg.make_undef_value(Type::I256)
+                } else if matches!(self.func.dfg.value(value), Value::Zero { .. }) {
+                    self.func.dfg.make_zero_value(Type::I256)
                 } else {
                     self.word_from_bool(inst, value)
                 }
