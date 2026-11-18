@@ -1,0 +1,58 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/narrow_effect_operands.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 958 bytes
+  total: 958 bytes
+
+functions:
+  mem: global_dyn_base=0xe0 arena_base=0x60 scratch_peak_words=3 stable_chain_peak_words=1
+  entry: ir_blocks=15 ir_insts=42 vcode_ops=203 fixups=40 imm_bytes=27
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
+  log0_len: ir_blocks=4 ir_insts=16 vcode_ops=31 fixups=1 imm_bytes=8
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=1
+  keccak_len: ir_blocks=4 ir_insts=17 vcode_ops=32 fixups=1 imm_bytes=8
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=1
+  mcopy_len: ir_blocks=4 ir_insts=21 vcode_ops=43 fixups=1 imm_bytes=13
+    mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xc0) entry_abs_words=3 abs_words_end=4
+  calldata_copy_len: ir_blocks=4 ir_insts=16 vcode_ops=33 fixups=1 imm_bytes=8
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=1
+  calldata_copy_offset: ir_blocks=1 ir_insts=10 vcode_ops=23 fixups=0 imm_bytes=8
+    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
+  calldata_load_offset: ir_blocks=1 ir_insts=9 vcode_ops=18 fixups=0 imm_bytes=5
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=1
+  malloc_size: ir_blocks=4 ir_insts=22 vcode_ops=45 fixups=1 imm_bytes=14
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=1
+  memcopy_len: ir_blocks=4 ir_insts=21 vcode_ops=43 fixups=1 imm_bytes=13
+    mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xc0) entry_abs_words=3 abs_words_end=4
+  memzero_len: ir_blocks=4 ir_insts=17 vcode_ops=33 fixups=1 imm_bytes=8
+    mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xc0) entry_abs_words=3 abs_words_end=4
+  alloc_dynamic_size: ir_blocks=4 ir_insts=22 vcode_ops=45 fixups=1 imm_bytes=14
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=1
+  call_arg_len: ir_blocks=4 ir_insts=16 vcode_ops=41 fixups=1 imm_bytes=10
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=1
+  call_ret_len: ir_blocks=4 ir_insts=21 vcode_ops=52 fixups=1 imm_bytes=16
+    mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xc0) entry_abs_words=3 abs_words_end=4
+  return_data_copy_len: ir_blocks=4 ir_insts=22 vcode_ops=57 fixups=1 imm_bytes=16
+    mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xc0) entry_abs_words=3 abs_words_end=4
+  dirty: ir_blocks=1 ir_insts=3 vcode_ops=6 fixups=0 imm_bytes=2
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=1
+
+evm:
+  case log0_len: calldata_len=64 success reason=Return gas_used=22096 gas_refunded=0 logs=1 output=call len=32 tx_gas=21292 runtime_gas=804
+  case keccak_len: calldata_len=64 success reason=Return gas_used=21526 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=234
+  case mcopy_len: calldata_len=64 success reason=Return gas_used=21650 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=358
+  case calldata_copy_len: calldata_len=64 success reason=Return gas_used=21542 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=250
+  case calldata_copy_offset: calldata_len=64 success reason=Return gas_used=21523 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=231
+  case calldata_load_offset: calldata_len=64 success reason=Return gas_used=21524 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=232
+  case malloc_size: calldata_len=64 success reason=Return gas_used=21631 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=339
+  case memcopy_len: calldata_len=64 success reason=Return gas_used=21760 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=468
+  case memzero_len: calldata_len=64 success reason=Return gas_used=21652 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=360
+  case alloc_dynamic_size: calldata_len=64 success reason=Return gas_used=21697 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=405
+  case call_arg_len: calldata_len=64 success reason=Return gas_used=21831 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=539
+  case call_ret_len: calldata_len=64 success reason=Return gas_used=22030 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=738
+  case return_data_copy_len: calldata_len=64 success reason=Return gas_used=22069 gas_refunded=0 logs=0 output=call len=32 tx_gas=21292 runtime_gas=777
