@@ -1527,6 +1527,20 @@ pub(crate) fn simplify_cast(
         }
     }
 
+    // A bitcast back to the type a wider bitcast came from keeps the bits it had.
+    if matches!(kind, CastInstKind::Bitcast)
+        && let Some((inst, _)) = func.dfg.value_inst_result(from)
+        && let Some(inner) = func.dfg.downcast::<&cast::Bitcast>(inst)
+        && func.dfg.value_ty(*inner.from()) == ty
+        && let (Some(bits), Some(wider)) = (
+            integral_bit_width(ty),
+            integral_bit_width(func.dfg.value_ty(from)),
+        )
+        && bits <= wider
+    {
+        return SimplifiedResult::Copy(*inner.from());
+    }
+
     // An integer no wider than a pointer that becomes a pointer and back is
     // itself; a wider one loses its high bits. (A pointer that becomes an
     // integer and back keeps no provenance, so it stays.)
