@@ -173,23 +173,24 @@ fn low_mask_bits(func: &Function, value: ValueId) -> Option<u16> {
 
 /// EVM values are concrete words and no later pass chooses a value per use,
 /// so a frozen value is its argument, and `freeze undef` is zero, or the
-/// null pointer.
-fn lower_freeze(func: &mut Function, inst: InstId) {
+/// null pointer. Returns the value that now stands for the freeze's result.
+fn lower_freeze(func: &mut Function, inst: InstId) -> ValueId {
     let arg = *func.dfg.downcast::<&Freeze>(inst).expect("a freeze").arg();
+    let result = func.dfg.inst_result(inst).expect("freeze has a result");
     let replacement = match *func.dfg.value(arg) {
         Value::Undef { ty } if ty.is_pointer(func.ctx()) => {
             let zero = func.dfg.make_imm_value(I256::zero());
             let null = IntToPtr::new_unchecked(func.inst_set(), zero, ty);
             func.dfg.replace_inst(inst, Box::new(null));
-            return;
+            return result;
         }
         Value::Undef { ty } => func.dfg.make_imm_value(Immediate::zero(ty)),
         _ => arg,
     };
-    let result = func.dfg.inst_result(inst).expect("freeze has a result");
     func.dfg.change_to_alias(result, replacement);
     func.layout.remove_inst(inst);
     func.erase_inst(inst);
+    replacement
 }
 
 /// Lowers the freezes passes insert after legalization, such as scalarizing a
@@ -650,7 +651,7 @@ impl<'a> FunctionLegalizer<'a> {
         {
             self.rewrite_ctz(inst, arg);
         } else if downcast::<&Freeze>(is, self.func.dfg.inst(inst)).is_some() {
-            lower_freeze(self.func, inst);
+            self.rewrite_freeze(inst);
         } else if let Some((lhs, rhs)) =
             downcast::<&cmp::Slt>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
@@ -2604,6 +2605,16 @@ impl<'a> FunctionLegalizer<'a> {
                 let result = self.normalize_and_retag_width(inst, raw, width);
                 self.replace_with_aliases(inst, &[result]);
             }
+        }
+    }
+
+    /// Lowers a freeze. The zero that replaces `freeze undef` may be an immediate no value had
+    /// before; it takes the freeze's width.
+    fn rewrite_freeze(&mut self, inst: InstId) {
+        let width = self.single_result_width(inst);
+        let lowered = lower_freeze(self.func, inst);
+        if self.width_of(lowered).is_none() {
+            self.provenance[lowered] = width;
         }
     }
 
