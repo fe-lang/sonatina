@@ -1,5 +1,6 @@
 //! Insert chain placement: an `insert_value` chain that builds an aggregate
-//! from undef moves up to just after the last of the values it inserts,
+//! from undef, or an `agg.make`, moves up to just after the last of the values
+//! it inserts,
 //! when its result only fills a field of another chain or is returned, and
 //! down to just before the store, when its result is only stored into an
 //! object later in its block with no call between.
@@ -32,11 +33,12 @@
 
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, InstId, Value, ValueId,
     inst::{
         control_flow::Return,
-        data::{EnumMake, InsertValue, ObjStore},
+        data::{AggMake, EnumMake, InsertValue, ObjStore},
     },
 };
 
@@ -200,7 +202,7 @@ fn construction(
         return true;
     }
     let mut head = def;
-    loop {
+    while func.dfg.downcast::<&AggMake>(head).is_none() {
         let Some(insert) = func.dfg.downcast::<&InsertValue>(head) else {
             return false;
         };
@@ -220,12 +222,14 @@ fn construction(
     if chain.last() != Some(&def) {
         return false;
     }
+    // A construction filling several fields of an `agg.make` is built once.
+    let mut seen = FxHashSet::default();
     for &inst in &chain {
-        let insert = func
-            .dfg
-            .downcast::<&InsertValue>(inst)
-            .expect("a chain holds inserts");
-        construction(func, *insert.value(), Some(inst), block, tree);
+        for field in fields(func, inst) {
+            if seen.insert(field) {
+                construction(func, field, Some(inst), block, tree);
+            }
+        }
     }
     tree.extend_from_slice(&chain);
     true
@@ -255,15 +259,17 @@ fn stored_tree(func: &Function, store: InstId) -> Option<Vec<InstId>> {
     (!in_place && reached).then_some(tree)
 }
 
-/// Appends to `tree` the chains embedded in `chain`, in `block`, then `chain`.
+/// Appends to `tree` the chains embedded in `chain`, in `block`, then `chain`;
+/// a chain filling several fields of an `agg.make` once.
 fn collect_tree(func: &Function, chain: &[InstId], block: BlockId, tree: &mut Vec<InstId>) {
+    let mut seen = FxHashSet::default();
     for &inst in chain {
-        let insert = func
-            .dfg
-            .downcast::<&InsertValue>(inst)
-            .expect("a chain holds inserts");
-        if let Some(embedded) = embedded_chain(func, *insert.value(), inst, block) {
-            collect_tree(func, &embedded, block, tree);
+        for field in fields(func, inst) {
+            if seen.insert(field)
+                && let Some(embedded) = embedded_chain(func, field, inst, block)
+            {
+                collect_tree(func, &embedded, block, tree);
+            }
         }
     }
     tree.extend_from_slice(chain);
@@ -282,10 +288,13 @@ fn embedded_chain(
     }
     let mut head = func.dfg.value_inst(value)?;
     loop {
-        let insert = func.dfg.downcast::<&InsertValue>(head)?;
         if func.layout.inst_block(head) != block {
             return None;
         }
+        if func.dfg.downcast::<&AggMake>(head).is_some() {
+            break;
+        }
+        let insert = func.dfg.downcast::<&InsertValue>(head)?;
         let dest = *insert.dest();
         if matches!(func.dfg.value(dest), Value::Undef { .. }) {
             break;
@@ -306,15 +315,43 @@ fn number(func: &Function, block: BlockId, order: &mut SecondaryMap<InstId, u32>
     }
 }
 
-/// Whether `inst` starts an `insert_value` chain on an undef aggregate.
+/// Whether `inst` starts an `insert_value` chain on an undef aggregate, or
+/// is an `agg.make`, a chain of its own.
 fn is_undef_head(func: &Function, inst: InstId) -> bool {
-    func.dfg
-        .downcast::<&InsertValue>(inst)
-        .is_some_and(|insert| matches!(func.dfg.value(*insert.dest()), Value::Undef { .. }))
+    func.dfg.downcast::<&AggMake>(inst).is_some()
+        || func
+            .dfg
+            .downcast::<&InsertValue>(inst)
+            .is_some_and(|insert| matches!(func.dfg.value(*insert.dest()), Value::Undef { .. }))
 }
 
-/// The chain starting at `head`: each insert the sole user of the one
-/// before, in the same block.
+/// The values the chain instruction `inst` puts in fields.
+fn fields(func: &Function, inst: InstId) -> SmallVec<[ValueId; 4]> {
+    match func.dfg.downcast::<&AggMake>(inst) {
+        Some(make) => make.values().clone(),
+        None => smallvec![
+            *func
+                .dfg
+                .downcast::<&InsertValue>(inst)
+                .expect("a chain holds inserts")
+                .value()
+        ],
+    }
+}
+
+/// Whether `user` puts `value` in a field of the aggregate it builds.
+fn fills_field(func: &Function, user: InstId, value: ValueId) -> bool {
+    func.dfg
+        .downcast::<&InsertValue>(user)
+        .is_some_and(|insert| *insert.value() == value && *insert.dest() != value)
+        || func
+            .dfg
+            .downcast::<&AggMake>(user)
+            .is_some_and(|make| make.values().contains(&value))
+}
+
+/// The chain starting at `head`, an insert on undef or an `agg.make`: each
+/// insert the sole user of the one before, in the same block.
 fn chain(func: &Function, head: InstId) -> Vec<InstId> {
     let block = func.layout.inst_block(head);
     std::iter::successors(Some(head), |&inst| {
@@ -360,22 +397,18 @@ fn hoisted_position(
 ) -> Option<InstId> {
     let tail = func.dfg.inst_result(*chain.last()?)?;
     let user = sole_user(func, tail)?;
-    let fills_field = func
-        .dfg
-        .downcast::<&InsertValue>(user)
-        .is_some_and(|insert| *insert.value() == tail && *insert.dest() != tail);
-    if !fills_field && func.dfg.downcast::<&Return>(user).is_none() {
+    if !fills_field(func, user, tail) && func.dfg.downcast::<&Return>(user).is_none() {
         return None;
     }
 
     let head = chain[0];
     let block = func.layout.inst_block(head);
     let mut latest: Option<(BlockId, InstId)> = None;
-    for &inst in chain {
-        let insert = func.dfg.downcast::<&InsertValue>(inst)?;
-        let Some(def) = func.dfg.value_inst(*insert.value()) else {
-            continue;
-        };
+    for def in chain
+        .iter()
+        .flat_map(|&inst| fields(func, inst))
+        .filter_map(|field| func.dfg.value_inst(field))
+    {
         let def_block = func.layout.inst_block(def);
         let later = match latest {
             None => true,
@@ -414,10 +447,7 @@ fn embedded_in_stored_chain(func: &Function, mut value: ValueId) -> bool {
         if let Some(store) = func.dfg.downcast::<&ObjStore>(user) {
             return *store.value() == value;
         }
-        let Some(insert) = func.dfg.downcast::<&InsertValue>(user) else {
-            return false;
-        };
-        if *insert.value() != value || *insert.dest() == value {
+        if !fills_field(func, user, value) {
             return false;
         }
         // The rest of the chain `value` fills ends at its own result.
