@@ -1,0 +1,39 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/narrow_aggregate_reads_undef.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @S = {i8};
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        mstore 4096.i32 v0 i256;
+        call %clobber;
+        v1.i256 = call %read;
+        mstore 0.i32 v1 i256;
+        evm_return 0.i32 32.i32;
+}
+
+func inline(never) private %clobber() {
+    block0:
+        mstore 4096.i32 undef.@S @S;
+        return;
+}
+
+func inline(never) private %read() -> i256 {
+    block0:
+        v0.@S = mload 4096.i32 @S;
+        v1.i8 = extract_value v0 0.i8;
+        v3.i256 = zext v1 i256;
+        return v3;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

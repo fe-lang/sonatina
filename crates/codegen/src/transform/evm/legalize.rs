@@ -1,7 +1,7 @@
 use std::iter;
 
 use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
     Function, I256, Immediate, Inst, InstId, Module, Type, U256, Value, ValueId,
@@ -13,7 +13,10 @@ use sonatina_ir::{
         },
         cast::{self, Bitcast, IntToPtr, PtrToInt},
         cmp::{self, Eq, IsZero, Ne, Sgt, Slt},
-        data::{Alloca, Freeze, MemAllocDynamic, Memcopy, Mload, Mstore},
+        control_flow::Phi,
+        data::{
+            Alloca, ExtractValue, Freeze, InsertValue, MemAllocDynamic, Memcopy, Mload, Mstore,
+        },
         downcast,
         evm::{
             EvmCodeLoad, EvmExp, EvmMalloc, EvmMcopy, EvmSaddsat, EvmSdiv, EvmSdivo, EvmSmod,
@@ -29,7 +32,10 @@ use sonatina_ir::{
 use sonatina_triple::Architecture;
 
 use super::{const_data::emit_const_load_from_addr, scalar_words::legalize_evm_scalar_immediate};
-use crate::optim::adce::AdceSolver;
+use crate::{
+    optim::adce::AdceSolver,
+    transform::aggregate::shape::{const_u32, is_supported_aggregate_ty},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScalarWidth {
@@ -149,6 +155,97 @@ fn scalar_width_for_type(ctx: &ModuleCtx, ty: Type) -> Option<ScalarWidth> {
         Type::Compound(_) if ty.is_pointer(ctx) => Some(ScalarWidth::Full256),
         Type::Compound(_) | Type::Unit => None,
     }
+}
+
+/// The extracts and aggregate-to-scalar bitcasts that read a narrow scalar out of an aggregate
+/// whose word may come from memory. Such a word need not be a value of the field's type.
+fn narrow_aggregate_reads(ctx: &ModuleCtx, func: &Function) -> FxHashSet<InstId> {
+    func.layout
+        .iter_block()
+        .flat_map(|block| func.layout.iter_inst(block))
+        .filter(|&inst| {
+            let [result] = func.dfg.inst_results(inst) else {
+                return false;
+            };
+            let ty = func.dfg.value_ty(*result);
+            // A read that is only stored back to memory as the same type copies the word, and
+            // each read of the copy normalizes it.
+            if !matches!(
+                scalar_width_for_type(ctx, ty),
+                Some(ScalarWidth::Bool | ScalarWidth::Narrow(_))
+            ) || func.dfg.users(*result).all(|&user| {
+                func.dfg
+                    .downcast::<&Mstore>(user)
+                    .is_some_and(|store| *store.value() == *result && *store.ty() == ty)
+            }) {
+                return false;
+            }
+            let mut visited = FxHashSet::default();
+            if let Some(extract) = func.dfg.downcast::<&ExtractValue>(inst) {
+                let path = const_u32(&func.dfg, *extract.idx()).map(|idx| vec![idx]);
+                field_may_be_memory(ctx, func, *extract.dest(), path.as_deref(), &mut visited)
+            } else {
+                func.dfg.downcast::<&Bitcast>(inst).is_some_and(|bitcast| {
+                    field_may_be_memory(ctx, func, *bitcast.from(), None, &mut visited)
+                })
+            }
+        })
+        .collect()
+}
+
+/// Whether the field of `value` at `path`, or any field if `path` is `None`, may hold a word
+/// that no instruction computed: one read from memory, passed in, or never written. A scalar
+/// holds a value of its type, normalized when it was computed or read.
+fn field_may_be_memory(
+    ctx: &ModuleCtx,
+    func: &Function,
+    value: ValueId,
+    path: Option<&[u32]>,
+    visited: &mut FxHashSet<(ValueId, Option<Vec<u32>>)>,
+) -> bool {
+    if !is_supported_aggregate_ty(ctx, func.dfg.value_ty(value)) {
+        return false;
+    }
+    let path = path.filter(|path| !path.is_empty());
+    if !visited.insert((value, path.map(<[u32]>::to_vec))) {
+        return false;
+    }
+    let Some(inst) = func.dfg.value_inst(value) else {
+        return true;
+    };
+    if let Some(insert) = func.dfg.downcast::<&InsertValue>(inst) {
+        let (dest, inserted) = (*insert.dest(), *insert.value());
+        return match (const_u32(&func.dfg, *insert.idx()), path) {
+            (Some(at), Some([first, rest @ ..])) if at == *first => {
+                field_may_be_memory(ctx, func, inserted, Some(rest), visited)
+            }
+            (Some(_), Some(path)) => field_may_be_memory(ctx, func, dest, Some(path), visited),
+            (None, Some([_, rest @ ..])) => {
+                field_may_be_memory(ctx, func, inserted, Some(rest), visited)
+                    || field_may_be_memory(ctx, func, dest, path, visited)
+            }
+            _ => {
+                field_may_be_memory(ctx, func, inserted, None, visited)
+                    || field_may_be_memory(ctx, func, dest, None, visited)
+            }
+        };
+    }
+    if let Some(extract) = func.dfg.downcast::<&ExtractValue>(inst) {
+        let path = const_u32(&func.dfg, *extract.idx())
+            .zip(path.or(Some(&[])))
+            .map(|(idx, path)| [&[idx], path].concat());
+        return field_may_be_memory(ctx, func, *extract.dest(), path.as_deref(), visited);
+    }
+    if let Some(phi) = func.dfg.downcast::<&Phi>(inst) {
+        return phi
+            .args()
+            .iter()
+            .any(|&(arg, _)| field_may_be_memory(ctx, func, arg, path, visited));
+    }
+    if let Some(bitcast) = func.dfg.downcast::<&Bitcast>(inst) {
+        return field_may_be_memory(ctx, func, *bitcast.from(), None, visited);
+    }
+    true
 }
 
 fn legalize_immediate(imm: sonatina_ir::Immediate) -> sonatina_ir::Immediate {
@@ -291,6 +388,8 @@ struct FunctionLegalizer<'a> {
     func: &'a mut Function,
     types: &'a mut TypeLegalizer,
     provenance: SecondaryMap<ValueId, Option<ScalarWidth>>,
+    /// The reads of a narrow scalar out of an aggregate whose word may come from memory.
+    narrow_aggregate_reads: FxHashSet<InstId>,
 }
 
 impl<'a> FunctionLegalizer<'a> {
@@ -301,11 +400,13 @@ impl<'a> FunctionLegalizer<'a> {
             provenance[value] = scalar_width_for_type(ctx, func.dfg.value_ty(value));
         }
 
+        let narrow_aggregate_reads = narrow_aggregate_reads(ctx, func);
         Self {
             ctx,
             func,
             types,
             provenance,
+            narrow_aggregate_reads,
         }
     }
 
@@ -371,6 +472,10 @@ impl<'a> FunctionLegalizer<'a> {
     }
 
     fn legalize_inst(&mut self, inst: InstId) {
+        if self.narrow_aggregate_reads.contains(&inst) {
+            self.rewrite_narrow_aggregate_read(inst);
+            return;
+        }
         let is = self.evm_inst_set();
 
         if let Some((lhs, rhs)) =
@@ -2616,6 +2721,54 @@ impl<'a> FunctionLegalizer<'a> {
         if self.width_of(lowered).is_none() {
             self.provenance[lowered] = width;
         }
+    }
+
+    /// Normalizes a narrow scalar read out of an aggregate, as `rewrite_mload` does for a scalar
+    /// load: memory holds whatever word was last written to the slot, which need not be a value
+    /// of the field's type.
+    fn rewrite_narrow_aggregate_read(&mut self, inst: InstId) {
+        let width = self
+            .single_result_width(inst)
+            .expect("missing narrow aggregate read width");
+        let is = self.evm_inst_set();
+        let field_ty = self.func.dfg.value_ty(
+            self.func
+                .dfg
+                .inst_result(inst)
+                .expect("narrow aggregate read has a result"),
+        );
+        let raw = if let Some(extract) = downcast::<&ExtractValue>(is, self.func.dfg.inst(inst)) {
+            let (dest, idx) = (*extract.dest(), *extract.idx());
+            self.insert_before_one(
+                inst,
+                ExtractValue::new(is, dest, idx),
+                field_ty,
+                Some(ScalarWidth::Full256),
+            )
+        } else {
+            let from = *downcast::<&Bitcast>(is, self.func.dfg.inst(inst))
+                .expect("narrow aggregate read is an extract or a bitcast")
+                .from();
+            self.insert_before_one(
+                inst,
+                Bitcast::new(is, from, field_ty),
+                field_ty,
+                Some(ScalarWidth::Full256),
+            )
+        };
+        // A boolean field keeps its type; its word is widened as `zext` widens a boolean.
+        let raw = if field_ty == Type::I1 {
+            self.insert_before_one(
+                inst,
+                Bitcast::new(is, raw, Type::I256),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            )
+        } else {
+            raw
+        };
+        let result = self.normalize_and_retag_width(inst, raw, width);
+        self.replace_with_aliases(inst, &[result]);
     }
 
     fn rewrite_mstore(&mut self, inst: InstId, addr: ValueId, value: ValueId, ty: Type) {
