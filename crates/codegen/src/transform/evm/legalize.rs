@@ -32,7 +32,10 @@ use sonatina_ir::{
 use sonatina_triple::Architecture;
 
 use super::{const_data::emit_const_load_from_addr, scalar_words::legalize_evm_scalar_immediate};
-use crate::{optim::adce::AdceSolver, transform::aggregate::shape::is_supported_aggregate_ty};
+use crate::{
+    optim::adce::AdceSolver,
+    transform::{aggregate::shape::is_supported_aggregate_ty, concrete::lower_frozen_undef},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScalarWidth {
@@ -445,30 +448,6 @@ fn low_mask_bits(func: &Function, value: ValueId) -> Option<u16> {
     [1u16, 8, 16, 32, 64, 128, 256]
         .into_iter()
         .find(|&bits| ones == low_mask(bits))
-}
-
-/// Lowers `freeze undef` to zero, or the null pointer, and leaves a freeze of
-/// any other value alone. That freeze stays until [`lower_late_freezes`]: IR
-/// passes run after legalization, and to them its argument may be
-/// unspecified where its result is not. Returns the value that now stands
-/// for the freeze's result, or `None` if the freeze stays.
-fn lower_frozen_undef(func: &mut Function, inst: InstId) -> Option<ValueId> {
-    let arg = *func.dfg.downcast::<&Freeze>(inst).expect("a freeze").arg();
-    let result = func.dfg.inst_result(inst).expect("freeze has a result");
-    let replacement = match *func.dfg.value(arg) {
-        Value::Undef { ty } if ty.is_pointer(func.ctx()) => {
-            let zero = func.dfg.make_imm_value(I256::zero());
-            let null = IntToPtr::new_unchecked(func.inst_set(), zero, ty);
-            func.dfg.replace_inst(inst, Box::new(null));
-            return Some(result);
-        }
-        Value::Undef { ty } => func.dfg.make_imm_value(Immediate::zero(ty)),
-        _ => return None,
-    };
-    func.dfg.change_to_alias(result, replacement);
-    func.layout.remove_inst(inst);
-    func.erase_inst(inst);
-    Some(replacement)
 }
 
 /// Lowers every freeze once no IR pass is left: machine lowering picks zero
