@@ -1,6 +1,5 @@
-//! Insert chain placement: an `insert_value` chain that builds an aggregate
-//! from undef, or an `agg.make`, moves up to just after the last of the values
-//! it inserts,
+//! Insert chain placement: an `agg.make`, with the inserts that update it in
+//! place, moves up to just after the last of the values it inserts,
 //! when its result only fills a field of another chain or is returned, and
 //! down to just before the store, when its result is only stored into an
 //! object later in its block with no call between.
@@ -27,7 +26,7 @@
 //! block, as a push builds an element before learning whether its slot
 //! exists and hands it back when it does not. Each copy then has its own
 //! uses, and the stored one is built at its destination. The construction
-//! is an `insert_value` chain on undef or an `enum.make`, with the
+//! is an `agg.make` chain or an `enum.make`, with the
 //! constructions only it uses, all in its block. It is not built again in a
 //! loop it was outside of, and goes once its block has no use of it left.
 
@@ -35,7 +34,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Function, InstId, Value, ValueId,
+    BlockId, Function, InstId, ValueId,
     inst::{
         control_flow::Return,
         data::{AggMake, EnumMake, InsertValue, ObjStore},
@@ -58,13 +57,14 @@ pub struct HoistInsertChains;
 impl HoistInsertChains {
     pub fn run(&mut self, func: &mut Function, domtree: &DomTree, lpt: &LoopTree) -> bool {
         // Placement assumes fresh aggregates are spelled `agg.make`; passes
-        // since backend entry may have made new insert chains on undef.
+        // since backend entry may have made new insert chains on undef. A
+        // sparse chain into a long array stays where it is.
         let mut changed = fold_fresh_aggregates_in(func);
         let heads: Vec<InstId> = domtree
             .rpo()
             .iter()
             .flat_map(|&block| func.layout.iter_inst(block))
-            .filter(|&inst| is_undef_head(func, inst))
+            .filter(|&inst| func.dfg.downcast::<&AggMake>(inst).is_some())
             .collect();
         let mut order = SecondaryMap::default();
         for &block in domtree.rpo() {
@@ -182,8 +182,8 @@ fn rebuild_at_uses(func: &mut Function, lpt: &LoopTree, store: InstId) -> bool {
 }
 
 /// Appends to `tree` the instructions building `value` in `block`, after
-/// those of the constructions embedded in it: an `insert_value` chain on
-/// undef or an `enum.make`. An embedded construction is used only by `user`,
+/// those of the constructions embedded in it: an `agg.make` chain or an
+/// `enum.make`. An embedded construction is used only by `user`,
 /// the instruction embedding it; another value it takes is an input, which
 /// the construction leaves where it is.
 fn construction(
@@ -218,9 +218,6 @@ fn construction(
             return false;
         };
         let dest = *insert.dest();
-        if matches!(func.dfg.value(dest), Value::Undef { .. }) {
-            break;
-        }
         let Some(dest_def) = func.dfg.value_inst(dest) else {
             return false;
         };
@@ -286,7 +283,7 @@ fn collect_tree(func: &Function, chain: &[InstId], block: BlockId, tree: &mut Ve
     tree.extend_from_slice(chain);
 }
 
-/// The chain on undef in `block` whose result is `value`, when `user` is
+/// The `agg.make` chain in `block` whose result is `value`, when `user` is
 /// its one use.
 fn embedded_chain(
     func: &Function,
@@ -307,9 +304,6 @@ fn embedded_chain(
         }
         let insert = func.dfg.downcast::<&InsertValue>(head)?;
         let dest = *insert.dest();
-        if matches!(func.dfg.value(dest), Value::Undef { .. }) {
-            break;
-        }
         if sole_user(func, dest)? != head {
             return None;
         }
@@ -324,16 +318,6 @@ fn number(func: &Function, block: BlockId, order: &mut SecondaryMap<InstId, u32>
     for (index, inst) in func.layout.iter_inst(block).enumerate() {
         order[inst] = index as u32;
     }
-}
-
-/// Whether `inst` starts an `insert_value` chain on an undef aggregate, or
-/// is an `agg.make`, a chain of its own.
-fn is_undef_head(func: &Function, inst: InstId) -> bool {
-    func.dfg.downcast::<&AggMake>(inst).is_some()
-        || func
-            .dfg
-            .downcast::<&InsertValue>(inst)
-            .is_some_and(|insert| matches!(func.dfg.value(*insert.dest()), Value::Undef { .. }))
 }
 
 /// The values the chain instruction `inst` puts in fields.
@@ -361,8 +345,8 @@ fn fills_field(func: &Function, user: InstId, value: ValueId) -> bool {
             .is_some_and(|make| make.values().contains(&value))
 }
 
-/// The chain starting at `head`, an insert on undef or an `agg.make`: each
-/// insert the sole user of the one before, in the same block.
+/// The chain starting at the `agg.make` `head`: each insert the sole user of
+/// the one before, in the same block.
 fn chain(func: &Function, head: InstId) -> Vec<InstId> {
     let block = func.layout.inst_block(head);
     std::iter::successors(Some(head), |&inst| {

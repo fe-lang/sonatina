@@ -16,7 +16,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    INLINE_MEMORY_BYTES, aggregate_elem_offset, constant_value_index, is_undef,
+    INLINE_MEMORY_BYTES, aggregate_elem_offset, constant_value_index,
     uses_indirect_value_representation, value_storage_alignment, value_storage_size,
 };
 
@@ -47,17 +47,16 @@ use super::{
 /// the load's source. A store may overlap that source, so it consumes only
 /// a load small enough to copy inline, reading every word before writing.
 ///
-/// A class whose last value only fills a field of an `insert_value` chain
-/// with an undef source, or of an `agg.make`, lives in that chain's storage,
-/// at the field: the insert copies nothing. Nothing reads the field before the insert, and the
-/// chain's storage stays live while the class is. A phi does so only when it
-/// is its block's one aggregate phi, so its edge copies need no ordering.
+/// A class whose last value only fills a field of an `agg.make` lives in its
+/// storage, at the field: the `agg.make` copies nothing. Nothing reads the
+/// field before the `agg.make`, and its storage stays live while the class
+/// is. A phi does so only when it is its block's one aggregate phi, so its
+/// edge copies need no ordering.
 ///
-/// An `insert_value` chain with an undef source or an `agg.make` whose last
+/// An `agg.make`, with the inserts continuing in its storage, whose last
 /// value is only stored into an object is built at the store's destination
-/// instead, when
-/// nothing between the chain's start and the store touches memory and the
-/// destination's address is defined before the chain starts.
+/// instead, when nothing between its start and the store touches memory and
+/// the destination's address is defined before it starts.
 ///
 /// A returned class can live in the function's return buffer instead, so
 /// that its `return` copies nothing. The buffer is caller storage distinct
@@ -355,20 +354,6 @@ impl FrameSlots {
     /// source `source`.
     pub fn continues_source(&self, inst: InstId, source: ValueId) -> bool {
         self.continuation.get(&source) == Some(&inst)
-    }
-
-    /// The `insert_value` chain head `head` and the inserts continuing its
-    /// storage, in order.
-    pub fn insert_chain<'a>(
-        &'a self,
-        function: &'a Function,
-        head: InstId,
-    ) -> impl Iterator<Item = InstId> + 'a {
-        std::iter::successors(Some(head), move |&inst| {
-            self.continuation
-                .get(&function.dfg.inst_result(inst)?)
-                .copied()
-        })
     }
 }
 
@@ -721,7 +706,7 @@ impl Plan {
         Ok(plan)
     }
 
-    /// Builds each `insert_value` chain on undef whose last value is only
+    /// Builds each `agg.make` chain whose last value is only
     /// stored into an object at that object, with the classes embedded in
     /// it, when the object's address is defined before the first of them
     /// starts and nothing from there to the store may read or write the
@@ -773,16 +758,16 @@ impl Plan {
                 outer = parent;
             }
         }
-        // The `insert_value` chain of a class on undef, if it is one, or its
-        // `agg.make`.
+        // The `agg.make` of a class and the inserts continuing it, if it is
+        // one. A chain on undef was folded into an `agg.make`, but for a
+        // sparse one into a long array, which is built like an update.
         let chain_of = |class: usize| -> Option<Vec<InstId>> {
             let head = dfg.value_inst(*self.members[class].first()?)?;
-            let fresh = match native_inst_set().resolve_inst(dfg.inst(head)) {
-                NativeInstKind::AggMake(_) => true,
-                NativeInstKind::InsertValue(insert) => is_undef(function, *insert.dest()),
-                _ => false,
-            };
-            fresh.then(|| {
+            matches!(
+                native_inst_set().resolve_inst(dfg.inst(head)),
+                NativeInstKind::AggMake(_)
+            )
+            .then(|| {
                 std::iter::successors(Some(head), |&inst| {
                     self.continuation.get(&dfg.inst_result(inst)?).copied()
                 })
@@ -908,21 +893,16 @@ impl Plan {
         }
     }
 
-    /// Places each class whose last value only fills a field of an
-    /// `insert_value` chain with an undef source, or of an `agg.make`, in that
-    /// chain's storage. The chain zeroes only fields no insert of it writes,
-    /// and an `agg.make` writes each field once, so building the class there
-    /// before the chain starts loses nothing.
+    /// Places each class whose last value only fills a field of an `agg.make`
+    /// in that `agg.make`'s storage. An `agg.make` zeroes only its `undef`
+    /// fields and writes each field once, so building the class there before
+    /// it loses nothing.
     fn embed(
         &mut self,
         function: &Function,
         class_of: &FxHashMap<ValueId, usize>,
     ) -> Result<(), String> {
         let dfg = &function.dfg;
-        let insert_of = |inst: InstId| match native_inst_set().resolve_inst(dfg.inst(inst)) {
-            NativeInstKind::InsertValue(insert) => Some(insert),
-            _ => None,
-        };
         for child in 0..self.classes.len() {
             let Some(&root) = self.members[child].first() else {
                 continue;
@@ -966,44 +946,15 @@ impl Plan {
                 continue;
             }
             // The field `user` writes `tail` to, once.
-            let index = if let Some(insert) = insert_of(user) {
-                if *insert.value() != tail || *insert.dest() == tail {
-                    continue;
-                }
-                let Some(head) = dfg.value_inst(self.members[parent][0]) else {
-                    continue;
-                };
-                if !insert_of(head).is_some_and(|head| is_undef(function, *head.dest())) {
-                    continue;
-                }
-                let index = constant_value_index(function, *insert.idx(), "insert_value")?;
-                let chain = std::iter::successors(Some(head), |&inst| {
-                    self.continuation.get(&dfg.inst_result(inst)?).copied()
-                });
-                let mut writes = 0;
-                for inst in chain {
-                    let insert =
-                        insert_of(inst).ok_or("insert chain continues past insert_value")?;
-                    if constant_value_index(function, *insert.idx(), "insert_value")? == index {
-                        writes += 1;
-                    }
-                }
-                if writes != 1 {
-                    continue;
-                }
-                index
-            } else if let NativeInstKind::AggMake(make) =
-                native_inst_set().resolve_inst(dfg.inst(user))
-            {
-                let mut fields = (0..)
-                    .zip(make.values())
-                    .filter(|&(_, &value)| value == tail)
-                    .map(|(index, _)| index);
-                let (Some(index), None) = (fields.next(), fields.next()) else {
-                    continue;
-                };
-                index
-            } else {
+            let NativeInstKind::AggMake(make) = native_inst_set().resolve_inst(dfg.inst(user))
+            else {
+                continue;
+            };
+            let mut fields = (0..)
+                .zip(make.values())
+                .filter(|&(_, &value)| value == tail)
+                .map(|(index, _)| index);
+            let (Some(index), None) = (fields.next(), fields.next()) else {
                 continue;
             };
             let ty = dfg.value_ty(self.members[parent][0]);

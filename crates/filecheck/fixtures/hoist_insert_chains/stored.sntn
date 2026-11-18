@@ -1,4 +1,4 @@
-#! An `insert_value` chain on undef whose result is only stored into an object later in its block moves down to just before the store, unless a call comes between.
+#! An `agg.make` chain whose result is only stored into an object later in its block moves down to just before the store, unless a call comes between.
 
 target = "evm-ethereum-osaka"
 

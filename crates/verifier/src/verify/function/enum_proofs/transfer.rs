@@ -294,7 +294,7 @@ pub(super) fn instruction(
         value.assert_variant(ctx, assertion.variant().index());
         state.values.insert(*assertion.value(), value);
     } else if let Some(make) = downcast::<&data::AggMake>(is, inst) {
-        // As an insert chain on undef that writes every field.
+        // Every field is written.
         let mut value = ValueState::new(*make.ty(), true);
         for (index, &field) in make.values().iter().enumerate() {
             let field = state.value(verifier, field);

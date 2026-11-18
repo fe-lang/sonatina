@@ -333,7 +333,7 @@ pub(super) fn is_undef(function: &Function, value: ValueId) -> bool {
 }
 
 /// Zeroes the field bytes of the `ty` value at `dst` outside the `written`
-/// ranges: the fields an insert chain on undef leaves, which read as zero.
+/// ranges: the `undef` fields of an `agg.make`, which read as zero.
 /// Padding is not part of the value, so it keeps whatever it holds; a value
 /// too large for inline copies has its gaps zeroed whole.
 pub(super) fn zero_unwritten_fields(

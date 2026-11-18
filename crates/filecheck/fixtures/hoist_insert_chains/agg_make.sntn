@@ -1,4 +1,4 @@
-#! An `agg.make` moves like an insert chain on undef: up to just after the last value it takes, when its result fills a field of another or is returned.
+#! An `agg.make` moves up to just after the last value it takes, when its result fills a field of another or is returned.
 
 target = "evm-ethereum-osaka"
 

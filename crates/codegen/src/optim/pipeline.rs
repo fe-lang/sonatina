@@ -137,8 +137,8 @@ pub enum Pass {
     /// Read a local object instead of a whole copy of it that nothing else
     /// writes, when nothing writes it after the copy (native pipelines only).
     CoalesceObjectCopies,
-    /// Move an `insert_value` chain building an aggregate from undef up to
-    /// its last input when its result fills a field of another chain or is
+    /// Move an `agg.make`, with the inserts updating it in place, up to its
+    /// last input when its result fills a field of another chain or is
     /// returned (native pipelines only).
     HoistInsertChains,
     /// Recompute `dfg.users` from layout-inserted instructions only.

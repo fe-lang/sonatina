@@ -1,4 +1,4 @@
-#! An `insert_value` chain on undef whose result fills a field of another chain, or is returned, moves up to just after the last value it inserts.
+#! An `agg.make` chain whose result fills a field of another chain, or is returned, moves up to just after the last value it inserts.
 
 target = "evm-ethereum-osaka"
 
