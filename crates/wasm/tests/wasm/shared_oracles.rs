@@ -37,6 +37,22 @@ fn the_object_alias_matrix_gives_the_results_the_other_backends_give() {
 }
 
 #[test]
+fn fresh_aggregate_routes_run_at_all_optimization_levels() {
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let bytes = compile_at(alias_execution::FRESH_SOURCE, level).expect("compiles");
+        let mut machine = Machine::new(&bytes);
+        for &(name, expected) in alias_execution::FRESH_CASES {
+            let entry = machine.func(name);
+            assert_eq!(
+                machine.call(&entry, &[])[0].unwrap_i64(),
+                expected,
+                "{level:?}: {name}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_returned_local_allocation_is_rejected_as_it_is_natively() {
     for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
         let error = compile_at(alias_execution::CAPTURE_SOURCE, level)

@@ -43,7 +43,10 @@ use sonatina_ir::{
 };
 
 use super::inst_size;
-use crate::{cfg_edit::clone_inst_before, domtree::DomTree, loop_analysis::LoopTree};
+use crate::{
+    cfg_edit::clone_inst_before, domtree::DomTree, loop_analysis::LoopTree,
+    transform::aggregate::fresh::fold_fresh_aggregates_in,
+};
 
 /// The most instructions a construction built again at its uses may have, by
 /// `inst_size`.
@@ -54,6 +57,9 @@ pub struct HoistInsertChains;
 
 impl HoistInsertChains {
     pub fn run(&mut self, func: &mut Function, domtree: &DomTree, lpt: &LoopTree) -> bool {
+        // Placement assumes fresh aggregates are spelled `agg.make`; passes
+        // since backend entry may have made new insert chains on undef.
+        let mut changed = fold_fresh_aggregates_in(func);
         let heads: Vec<InstId> = domtree
             .rpo()
             .iter()
@@ -64,7 +70,6 @@ impl HoistInsertChains {
         for &block in domtree.rpo() {
             number(func, block, &mut order);
         }
-        let mut changed = false;
         for head in heads {
             let chain = chain(func, head);
             if let Some(after) = hoisted_position(func, domtree, lpt, &order, &chain) {

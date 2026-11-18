@@ -53,6 +53,24 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
     }
 }
 
+#[test]
+fn fresh_aggregate_routes_run_at_all_optimization_levels() {
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let artifact = Compile::new(
+            parse_verified_native_module(alias_execution::FRESH_SOURCE),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .expect("the routes compile");
+        for &(name, expected) in alias_execution::FRESH_CASES {
+            let entry: unsafe extern "C" fn() -> i64 =
+                unsafe { std::mem::transmute(artifact.function_address(name).unwrap()) };
+            assert_eq!(unsafe { entry() }, expected, "{level:?}: {name}");
+        }
+    }
+}
+
 // T01/T02: the same generic no-inline callee is used by both callers.
 const MIXED_CALLERS: &str = r#"
 func inline(never) private %read_after_write(v0.objref<i64>, v1.objref<i64>) -> i64 {

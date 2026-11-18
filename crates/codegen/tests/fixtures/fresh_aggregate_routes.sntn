@@ -1,0 +1,154 @@
+# Inserts into `undef` that passes make out of verified input. Each route's
+# function builds a `@pair` whose field 0 is its argument; each case returns
+# that field. Backends fold the inserts into `agg.make` on entry
+# (`fold_fresh_aggregates`), and the shared simplifier earlier.
+type @pair = { i64, i64 };
+type @outer = { @pair, i64 };
+
+func private %set_first(v0.@pair, v1.i64) -> @pair {
+block0:
+    v2.@pair = insert_value v0 0.i32 v1;
+    return v2;
+}
+
+# Inlining `%set_first` with an `undef` argument.
+func inline(never) private %inline_undef(v0.i64) -> @pair {
+block0:
+    v1.@pair = call %set_first undef.@pair v0;
+    return v1;
+}
+
+# Field 0 of `undef.@outer` folds to `undef`.
+func inline(never) private %field_of_undef(v0.i64) -> @pair {
+block0:
+    v1.@pair = extract_value undef.@outer 0.i32;
+    v2.@pair = insert_value v1 0.i32 v0;
+    return v2;
+}
+
+# Field 0 of the `agg.make` folds to its `undef` operand.
+func inline(never) private %field_of_make(v0.i64) -> @pair {
+block0:
+    v1.@outer = agg.make @outer undef.@pair 7.i64;
+    v2.@pair = extract_value v1 0.i32;
+    v3.@pair = insert_value v2 0.i32 v0;
+    return v3;
+}
+
+# The constant branch leaves the phi only its `undef` input.
+func inline(never) private %dead_edge(v0.i64) -> @pair {
+block0:
+    br 1.i1 block1 block2;
+block1:
+    jump block3;
+block2:
+    v1.@pair = agg.make @pair v0 v0;
+    jump block3;
+block3:
+    v2.@pair = phi (undef.@pair block1) (v1 block2);
+    v3.@pair = insert_value v2 0.i32 v0;
+    return v3;
+}
+
+# The load reads the `undef` stored before it.
+func inline(never) private %stored_undef(v0.i64) -> @pair {
+block0:
+    v1.objref<@pair> = obj.alloc @pair;
+    obj.store v1 undef.@pair;
+    v2.@pair = obj.load v1;
+    v3.@pair = insert_value v2 0.i32 v0;
+    return v3;
+}
+
+# The first unrolled copy takes the phi's `undef` entry value.
+func inline(never) private %unrolled(v0.i64) -> @pair {
+block0:
+    jump block1;
+block1:
+    v1.@pair = phi (undef.@pair block0) (v3 block2);
+    v2.i64 = phi (0.i64 block0) (v4 block2);
+    v5.i1 = lt v2 2.i64;
+    br v5 block2 block3;
+block2:
+    v3.@pair = insert_value v1 0.i32 v0;
+    v4.i64 = add v2 1.i64;
+    jump block1;
+block3:
+    return v1;
+}
+
+# Threading the branch on `v3` takes the phi's `undef` input on one path.
+func inline(never) private %threaded(v0.i64, v4.i1) -> @pair {
+block0:
+    br v4 block1 block2;
+block1:
+    jump block3;
+block2:
+    v7.@pair = agg.make @pair v0 v0;
+    jump block3;
+block3:
+    v3.i1 = phi (1.i1 block1) (0.i1 block2);
+    v2.@pair = phi (undef.@pair block1) (v7 block2);
+    v9.@pair = insert_value v2 0.i32 v0;
+    br v3 block4 block5;
+block4:
+    return v9;
+block5:
+    return v9;
+}
+
+func public %inlined() -> i64 {
+block0:
+    v0.@pair = call %inline_undef 11.i64;
+    v1.i64 = extract_value v0 0.i32;
+    return v1;
+}
+
+func public %extracted_undef() -> i64 {
+block0:
+    v0.@pair = call %field_of_undef 12.i64;
+    v1.i64 = extract_value v0 0.i32;
+    return v1;
+}
+
+func public %extracted_make() -> i64 {
+block0:
+    v0.@pair = call %field_of_make 13.i64;
+    v1.i64 = extract_value v0 0.i32;
+    return v1;
+}
+
+func public %folded_branch() -> i64 {
+block0:
+    v0.@pair = call %dead_edge 14.i64;
+    v1.i64 = extract_value v0 0.i32;
+    return v1;
+}
+
+func public %forwarded() -> i64 {
+block0:
+    v0.@pair = call %stored_undef 15.i64;
+    v1.i64 = extract_value v0 0.i32;
+    return v1;
+}
+
+func public %unrolled_twice() -> i64 {
+block0:
+    v0.@pair = call %unrolled 16.i64;
+    v1.i64 = extract_value v0 0.i32;
+    return v1;
+}
+
+func public %threaded_true() -> i64 {
+block0:
+    v0.@pair = call %threaded 17.i64 1.i1;
+    v1.i64 = extract_value v0 0.i32;
+    return v1;
+}
+
+func public %threaded_false() -> i64 {
+block0:
+    v0.@pair = call %threaded 18.i64 0.i1;
+    v1.i64 = extract_value v0 0.i32;
+    return v1;
+}

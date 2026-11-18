@@ -28,7 +28,10 @@ use super::{
     const_eval::{BlockEdge, ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys},
     sccp_simplify::{AuxDeps, SimplifyAction, SimplifyCtx, simplify_inst},
 };
-use crate::{analysis::known_bits::KnownBitsQuery, cfg_edit::CfgEditor};
+use crate::{
+    analysis::known_bits::KnownBitsQuery, cfg_edit::CfgEditor,
+    transform::aggregate::fresh::fold_fresh_insert,
+};
 
 #[derive(Debug)]
 pub struct SccpSolver {
@@ -328,7 +331,7 @@ impl SccpSolver {
                         all_results_simplified = false;
                     }
                 }
-                SimplifyAction::NoChange => {
+                SimplifyAction::FoldFreshInsert | SimplifyAction::NoChange => {
                     all_results_simplified = false;
                 }
             }
@@ -611,6 +614,11 @@ impl SccpSolver {
                         {
                             func.dfg
                                 .replace_inst(inst, Box::new(cmp::IsZero::new(is_zero, arg)));
+                            return true;
+                        }
+                    }
+                    SimplifyAction::FoldFreshInsert => {
+                        if fold_fresh_insert(func, inst).is_some() {
                             return true;
                         }
                     }

@@ -16,7 +16,7 @@ use sonatina_verifier::{VerifierConfig, verify_function_signature};
 use sonatina_codegen::{
     backend::{Backend, BackendOptions},
     optim::Pipeline,
-    transform::aggregate::{EnumTagLower, check_frame_lifetimes},
+    transform::aggregate::{EnumTagLower, check_frame_lifetimes, fold_fresh_aggregates},
 };
 
 /// The import module used for `extern` functions unless
@@ -148,6 +148,11 @@ pub const DEFAULT_STACK_BYTES: u32 = memory::DEFAULT_STACK_BYTES;
 /// are checked against the frame rule of `obj.alloc`: no reference outlives
 /// its frame.
 fn legalize_module(module: &Module) -> Result<(), WasmError> {
+    // Translation assumes fresh aggregates are spelled `agg.make`: no
+    // constant-index insert into `undef` or an `agg.make` is left, but for
+    // sparse inserts into long arrays (`fold_fresh_aggregates`). The final IR
+    // phase that makes values concrete, once it exists, takes this step over.
+    fold_fresh_aggregates(module);
     EnumTagLower.run(module);
     for func in module.funcs() {
         let report = verify_function_signature(&module.ctx, func, &VerifierConfig::default());

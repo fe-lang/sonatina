@@ -15,13 +15,19 @@ use super::{
         simplify_inst_with_facts, simplify_zext_i1_compare,
     },
 };
-use crate::analysis::known_bits::{KnownBits, KnownBitsQuery};
+use crate::{
+    analysis::known_bits::{KnownBits, KnownBitsQuery},
+    transform::aggregate::fresh::is_fresh_chain_end,
+};
 
 #[derive(Clone, Copy)]
 pub(super) enum SimplifyAction {
     Const(Immediate),
     Copy(ValueId),
     BuildIsZero(ValueId),
+    /// The last insert of a chain into `undef` or an `agg.make`: it becomes
+    /// an `agg.make` (`transform::aggregate::fresh`).
+    FoldFreshInsert,
     NoChange,
 }
 
@@ -227,6 +233,11 @@ pub(super) fn simplify_inst(
                 // when the field changes.
                 ctx.aux_deps.value_deps.push(field);
                 return wrap_action(SimplifyAction::Copy(field));
+            }
+            if downcast::<&data::InsertValue>(is, inst).is_some()
+                && is_fresh_chain_end(func, inst_id)
+            {
+                return wrap_action(SimplifyAction::FoldFreshInsert);
             }
             if let Some(i) = downcast::<&data::ConstLoad>(is, inst) {
                 return wrap_action(simplify_const_load(func, lattice, *i.object(), ctx));

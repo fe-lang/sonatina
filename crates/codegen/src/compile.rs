@@ -13,6 +13,7 @@ use crate::{
     object::{CompileOptions, ObjectArtifact, ObjectCompileError, compile_all_objects},
     optim::Pipeline,
     stackalloc::StackifySearchProfile,
+    transform::aggregate::fold_fresh_aggregates,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -81,6 +82,7 @@ impl<B: Backend> Compile<B> {
     /// reference to the optimized module for inspection or IR dumping.
     pub fn optimize(&mut self) -> &Module {
         if !self.optimized {
+            fold_fresh_aggregates(&self.module);
             self.backend.pipeline(&self.options).run(&mut self.module);
             self.optimized = true;
         }

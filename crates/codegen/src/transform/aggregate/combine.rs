@@ -10,6 +10,7 @@ use sonatina_ir::{
 
 use super::{
     ObjectEffectSummaryMap,
+    fresh::{fold_fresh_insert, is_fresh_chain_end},
     object_access::{ObjectAccessFacts, ObjectInstEffects},
     object_initialization::value_initialization,
     object_load_store::transfer_backward_effects,
@@ -579,16 +580,8 @@ impl AggregateCombine {
             return true;
         }
 
-        // AC3 into an `agg.make`: the field takes the inserted value.
-        if let Some(prev_inst) = func.dfg.value_inst(*insert.dest())
-            && let Some(make) = func.dfg.downcast::<&data::AggMake>(prev_inst)
-            && let Some(idx) = inst_const_index(func, *insert.idx())
-            && (idx as usize) < make.values().len()
-        {
-            let mut values = make.values().clone();
-            values[idx as usize] = *insert.value();
-            let rewritten = data::AggMake::new_unchecked(func.inst_set(), *make.ty(), values);
-            func.dfg.replace_inst(inst, Box::new(rewritten));
+        // A chain of inserts into `undef` or an `agg.make` is one `agg.make`.
+        if is_fresh_chain_end(func, inst) && fold_fresh_insert(func, inst).is_some() {
             return true;
         }
 
