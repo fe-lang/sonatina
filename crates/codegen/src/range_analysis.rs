@@ -954,6 +954,10 @@ fn refine_edge(
 
     match branch.branch_kind() {
         BranchKind::Jump(jump) => ((*jump.dest() == succ) as u8 == 1).then(|| env.clone()),
+        BranchKind::Br(br) if br.nz_dest() == br.z_dest() => {
+            // Both outcomes reach the same block, so neither constrains the edge.
+            (*br.nz_dest() == succ).then(|| env.clone())
+        }
         BranchKind::Br(br) => {
             refine_br_edge(func, env, *br.cond(), succ == *br.nz_dest(), maybe_undef)
         }
