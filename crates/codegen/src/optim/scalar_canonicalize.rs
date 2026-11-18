@@ -1,7 +1,9 @@
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     Function, I256, Immediate, Inst, InstId, Type, U256, Value, ValueId,
-    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, arith, cast, cmp, logic},
+    inst::{
+        BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, arith, cast, cmp, evm, logic,
+    },
 };
 
 use super::simplify_expr::{
@@ -217,6 +219,11 @@ fn canonicalize_binary_inst(
         | BinaryInstKind::EvmUdiv
         | BinaryInstKind::Umod
         | BinaryInstKind::EvmUmod => {
+            if matches!(kind, BinaryInstKind::Udiv | BinaryInstKind::EvmUdiv)
+                && let Some(rewrite) = merge_unsigned_divisions(func, kind, lhs, rhs)
+            {
+                return Some(rewrite);
+            }
             let divisor = func.dfg.value_imm(rhs)?;
             let shift = nontrivial_pow2_shift(divisor)?;
             Some(
@@ -237,6 +244,47 @@ fn canonicalize_binary_inst(
         }
         _ => None,
     }
+}
+
+/// Unsigned division rounds down, so (x / a) / b equals x / (a * b).
+/// Keep zero divisors and products that do not fit the original width.
+/// Require a single user so the rewrite removes the inner division.
+fn merge_unsigned_divisions(
+    func: &Function,
+    kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<InstSpec> {
+    let outer = func.dfg.value_imm(rhs)?;
+    let inner_inst = func.dfg.value_inst(lhs)?;
+    if func.dfg.inst(inner_inst).kind() != InstClassKind::Binary(kind)
+        || func.dfg.users(lhs).count() != 1
+    {
+        return None;
+    }
+    let [value, inner_divisor] = func.dfg.inst(inner_inst).collect_values()[..] else {
+        return None;
+    };
+    let inner = func.dfg.value_imm(inner_divisor)?;
+    // Power-of-two divisors already become cheap shifts with small constants.
+    // Combining them can replace that compact spelling with a large PUSH.
+    if outer.is_zero()
+        || inner.is_zero()
+        || nontrivial_pow2_shift(inner).is_some()
+        || nontrivial_pow2_shift(outer).is_some()
+    {
+        return None;
+    }
+    let (product, overflow) = imm_to_u256(inner).overflowing_mul(imm_to_u256(outer));
+    let width = integral_bit_width(outer.ty())?;
+    if overflow || (width < 256 && product >= (U256::one() << width)) {
+        return None;
+    }
+    Some(InstSpec::Binary {
+        kind,
+        lhs: Operand::Value(value),
+        rhs: Operand::Imm(Immediate::from_i256(I256::from(product), outer.ty())),
+    })
 }
 
 /// `shr a (shr b x)` is `shr (a + b) x`, and likewise for `shl` and `sar`. A
@@ -390,6 +438,10 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
                 BinaryInstKind::Shr => Some(Box::new(arith::Shr::new(is.has_shr()?, lhs, rhs))),
                 BinaryInstKind::Sar => Some(Box::new(arith::Sar::new(is.has_sar()?, lhs, rhs))),
                 BinaryInstKind::And => Some(Box::new(logic::And::new(is.has_and()?, lhs, rhs))),
+                BinaryInstKind::Udiv => Some(Box::new(arith::Udiv::new(is.has_udiv()?, lhs, rhs))),
+                BinaryInstKind::EvmUdiv => {
+                    Some(Box::new(evm::EvmUdiv::new(is.has_evm_udiv()?, lhs, rhs)))
+                }
                 _ => None,
             }
         }
@@ -454,6 +506,8 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             BinaryInstKind::Shr => is.has_shr().is_some(),
             BinaryInstKind::Sar => is.has_sar().is_some(),
             BinaryInstKind::And => is.has_and().is_some(),
+            BinaryInstKind::Udiv => is.has_udiv().is_some(),
+            BinaryInstKind::EvmUdiv => is.has_evm_udiv().is_some(),
             _ => false,
         },
         InstSpec::Cast { kind, .. } => match kind {
@@ -908,5 +962,63 @@ block0:
         module.func_store.view(func_ref, |func| {
             FuncWriter::new(func_ref, func).dump_string()
         })
+    }
+
+    #[test]
+    fn merges_unsigned_constant_division_chains() {
+        for (ty, op) in [("i8", "udiv"), ("i128", "udiv"), ("i256", "evm_udiv")] {
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.{ty}) -> {ty} {{\nblock0:\n v1.{ty} = {op} v0 3.{ty};\n v2.{ty} = {op} v1 7.{ty};\n return v2;\n}}"
+            );
+            let (module, f) = parse_test_module(&source);
+            module
+                .func_store
+                .modify(f, |func| assert!(ScalarCanonicalize::new().run(func)));
+            let dumped = dump_func(&module, f);
+            assert!(dumped.contains(&format!("{op} v0 21.{ty}")), "{dumped}");
+            assert_eq!(dumped.matches(&format!(" = {op} ")).count(), 1, "{dumped}");
+        }
+    }
+
+    #[test]
+    fn preserves_unsafe_or_shared_division_chains() {
+        for (ty, op, a, b, shared) in [
+            ("i256", "evm_udiv", "0", "3", false),
+            ("i256", "evm_udiv", "3", "0", false),
+            ("i256", "evm_udiv", "-1", "3", false),
+            ("i8", "udiv", "17", "17", false),
+            ("i256", "evm_sdiv", "3", "7", false),
+            ("i128", "sdiv", "3", "7", false),
+            ("i256", "evm_udiv", "3", "7", true),
+        ] {
+            let result = if shared {
+                format!(" v3.{ty} = add v1 v2;\n return v3;")
+            } else {
+                " return v2;".into()
+            };
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.{ty}) -> {ty} {{\nblock0:\n v1.{ty} = {op} v0 {a}.{ty};\n v2.{ty} = {op} v1 {b}.{ty};\n{result}\n}}"
+            );
+            let (module, f) = parse_test_module(&source);
+            module
+                .func_store
+                .modify(f, |func| assert!(!ScalarCanonicalize::new().run(func)));
+        }
+    }
+
+    #[test]
+    fn keeps_compact_power_of_two_divisors() {
+        for (a, b) in [("18446744073709551616", "3"), ("3", "18446744073709551616")] {
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i256 {{\nblock0:\n v1.i256 = evm_udiv v0 {a}.i256;\n v2.i256 = evm_udiv v1 {b}.i256;\n return v2;\n}}"
+            );
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(dumped.contains("shr 64.i256"), "{dumped}");
+            assert!(dumped.contains(" = evm_udiv "), "{dumped}");
+        }
     }
 }

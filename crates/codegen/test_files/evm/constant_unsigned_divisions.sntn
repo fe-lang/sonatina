@@ -1,0 +1,46 @@
+#! evm.config: { vcode: true, opt: 2, stackify_trace: false }
+#! evm.case: input_0
+#!   calldata: u256(0)
+#!   expect: return u256(0) u256(0) u256(0)
+#! evm.case: input_1
+#!   calldata: u256(20)
+#!   expect: return u256(0) u256(0) u256(0)
+#! evm.case: input_2
+#!   calldata: u256(21)
+#!   expect: return u256(1) u256(0) u256(1)
+#! evm.case: input_3
+#!   calldata: u256(22)
+#!   expect: return u256(1) u256(0) u256(1)
+#! evm.case: input_4
+#!   calldata: u256(999)
+#!   expect: return u256(47) u256(0) u256(11)
+#! evm.case: input_5
+#!   calldata: u256(1000)
+#!   expect: return u256(47) u256(1) u256(11)
+#! evm.case: input_6
+#!   calldata: u256(1001)
+#!   expect: return u256(47) u256(1) u256(11)
+#! evm.case: input_7
+#!   calldata: u256(115792089237316195423570985008687907853269984665640564039457584007913129639935)
+#!   expect: return u256(5513909011300771210646237381366090850155713555506693525688456381329196649520) u256(115792089237316195423570985008687907853269984665640564039457584007913129639) u256(12)
+
+target = "evm-ethereum-osaka"
+func public %entry() {
+block0:
+ v0.i256 = evm_calldata_load 0.i256;
+ v1.i256 = evm_udiv v0 3.i256;
+ v2.i256 = evm_udiv v1 7.i256;
+ v3.i256 = evm_udiv v0 10.i256;
+ v4.i256 = evm_udiv v3 100.i256;
+ v5.i8 = trunc v0 i8;
+ v6.i8 = udiv v5 3.i8;
+ v7.i8 = udiv v6 7.i8;
+ v8.i256 = zext v7 i256;
+ mstore 0.i256 v2 i256;
+ mstore 32.i256 v4 i256;
+ mstore 64.i256 v8 i256;
+ evm_return 0.i256 96.i256;
+}
+object @Contract {
+ section runtime { entry %entry; }
+}

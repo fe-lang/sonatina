@@ -1,0 +1,27 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/constant_unsigned_divisions.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v2.i256 = evm_udiv v0 21.i256;
+        v4.i256 = evm_udiv v0 1000.i256;
+        v5.i8 = trunc v0 i8;
+        v7.i8 = udiv v5 21.i8;
+        v8.i256 = zext v7 i256;
+        mstore 0.i256 v2 i256;
+        mstore 32.i256 v4 i256;
+        mstore 64.i256 v8 i256;
+        evm_return 0.i256 96.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
