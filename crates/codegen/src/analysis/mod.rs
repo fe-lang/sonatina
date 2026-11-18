@@ -6,4 +6,5 @@ pub mod induction;
 pub mod known_bits;
 pub mod memory_access;
 pub mod scalar_facts;
+pub(crate) mod slot_writes;
 pub mod tail_position;

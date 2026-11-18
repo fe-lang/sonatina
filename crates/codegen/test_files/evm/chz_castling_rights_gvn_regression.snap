@@ -15,7 +15,7 @@ functions:
     mem: scratch_words=9 stable_words=0 stable_mode=None entry_abs_words=9 abs_words_end=9
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=22240 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1240
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=22234 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1234
 
 
 --------------- DEBUG ---------------
@@ -30,18 +30,18 @@ main_root:
     JUMPDEST
     PUSH2 0x100 (256)  // v7.i256 = evm_mload 256.i256;
     MLOAD
-    PUSH1 0xff (255)  // v9.i256 = and v7 255.i256;
-    AND
-    PUSH1 0x1 (1)  // v11.i256 = gt v9 1.i256;
+    PUSH1 0x1 (1)  // v9.i256 = gt v7 1.i256;
     DUP2
     GT
-    ISZERO  // br v11 block3 block6;
+    ISZERO  // br v9 block3 block6;
     PUSH1 block6
     JUMPI
   block3:
-    PUSH1 0x1 (1)  // v12.i256 = sub v9 1.i256;
+    PUSH1 0x1 (1)  // v10.i256 = sub v7 1.i256;
     SWAP1
     SUB
+    PUSH1 0xff (255)  // v12.i256 = and v10 255.i256;
+    AND
     DUP1  // evm_mstore 256.i256 v12;
     PUSH2 0x100 (256)
     MSTORE

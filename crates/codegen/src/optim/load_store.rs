@@ -46,8 +46,8 @@ struct LiveState {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct AllocaVisibility {
-    local_only: FxHashSet<InstId>,
+pub(crate) struct AllocaVisibility {
+    pub(crate) local_only: FxHashSet<InstId>,
 }
 
 /// What the backward solver knows about a function for one run.
@@ -591,7 +591,7 @@ fn meet_live(states: impl Iterator<Item = (LiveState, bool)>) -> LiveState {
     out
 }
 
-fn collect_alloca_visibility(
+pub(crate) fn collect_alloca_visibility(
     func: &Function,
     analysis: &mut MemoryAccessAnalysis,
 ) -> AllocaVisibility {
@@ -1095,7 +1095,11 @@ fn discharge_live_ranges(
     }
 }
 
-fn store_value_of_inst(func: &Function, inst: InstId, key: &TrackedLocKey) -> Option<ValueId> {
+pub(crate) fn store_value_of_inst(
+    func: &Function,
+    inst: InstId,
+    key: &TrackedLocKey,
+) -> Option<ValueId> {
     let inst_data = func.dfg.inst(inst);
     let is = func.inst_set();
 
@@ -1137,7 +1141,7 @@ fn expected_loaded_value_type(key: &TrackedLocKey) -> Type {
     }
 }
 
-fn forwardable_read_key(
+pub(crate) fn forwardable_read_key(
     func: &Function,
     inst: InstId,
     analysis: &mut MemoryAccessAnalysis,

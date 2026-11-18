@@ -1,0 +1,187 @@
+target = "evm-ethereum-osaka"
+
+# sameln: func public %stored_on_every_path(v0.i1, v1.i256) -> i256 {
+# check:       v4.i256 = mload v2 i256;
+# not:         and v4
+# check:       return v4;
+func public %stored_on_every_path(v0.i1, v1.i256) -> i256 {
+block0:
+    v2.*i256 = alloca i256;
+    br v0 block1 block2;
+
+block1:
+    v3.i256 = and v1 255.i256;
+    mstore v2 v3 i256;
+    jump block3;
+
+block2:
+    mstore v2 7.i256 i256;
+    jump block3;
+
+block3:
+    v4.i256 = mload v2 i256;
+    v5.i256 = and v4 255.i256;
+    return v5;
+}
+
+# sameln: func public %unstored_path(v0.i1, v1.i256) -> i256 {
+# check:       v5.i256 = and v4 255.i256;
+# nextln:      return v5;
+func public %unstored_path(v0.i1, v1.i256) -> i256 {
+block0:
+    v2.*i256 = alloca i256;
+    br v0 block1 block2;
+
+block1:
+    v3.i256 = and v1 255.i256;
+    mstore v2 v3 i256;
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v4.i256 = mload v2 i256;
+    v5.i256 = and v4 255.i256;
+    return v5;
+}
+
+# sameln: func public %store_in_loop(v0.i256) -> i256 {
+# check:       v5.i256 = mload v1 i256;
+# not:         and v5
+# check:       return v5;
+func public %store_in_loop(v0.i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 0.i256 i256;
+    jump block1;
+
+block1:
+    v2.i256 = phi (0.i256 block0) (v4 block2);
+    v3.i1 = lt v2 v0;
+    br v3 block2 block3;
+
+block2:
+    v4.i256 = add v2 1.i256;
+    v6.i256 = and v4 15.i256;
+    mstore v1 v6 i256;
+    jump block1;
+
+block3:
+    v5.i256 = mload v1 i256;
+    v7.i256 = and v5 15.i256;
+    return v7;
+}
+
+# sameln: func public %escaping_slot(v0.*i256) -> i256 {
+# check:       v4.i256 = and v3 255.i256;
+# nextln:      return v4;
+func public %escaping_slot(v0.*i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 7.i256 i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v0 v2 i256;
+    v3.i256 = mload v1 i256;
+    v4.i256 = and v3 255.i256;
+    return v4;
+}
+
+# sameln: func public %dynamic_offset_into_slot(v0.i256) -> i256 {
+# check:       v4.i256 = and v3 255.i256;
+# nextln:      return v4;
+func public %dynamic_offset_into_slot(v0.i256) -> i256 {
+block0:
+    v1.*[i256; 2] = alloca [i256; 2];
+    v2.*i256 = gep v1 0.i256 v0;
+    mstore v2 7.i256 i256;
+    v5.*i256 = gep v1 0.i256 0.i256;
+    v3.i256 = mload v5 i256;
+    v4.i256 = and v3 255.i256;
+    return v4;
+}
+
+# sameln: func public %write_through_unknown_pointer(v0.*i256) -> i256 {
+# check:       v5.i256 = and v4 255.i256;
+# nextln:      return v5;
+func public %write_through_unknown_pointer(v0.*i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 7.i256 i256;
+    v2.i256 = mload v0 i256;
+    v3.*i256 = int_to_ptr v2 *i256;
+    mstore v3 -1.i256 i256;
+    v4.i256 = mload v1 i256;
+    v5.i256 = and v4 255.i256;
+    return v5;
+}
+
+# sameln: func public %write_through_argument_pointer(v0.*i256, v1.i256) -> i256 {
+# check:       v3.i256 = mload v2 i256;
+# not:         and v3
+# check:       return v3;
+func public %write_through_argument_pointer(v0.*i256, v1.i256) -> i256 {
+block0:
+    v2.*i256 = alloca i256;
+    mstore v2 7.i256 i256;
+    mstore v0 v1 i256;
+    v3.i256 = mload v2 i256;
+    v4.i256 = and v3 255.i256;
+    return v4;
+}
+
+# sameln: func public %partial_overwrite(v0.i256) -> i256 {
+# check:       v4.i256 = and v3 255.i256;
+# nextln:      return v4;
+func public %partial_overwrite(v0.i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 7.i256 i256;
+    v2.i256 = ptr_to_int v1 i256;
+    v5.i256 = add v2 3.i256;
+    evm_mstore8 v5 v0;
+    v3.i256 = mload v1 i256;
+    v4.i256 = and v3 255.i256;
+    return v4;
+}
+
+func private %pure(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    return v1;
+}
+
+func private %writes_memory(v0.i256) -> i256 {
+block0:
+    mstore 0.i256 v0 i256;
+    return v0;
+}
+
+# sameln: func public %pure_call_between_store_and_load(v0.i256) -> i256 {
+# check:       v3.i256 = mload v1 i256;
+# not:         and v3
+# check:       return v5;
+func public %pure_call_between_store_and_load(v0.i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 7.i256 i256;
+    v2.i256 = call %pure v0;
+    v3.i256 = mload v1 i256;
+    v4.i256 = and v3 255.i256;
+    v5.i256 = add v4 v2;
+    return v5;
+}
+
+# A call that may write memory may write any location, as in load-store forwarding.
+# sameln: func public %writing_call_between_store_and_load(v0.i256) -> i256 {
+# check:       v4.i256 = and v3 255.i256;
+func public %writing_call_between_store_and_load(v0.i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 7.i256 i256;
+    v2.i256 = call %writes_memory v0;
+    v3.i256 = mload v1 i256;
+    v4.i256 = and v3 255.i256;
+    v5.i256 = add v4 v2;
+    return v5;
+}

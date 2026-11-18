@@ -6,14 +6,18 @@ use std::{
 };
 
 use cranelift_entity::SecondaryMap;
+use rustc_hash::FxHashMap;
 use sonatina_ir::{
     Function, Immediate, Type, U256, Value, ValueId,
     inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, data, downcast, logic},
 };
 
-use crate::optim::const_eval::{
-    ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys,
-    eval_const_path_dynamic_domain_immediates, eval_const_path_immediate,
+use crate::{
+    analysis::slot_writes::local_slot_load_writes,
+    optim::const_eval::{
+        ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys,
+        eval_const_path_dynamic_domain_immediates, eval_const_path_immediate,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -102,6 +106,7 @@ pub struct KnownBitsQuery {
     value_tys: SecondaryMap<ValueId, Option<Type>>,
     immediates: SecondaryMap<ValueId, Option<Immediate>>,
     const_paths: ConstPathAnalysis,
+    slot_writes: FxHashMap<ValueId, Vec<ValueId>>,
 }
 
 #[cfg(test)]
@@ -123,6 +128,7 @@ impl KnownBitsQuery {
             value_tys: SecondaryMap::default(),
             immediates: SecondaryMap::default(),
             const_paths: ConstPathAnalysis::default(),
+            slot_writes: local_slot_load_writes(func),
         };
         query.capture_value_metadata(func);
         query.const_paths = analyze_const_paths(func, &collect_constref_value_tys(func));
@@ -179,6 +185,11 @@ impl KnownBitsQuery {
             self.known[value] = self.seed_known_bits(func, value);
             queued[value] = true;
             worklist.push_back(value);
+        }
+        for (&load, writes) in &self.slot_writes {
+            for &value in writes {
+                dependents[value].push(load);
+            }
         }
 
         while let Some(value) = worklist.pop_front() {
@@ -250,8 +261,20 @@ impl KnownBitsQuery {
             Value::Immediate { .. } => unreachable!("immediates handled above"),
             Value::Inst {
                 inst, result_idx, ..
-            } => self.inst_result_known_bits(func, *inst, usize::from(*result_idx), ty),
+            } => match self.slot_writes.get(&value) {
+                Some(writes) => self.slot_load_known_bits(func, writes, ty),
+                None => self.inst_result_known_bits(func, *inst, usize::from(*result_idx), ty),
+            },
         }
+    }
+
+    /// A load of a local slot reads a word one of the stores that reach it wrote.
+    fn slot_load_known_bits(&self, func: &Function, values: &[ValueId], ty: Type) -> KnownBits {
+        values
+            .iter()
+            .map(|&value| self.known_of(func, value))
+            .reduce(|acc, bits| acc.meet(bits, ty))
+            .unwrap_or_else(|| KnownBits::unknown(ty))
     }
 
     fn inst_result_known_bits(
