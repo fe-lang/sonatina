@@ -299,6 +299,41 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_target_comparison_keeps_incoming_overflow_check() {
+        assert_duplicate_target_keeps_overflow_check(
+            "v2.i1 = lt v1 10.i8;\n    br v2 block3 block3;",
+        );
+    }
+
+    #[test]
+    fn duplicate_target_false_branch_keeps_incoming_overflow_check() {
+        assert_duplicate_target_keeps_overflow_check("br 0.i1 block3 block3;");
+    }
+
+    fn assert_duplicate_target_keeps_overflow_check(branch: &str) {
+        let output = optimized(&format!(
+            r#"
+target = "evm-ethereum-osaka"
+func public %test(v0.i1, v1.i8) -> i1 {{
+block0:
+    br v0 block1 block2;
+block1:
+    {branch}
+block2:
+    jump block3;
+block3:
+    v3.i8 = phi (v1 block1) (250.i8 block2);
+    v4.i8 = phi (246.i8 block1) (5.i8 block2);
+    (v5.i8, v6.i1) = uaddo v3 v4;
+    return v6;
+}}
+"#
+        ));
+        // Both outcomes from block1 reach block3. v1 = 10 must overflow.
+        assert!(output.contains("uaddo"), "{output}");
+    }
+
+    #[test]
     fn incoming_paths_preserve_multiply_add_bounds() {
         for (last_digit, removes_add) in [(5, true), (6, false)] {
             let output = optimized(&format!(
