@@ -119,6 +119,10 @@ impl<'a> AggregateValueReconstructor<'a> {
             ));
         };
 
+        if let Some(make) = func.dfg.downcast::<&data::AggMake>(def_inst) {
+            return make.values().get(target_idx as usize).copied();
+        }
+
         if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(def_inst) {
             let insert_idx = shape::const_u32(&func.dfg, *insert.idx())?;
             return if insert_idx == target_idx {
