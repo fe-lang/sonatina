@@ -1,6 +1,7 @@
 mod alias_execution;
 mod evm_directives;
 mod evm_switch;
+mod zero_values;
 
 use dir_test::{Fixture, dir_test};
 
@@ -233,6 +234,28 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
             }
         }
     }
+}
+
+#[test]
+fn zero_values_run_at_all_levels() {
+    assert_i64_cases(zero_values::ZERO_SOURCE, zero_values::ZERO_CASES);
+    // A dynamic index, which only EVM takes.
+    assert_i64_cases(
+        r#"func inline(never) private %read_zero_array(v0.i64) -> i64 {
+block0:
+    v1.i64 = extract_value zero.[i64; 4] v0;
+    return v1;
+}
+
+func public %dynamic_index() -> i64 {
+block0:
+    v0.i64 = call %read_zero_array 2.i64;
+    v1.i64 = add v0 12.i64;
+    return v1;
+}
+"#,
+        &[("dynamic_index", 12)],
+    );
 }
 
 #[test]
