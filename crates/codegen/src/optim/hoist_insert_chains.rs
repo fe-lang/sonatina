@@ -42,9 +42,11 @@ use sonatina_ir::{
     },
 };
 
+use super::inst_size;
 use crate::{cfg_edit::clone_inst_before, domtree::DomTree, loop_analysis::LoopTree};
 
-/// The most instructions a construction built again at its uses may have.
+/// The most instructions a construction built again at its uses may have, by
+/// `inst_size`.
 const MAX_REBUILT_INSTS: usize = 16;
 
 #[derive(Default)]
@@ -123,7 +125,11 @@ fn rebuild_at_uses(func: &mut Function, lpt: &LoopTree, store: InstId) -> bool {
     if func.layout.inst_block(store) == block
         || func.dfg.users(value).any(|&user| func.dfg.is_phi(user))
         || !construction(func, value, None, block, &mut tree)
-        || tree.len() > MAX_REBUILT_INSTS
+        || tree
+            .iter()
+            .map(|&inst| inst_size(func, inst))
+            .sum::<usize>()
+            > MAX_REBUILT_INSTS
     {
         return false;
     }

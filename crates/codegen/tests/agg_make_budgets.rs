@@ -1,7 +1,7 @@
 //! A fresh array built by an `insert_value` chain on undef and by an
 //! `agg.make` weighs the same in the size budgets of loop rotation, loop
-//! unrolling and jump threading: each pass applies to both spellings or to
-//! neither.
+//! unrolling, jump threading and insert chain placement: each pass applies to
+//! both spellings or to neither.
 use sonatina_codegen::optim::{Pass, Pipeline, Step};
 use sonatina_ir::ir_writer::ModuleWriter;
 
@@ -139,6 +139,38 @@ block3:
                 )
             },
             unrolls,
+        );
+    }
+}
+
+#[test]
+fn rebuilding_at_uses_weighs_agg_make_as_its_chain() {
+    // A value stored in a later block is built again at its uses when its
+    // construction is small: sixteen fields are, seventeen are not.
+    for (len, rebuilds) in [(16, true), (17, false)] {
+        same_decision(
+            Pass::HoistInsertChains,
+            |make| {
+                format!(
+                    "target = \"evm-ethereum-osaka\"
+declare external %grow() -> i1;
+declare external %undo([i256; {len}]);
+func public %push(v0.objref<[i256; {len}]>, v1.i256) {{
+block0:
+{}    v6.i1 = call %grow;
+    br v6 block1 block2;
+block1:
+    obj.store v0 v9;
+    return;
+block2:
+    call %undo v9;
+    return;
+}}
+",
+                    build("v9", len, "v1", make)
+                )
+            },
+            rebuilds,
         );
     }
 }
