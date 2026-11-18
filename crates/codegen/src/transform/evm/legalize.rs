@@ -3107,17 +3107,11 @@ impl<'a> FunctionLegalizer<'a> {
     }
 
     fn rewrite_mstore(&mut self, inst: InstId, addr: ValueId, value: ValueId, ty: Type) {
-        let ty = self.types.legalize_type(self.ctx, ty);
-        // Memory holds words: an `i1` is stored as the word it widens to.
-        let (value, ty) = match scalar_width_for_type(self.ctx, ty) {
-            Some(ScalarWidth::Narrow(bits)) => {
-                let extended = self.zero_extend_to_i256(inst, value);
-                let value =
-                    self.normalize_bits_for_width(inst, extended, ScalarWidth::Narrow(bits));
-                (value, ty)
-            }
-            Some(ScalarWidth::Bool) => (self.word_from_bool(inst, value), Type::I256),
-            Some(ScalarWidth::Full256) | None => (value, ty),
+        // Memory holds words: an `i1` is stored as the word it widens to, and a narrower integer
+        // is already a word of its type.
+        let (value, ty) = match self.types.legalize_type(self.ctx, ty) {
+            Type::I1 => (self.word_from_bool(inst, value), Type::I256),
+            ty => (value, ty),
         };
         self.func.dfg.replace_inst(
             inst,
