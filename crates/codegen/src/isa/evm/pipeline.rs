@@ -389,6 +389,9 @@ impl EvmPipelineContext<'_> {
                 &self.backend.isa,
             ));
         }
+        // Forwarding above can reach masks and compares whose operands are now
+        // known to be narrow; nothing after this round simplifies them.
+        self.run_pass_round("known_bits", &[Pass::KnownBitsSimplify]);
         Ok(())
     }
 

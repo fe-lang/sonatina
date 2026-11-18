@@ -45,15 +45,15 @@ main_root:
     DUP1  // evm_mstore 256.i256 v12;
     PUSH2 0x100 (256)
     MSTORE
-    PUSH1 0x3 (3)  // v15.i256 = shl 3.i256 v12;
+    PUSH1 0x3 (3)  // v14.i256 = shl 3.i256 v12;
     SHL
-    PUSH1 0xff (255)  // v16.i256 = and v15 255.i256;
+    PUSH1 0xff (255)  // v15.i256 = and v14 255.i256;
     DUP2
     AND
-    DUP1  // v17.i256 = eq v15 v16;
+    DUP1  // v16.i256 = eq v14 v15;
     SWAP2
     EQ
-    PUSH1 block5  // br v17 block5 block4;
+    PUSH1 block5  // br v16 block5 block4;
     JUMPI
   block4:
     PUSH4 0x4e487b71 (1313373041)  // evm_mstore v4 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
@@ -69,14 +69,14 @@ main_root:
     REVERT
   block5:
     JUMPDEST
-    PUSH1 0x2 (2)  // v23.i256 = shl 2.i256 v16;
+    PUSH1 0x2 (2)  // v22.i256 = shl 2.i256 v15;
     SHL
-    PUSH31 0xe000c00000000000000000000000000000000000000000000000000060004 (24736182426257386421843701014581903457152858201991735900572260061420060676)  // v25.i256 = shr v23 24736182426257386421843701014581903457152858201991735900572260061420060676.i256;
+    PUSH31 0xe000c00000000000000000000000000000000000000000000000000060004 (24736182426257386421843701014581903457152858201991735900572260061420060676)  // v24.i256 = shr v22 24736182426257386421843701014581903457152858201991735900572260061420060676.i256;
     SWAP1
     SHR
-    PUSH1 0xf (15)  // v27.i256 = and v25 15.i256;
+    PUSH1 0xf (15)  // v26.i256 = and v24 15.i256;
     AND
-    ISZERO  // br v27 block20 block23;
+    ISZERO  // br v26 block20 block23;
     PUSH1 block2
     JUMPI
   block20:
@@ -108,39 +108,39 @@ main_root:
     MSTORE
   block19:
     JUMPDEST
-    PUSH0  // v42.i256 = evm_mload v4;
+    PUSH0  // v41.i256 = evm_mload v4;
     MLOAD
-    PUSH1 0x40 (64)  // v44.i256 = evm_mload 64.i256;
+    PUSH1 0x40 (64)  // v43.i256 = evm_mload 64.i256;
     MLOAD
-    PUSH1 0x60 (96)  // v46.i256 = evm_mload 96.i256;
+    PUSH1 0x60 (96)  // v45.i256 = evm_mload 96.i256;
     MLOAD
-    PUSH1 0x80 (128)  // v48.i256 = evm_mload 128.i256;
+    PUSH1 0x80 (128)  // v47.i256 = evm_mload 128.i256;
     MLOAD
-    PUSH1 0xa0 (160)  // v50.i256 = evm_mload 160.i256;
+    PUSH1 0xa0 (160)  // v49.i256 = evm_mload 160.i256;
     MLOAD
-    PUSH1 0xc0 (192)  // v53.i256 = evm_mload 192.i256;
+    PUSH1 0xc0 (192)  // v52.i256 = evm_mload 192.i256;
     MLOAD
-    SWAP5  // v54.i256 = and v42 1.i256;
+    SWAP5  // v53.i256 = and v41 1.i256;
     PUSH1 0x1 (1)
     AND
-    PUSH0  // br_table v54 block7 (v4 block27);
+    PUSH0  // br_table v53 block7 (v4 block27);
     DUP2
     EQ
     PUSH1 block27
     JUMPI
   block7:
-    POP  // v55.i256 = and v53 255.i256;
+    POP  // v54.i256 = and v52 255.i256;
     SWAP4
     PUSH1 0xff (255)
     AND
-    DUP1  // br v55 block8 block24;
+    DUP1  // br v54 block8 block24;
     ISZERO
     PUSH1 block24
     JUMPI
   block8:
-    PUSH1 0xff (255)  // v57.i256 = xor v55 255.i256;
+    PUSH1 0xff (255)  // v56.i256 = xor v54 255.i256;
     XOR
-    PUSH1 0x3 (3)  // v58.i256 = and 3.i256 v57;
+    PUSH1 0x3 (3)  // v57.i256 = and 3.i256 v56;
     AND
     PUSH1 block10  // jump block10;
     JUMP
@@ -150,26 +150,26 @@ main_root:
     PUSH1 0x3 (3)
   block10:
     JUMPDEST
-    PUSH1 0xfd (253)  // v60.i256 = and v0 253.i256;
+    PUSH1 0xfd (253)  // v59.i256 = and v0 253.i256;
     AND
-    SWAP3  // v62.i256 = and v44 -31.i256;
+    SWAP3  // v61.i256 = and v43 -31.i256;
     PUSH1 0x1e (30)
     NOT
     AND
-    SWAP3  // v63.i256 = shl 1.i256 v60;
+    SWAP3  // v62.i256 = shl 1.i256 v59;
     PUSH1 0x1 (1)
     SHL
-    SWAP1  // v64.i256 = or v62 v63;
+    SWAP1  // v63.i256 = or v61 v62;
     SWAP3
     OR
-    SWAP3  // v65.i256 = and v50 1.i256;
+    SWAP3  // v64.i256 = and v49 1.i256;
     PUSH1 0x1 (1)
     AND
-    ISZERO  // br v65 block11 block12;
+    ISZERO  // br v64 block11 block12;
     PUSH1 block12
     JUMPI
   block11:
-    SWAP2  // v67.i256 = and v64 -481.i256;
+    SWAP2  // v66.i256 = and v63 -481.i256;
     PUSH2 0x1e0 (480)
     NOT
     AND
@@ -177,24 +177,24 @@ main_root:
     JUMP
   block12:
     JUMPDEST
-    SWAP2  // v68.i256 = and v64 -481.i256;
+    SWAP2  // v67.i256 = and v63 -481.i256;
     PUSH2 0x1e0 (480)
     NOT
     AND
-    PUSH2 0x1e0 (480)  // v70.i256 = or v68 480.i256;
+    PUSH2 0x1e0 (480)  // v69.i256 = or v67 480.i256;
     OR
   block13:
     JUMPDEST
-    SWAP1  // v71.i256 = and v48 1.i256;
+    SWAP1  // v70.i256 = and v47 1.i256;
     PUSH1 0x1 (1)
     AND
-    PUSH1 block25  // br v71 block25 block18;
+    PUSH1 block25  // br v70 block25 block18;
     JUMPI
   block18:
-    SWAP1  // v72.i256 = and v46 1.i256;
+    SWAP1  // v71.i256 = and v45 1.i256;
     PUSH1 0x1 (1)
     AND
-    ISZERO  // br v72 block16 block26;
+    ISZERO  // br v71 block16 block26;
     PUSH1 block26
     JUMPI
   block16:
@@ -213,15 +213,15 @@ main_root:
     PUSH0
   block17:
     JUMPDEST
-    SWAP1  // v74.i256 = and v1 -130561.i256;
+    SWAP1  // v73.i256 = and v1 -130561.i256;
     PUSH3 0x1fe00 (130560)
     NOT
     AND
-    OR  // v75.i256 = or v74 v2;
-    PUSH5 0x1fffe0000 (8589803520)  // v77.i256 = and v75 -8589803521.i256;
+    OR  // v74.i256 = or v73 v2;
+    PUSH5 0x1fffe0000 (8589803520)  // v76.i256 = and v74 -8589803521.i256;
     NOT
     AND
-    PUSH3 0x40000 (262144)  // v79.i256 = or v77 262144.i256;
+    PUSH3 0x40000 (262144)  // v78.i256 = or v76 262144.i256;
     OR
     PUSH1 block22  // jump block22;
     JUMP
@@ -236,11 +236,11 @@ main_root:
     PUSH0
   block22:
     JUMPDEST
-    PUSH1 0x1 (1)  // v80.i256 = shr 1.i256 v3;
+    PUSH1 0x1 (1)  // v79.i256 = shr 1.i256 v3;
     SHR
-    PUSH1 0xf (15)  // v81.i256 = and v80 15.i256;
+    PUSH1 0xf (15)  // v80.i256 = and v79 15.i256;
     AND
-    PUSH0  // evm_mstore v4 v81;
+    PUSH0  // evm_mstore v4 v80;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v4 32.i256;
     PUSH0
