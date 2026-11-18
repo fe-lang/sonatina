@@ -226,14 +226,24 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
     }
 
-    pub(super) fn emit_store_if_stored_at_depth(&mut self, v: ValueId, depth: usize) {
+    /// Stores the just-defined `v` at `depth` if the plan keeps it in memory, and returns whether
+    /// the store took it off the stack. A value on top whose stack copy no instruction can use
+    /// (`merge_separated`) is stored itself: each use reloads it, and this store dominates them
+    /// all. Any other value is stored from a `DUP`, keeping its copy.
+    pub(super) fn emit_store_if_stored_at_depth(&mut self, v: ValueId, depth: usize) -> bool {
         // A rematerialized value is recomputed at each load.
         if self.mem.spill_set().stored(v).is_none() || self.mem.remat_actions[v].is_some() {
-            return;
+            return false;
         }
-        debug_assert!(depth < self.ctx.reach.dup_max, "DUP out of range");
-        self.actions.push(Action::StackDup(depth as u8));
+        let consume = depth == 0 && self.ctx.merge_separated.contains(v);
+        if consume {
+            self.stack.pop_operand();
+        } else {
+            debug_assert!(depth < self.ctx.reach.dup_max, "DUP out of range");
+            self.actions.push(Action::StackDup(depth as u8));
+        }
         self.mem.emit_store_for_spilled_value(v, self.actions);
+        consume
     }
 
     fn push_value_from_spill_slot_or_mark(&mut self, load_from: ValueId, stack_as: ValueId) {

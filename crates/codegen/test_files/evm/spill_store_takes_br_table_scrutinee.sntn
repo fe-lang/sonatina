@@ -1,0 +1,84 @@
+#! evm.config: { stack_reach: 4, vcode: true }
+#! evm.case: case_zero
+#!   calldata: u256(0) u256(7)
+#!   expect: return u256(52)
+#! evm.case: case_one
+#!   calldata: u256(1) u256(7)
+#!   expect: return u256(92)
+#! evm.case: case_two
+#!   calldata: u256(2) u256(7)
+#!   expect: return u256(132)
+#! evm.case: default
+#!   calldata: u256(3) u256(7)
+#!   expect: return u256(172)
+#! evm.case: other_side
+#!   calldata: u256(1) u256(200)
+#!   expect: return u256(672)
+
+# The br_table scrutinee v2 and the case operands v3-v10 are defined in block0
+# and used only past the merge block11, so their stores take them off the
+# stack. The cases reload the scrutinee before their compares.
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i256 = call %dispatch v0 v1;
+        mstore 0.i256 v2 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func private %dispatch(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = and v0 3.i256;
+        v3.i256 = add v1 10.i256;
+        v4.i256 = add v1 20.i256;
+        v5.i256 = add v1 30.i256;
+        v6.i256 = add v1 40.i256;
+        v7.i256 = add v1 50.i256;
+        v8.i256 = add v1 60.i256;
+        v9.i256 = add v1 70.i256;
+        v10.i256 = add v1 80.i256;
+        v11.i1 = lt v1 100.i256;
+        br v11 block1 block2;
+
+    block1:
+        v12.i256 = add v1 1.i256;
+        jump block3;
+
+    block2:
+        v13.i256 = add v1 2.i256;
+        jump block3;
+
+    block3:
+        v14.i256 = phi (v12 block1) (v13 block2);
+        br_table v2 block7 (0.i256 block4) (1.i256 block5) (2.i256 block6);
+
+    block4:
+        v15.i256 = add v14 v3;
+        v16.i256 = add v15 v4;
+        return v16;
+
+    block5:
+        v17.i256 = add v14 v5;
+        v18.i256 = add v17 v6;
+        return v18;
+
+    block6:
+        v19.i256 = add v14 v7;
+        v20.i256 = add v19 v8;
+        return v20;
+
+    block7:
+        v21.i256 = add v14 v9;
+        v22.i256 = add v21 v10;
+        return v22;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

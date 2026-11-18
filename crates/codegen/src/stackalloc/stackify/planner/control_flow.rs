@@ -17,6 +17,9 @@ struct PendingPhiStores {
     readers: BTreeMap<ValueId, usize>,
     /// Pending stores whose phi's old value is no longer read, emitted last first.
     ready: SmallVec<[ValueId; 4]>,
+    /// The values the successor takes from the stack, its stack phis' sources included: once
+    /// normalization reads those, the stack still holds them until they are renamed.
+    carried: BitSet<ValueId>,
 }
 
 impl PendingPhiStores {
@@ -69,6 +72,11 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         for &(_, src) in stack_phi_pairs.iter().chain(&spilled_phi_pairs) {
             *readers.entry(src).or_default() += 1;
         }
+        debug_assert!(
+            stack_phi_pairs.len() <= tmpl.params.len(),
+            "template params missing phi results for block {succ:?}"
+        );
+        let args_prefix_len = tmpl.params.len() - stack_phi_pairs.len();
         let mut stores = PendingPhiStores {
             srcs: spilled_phi_pairs.iter().copied().collect(),
             ready: spilled_phi_pairs
@@ -78,6 +86,12 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 .filter(|phi_res| !readers.contains_key(phi_res))
                 .collect(),
             readers,
+            carried: tmpl.params[..args_prefix_len]
+                .iter()
+                .chain(tmpl.transfer())
+                .copied()
+                .chain(stack_phi_pairs.iter().map(|&(_, src)| src))
+                .collect(),
         };
         let mut held = SmallVec::new();
         self.emit_ready_phi_stores(&mut stores, &mut held);
@@ -103,12 +117,6 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         // - function args (entry block only)
         // - stack-resident phi results (replaced here by per-edge phi sources, then renamed
         //   in-place; spilled phis are stored to memory and omitted from `P(succ)`)
-        let phi_count = stack_phi_pairs.len();
-        debug_assert!(
-            phi_count <= tmpl.params.len(),
-            "template params missing phi results for block {succ:?}"
-        );
-        let args_prefix_len = tmpl.params.len() - phi_count;
         let expected_phi_params: SmallVec<[ValueId; 4]> = stack_phi_pairs
             .iter()
             .map(|(phi_res, _)| *phi_res)
@@ -210,7 +218,19 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 *owner = None;
                 self.emit_spilled_phi_store(phi_res, src);
             } else {
-                self.emit_spilled_phi_store(phi_res, src);
+                // The edge drops what the successor does not take. With no item held for a
+                // later store, a source on top that nothing else on the edge reads is stored
+                // itself.
+                if held.is_empty()
+                    && self.stack.top() == Some(&StackItem::Value(src))
+                    && stores.readers[&src] == 1
+                    && !stores.carried.contains(src)
+                {
+                    self.mem.emit_store_for_spilled_value(phi_res, self.actions);
+                    self.stack.pop_operand();
+                } else {
+                    self.emit_spilled_phi_store(phi_res, src);
+                }
                 stores.read(src);
             }
         }
@@ -632,7 +652,7 @@ block3:
     #[test]
     fn spilled_phi_chain_stores_readers_first() {
         // `v2` reads the old `v1`, so `v2` is stored before `v1` despite the phi order, all before
-        // normalization.
+        // normalization. Nothing else reads `v3`, so its store takes it from the top.
         let actions = plan_edge_fixup(EdgeFixup {
             src: r#"
 target = "evm-ethereum-osaka"
@@ -669,10 +689,90 @@ block3:
             &[
                 Action::MemLoadAbs(0),
                 Action::MemStoreAbs(32),
+                Action::MemStoreAbs(0),
+            ],
+        );
+    }
+
+    #[test]
+    fn spilled_phi_store_copies_source_another_phi_reads() {
+        // `v1` and `v2` both take `v3`: the first store copies it, the last takes it.
+        let actions = plan_edge_fixup(EdgeFixup {
+            src: r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (1.i256 block0) (v3 block2);
+    v2.i256 = phi (2.i256 block0) (v3 block2);
+    v4.i1 = lt v1 v0;
+    br v4 block2 block3;
+
+block2:
+    v3.i256 = add v1 v2;
+    jump block1;
+
+block3:
+    return v2;
+}
+"#,
+            pred: BlockId(2),
+            succ: BlockId(1),
+            scratch: &["v1", "v2"],
+            spilled: &[],
+            stack: &["v3", "v0"],
+            params: &[],
+            transfer: &["v0"],
+        });
+
+        assert_eq!(
+            actions.as_slice(),
+            &[
                 Action::StackDup(0),
                 Action::MemStoreAbs(0),
-                Action::Pop,
+                Action::MemStoreAbs(32),
             ],
+        );
+    }
+
+    #[test]
+    fn spilled_phi_store_copies_source_the_successor_takes() {
+        // `v0` feeds the spilled `v1` and also enters `block1` on the stack.
+        let actions = plan_edge_fixup(EdgeFixup {
+            src: r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (1.i256 block0) (v0 block2);
+    v2.i1 = lt v1 v0;
+    br v2 block2 block3;
+
+block2:
+    jump block1;
+
+block3:
+    return v1;
+}
+"#,
+            pred: BlockId(2),
+            succ: BlockId(1),
+            scratch: &["v1"],
+            spilled: &[],
+            stack: &["v0"],
+            params: &[],
+            transfer: &["v0"],
+        });
+
+        assert_eq!(
+            actions.as_slice(),
+            &[Action::StackDup(0), Action::MemStoreAbs(0)],
         );
     }
 
@@ -708,5 +808,61 @@ block3:
         });
 
         assert_eq!(actions.as_slice(), &[]);
+    }
+
+    #[test]
+    fn spilled_phi_store_keeps_normalized_stack_phi_source() {
+        // Stack phi `v1` takes `v3`, which spilled `v4` also reads. Normalization reads `v3` for
+        // `v1` and leaves it on top as `v1`'s placeholder, so `v4`'s store copies it.
+        let actions = plan_edge_fixup(EdgeFixup {
+            src: r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v1.i256 = phi (0.i256 block0) (v3 block2);
+    v2.i256 = phi (0.i256 block0) (v4 block2);
+    v4.i256 = phi (1.i256 block0) (v3 block2);
+    v3.i256 = phi (2.i256 block0) (v5 block2);
+    v5.i256 = phi (3.i256 block0) (v6 block2);
+    v6.i256 = phi (4.i256 block0) (v5 block2);
+    v7.i1 = lt v1 v0;
+    br v7 block2 block3;
+
+block2:
+    jump block1;
+
+block3:
+    v8.i256 = add v1 v2;
+    return v8;
+}
+"#,
+            pred: BlockId(2),
+            succ: BlockId(1),
+            scratch: &["v3", "v4", "v5", "v6"],
+            spilled: &[],
+            stack: &["v0"],
+            params: &["v1", "v2"],
+            transfer: &["v0"],
+        });
+
+        assert_eq!(
+            actions.as_slice(),
+            &[
+                Action::MemLoadAbs(32),
+                Action::MemLoadAbs(0),
+                Action::StackDup(0),
+                Action::MemStoreAbs(32),
+                Action::MemLoadAbs(64),
+                Action::MemStoreAbs(0),
+                Action::MemLoadAbs(64),
+                Action::MemLoadAbs(96),
+                Action::MemStoreAbs(64),
+                Action::MemStoreAbs(96),
+            ],
+        );
     }
 }

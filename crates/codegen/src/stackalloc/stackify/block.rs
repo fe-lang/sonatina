@@ -434,16 +434,18 @@ impl<'d, 'a, 'ctx, O: StackifyObserver> BlockPlanner<'d, 'a, 'ctx, O> {
             self.state.stack.push_value(res);
         }
 
+        // A result whose store takes it off the stack moves the later ones up.
+        let mut consumed = 0;
         for (depth, &res) in results.iter().enumerate() {
             if self.state.uses.is_dead(res) {
                 continue;
             }
-            self.driver.with_planner(
+            consumed += usize::from(self.driver.with_planner(
                 &mut self.state.stack,
                 &mut self.state.free_slots,
                 PlannerActionSink::Post(inst),
-                |planner| planner.emit_store_if_stored_at_depth(res, depth),
-            );
+                |planner| planner.emit_store_if_stored_at_depth(res, depth - consumed),
+            ));
         }
 
         {

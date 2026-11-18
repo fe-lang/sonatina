@@ -6,16 +6,16 @@ input_file: test_files/evm/fixed_slot_spill_phi_edge_after_ir_store.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 374 bytes
-  total: 374 bytes
+  section runtime: 289 bytes
+  total: 289 bytes
 
 functions:
-  mem: global_dyn_base=0x380 arena_base=0x40 scratch_peak_words=0 stable_chain_peak_words=26
-  entry: ir_blocks=4 ir_insts=54 vcode_ops=260 fixups=2 imm_bytes=69
-    mem: scratch_words=0 stable_words=26 stable_mode=StableAbs(base=0x40) entry_abs_words=0 abs_words_end=26
+  mem: global_dyn_base=0x360 arena_base=0x40 scratch_peak_words=0 stable_chain_peak_words=25
+  entry: ir_blocks=4 ir_insts=54 vcode_ops=185 fixups=2 imm_bytes=64
+    mem: scratch_words=0 stable_words=25 stable_mode=StableAbs(base=0x40) entry_abs_words=0 abs_words_end=25
 
 evm:
-  case reads_stored_word: calldata_len=96 success reason=Return gas_used=22162 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=754
+  case reads_stored_word: calldata_len=96 success reason=Return gas_used=22037 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=629
 
 
 --------------- DEBUG ---------------
@@ -30,194 +30,119 @@ entry:
     PUSH1 0x1 (1)  // v5.i256 = add v1 v4;
     DUP3
     ADD
-    DUP1
     PUSH1 0x20 (32)
     MSTORE
     PUSH1 0x2 (2)  // v7.i256 = add v1 v6;
-    DUP4
+    DUP3
     ADD
-    DUP1
     PUSH2 0x120 (288)
     MSTORE
     PUSH1 0x3 (3)  // v9.i256 = add v1 v8;
-    DUP5
+    DUP3
     ADD
-    DUP1
     PUSH2 0x140 (320)
     MSTORE
     PUSH1 0x4 (4)  // v11.i256 = add v1 v10;
-    DUP6
+    DUP3
     ADD
-    DUP1
     PUSH2 0x160 (352)
     MSTORE
     PUSH1 0x5 (5)  // v13.i256 = add v1 v12;
-    DUP7
+    DUP3
     ADD
-    DUP1
     PUSH2 0x180 (384)
     MSTORE
     PUSH1 0x6 (6)  // v15.i256 = add v1 v14;
-    DUP8
+    DUP3
     ADD
-    DUP1
     PUSH2 0x1a0 (416)
     MSTORE
     PUSH1 0x7 (7)  // v17.i256 = add v1 v16;
-    DUP9
+    DUP3
     ADD
-    DUP1
     PUSH2 0x1c0 (448)
     MSTORE
     PUSH1 0x8 (8)  // v19.i256 = add v1 v18;
-    DUP10
+    DUP3
     ADD
-    DUP1
     PUSH2 0x1e0 (480)
     MSTORE
     PUSH1 0x9 (9)  // v93.i256 = add v1 v20;
-    DUP11
+    DUP3
     ADD
-    DUP1
     PUSH2 0x200 (512)
     MSTORE
     PUSH1 0xa (10)  // v81.i256 = add v1 v80;
-    DUP12
+    DUP3
     ADD
-    DUP1
     PUSH2 0x220 (544)
     MSTORE
     PUSH1 0xb (11)  // v100.i256 = add v1 v82;
-    DUP13
+    DUP3
     ADD
-    DUP1
     PUSH2 0x240 (576)
     MSTORE
     PUSH1 0xc (12)  // v200.i256 = add v1 v101;
-    DUP14
+    DUP3
     ADD
-    DUP1
     PUSH2 0x260 (608)
     MSTORE
     PUSH1 0xd (13)  // v202.i256 = add v1 v201;
-    DUP15
+    DUP3
     ADD
-    DUP1
     PUSH2 0x280 (640)
     MSTORE
     PUSH1 0xe (14)  // v204.i256 = add v1 v203;
-    DUP16
+    DUP3
     ADD
-    DUP1
     PUSH2 0x2a0 (672)
     MSTORE
-    DUP16  // v206.i256 = add v1 v205;
-    PUSH1 0xf (15)
+    PUSH1 0xf (15)  // v206.i256 = add v1 v205;
+    DUP3
     ADD
-    SWAP16  // v208.i256 = add v1 v207;
-    DUP1
-    PUSH1 0x10 (16)
+    PUSH1 0x10 (16)  // v208.i256 = add v1 v207;
+    DUP4
     ADD
-    DUP1
     PUSH2 0x2c0 (704)
     MSTORE
     PUSH1 0x11 (17)  // v210.i256 = add v1 v209;
-    DUP3
+    DUP4
     ADD
-    DUP1
     PUSH2 0x2e0 (736)
     MSTORE
     PUSH1 0x12 (18)  // v212.i256 = add v1 v211;
     DUP4
     ADD
-    DUP1
     PUSH2 0x300 (768)
     MSTORE
     PUSH1 0x13 (19)  // v214.i256 = add v1 v213;
-    DUP5
+    DUP4
     ADD
-    DUP1
     PUSH2 0x320 (800)
     MSTORE
     PUSH1 0x14 (20)  // v216.i256 = add v1 v215;
-    DUP6
+    DUP4
     ADD
-    DUP1
     PUSH2 0x340 (832)
     MSTORE
-    DUP6  // evm_mstore v90 v1;
+    DUP3  // evm_mstore v90 v1;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // v74.i256 = is_zero v3;
-    CALLDATALOAD
+    SWAP1  // v74.i256 = is_zero v3;
     ISZERO
     PUSH1 block2  // br v74 block2 block1;
     JUMPI
   block1:
-    PUSH1 0x64 (100)  // v48.i256 = add v1 v219;
-    DUP7
+    SWAP1  // v48.i256 = add v1 v219;
+    PUSH1 0x64 (100)
     ADD
-    DUP1
-    PUSH2 0x360 (864)
-    MSTORE
-    POP  // jump block3;
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    PUSH2 0x360 (864)
-    MLOAD
-    PUSH1 block3
+    PUSH1 block3  // jump block3;
     JUMP
   block2:
     JUMPDEST
-    PUSH1 0xc8 (200)  // v50.i256 = add v1 200.i256;
-    DUP7
+    SWAP1  // v50.i256 = add v1 200.i256;
+    PUSH1 0xc8 (200)
     ADD
-    DUP1
-    PUSH2 0x360 (864)
-    MSTORE
-    POP  // jump block3;
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    PUSH2 0x360 (864)
-    MLOAD
   block3:
     JUMPDEST
     PUSH0  // v51.i256 = evm_mload v90;

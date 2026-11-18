@@ -29,7 +29,8 @@ use super::{
     sym_stack::SymStack,
     templates::{
         DefInfo, compute_block_interfaces, compute_def_info, compute_dom_depth,
-        compute_phi_out_sources, compute_phi_results, function_has_internal_return,
+        compute_merge_separated, compute_phi_out_sources, compute_phi_results,
+        function_has_internal_return,
     },
     terminal_chain::compute_terminal_chain_blocks,
     trace::{NullObserver, StackifyObserver},
@@ -184,6 +185,9 @@ pub(super) struct StackifyContext<'a> {
     pub(super) def_info: SecondaryMap<ValueId, Option<DefInfo>>,
     pub(super) phi_results: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
     pub(super) phi_out_sources: SecondaryMap<BlockId, BitSet<ValueId>>,
+    /// The values whose stack copy no instruction can use once they are defined
+    /// (`compute_merge_separated`); a store of one moves it off the stack.
+    pub(super) merge_separated: BitSet<ValueId>,
     pub(super) spill_slot_interference: SpillSlotInterference,
     pub(super) has_internal_return: bool,
     pub(super) reach: StackifyReachability,
@@ -362,6 +366,15 @@ impl<'a> StackifyBuilder<'a> {
         let remat_actions = compute_remat_actions(self.func, &value_aliases);
         let phi_results = compute_phi_results(self.func, &value_aliases);
         let phi_out_sources = compute_phi_out_sources(self.func, self.cfg, &value_aliases);
+        let def_info = compute_def_info(self.func, entry, &value_aliases);
+        let merge_separated = compute_merge_separated(
+            self.func,
+            self.cfg,
+            self.dom,
+            &def_info,
+            &value_aliases,
+            &phi_out_sources,
+        );
         let spill_slot_interference = SpillSlotInterference::compute(
             self.func,
             self.cfg,
@@ -379,9 +392,10 @@ impl<'a> StackifyBuilder<'a> {
             entry,
             scc,
             dom_depth: compute_dom_depth(self.dom, entry),
-            def_info: compute_def_info(self.func, entry, &value_aliases),
+            def_info,
             phi_results,
             phi_out_sources,
+            merge_separated,
             spill_slot_interference,
             // Internal-return functions expect a caller-provided return address below their args.
             has_internal_return: function_has_internal_return(self.func),
@@ -403,10 +417,10 @@ impl<'a> StackifyBuilder<'a> {
         // or at entry for an argument, each of which dominates the loads. The plan is final once
         // it reloads exactly the values it stores.
         //
-        // Stores do not move the symbolic stack, so dropping some leaves the rest of the plan
-        // alone, except where an edge no longer stages a phi's source for its store. If that makes
-        // a plan reload a value whose stores were dropped, the value stays stored from then on,
-        // which bounds the iterations.
+        // Dropping a store can change the rest of the plan: an edge no longer stages a phi's
+        // source for it, and a store that took its value off the stack leaves the value there
+        // instead. If that makes a plan reload a value whose stores were dropped, the value stays
+        // stored from then on, which bounds the iterations.
         let mut spill_set: BitSet<ValueId> = BitSet::default();
         let mut stored: BitSet<ValueId> = BitSet::default();
         let mut dropped: BitSet<ValueId> = BitSet::default();

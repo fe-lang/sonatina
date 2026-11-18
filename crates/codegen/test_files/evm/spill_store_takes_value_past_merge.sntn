@@ -1,0 +1,80 @@
+#! evm.config: { stack_reach: 4, vcode: true }
+#! evm.case: taken
+#!   calldata: u256(5) u256(1) u256(3)
+#!   expect: return u256(2371)
+#! evm.case: not_taken
+#!   calldata: u256(5) u256(0) u256(2)
+#!   expect: return u256(1221)
+
+# Every use of v3-v6 lies past a merge from block0: in the loop behind the
+# header block4, or after the loop and the call in block5. The stack carries no
+# spilled value into a merge, so each use reloads the value and its store at
+# the definition takes it off the stack. v7 is also used in block1, which
+# inherits the stack of block0, so its store keeps a copy there.
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i256 = evm_calldata_load 64.i32;
+        v3.i256 = call %f v0 v1 v2;
+        mstore 0.i256 v3 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func private %one() -> i256 {
+    block0:
+        v0.*[i256; 2] = alloca [i256; 2];
+        v1.i256 = ptr_to_int v0 i256;
+        mstore v1 1.i256 i256;
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func private %f(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.i256 = mul v0 3.i256;
+        v4.i256 = add v0 4.i256;
+        v5.i256 = mul v0 5.i256;
+        v6.i256 = add v0 6.i256;
+        v7.i256 = mul v0 7.i256;
+        v8.i1 = ne v1 0.i256;
+        br v8 block1 block2;
+
+    block1:
+        v9.i256 = add v7 v2;
+        jump block3;
+
+    block2:
+        v10.i256 = add v0 v2;
+        jump block3;
+
+    block3:
+        v11.i256 = phi (v9 block1) (v10 block2);
+        jump block4;
+
+    block4:
+        v12.i256 = phi (0.i256 block3) (v15 block4);
+        v13.i256 = phi (v11 block3) (v14 block4);
+        v14.i256 = add v13 v3;
+        v15.i256 = add v12 1.i256;
+        v16.i1 = lt v15 v2;
+        br v16 block4 block5;
+
+    block5:
+        v17.i256 = call %one;
+        v18.i256 = add v14 v17;
+        v19.i256 = add v18 v4;
+        v20.i256 = mul v19 v5;
+        v21.i256 = add v20 v6;
+        v22.i256 = add v21 v7;
+        return v22;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

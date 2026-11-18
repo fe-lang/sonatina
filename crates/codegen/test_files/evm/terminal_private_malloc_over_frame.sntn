@@ -5,7 +5,7 @@
 
 target = "evm-ethereum-osaka"
 
-# `%rec` keeps six values in its dynamic frame across the recursive call, then
+# `%rec` keeps values in its dynamic frame across the recursive call, then
 # builds its return payload in a terminal-private malloc. The payload buffer
 # must not overlap the frame the reloaded values come from.
 func private %rec(v0.i256) -> i256 {

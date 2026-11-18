@@ -6,12 +6,12 @@ input_file: test_files/evm/calldata_rematerialization.sntn
 evm.config: stack_reach=4 vcode=false bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false mem_plan_detail=true
 
 object: Contract
-  section runtime: 175 bytes
-  total: 175 bytes
+  section runtime: 169 bytes
+  total: 169 bytes
 
 functions:
   mem: global_dyn_base=0x80 arena_base=0x40 scratch_peak_words=0 stable_chain_peak_words=2
-  entry: ir_blocks=10 ir_insts=42 vcode_ops=122 fixups=7 imm_bytes=22
+  entry: ir_blocks=10 ir_insts=42 vcode_ops=116 fixups=7 imm_bytes=22
     mem: scratch_words=0 stable_words=2 stable_mode=StableAbs(base=0x40) entry_abs_words=0 abs_words_end=2
   clobber: ir_blocks=1 ir_insts=4 vcode_ops=11 fixups=0 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
@@ -25,13 +25,13 @@ evm mem plan: clobber scratch_words=0 stable_words=0 stable_mode=None entry_abs_
 
 
 evm:
-  case empty: calldata_len=0 success reason=Return gas_used=21138 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=138
-  case one: calldata_len=192 success reason=Return gas_used=22211 gas_refunded=0 logs=0 output=call len=32 tx_gas=21840 runtime_gas=371
-  case two: calldata_len=192 success reason=Return gas_used=22420 gas_refunded=0 logs=0 output=call len=32 tx_gas=21840 runtime_gas=580
-  case three: calldata_len=192 success reason=Return gas_used=22639 gas_refunded=0 logs=0 output=call len=32 tx_gas=21840 runtime_gas=799
-  case overflow: calldata_len=192 success reason=Return gas_used=22792 gas_refunded=0 logs=0 output=call len=32 tx_gas=22212 runtime_gas=580
-  case short: calldata_len=32 success reason=Return gas_used=21511 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=371
-  case partial_word: calldata_len=33 success reason=Return gas_used=21527 gas_refunded=0 logs=0 output=call len=32 tx_gas=21156 runtime_gas=371
+  case empty: calldata_len=0 success reason=Return gas_used=21128 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=128
+  case one: calldata_len=192 success reason=Return gas_used=22201 gas_refunded=0 logs=0 output=call len=32 tx_gas=21840 runtime_gas=361
+  case two: calldata_len=192 success reason=Return gas_used=22410 gas_refunded=0 logs=0 output=call len=32 tx_gas=21840 runtime_gas=570
+  case three: calldata_len=192 success reason=Return gas_used=22629 gas_refunded=0 logs=0 output=call len=32 tx_gas=21840 runtime_gas=789
+  case overflow: calldata_len=192 success reason=Return gas_used=22782 gas_refunded=0 logs=0 output=call len=32 tx_gas=22212 runtime_gas=570
+  case short: calldata_len=32 success reason=Return gas_used=21501 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=361
+  case partial_word: calldata_len=33 success reason=Return gas_used=21517 gas_refunded=0 logs=0 output=call len=32 tx_gas=21156 runtime_gas=361
 
 
 --------------- DEBUG ---------------
@@ -71,24 +71,24 @@ spill_set: o0=v19, o1=v21
     - stack=[v17, v15, v13, v11, v9, v7, v5]
       pre: [PUSH(18446744073709551648)]
       evm_calldata_load [18446744073709551648] -> v19
-      post: [DUP1, MSTORE_OBJ(0)]
+      post: [MSTORE_OBJ(0)]
     // v21.i256 = evm_calldata_load -1.i256;
-    - stack=[v19, v17, v15, v13, v11, v9, v7, v5]
+    - stack=[v17, v15, v13, v11, v9, v7, v5]
       pre: [PUSH(-1)]
       evm_calldata_load [-1] -> v21
-      post: [DUP1, MSTORE_OBJ(1)]
+      post: [MSTORE_OBJ(1)]
     // v43.i256 = is_zero v5;
-    - stack=[v21, v19, v17, v15, v13, v11, v9, v7, v5]
+    - stack=[v17, v15, v13, v11, v9, v7, v5]
       pre: [CALLDATALOAD(0)]
       is_zero [v5] -> v43
     // br v43 block11 block10;
-    - stack=[v43, v21, v19, v17, v15, v13, v11, v9, v7, v5]
+    - stack=[v43, v17, v15, v13, v11, v9, v7, v5]
       br [v43] -> [block11, block10]
   block10 P=[] T=[]
-    inherited from block0: [v21, v19, v17, v15, v13, v11, v9, v7, v5]
+    inherited from block0: [v17, v15, v13, v11, v9, v7, v5]
     // jump block3;
-    - stack=[v21, v19, v17, v15, v13, v11, v9, v7, v5]
-      exit(block3): [POP, POP, POP, POP, POP, POP, POP, POP, POP, PUSH(0), PUSH(0)]
+    - stack=[v17, v15, v13, v11, v9, v7, v5]
+      exit(block3): [POP, POP, POP, POP, POP, POP, POP, PUSH(0), PUSH(0)]
       jump -> block3
   block3 P=[v0, v1] T=[]
     // v23.i256 = call %clobber v0;
@@ -186,10 +186,10 @@ spill_set: o0=v19, o1=v21
       cleanup: [POP]
       jump -> block9
   block11 P=[] T=[]
-    inherited from block0: [v21x, v19x, v17x, v15x, v13x, v11x, v9x, v7x, v5x]
+    inherited from block0: [v17x, v15x, v13x, v11x, v9x, v7x, v5x]
     // jump block9;
-    - stack=[v21x, v19x, v17x, v15x, v13x, v11x, v9x, v7x, v5x]
-      cleanup: [POP, POP, POP, POP, POP, POP, POP, POP, POP]
+    - stack=[v17x, v15x, v13x, v11x, v9x, v7x, v5x]
+      cleanup: [POP, POP, POP, POP, POP, POP, POP]
       exit(block9): [PUSH(0)]
       jump -> block9
   block9 P=[v3] T=[]

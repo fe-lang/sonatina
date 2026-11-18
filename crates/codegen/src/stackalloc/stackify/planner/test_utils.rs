@@ -9,8 +9,8 @@ use crate::{
                 StackifyContext, StackifyReachability, StackifySearchProfile, compute_remat_actions,
             },
             templates::{
-                compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
-                function_has_internal_return,
+                compute_def_info, compute_dom_depth, compute_merge_separated,
+                compute_phi_out_sources, compute_phi_results, function_has_internal_return,
             },
         },
     },
@@ -46,6 +46,8 @@ pub(super) fn build_stackify_test_context<'a>(
             &value_aliases,
         );
     let remat_actions = compute_remat_actions(func, &value_aliases);
+    let merge_separated =
+        compute_merge_separated(func, cfg, dom, &def_info, &value_aliases, &phi_out_sources);
 
     StackifyContext {
         func,
@@ -59,6 +61,7 @@ pub(super) fn build_stackify_test_context<'a>(
         def_info,
         phi_results,
         phi_out_sources,
+        merge_separated,
         spill_slot_interference,
         has_internal_return: function_has_internal_return(func),
         reach,
