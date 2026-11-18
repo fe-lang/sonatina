@@ -6,6 +6,8 @@ use sonatina_ir::{
     },
 };
 
+use sonatina_triple::Architecture;
+
 use super::simplify_expr::{
     ZextI1CompareRewrite, canonicalize_cast_chain, imm_to_u256, integral_bit_width,
     nontrivial_pow2_shift, simplify_cast, simplify_zext_i1_compare,
@@ -129,7 +131,7 @@ impl ScalarCanonicalize {
                     });
                 }
 
-                canonicalize_binary_inst(func, kind, *lhs, *rhs)
+                canonicalize_binary_inst(func, inst, kind, *lhs, *rhs)
                     .filter(|&replacement| supports_inst_spec(func, replacement))
                     .map(|replacement| RewritePlan::ReplaceInst { inst, replacement })
             }
@@ -167,10 +169,14 @@ impl Default for ScalarCanonicalize {
 
 fn canonicalize_binary_inst(
     func: &Function,
+    inst: InstId,
     kind: BinaryInstKind,
     lhs: ValueId,
     rhs: ValueId,
 ) -> Option<InstSpec> {
+    if let Some(rewrite) = canonicalize_evm_byte(func, inst, kind, lhs, rhs) {
+        return Some(rewrite);
+    }
     match kind {
         BinaryInstKind::Eq
             if func.dfg.value_ty(lhs).is_integral() && func.dfg.value_ty(rhs).is_integral() =>
@@ -244,6 +250,70 @@ fn canonicalize_binary_inst(
         }
         _ => None,
     }
+}
+
+/// Select BYTE when a byte-aligned shift and mask extract one byte.
+/// Keep shared or cross-block producers to avoid extending source liveness.
+fn canonicalize_evm_byte(
+    func: &Function,
+    inst: InstId,
+    kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<InstSpec> {
+    if func.ctx().triple.architecture != Architecture::Evm
+        || func.dfg.value_ty(lhs) != Type::I256
+        || func.dfg.value_ty(rhs) != Type::I256
+    {
+        return None;
+    }
+    // The top byte needs no mask; BYTE 0 also saves a PUSH immediate byte.
+    if kind == BinaryInstKind::Shr
+        && func
+            .dfg
+            .value_imm(lhs)
+            .is_some_and(|imm| imm_to_u256(imm) == U256::from(248))
+    {
+        return Some(InstSpec::Binary {
+            kind: BinaryInstKind::EvmByte,
+            lhs: Operand::Imm(Immediate::zero(Type::I256)),
+            rhs: Operand::Value(rhs),
+        });
+    }
+    if kind != BinaryInstKind::And {
+        return None;
+    }
+    let is_byte_mask = |value| {
+        func.dfg
+            .value_imm(value)
+            .is_some_and(|imm| imm_to_u256(imm) == U256::from(255))
+    };
+    let shifted = if is_byte_mask(rhs) {
+        lhs
+    } else if is_byte_mask(lhs) {
+        rhs
+    } else {
+        return None;
+    };
+    let producer = func.dfg.value_inst(shifted)?;
+    let shift = func.dfg.downcast::<&arith::Shr>(producer)?;
+    if func.dfg.users_num(shifted) != 1
+        || func.layout.inst_block(producer) != func.layout.inst_block(inst)
+    {
+        return None;
+    }
+    let count = imm_to_u256(func.dfg.value_imm(*shift.bits())?);
+    if count == U256::zero() || count > U256::from(248) || count % U256::from(8) != U256::zero() {
+        return None;
+    }
+    Some(InstSpec::Binary {
+        kind: BinaryInstKind::EvmByte,
+        lhs: Operand::Imm(Immediate::from_i256(
+            I256::from(31 - count.as_usize() / 8),
+            Type::I256,
+        )),
+        rhs: Operand::Value(*shift.value()),
+    })
 }
 
 /// Unsigned division rounds down, so (x / a) / b equals x / (a * b).
@@ -438,6 +508,9 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
                 BinaryInstKind::Shr => Some(Box::new(arith::Shr::new(is.has_shr()?, lhs, rhs))),
                 BinaryInstKind::Sar => Some(Box::new(arith::Sar::new(is.has_sar()?, lhs, rhs))),
                 BinaryInstKind::And => Some(Box::new(logic::And::new(is.has_and()?, lhs, rhs))),
+                BinaryInstKind::EvmByte => {
+                    Some(Box::new(evm::EvmByte::new(is.has_evm_byte()?, lhs, rhs)))
+                }
                 BinaryInstKind::Udiv => Some(Box::new(arith::Udiv::new(is.has_udiv()?, lhs, rhs))),
                 BinaryInstKind::EvmUdiv => {
                     Some(Box::new(evm::EvmUdiv::new(is.has_evm_udiv()?, lhs, rhs)))
@@ -506,6 +579,7 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             BinaryInstKind::Shr => is.has_shr().is_some(),
             BinaryInstKind::Sar => is.has_sar().is_some(),
             BinaryInstKind::And => is.has_and().is_some(),
+            BinaryInstKind::EvmByte => is.has_evm_byte().is_some(),
             BinaryInstKind::Udiv => is.has_udiv().is_some(),
             BinaryInstKind::EvmUdiv => is.has_evm_udiv().is_some(),
             _ => false,
@@ -1020,5 +1094,61 @@ block0:
             assert!(dumped.contains("shr 64.i256"), "{dumped}");
             assert!(dumped.contains(" = evm_udiv "), "{dumped}");
         }
+    }
+    #[test]
+    fn preserves_unmatched_word_idioms() {
+        for (target, ty, shift, mask, shared) in [
+            ("evm-ethereum-osaka", "i256", 13, "255", false),
+            ("evm-ethereum-osaka", "i256", 256, "255", false),
+            ("evm-ethereum-osaka", "i256", 8, "65535", false),
+            ("evm-ethereum-osaka", "i256", 8, "255", true),
+            ("evm-ethereum-osaka", "i16", 8, "255", false),
+            ("x86_64-unknown-native", "i256", 8, "255", false),
+        ] {
+            let result = if shared {
+                format!("v3.{ty} = add v1 v2; return v3;")
+            } else {
+                "return v2;".into()
+            };
+            let source = format!(
+                "target = \"{target}\"\nfunc public %f(v0.{ty}) -> {ty} {{\nblock0:\n v1.{ty} = shr {shift}.{ty} v0;\n v2.{ty} = and v1 {mask}.{ty};\n {result}\n}}"
+            );
+            let (module, f) = parse_test_module(&source.replace("; ", ";\n"));
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(!dumped.contains("evm_byte"), "{dumped}");
+        }
+    }
+
+    #[test]
+    fn selects_byte_for_each_position_and_mask_order() {
+        for shift in (8..=248).step_by(8) {
+            for mask in ["and v1 255.i256", "and 255.i256 v1"] {
+                let source = format!(
+                    "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i256 {{\nblock0:\n v1.i256 = shr {shift}.i256 v0;\n v2.i256 = {mask};\n return v2;\n}}"
+                );
+                let (module, f) = parse_test_module(&source);
+                module.func_store.modify(f, |func| {
+                    ScalarCanonicalize::new().run(func);
+                });
+                let dumped = dump_func(&module, f);
+                assert!(
+                    dumped.contains(&format!("evm_byte {}.i256 v0", 31 - shift / 8)),
+                    "{dumped}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn keeps_cross_block_byte_shift() {
+        let source = "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i256 {\nblock0:\n v1.i256 = shr 8.i256 v0;\n jump block1;\nblock1:\n v2.i256 = and v1 255.i256;\n return v2;\n}";
+        let (module, f) = parse_test_module(source);
+        module.func_store.modify(f, |func| {
+            ScalarCanonicalize::new().run(func);
+        });
+        assert!(!dump_func(&module, f).contains("evm_byte"));
     }
 }

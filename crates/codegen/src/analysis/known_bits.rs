@@ -460,6 +460,8 @@ impl KnownBitsQuery {
             BinaryInstKind::Shl => self.shl_known_bits(func, ty, *lhs, rhs_known),
             BinaryInstKind::Shr => self.shr_known_bits(func, ty, *lhs, rhs_known),
             BinaryInstKind::Sar => self.sar_known_bits(func, ty, *lhs, rhs_known),
+            // BYTE returns at most eight bits, including for dynamic indices.
+            BinaryInstKind::EvmByte => KnownBits::normalized(ty, !low_mask(8), U256::zero()),
             BinaryInstKind::EvmSignExtend => {
                 self.evm_signextend_known_bits(func, ty, *lhs, rhs_known)
             }
@@ -730,7 +732,7 @@ mod tests {
             arith::{Sar, Shr},
             cast::{Sext, Trunc, Zext},
             control_flow::{Br, Jump, Phi, Return},
-            evm::EvmSignExtend,
+            evm::{EvmByte, EvmSignExtend},
             logic::{And, Not, Or, Select, Xor},
         },
         isa::Isa,
@@ -942,6 +944,27 @@ mod tests {
             query.for_value(&func, neg_shifted).exact_imm(Type::I32),
             Some(Immediate::from_i256(I256::from(-0x0000_8000i32), Type::I32))
         );
+    }
+
+    #[test]
+    fn evm_byte_has_zero_high_bits_for_dynamic_index_and_value() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256, Type::I256], Type::I256);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let index = builder.args()[0];
+        let word = builder.args()[1];
+        let byte = builder.insert_inst_with(|| EvmByte::new(is, index, word), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, byte));
+        builder.seal_all();
+        builder.finish();
+
+        let func = only_func(&mb);
+        let query = KnownBitsQuery::new(&func);
+        let known = query.for_value(&func, byte);
+        assert_eq!(known.known_zero, !low_mask(8));
+        assert_eq!(known.known_one, U256::zero());
     }
 
     #[test]
