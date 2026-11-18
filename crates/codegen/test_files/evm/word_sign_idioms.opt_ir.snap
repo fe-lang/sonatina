@@ -1,0 +1,30 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 2463
+expression: opt_ir_snapshot
+input_file: test_files/evm/word_sign_idioms.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v2.i256 = evm_signextend 30.i256 v0;
+        mstore 0.i256 v2 i256;
+        v4.i256 = evm_signextend 23.i256 v0;
+        mstore 32.i256 v4 i256;
+        v6.i256 = evm_signextend 15.i256 v0;
+        mstore 64.i256 v6 i256;
+        v8.i256 = evm_signextend 1.i256 v0;
+        mstore 96.i256 v8 i256;
+        v10.i256 = evm_signextend 0.i256 v0;
+        mstore 128.i256 v10 i256;
+        evm_return 0.i256 160.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
