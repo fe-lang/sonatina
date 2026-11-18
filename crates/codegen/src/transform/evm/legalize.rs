@@ -71,6 +71,17 @@ impl TypeLegalizer {
         }
     }
 
+    /// A member of an aggregate is a word, as in memory: an `i1` member becomes `i256`, as
+    /// narrower integers do, so no `i1` is ever read from memory. Reading one back goes through
+    /// a `bitcast` to `i1`, which keeps only the low bit.
+    fn legalize_member_type(&mut self, ctx: &ModuleCtx, ty: Type) -> Type {
+        if ty == Type::I1 {
+            Type::I256
+        } else {
+            self.legalize_type(ctx, ty)
+        }
+    }
+
     fn legalize_compound(&mut self, ctx: &ModuleCtx, compound: CompoundTypeRef) -> CompoundTypeRef {
         if let Some(&mapped) = self.compound_map.get(&compound) {
             return mapped;
@@ -81,7 +92,7 @@ impl TypeLegalizer {
 
         match current {
             CompoundType::Array { elem, len } => {
-                let elem = self.legalize_type(ctx, elem);
+                let elem = self.legalize_member_type(ctx, elem);
                 let mapped = ctx.with_ty_store_mut(|store| match store.make_array(elem, len) {
                     Type::Compound(mapped) => mapped,
                     _ => unreachable!(),
@@ -133,7 +144,7 @@ impl TypeLegalizer {
             CompoundType::Struct(StructData { name, fields, .. }) => {
                 let fields: Vec<_> = fields
                     .iter()
-                    .map(|&field| self.legalize_type(ctx, field))
+                    .map(|&field| self.legalize_member_type(ctx, field))
                     .collect();
                 ctx.with_ty_store_mut(|store| store.update_struct_fields(&name, &fields));
                 compound
@@ -157,8 +168,27 @@ fn scalar_width_for_type(ctx: &ModuleCtx, ty: Type) -> Option<ScalarWidth> {
     }
 }
 
+/// The `insert_value`s of an `i1` and the `bitcast`s of an `i1` to an aggregate.
+fn widened_aggregate_members(ctx: &ModuleCtx, func: &Function) -> FxHashSet<InstId> {
+    func.layout
+        .iter_block()
+        .flat_map(|block| func.layout.iter_inst(block))
+        .filter(|&inst| {
+            if let Some(insert) = func.dfg.downcast::<&InsertValue>(inst) {
+                func.dfg.value_ty(*insert.value()) == Type::I1
+            } else {
+                func.dfg.downcast::<&Bitcast>(inst).is_some_and(|bitcast| {
+                    func.dfg.value_ty(*bitcast.from()) == Type::I1
+                        && is_supported_aggregate_ty(ctx, *bitcast.ty())
+                })
+            }
+        })
+        .collect()
+}
+
 /// The extracts and aggregate-to-scalar bitcasts that read a narrow scalar out of an aggregate
-/// whose word may come from memory. Such a word need not be a value of the field's type.
+/// whose word may come from memory, and every one that reads an `i1`. Such a word need not be
+/// a value of the field's type.
 fn narrow_aggregate_reads(ctx: &ModuleCtx, func: &Function) -> FxHashSet<InstId> {
     func.layout
         .iter_block()
@@ -170,14 +200,20 @@ fn narrow_aggregate_reads(ctx: &ModuleCtx, func: &Function) -> FxHashSet<InstId>
             let ty = func.dfg.value_ty(*result);
             // A read that is only stored back to memory as the same type copies the word, and
             // each read of the copy normalizes it.
-            if !matches!(
-                scalar_width_for_type(ctx, ty),
-                Some(ScalarWidth::Bool | ScalarWidth::Narrow(_))
-            ) || func.dfg.users(*result).all(|&user| {
-                func.dfg
-                    .downcast::<&Mstore>(user)
-                    .is_some_and(|store| *store.value() == *result && *store.ty() == ty)
-            }) {
+            // An `i1` member is a word after legalization, so every read of one converts it.
+            if ty == Type::I1 {
+                return func.dfg.downcast::<&ExtractValue>(inst).is_some()
+                    || func.dfg.downcast::<&Bitcast>(inst).is_some_and(|bitcast| {
+                        is_supported_aggregate_ty(ctx, func.dfg.value_ty(*bitcast.from()))
+                    });
+            }
+            if !matches!(scalar_width_for_type(ctx, ty), Some(ScalarWidth::Narrow(_)))
+                || func.dfg.users(*result).all(|&user| {
+                    func.dfg
+                        .downcast::<&Mstore>(user)
+                        .is_some_and(|store| *store.value() == *result && *store.ty() == ty)
+                })
+            {
                 return false;
             }
             let mut visited = FxHashSet::default();
@@ -388,8 +424,11 @@ struct FunctionLegalizer<'a> {
     func: &'a mut Function,
     types: &'a mut TypeLegalizer,
     provenance: SecondaryMap<ValueId, Option<ScalarWidth>>,
-    /// The reads of a narrow scalar out of an aggregate whose word may come from memory.
+    /// The reads of a narrow scalar out of an aggregate whose word may come from memory, and
+    /// every read of an `i1` member.
     narrow_aggregate_reads: FxHashSet<InstId>,
+    /// The `insert_value`s and `bitcast`s that put an `i1` into an aggregate.
+    widened_aggregate_members: FxHashSet<InstId>,
 }
 
 impl<'a> FunctionLegalizer<'a> {
@@ -401,12 +440,14 @@ impl<'a> FunctionLegalizer<'a> {
         }
 
         let narrow_aggregate_reads = narrow_aggregate_reads(ctx, func);
+        let widened_aggregate_members = widened_aggregate_members(ctx, func);
         Self {
             ctx,
             func,
             types,
             provenance,
             narrow_aggregate_reads,
+            widened_aggregate_members,
         }
     }
 
@@ -474,6 +515,10 @@ impl<'a> FunctionLegalizer<'a> {
     fn legalize_inst(&mut self, inst: InstId) {
         if self.narrow_aggregate_reads.contains(&inst) {
             self.rewrite_narrow_aggregate_read(inst);
+            return;
+        }
+        if self.widened_aggregate_members.contains(&inst) {
+            self.widen_aggregate_member(inst);
             return;
         }
         let is = self.evm_inst_set();
@@ -2707,7 +2752,17 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                let result = self.normalize_and_retag_width(inst, raw, width);
+                // A `bitcast` to `i1` keeps the low bit of the word.
+                let result = if width == ScalarWidth::Bool {
+                    self.insert_before_one(
+                        inst,
+                        Bitcast::new(self.evm_inst_set(), raw, Type::I1),
+                        Type::I1,
+                        Some(ScalarWidth::Bool),
+                    )
+                } else {
+                    self.normalize_and_retag_width(inst, raw, width)
+                };
                 self.replace_with_aliases(inst, &[result]);
             }
         }
@@ -2723,26 +2778,21 @@ impl<'a> FunctionLegalizer<'a> {
         }
     }
 
-    /// Normalizes a narrow scalar read out of an aggregate, as `rewrite_mload` does for a scalar
-    /// load: memory holds whatever word was last written to the slot, which need not be a value
-    /// of the field's type.
+    /// Reads a narrow scalar member of an aggregate as the word it is, then makes it a value of
+    /// its type: an `i1` keeps the low bit through a `bitcast`; a narrower integer that may come
+    /// from memory is normalized as `rewrite_mload` normalizes a scalar load, since memory holds
+    /// whatever word was last written to the slot.
     fn rewrite_narrow_aggregate_read(&mut self, inst: InstId) {
         let width = self
             .single_result_width(inst)
             .expect("missing narrow aggregate read width");
         let is = self.evm_inst_set();
-        let field_ty = self.func.dfg.value_ty(
-            self.func
-                .dfg
-                .inst_result(inst)
-                .expect("narrow aggregate read has a result"),
-        );
         let raw = if let Some(extract) = downcast::<&ExtractValue>(is, self.func.dfg.inst(inst)) {
             let (dest, idx) = (*extract.dest(), *extract.idx());
             self.insert_before_one(
                 inst,
                 ExtractValue::new(is, dest, idx),
-                field_ty,
+                Type::I256,
                 Some(ScalarWidth::Full256),
             )
         } else {
@@ -2751,34 +2801,75 @@ impl<'a> FunctionLegalizer<'a> {
                 .from();
             self.insert_before_one(
                 inst,
-                Bitcast::new(is, from, field_ty),
-                field_ty,
-                Some(ScalarWidth::Full256),
-            )
-        };
-        // A boolean field keeps its type; its word is widened as `zext` widens a boolean.
-        let raw = if field_ty == Type::I1 {
-            self.insert_before_one(
-                inst,
-                Bitcast::new(is, raw, Type::I256),
+                Bitcast::new(is, from, Type::I256),
                 Type::I256,
                 Some(ScalarWidth::Full256),
             )
-        } else {
-            raw
         };
-        let result = self.normalize_and_retag_width(inst, raw, width);
+        let result = if width == ScalarWidth::Bool {
+            self.insert_before_one(
+                inst,
+                Bitcast::new(is, raw, Type::I1),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            )
+        } else {
+            self.normalize_and_retag_width(inst, raw, width)
+        };
         self.replace_with_aliases(inst, &[result]);
+    }
+
+    /// Widens an `i1` put into an aggregate, whose `i1` members are words.
+    fn widen_aggregate_member(&mut self, inst: InstId) {
+        let is = self.evm_inst_set();
+        if let Some(insert) = downcast::<&InsertValue>(is, self.func.dfg.inst(inst)) {
+            let (dest, idx, value) = (*insert.dest(), *insert.idx(), *insert.value());
+            let word = self.insert_before_one(
+                inst,
+                Bitcast::new(is, value, Type::I256),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            self.func
+                .dfg
+                .replace_inst(inst, Box::new(InsertValue::new(is, dest, idx, word)));
+        } else {
+            let bitcast = *downcast::<&Bitcast>(is, self.func.dfg.inst(inst))
+                .expect("a widened member is inserted or bitcast");
+            let (from, ty) = (*bitcast.from(), *bitcast.ty());
+            let word = self.insert_before_one(
+                inst,
+                Bitcast::new(is, from, Type::I256),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let ty = self.types.legalize_type(self.ctx, ty);
+            self.func
+                .dfg
+                .replace_inst(inst, Box::new(Bitcast::new(is, word, ty)));
+        }
     }
 
     fn rewrite_mstore(&mut self, inst: InstId, addr: ValueId, value: ValueId, ty: Type) {
         let ty = self.types.legalize_type(self.ctx, ty);
-        let value = match scalar_width_for_type(self.ctx, ty) {
+        // Memory holds words: an `i1` is stored as the word it widens to.
+        let (value, ty) = match scalar_width_for_type(self.ctx, ty) {
             Some(ScalarWidth::Narrow(bits)) => {
                 let extended = self.zero_extend_to_i256(inst, value);
-                self.normalize_bits_for_width(inst, extended, ScalarWidth::Narrow(bits))
+                let value =
+                    self.normalize_bits_for_width(inst, extended, ScalarWidth::Narrow(bits));
+                (value, ty)
             }
-            Some(ScalarWidth::Bool) | Some(ScalarWidth::Full256) | None => value,
+            Some(ScalarWidth::Bool) => {
+                let word = self.insert_before_one(
+                    inst,
+                    Bitcast::new(self.evm_inst_set(), value, Type::I256),
+                    Type::I256,
+                    Some(ScalarWidth::Full256),
+                );
+                (word, Type::I256)
+            }
+            Some(ScalarWidth::Full256) | None => (value, ty),
         };
         self.func.dfg.replace_inst(
             inst,
