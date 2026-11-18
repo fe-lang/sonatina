@@ -322,7 +322,7 @@ block0:
 #[test]
 fn fresh_aggregate_routes_run_and_fold_at_all_levels() {
     assert_i64_cases(alias_execution::FRESH_SOURCE, alias_execution::FRESH_CASES);
-    // What the backend gets: the optimized module after the step on entry.
+    // The optimized module, folded once more: what the final IR starts from.
     let source = format!(
         "target = \"evm-ethereum-osaka\"\n{}",
         alias_execution::FRESH_SOURCE

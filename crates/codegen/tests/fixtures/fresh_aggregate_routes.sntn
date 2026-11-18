@@ -1,7 +1,8 @@
 # Inserts into `undef` that passes make out of verified input. Each route's
 # function builds a `@pair` whose field 0 is its argument; each case returns
-# that field. Backends fold the inserts into `agg.make` on entry
-# (`fold_fresh_aggregates`), and the shared simplifier earlier.
+# that field. Compiles fold the inserts into `agg.make` before optimizing and
+# again where each backend makes its final IR, and the shared simplifier in
+# between.
 type @pair = { i64, i64 };
 type @outer = { @pair, i64 };
 

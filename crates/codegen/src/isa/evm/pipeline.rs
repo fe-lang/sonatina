@@ -15,7 +15,7 @@ use crate::{
     transform::{
         aggregate::{
             AggregateExpandAbi, AggregateLowerToMemoryLegalize, ObjectAggregateAbi,
-            assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees, fold_fresh_aggregates,
+            assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,
         },
         concrete::{check_concrete, concretize_function},
         evm::{
@@ -69,15 +69,10 @@ impl<'a> EvmPipeline<'a> {
         let _span = info_span!(
             "sonatina.codegen.evm.pipeline.run",
             funcs = ctx.funcs.len(),
-            phases = if optional_cleanup { 11 } else { 8 }
+            phases = if optional_cleanup { 10 } else { 7 }
         )
         .entered();
 
-        ctx.run_phase(
-            "fresh_aggregates",
-            "mandatory",
-            EvmPipelineContext::run_fresh_aggregates,
-        )?;
         ctx.run_phase(
             "const_lowering",
             "mandatory",
@@ -220,16 +215,6 @@ impl EvmPipelineContext<'_> {
         }
         ConstDataLower::default().run(self.module());
         self.func_behavior_dirty = true;
-        Ok(())
-    }
-
-    /// Folds every constant-index insert into `undef` or an `agg.make` into an
-    /// `agg.make`, as the native backends do on entry: no phase below sees one,
-    /// but for sparse inserts into long arrays (`fold_fresh_aggregates`). The
-    /// final IR phase that makes values concrete, once it exists, takes this
-    /// step over.
-    fn run_fresh_aggregates(&mut self) -> Result<(), String> {
-        fold_fresh_aggregates(self.module());
         Ok(())
     }
 
