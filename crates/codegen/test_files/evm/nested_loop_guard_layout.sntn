@@ -1,0 +1,53 @@
+#! evm.config: { opt: 2 }
+#! evm.case: outer_three_inner_four
+#!   calldata: u256(3) u256(4)
+#!   expect: return u256(18)
+#! evm.case: outer_three_inner_zero
+#!   calldata: u256(3) u256(0)
+#!   expect: return u256(0)
+#! evm.case: outer_zero
+#!   calldata: u256(0) u256(4)
+#!   expect: return u256(0)
+
+target = "evm-ethereum-osaka"
+
+# The outer loop's header branches to the inner loop when it is nonzero and
+# to the latch, which skips it, when zero; the latch comes after the inner
+# loop. The edge that skips the inner loop follows the header, and the inner
+# loop's exit falls into the latch.
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i1 = lt 0.i256 v0;
+        br v2 block1 block5;
+    block1:
+        v3.i256 = phi (0.i256 block0) (v12 block4);
+        v4.i256 = phi (0.i256 block0) (v11 block4);
+        v5.i1 = lt 0.i256 v1;
+        br v5 block2 block4;
+    block2:
+        v6.i256 = phi (0.i256 block1) (v8 block2);
+        v7.i256 = phi (v4 block1) (v9 block2);
+        v8.i256 = add v6 1.i256;
+        v9.i256 = add v7 v6;
+        v10.i1 = lt v8 v1;
+        br v10 block2 block3;
+    block3:
+        jump block4;
+    block4:
+        v11.i256 = phi (v4 block1) (v9 block3);
+        v12.i256 = add v3 1.i256;
+        v13.i1 = lt v12 v0;
+        br v13 block1 block5;
+    block5:
+        v14.i256 = phi (0.i256 block0) (v11 block4);
+        mstore 0.i256 v14 i256;
+        evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

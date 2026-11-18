@@ -7,7 +7,8 @@ mod stack;
 pub(crate) use alloc::FinalAlloc;
 pub(crate) use layout::{
     LateBlockAliasPlan, compute_function_entry_jump_targets, compute_late_block_alias_plan,
-    materialize_jumpdests, referenced_insn_label_targets, rewrite_evm_local_fallthrough_layout,
+    evm_emission_block_order, materialize_jumpdests, referenced_insn_label_targets,
+    rewrite_evm_local_fallthrough_layout,
 };
 pub(crate) use sites::{block_action_sites, emits_after};
 pub(crate) use stack::{

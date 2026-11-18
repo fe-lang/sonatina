@@ -6,27 +6,27 @@ input_file: test_files/evm/loops.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 565 bytes
-  section runtime: 545 bytes
-  total: 1110 bytes
+  section init: 561 bytes
+  section runtime: 541 bytes
+  total: 1102 bytes
 
 functions:
   mem: global_dyn_base=0x100 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=3
   __Bench_init: ir_blocks=3 ir_insts=7 vcode_ops=16 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Bench_runtime: ir_blocks=67 ir_insts=132 vcode_ops=379 fixups=55 imm_bytes=37
+  __Bench_runtime: ir_blocks=67 ir_insts=132 vcode_ops=375 fixups=55 imm_bytes=37
     mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
   u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98: ir_blocks=5 ir_insts=16 vcode_ops=45 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=171222 gas_refunded=0 logs=0 output=create len=545 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case counter: calldata_len=36 success reason=Return gas_used=24474 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=3270
+  deploy: success reason=Return gas_used=170352 gas_refunded=0 logs=0 output=create len=541 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case counter: calldata_len=36 success reason=Return gas_used=24461 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=3257
   case sum: calldata_len=36 success reason=Return gas_used=30276 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9072
-  case xor_loop: calldata_len=68 success reason=Return gas_used=26650 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=5306
-  case counter_unchecked: calldata_len=36 success reason=Return gas_used=24452 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=3248
+  case xor_loop: calldata_len=68 success reason=Return gas_used=26637 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=5293
+  case counter_unchecked: calldata_len=36 success reason=Return gas_used=24439 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=3235
   case sum_unchecked: calldata_len=36 success reason=Return gas_used=26045 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4841
-  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=26672 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=5328
+  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=26659 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=5315
 
 
 --------------- DEBUG ---------------
@@ -105,10 +105,15 @@ __Bench_runtime:
     JUMP
     JUMPDEST
     DUP1  // br v75 block67 block68;
-    ISZERO
-    PUSH1 block68
+    PUSH1 block67
     JUMPI
+  block68:
+    POP  // jump block12;
+    PUSH0
+    PUSH1 block12
+    JUMP
   block67:
+    JUMPDEST
     PUSH0  // jump block9;
   block9:
     JUMPDEST
@@ -122,12 +127,6 @@ __Bench_runtime:
   block69:
     SWAP1  // jump block12;
     POP
-    PUSH1 block12
-    JUMP
-  block68:
-    JUMPDEST
-    POP  // jump block12;
-    PUSH0
   block12:
     JUMPDEST
     PUSH0  // evm_mstore v17 v47;
@@ -149,10 +148,15 @@ __Bench_runtime:
     JUMP
     JUMPDEST
     DUP1  // br v59 block79 block80;
-    ISZERO
-    PUSH1 block80
+    PUSH1 block79
     JUMPI
+  block80:
+    POP  // jump block44;
+    PUSH0
+    PUSH1 block44
+    JUMP
   block79:
+    JUMPDEST
     PUSH0  // jump block41;
   block41:
     JUMPDEST
@@ -166,12 +170,6 @@ __Bench_runtime:
   block81:
     SWAP1  // jump block44;
     POP
-    PUSH1 block44
-    JUMP
-  block80:
-    JUMPDEST
-    POP  // jump block44;
-    PUSH0
   block44:
     JUMPDEST
     PUSH0  // evm_mstore v17 v8;
@@ -344,10 +342,15 @@ __Bench_runtime:
     JUMP
     JUMPDEST
     DUP2  // br v41 block76 block77;
-    ISZERO
-    PUSH1 block77
+    PUSH1 block76
     JUMPI
+  block77:
+    SWAP1  // jump block35;
+    POP
+    PUSH1 block35
+    JUMP
   block76:
+    JUMPDEST
     PUSH0  // jump block32;
     DUP2
     PUSH1 block32
@@ -373,12 +376,6 @@ __Bench_runtime:
     POP  // jump block35;
     SWAP2
     POP
-    POP
-    PUSH1 block35
-    JUMP
-  block77:
-    JUMPDEST
-    SWAP1  // jump block35;
     POP
   block35:
     JUMPDEST
@@ -407,10 +404,15 @@ __Bench_runtime:
     JUMP
     JUMPDEST
     DUP2  // br v93 block85 block86;
-    ISZERO
-    PUSH1 block86
+    PUSH1 block85
     JUMPI
+  block86:
+    SWAP1  // jump block62;
+    POP
+    PUSH1 block62
+    JUMP
   block85:
+    JUMPDEST
     PUSH0  // jump block59;
     DUP2
     PUSH1 block59
@@ -436,12 +438,6 @@ __Bench_runtime:
     POP  // jump block62;
     SWAP2
     POP
-    POP
-    PUSH1 block62
-    JUMP
-  block86:
-    JUMPDEST
-    SWAP1  // jump block62;
     POP
   block62:
     JUMPDEST

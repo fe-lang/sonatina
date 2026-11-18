@@ -521,7 +521,6 @@ pub(crate) struct FuncPreAnalysis {
 
 pub(crate) struct MachineStackifyAnalysis {
     pub(crate) alloc: StackifyAlloc,
-    pub(crate) block_order: Vec<BlockId>,
     pub(crate) stable_final_spill_values: BitSet<ValueId>,
     pub(crate) trace: Option<StackifyTrace>,
 }
