@@ -466,6 +466,18 @@ impl ModuleCtx {
             .unwrap()
     }
 
+    /// Declared functions in `FuncRef` order. `declared_funcs` iterates in
+    /// per-process hash order.
+    pub fn declared_func_refs(&self) -> Vec<FuncRef> {
+        let mut funcs: Vec<_> = self
+            .declared_funcs
+            .iter()
+            .map(|entry| *entry.key())
+            .collect();
+        funcs.sort_unstable();
+        funcs
+    }
+
     pub fn get_sig(&self, func_ref: FuncRef) -> Option<Signature> {
         self.declared_funcs.view(&func_ref, |_, sig| sig.clone())
     }
