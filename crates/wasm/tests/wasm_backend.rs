@@ -8,6 +8,8 @@
 // Shared with the native backends' tests, which keep the data.
 #[path = "../../codegen/tests/alias_execution/mod.rs"]
 mod alias_execution;
+#[path = "../../codegen/tests/zero_values/mod.rs"]
+mod zero_values;
 
 #[path = "wasm/aggregates.rs"]
 mod aggregates;

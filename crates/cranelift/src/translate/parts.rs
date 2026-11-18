@@ -51,7 +51,7 @@ pub(super) fn resolve_parts(
         return Ok(values.clone());
     }
     match function.dfg.value(value) {
-        Value::Undef { .. } => zero_parts(function.ctx(), parts, builder),
+        Value::Undef { .. } | Value::Zero { .. } => zero_parts(function.ctx(), parts, builder),
         other => Err(format!(
             "unresolved register aggregate v{}: {other:?}",
             value.0

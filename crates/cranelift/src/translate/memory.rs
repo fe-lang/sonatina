@@ -328,8 +328,13 @@ fn is_zero_initializer(init: &GvInitializer) -> bool {
     }
 }
 
-pub(super) fn is_undef(function: &Function, value: ValueId) -> bool {
-    matches!(function.dfg.value(value), Value::Undef { .. })
+/// Whether `value` reads as zero without being computed: a `zero`, or an
+/// `undef`, which native code materializes as zero.
+pub(super) fn reads_as_zero(function: &Function, value: ValueId) -> bool {
+    matches!(
+        function.dfg.value(value),
+        Value::Undef { .. } | Value::Zero { .. }
+    )
 }
 
 /// Zeroes the field bytes of the `ty` value at `dst` outside the `written`
@@ -468,7 +473,7 @@ pub(super) fn store_indirect(
     config: TargetFrontendConfig,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
-    if is_undef(function, value) || is_zero_constant(function, value) {
+    if reads_as_zero(function, value) || is_zero_constant(function, value) {
         zero_bytes(
             dst,
             value_storage_size(ty, function.ctx())?,
@@ -493,7 +498,7 @@ pub(super) fn resolve_operand(
     builder: &mut FunctionBuilder,
 ) -> Result<clif::Value, String> {
     let ty = function.dfg.value_ty(value);
-    if !is_undef(function, value) || !uses_indirect_value_representation(function.ctx(), ty) {
+    if !reads_as_zero(function, value) || !uses_indirect_value_representation(function.ctx(), ty) {
         return resolve_value(function, value, value_map, builder);
     }
     let address = create_stack_slot_for_type(ty, function.ctx(), builder)?;

@@ -6,7 +6,7 @@ use sonatina_wasm::WasmBackend;
 use wasmtime::Val;
 
 use super::harness::{Machine, parse};
-use crate::alias_execution;
+use crate::{alias_execution, zero_values};
 
 fn compile_at(source: &str, level: OptLevel) -> Result<Vec<u8>, String> {
     Compile::new(parse(source), WasmBackend::new())
@@ -33,6 +33,22 @@ fn the_object_alias_matrix_gives_the_results_the_other_backends_give() {
         let mut machine = Machine::new(&bytes);
         let entry = machine.func("disjoint_only");
         assert_eq!(machine.call(&entry, &[])[0].unwrap_i64(), 11, "{level:?}");
+    }
+}
+
+#[test]
+fn zero_values_run_at_all_optimization_levels() {
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let bytes = compile_at(zero_values::ZERO_SOURCE, level).expect("compiles");
+        let mut machine = Machine::new(&bytes);
+        for &(name, expected) in zero_values::ZERO_CASES {
+            let entry = machine.func(name);
+            assert_eq!(
+                machine.call(&entry, &[])[0].unwrap_i64(),
+                expected,
+                "{level:?}: {name}"
+            );
+        }
     }
 }
 

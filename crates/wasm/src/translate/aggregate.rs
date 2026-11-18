@@ -868,7 +868,7 @@ impl FunctionTranslator<'_> {
             // what it held before does not matter.
             match function.dfg.value(dest) {
                 _ if self.inserts_write_every_byte(block, inst_id, result_ty, size)? => {}
-                Value::Undef { .. } => self.fill_zero(wb, address, size),
+                Value::Undef { .. } | Value::Zero { .. } => self.fill_zero(wb, address, size),
                 _ => {
                     let source = self.operand(wb, dest)?;
                     self.copy_bytes(wb, address, source, size);
@@ -955,7 +955,11 @@ impl FunctionTranslator<'_> {
         let address = self.slot_address(wb, slot)?;
         let mut fields = Vec::new();
         for (idx, &value) in values.iter().enumerate() {
-            if matches!(self.function.dfg.value(value), Value::Undef { .. }) {
+            // A `zero` or `undef` field is left to the fill below.
+            if matches!(
+                self.function.dfg.value(value),
+                Value::Undef { .. } | Value::Zero { .. }
+            ) {
                 continue;
             }
             let (offset, elem_ty) = self.element_offset(ty, idx)?;

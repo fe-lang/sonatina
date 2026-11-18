@@ -129,7 +129,9 @@ pub(super) fn resolve_i256(
             imm: Immediate::I256(imm),
             ..
         } => Ok(constant_limbs(imm.to_u256(), builder)),
-        Value::Undef { ty: Type::I256 } => Ok(constant_limbs(U256::zero(), builder)),
+        Value::Undef { ty: Type::I256 } | Value::Zero { ty: Type::I256 } => {
+            Ok(constant_limbs(U256::zero(), builder))
+        }
         value => Err(format!("unresolved i256 value v{}: {value:?}", value_id.0)),
     }
 }

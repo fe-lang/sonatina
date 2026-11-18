@@ -1549,7 +1549,9 @@ impl<'a> FunctionTranslator<'a> {
             Value::Immediate { imm, .. } if Wide::from_type(imm.ty()).is_some() => {
                 Ok(self.emit(wb).wide_const(imm.zext(Type::I256).as_i256()))
             }
-            Value::Undef { ty } if Wide::from_type(*ty).is_some() => Ok(self.emit(wb).wide_zero()),
+            Value::Undef { ty } | Value::Zero { ty } if Wide::from_type(*ty).is_some() => {
+                Ok(self.emit(wb).wide_zero())
+            }
             Value::Immediate { imm, .. } => Err(self.unsupported_type("an immediate", imm.ty())),
             _ => Err(invalid(format!(
                 "function `{}`: value v{} is used before it is defined",

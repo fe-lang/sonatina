@@ -2444,7 +2444,7 @@ fn translate_function(
                         let mut stored = Vec::new();
                         for (idx, &field) in make.values().iter().enumerate() {
                             let (offset, ty) = aggregate_elem_offset(&module.ctx, result_ty, idx)?;
-                            if is_undef(function, field) {
+                            if reads_as_zero(function, field) {
                                 continue;
                             }
                             written.push((offset as u32, value_storage_size(ty, &module.ctx)?));
