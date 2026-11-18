@@ -17,9 +17,10 @@ use crate::{
             AggregateExpandAbi, AggregateLowerToMemoryLegalize, ObjectAggregateAbi,
             assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees, fold_fresh_aggregates,
         },
+        concrete::{check_concrete, concretize_function},
         evm::{
             ConstDataLower, erase_unit_values, legalize_evm_section, lower_keccak256_words,
-            lower_late_freezes, reuse_terminal_word_buffers,
+            reuse_terminal_word_buffers,
         },
     },
 };
@@ -68,7 +69,7 @@ impl<'a> EvmPipeline<'a> {
         let _span = info_span!(
             "sonatina.codegen.evm.pipeline.run",
             funcs = ctx.funcs.len(),
-            phases = if optional_cleanup { 10 } else { 7 }
+            phases = if optional_cleanup { 11 } else { 8 }
         )
         .entered();
 
@@ -119,9 +120,9 @@ impl<'a> EvmPipeline<'a> {
             )?;
         }
         ctx.run_phase(
-            "freeze_lowering",
+            "concretize",
             "mandatory",
-            EvmPipelineContext::run_freeze_lowering,
+            EvmPipelineContext::run_concretize,
         )?;
         ctx.run_phase(
             "keccak_words_lowering",
@@ -132,6 +133,11 @@ impl<'a> EvmPipeline<'a> {
             "unit_erasure",
             "mandatory",
             EvmPipelineContext::run_unit_erasure,
+        )?;
+        ctx.run_phase(
+            "check_concrete",
+            "mandatory",
+            EvmPipelineContext::run_check_concrete,
         )?;
 
         Ok(EvmPipelineArtifacts {
@@ -411,11 +417,13 @@ impl EvmPipelineContext<'_> {
         Ok(())
     }
 
-    /// Runs after the last IR pass, which could take the unspecified argument
-    /// of a freeze as any value.
-    fn run_freeze_lowering(&mut self) -> Result<(), String> {
+    /// Makes every value concrete (`transform::concrete`). Runs after the last
+    /// IR pass, which could take an unspecified value, or the argument of a
+    /// freeze, as any value. The phases after it make no `undef`, so the IR
+    /// prepare and machine lowering consume is concrete.
+    fn run_concretize(&mut self) -> Result<(), String> {
         for &func in &self.funcs {
-            self.module().func_store.modify(func, lower_late_freezes);
+            self.module().func_store.modify(func, concretize_function);
         }
         Ok(())
     }
@@ -444,6 +452,22 @@ impl EvmPipelineContext<'_> {
         } else {
             summaries
         });
+        Ok(())
+    }
+
+    /// Checks the IR this pipeline leaves is concrete: no `undef` operand and
+    /// no `freeze`.
+    fn run_check_concrete(&mut self) -> Result<(), String> {
+        let module = self.module();
+        for &func in &self.funcs {
+            module
+                .func_store
+                .view(func, check_concrete)
+                .map_err(|error| {
+                    let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
+                    format!("function %{name} is not concrete after the EVM pipeline: {error}")
+                })?;
+        }
         Ok(())
     }
 

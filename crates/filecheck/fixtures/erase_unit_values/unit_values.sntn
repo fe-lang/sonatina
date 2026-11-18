@@ -28,11 +28,11 @@ func public %loop_phi(v0.i256) -> i256 {
 }
 
 # Unit loads and stores go. A use of an erased result that stays reads
-# `undef.unit`.
+# `zero.unit`, the unit value.
 
 # check: func public %memory(v0.i256) -> i256 {
 # nextln:     block0:
-# nextln:         call %sink undef.unit;
+# nextln:         call %sink zero.unit;
 # nextln:         v2.i256 = mload v0 i256;
 # nextln:         return v2;
 func public %memory(v0.i256) -> i256 {
@@ -46,7 +46,7 @@ func public %memory(v0.i256) -> i256 {
 }
 
 # check: block3:
-# nextln:         call %sink undef.unit;
+# nextln:         call %sink zero.unit;
 # nextln:         return;
 func public %phi_use(v0.i1) {
     block0:

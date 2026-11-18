@@ -450,29 +450,8 @@ fn low_mask_bits(func: &Function, value: ValueId) -> Option<u16> {
         .find(|&bits| ones == low_mask(bits))
 }
 
-/// Lowers every freeze once no IR pass is left: machine lowering picks zero
-/// for each `undef`, so a frozen value is its argument there. Lowering a
-/// freeze replaces its result in a later freeze of it.
-pub(crate) fn lower_late_freezes(func: &mut Function) {
-    let freezes: Vec<_> = func
-        .layout
-        .iter_block()
-        .flat_map(|block| func.layout.iter_inst(block))
-        .filter(|&inst| func.dfg.downcast::<&Freeze>(inst).is_some())
-        .collect();
-    for inst in freezes {
-        if lower_frozen_undef(func, inst).is_none() {
-            let arg = *func.dfg.downcast::<&Freeze>(inst).expect("a freeze").arg();
-            let result = func.dfg.inst_result(inst).expect("freeze has a result");
-            func.dfg.change_to_alias(result, arg);
-            func.layout.remove_inst(inst);
-            func.erase_inst(inst);
-        }
-    }
-}
-
 /// Removes the phis, loads and stores of `unit`, which hold no bits. A use of a
-/// removed result reads `undef.unit` instead. ABI expansion has already dropped
+/// removed result reads `zero.unit`, the unit value, instead. ABI expansion has already dropped
 /// unit arguments and results, so with these gone no unit value reaches machine
 /// lowering, whatever earlier passes made.
 pub fn erase_unit_values(func: &mut Function) {
@@ -498,8 +477,8 @@ pub fn erase_unit_values(func: &mut Function) {
         .collect();
     for &inst in &insts {
         if let Some(result) = func.dfg.inst_result(inst) {
-            let undef = func.dfg.make_undef_value(Type::Unit);
-            func.dfg.change_to_alias(result, undef);
+            let unit = func.dfg.make_zero_value(Type::Unit);
+            func.dfg.change_to_alias(result, unit);
         }
         func.layout.remove_inst(inst);
     }
@@ -3539,7 +3518,7 @@ block0:
         let parsed = parse(FROZEN_UNDEF);
         let func_ref = find_func(&parsed, "entry");
         let dumped = parsed.module.func_store.modify(func_ref, |function| {
-            super::lower_late_freezes(function);
+            crate::transform::concrete::concretize_function(function);
             dump_func(function, func_ref)
         });
         assert_frozen_undef_lowered(&dumped);
@@ -3561,7 +3540,7 @@ block0:
         );
         let func_ref = find_func(&parsed, "entry");
         let dumped = parsed.module.func_store.modify(func_ref, |function| {
-            super::lower_late_freezes(function);
+            crate::transform::concrete::concretize_function(function);
             dump_func(function, func_ref)
         });
         assert!(dumped.contains("return 0.i256;"), "{dumped}");
@@ -3602,7 +3581,7 @@ block5:
         let parsed = parse(FROZEN_PHI);
         let func_ref = find_func(&parsed, "entry");
         let dumped = parsed.module.func_store.modify(func_ref, |function| {
-            super::lower_late_freezes(function);
+            crate::transform::concrete::concretize_function(function);
             dump_func(function, func_ref)
         });
         assert!(!dumped.contains("freeze"), "{dumped}");

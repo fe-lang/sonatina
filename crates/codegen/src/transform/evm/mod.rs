@@ -7,5 +7,5 @@ mod terminal_payload;
 pub(crate) use const_data::{CONST_WORD_POOL_PREFIX, ConstDataLower};
 pub(crate) use keccak_words::lower_keccak256_words;
 pub use legalize::erase_unit_values;
-pub(crate) use legalize::{legalize_evm_section, lower_late_freezes};
+pub(crate) use legalize::legalize_evm_section;
 pub(crate) use terminal_payload::reuse_terminal_word_buffers;
