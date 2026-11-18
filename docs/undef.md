@@ -81,13 +81,35 @@ there; the byte-level memory model is an open question.
 
 ## Lowering
 
-Every backend materializes a literal `undef` as zero. Any other unspecified
-value has whatever bits the compiled code computes or the memory holds: a slot
-no store wrote reads its old contents.
-
 On EVM a narrow value's word is normalized, or the value is unspecified and the
 word may be any word; `freeze` and effect operands are where such a value is
 made a value of its type, by masking the word.
+
+## The final IR
+
+`zero.T` is the value of `T` whose bits are all zero: zero, the null pointer
+or object reference, the tag of variant 0, an aggregate whose fields are each
+zero, the unit value. It is an ordinary constant, not a second kind of
+unspecified value; an access through a null pointer or object reference is
+undefined behavior, as it names no location. EVM pointer provenance follows
+this: a null pointer or object reference reaches no memory, as `undef` does,
+and an integer or tag `zero`, alone or as a field of a zero aggregate, is a
+raw word, as the immediate 0 is.
+
+The last IR phase on every backend, `concretize`, makes every value concrete:
+it replaces each literal `undef.T` with `zero.T`, lowers `freeze undef` to
+zero (a frozen pointer to `int_to_ptr 0`, a defined pointer, not the null
+`zero`), and replaces each other `freeze x` with `x`. On EVM a narrow `freeze`
+is by then a mask of a word-typed `freeze`; the mask stays, and is folded where
+the word it masks became a constant. Backends compile the final IR, which has no `undef`
+and no `freeze`, and check so on entry (`check_concrete`). Until `concretize`,
+the rules above hold, and passes may refine an unspecified value to anything.
+
+In the final IR, memory is concrete: every byte holds a definite value at
+every point. A slot nothing has written since its allocation holds whatever
+the memory held there, which the IR does not determine. On EVM, where memory
+legalization stores nothing for an unspecified field, the slot keeps the word
+it had.
 
 ## Rules for passes
 
