@@ -13,8 +13,7 @@ type @five = { i256, i256, i256, i256, i256 };
 # check:         return v6;
 func public %scalarize_insert_extract(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.@slice = insert_value undef.@slice 0.i8 v0;
-        v3.@slice = insert_value v2 1.i8 v1;
+        v3.@slice = agg.make @slice v0 v1;
         v4.i256 = extract_value v3 0.i8;
         v5.i256 = extract_value v3 1.i8;
         v6.i256 = add v4 v5;
@@ -26,8 +25,7 @@ func public %scalarize_insert_extract(v0.i256, v1.i256) -> i256 {
 # check:         return v0;
 func public %scalarize_aggregate_bitcast(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.@slice = insert_value undef.@slice 0.i8 v0;
-        v3.@slice = insert_value v2 1.i8 v1;
+        v3.@slice = agg.make @slice v0 v1;
         v4.@pair_bitcast = bitcast v3 @pair_bitcast;
         v5.@one = extract_value v4 0.i8;
         v6.i256 = extract_value v5 0.i8;
@@ -36,22 +34,20 @@ func public %scalarize_aggregate_bitcast(v0.i256, v1.i256) -> i256 {
 
 # sameln: func public %scalarize_diamond(v0.i1, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
 # check:     block3:
-# check:         v21.i256 = phi (v1 block0) (v3 block2);
-# check:         v18.i256 = phi (v2 block0) (v4 block2);
-# check:         v12.i256 = add v21 v18;
+# check:         v13.i256 = phi (v1 block0) (v3 block2);
+# check:         v14.i256 = phi (v2 block0) (v4 block2);
+# check:         v12.i256 = add v13 v14;
 # check:         return v12;
 func public %scalarize_diamond(v0.i1, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
     block0:
         br v0 block1 block2;
 
     block1:
-        v5.@slice = insert_value undef.@slice 0.i8 v1;
-        v6.@slice = insert_value v5 1.i8 v2;
+        v6.@slice = agg.make @slice v1 v2;
         jump block3;
 
     block2:
-        v7.@slice = insert_value undef.@slice 0.i8 v3;
-        v8.@slice = insert_value v7 1.i8 v4;
+        v8.@slice = agg.make @slice v3 v4;
         jump block3;
 
     block3:
@@ -156,15 +152,15 @@ func public %scalarize_promote_direct_root_scalar_view(v0.i256) -> i256 {
 # sameln: func public %scalarize_promote_aggregate_pointer_bitcast(v0.*i8) -> i256 {
 # check:     block0:
 # check:         v3.i256 = ptr_to_int v0 i256;
-# check:         v13.*i8 = bitcast v3 *i8;
-# check:         v7.i256 = ptr_to_int v13 i256;
+# check:         v11.*i8 = bitcast v3 *i8;
+# check:         v7.i256 = ptr_to_int v11 i256;
 # check:         return v7;
 func public %scalarize_promote_aggregate_pointer_bitcast(v0.*i8) -> i256 {
     block0:
         v1.*@ptr_one = alloca @ptr_one;
         v2.*@int_one = bitcast v1 *@int_one;
         v3.i256 = ptr_to_int v0 i256;
-        v4.@int_one = insert_value undef.@int_one 0.i8 v3;
+        v4.@int_one = agg.make @int_one v3;
         mstore v2 v4 @int_one;
         v5.@ptr_one = mload v1 @ptr_one;
         v6.*i8 = extract_value v5 0.i8;
@@ -182,7 +178,7 @@ func public %scalarize_promote_direct_aggregate_view(v0.*i8) -> i256 {
     block0:
         v1.*@ptr_one = alloca @ptr_one;
         v2.i256 = ptr_to_int v0 i256;
-        v3.@int_one = insert_value undef.@int_one 0.i8 v2;
+        v3.@int_one = agg.make @int_one v2;
         mstore v1 v3 @int_one;
         v4.@ptr_one = mload v1 @ptr_one;
         v5.*i8 = extract_value v4 0.i8;
@@ -195,8 +191,7 @@ func public %scalarize_promote_direct_aggregate_view(v0.*i8) -> i256 {
 # check:         return v1;
 func public %scalarize_promote_whole_load_store(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.@slice = insert_value undef.@slice 0.i8 v0;
-        v3.@slice = insert_value v2 1.i8 v1;
+        v3.@slice = agg.make @slice v0 v1;
         v4.*@slice = alloca @slice;
         mstore v4 v3 @slice;
         v5.@slice = mload v4 @slice;
@@ -229,8 +224,7 @@ func public %scalarize_fixed_array_constant_index(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*[@slice; 2] = alloca [@slice; 2];
         v3.*@slice = gep v2 0.i8 1.i8;
-        v4.@slice = insert_value undef.@slice 0.i8 v0;
-        v5.@slice = insert_value v4 1.i8 v1;
+        v5.@slice = agg.make @slice v0 v1;
         mstore v3 v5 @slice;
         v6.@slice = mload v3 @slice;
         v7.i256 = extract_value v6 1.i8;
@@ -305,8 +299,7 @@ func public %scalarize_reject_escaping_alloca(v0.*@slice, v1.i256) -> i256 {
 # check:         return v6;
 func public %scalarize_phi_with_nonscalar_incoming(v0.i1, v1.@slice, v2.i256) -> i256 {
     block0:
-        v3.@slice = insert_value undef.@slice 0.i8 v2;
-        v4.@slice = insert_value v3 1.i8 9.i256;
+        v4.@slice = agg.make @slice v2 9.i256;
         br v0 block1 block2;
 
     block1:
@@ -321,6 +314,8 @@ func public %scalarize_phi_with_nonscalar_incoming(v0.i1, v1.@slice, v2.i256) ->
         return v6;
 }
 
+# The phi joins an `agg.make` and an update, which combine does not split, so
+# scalarization makes the leaf phis, last field first.
 # sameln: func public %scalarize_loop_carried_slice(v0.i1, v1.i256, v2.i256) -> i256 {
 # check:     block1:
 # check:         phi (v1 block0) (42.i256 block2);
@@ -329,8 +324,7 @@ func public %scalarize_phi_with_nonscalar_incoming(v0.i1, v1.@slice, v2.i256) ->
 # check:         return
 func public %scalarize_loop_carried_slice(v0.i1, v1.i256, v2.i256) -> i256 {
     block0:
-        v3.@slice = insert_value undef.@slice 0.i8 v1;
-        v4.@slice = insert_value v3 1.i8 v2;
+        v4.@slice = agg.make @slice v1 v2;
         jump block1;
 
     block1:
@@ -354,7 +348,7 @@ func public %scalarize_loop_carried_slice(v0.i1, v1.i256, v2.i256) -> i256 {
 # check:         phi (v1 block0) (42.i256 block2);
 func public %scalarize_loop_carried_phi(v0.i1, v1.i256) -> i256 {
     block0:
-        v2.@one = insert_value undef.@one 0.i8 v1;
+        v2.@one = agg.make @one v1;
         jump block1;
 
     block1:

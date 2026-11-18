@@ -17,10 +17,10 @@ type @Flag = enum {
 
 func public %entry(v0.i256, v1.i256) -> i256 {
     block0:
-        v17.i256 = add v0 1.i256;
-        v34.i256 = add v0 v1;
-        v5.i256 = add v17 v0;
-        v6.i256 = add v5 v34;
+        v15.i256 = add v0 1.i256;
+        v28.i256 = add v0 v1;
+        v5.i256 = add v15 v0;
+        v6.i256 = add v5 v28;
         return v6;
 }
 

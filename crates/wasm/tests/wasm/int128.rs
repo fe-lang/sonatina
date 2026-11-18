@@ -377,7 +377,7 @@ global private const @Pair $pair = {{7, -2}};
 {PRELUDE}func public %fields(v0.i64, v1.i64) -> (i64, i64, i64, i64, i64, i64) {{
     block0:
         v2.i128 = call %pack v0 v1;
-        v3.@Pair = insert_value undef.@Pair 1.i32 v2;
+        v3.@Pair = agg.make @Pair undef.i8 v2;
         v4.i128 = extract_value v3 1.i32;
         v5.i128 = add v4 1.i128;
         v6.objref<i128> = obj.alloc i128;

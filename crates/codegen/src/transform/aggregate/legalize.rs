@@ -2447,8 +2447,7 @@ func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
         v1.i256 = evm_calldata_load 32.i32;
-        v2.@pair = insert_value undef.@pair 0.i8 v0;
-        v3.@pair = insert_value v2 1.i8 v1;
+        v3.@pair = agg.make @pair v0 v1;
         v4.@nested = bitcast v3 @nested;
         v5.@inner = extract_value v4 0.i8;
         v6.i256 = extract_value v5 0.i8;
@@ -2485,8 +2484,7 @@ type @nested = { @inner, i256 };
 
 func private %f(v0.i1, v1.i256, v2.i256) -> i256 {
     block0:
-        v3.@pair = insert_value undef.@pair 0.i8 v1;
-        v4.@pair = insert_value v3 1.i8 v2;
+        v4.@pair = agg.make @pair v1 v2;
         v5.*@pair = alloca @pair;
         mstore v5 v4 @pair;
         br v0 block1 block2;
@@ -2545,8 +2543,7 @@ type @pair = { i256, i256 };
 
 func private %f(v0.i256) -> i256 {
     block0:
-        v1.@pair = insert_value undef.@pair 0.i8 v0;
-        v2.@pair = insert_value v1 1.i8 9.i256;
+        v2.@pair = agg.make @pair v0 9.i256;
         return 0.i256;
 }
 "#,
@@ -2588,28 +2585,14 @@ func private %make_chunk(v0.i256) -> (i256, i256, i256) {
 
 func private %f(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256, v8.i256) {
     block0:
-        v9.@chunk = insert_value undef.@chunk 0.i8 v0;
-        v10.@chunk = insert_value v9 1.i8 v1;
-        v11.@chunk = insert_value v10 2.i8 v2;
-        v12.@chunk = insert_value undef.@chunk 0.i8 v3;
-        v13.@chunk = insert_value v12 1.i8 v4;
-        v14.@chunk = insert_value v13 2.i8 v5;
-        v15.@chunk = insert_value undef.@chunk 0.i8 v6;
-        v16.@chunk = insert_value v15 1.i8 v7;
-        v17.@chunk = insert_value v16 2.i8 v8;
+        v11.@chunk = agg.make @chunk v0 v1 v2;
+        v14.@chunk = agg.make @chunk v3 v4 v5;
+        v17.@chunk = agg.make @chunk v6 v7 v8;
         (v18.i256, v19.i256, v20.i256) = call %make_chunk v0;
-        v21.@chunk = insert_value undef.@chunk 0.i8 v18;
-        v22.@chunk = insert_value v21 1.i8 v19;
-        v23.@chunk = insert_value v22 2.i8 v20;
+        v23.@chunk = agg.make @chunk v18 v19 v20;
         (v24.i256, v25.i256, v26.i256) = call %make_chunk v3;
-        v27.@chunk = insert_value undef.@chunk 0.i8 v24;
-        v28.@chunk = insert_value v27 1.i8 v25;
-        v29.@chunk = insert_value v28 2.i8 v26;
-        v30.@event = insert_value undef.@event 0.i8 v11;
-        v31.@event = insert_value v30 1.i8 v14;
-        v32.@event = insert_value v31 2.i8 v17;
-        v33.@event = insert_value v32 3.i8 v23;
-        v34.@event = insert_value v33 4.i8 v29;
+        v29.@chunk = agg.make @chunk v24 v25 v26;
+        v34.@event = agg.make @event v11 v14 v17 v23 v29;
         mstore 0.i32 v34 @event;
         return;
 }
@@ -2644,15 +2627,13 @@ func private %f(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i8 = int_to_ptr v0 *i8;
         v3.*i8 = int_to_ptr v1 *i8;
-        v4.@pair = insert_value undef.@pair 0.i8 v2;
-        v5.@pair = insert_value v4 1.i8 9.i256;
+        v5.@pair = agg.make @pair v2 9.i256;
         v6.*@pair = alloca @pair;
         mstore v6 v5 @pair;
         v7.@pair = mload v6 @pair;
         v8.*i8 = extract_value v7 0.i8;
         v9.i256 = ptr_to_int v8 i256;
-        v10.[*i8; 2] = insert_value undef.[*i8; 2] 0.i8 v2;
-        v11.[*i8; 2] = insert_value v10 1.i8 v3;
+        v11.[*i8; 2] = agg.make [*i8; 2] v2 v3;
         v12.*[*i8; 2] = alloca [*i8; 2];
         mstore v12 v11 [*i8; 2];
         v13.[*i8; 2] = mload v12 [*i8; 2];
@@ -2701,8 +2682,7 @@ type @outer = { @empty, i256 };
 
 func private %f(v0.i256) -> i256 {
     block0:
-        v1.@outer = insert_value undef.@outer 0.i8 undef.@empty;
-        v2.@outer = insert_value v1 1.i8 v0;
+        v2.@outer = agg.make @outer undef.@empty v0;
         v3.@empty = extract_value v2 0.i8;
         v4.i256 = extract_value v2 1.i8;
         return v4;
@@ -2790,8 +2770,7 @@ type @outer = { unit, i256 };
 
 func private %f(v0.i256) {
     block0:
-        v1.@outer = insert_value undef.@outer 0.i8 undef.unit;
-        v2.@outer = insert_value v1 1.i8 v0;
+        v2.@outer = agg.make @outer undef.unit v0;
         mstore 0.i32 v2 @outer;
         return;
 }
@@ -2828,8 +2807,7 @@ func private %f() {
         mstore 64.i32 55.i256 i256;
         v0.@outer = mload 64.i32 @outer;
         v1.unit = extract_value v0 0.i8;
-        v2.@outer = insert_value undef.@outer 0.i8 v1;
-        v3.@outer = insert_value v2 1.i8 89.i256;
+        v3.@outer = agg.make @outer v1 89.i256;
         mstore 0.i32 v3 @outer;
         return;
 }
@@ -2900,7 +2878,7 @@ func private %f(v0.i256) -> i256 {
         return v2;
 
     block1:
-        v1.@one = insert_value undef.@one 0.i8 v0;
+        v1.@one = agg.make @one v0;
         jump block2;
 }
 "#,
@@ -3180,11 +3158,9 @@ type @big = {{i256, i256, i256, i256, i256, i256, [i256; 18]}};
 
 func public %entry() {{
     block0:
-        v0.@big = insert_value undef.@big 0.i8 1.i256;
-        v1.@big = insert_value v0 1.i8 2.i256;
-        v2.@big = insert_value undef.@big 0.i8 3.i256;
-        v3.@big = insert_value v2 1.i8 4.i256;
-        v4.@big = insert_value undef.@big 0.i8 5.i256;
+        v1.@big = agg.make @big 1.i256 2.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.[i256; 18];
+        v3.@big = agg.make @big 3.i256 4.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.[i256; 18];
+        v4.@big = agg.make @big 5.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.[i256; 18];
         jump block1;
 
     block1:

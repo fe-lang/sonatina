@@ -11,10 +11,8 @@ type @Nested = {i256, @Selection};
 func inline(never) private %select(v0.objref<[i256; 2]>, v1.i256) -> @Nested {
     block0:
         v2.objref<i256> = obj.index v0 v1;
-        v3.@Selection = insert_value undef.@Selection 0.i256 v2;
-        v4.@Selection = insert_value v3 1.i256 42.i256;
-        v5.@Nested = insert_value undef.@Nested 0.i256 7.i256;
-        v6.@Nested = insert_value v5 1.i256 v4;
+        v4.@Selection = agg.make @Selection v2 42.i256;
+        v6.@Nested = agg.make @Nested 7.i256 v4;
         return v6;
 }
 

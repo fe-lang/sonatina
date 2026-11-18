@@ -911,7 +911,7 @@ func private %b(v0.i256, v1.i256) -> i256 {
 func private %register() {
     block0:
         v0.*(i256, i256) -> i256 = get_function_ptr %a;
-        v1.@cb_box = insert_value undef.@cb_box 0.i8 v0;
+        v1.@cb_box = agg.make @cb_box v0;
         return;
 }
 
@@ -954,7 +954,7 @@ func private %a(v0.i256, v1.i256) -> i256 {
 func private %register() {
     block0:
         v0.*(i256, i256) -> i256 = get_function_ptr %a;
-        v1.@cb_box = insert_value undef.@cb_box 0.i8 v0;
+        v1.@cb_box = agg.make @cb_box v0;
         call %consume v1;
         return;
 }

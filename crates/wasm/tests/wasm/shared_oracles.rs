@@ -267,8 +267,7 @@ block0:
     v3.objref<@slot> = obj.alloc @slot;
     v4.objref<i64> = obj.proj v1 0.i64;
     obj.store v4 v0;
-    v5.@pair = insert_value undef.@pair 0.i64 7.i64;
-    v6.@pair = insert_value v5 1.i64 v4;
+    v6.@pair = agg.make @pair 7.i64 v4;
     obj.store v2 v6;
     v7.@slot = enum.make @slot #Full (v4);
     obj.store v3 v7;

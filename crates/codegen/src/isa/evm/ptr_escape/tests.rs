@@ -278,7 +278,7 @@ type @Box = {i256};
 
 func public %box(v0.i256) -> @Box {
 block0:
-v1.@Box = insert_value undef.@Box 0.i256 v0;
+v1.@Box = agg.make @Box v0;
 return v1;
 }
 "#,

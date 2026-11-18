@@ -260,10 +260,7 @@ block0:
     v22.i64 = trunc v21 i64;
     v23.i128 = shr 127.i128 v21;
     v24.i64 = trunc v23 i64;
-    v25.[i64; 4] = insert_value undef.[i64; 4] 0.i256 v14;
-    v26.[i64; 4] = insert_value v25 1.i256 v16;
-    v27.[i64; 4] = insert_value v26 2.i256 v22;
-    v28.[i64; 4] = insert_value v27 3.i256 v24;
+    v28.[i64; 4] = agg.make [i64; 4] v14 v16 v22 v24;
     mstore v1 v28 [i64; 4];
     return;
 }}
@@ -610,8 +607,7 @@ block0:
 func public %pad(v0.*[i64; 32], v1.i8, v2.*@Padded) {{
 block0:
     v3.[i64; 32] = mload v0 [i64; 32];
-    v4.@Padded = insert_value undef.@Padded 1.i64 v3;
-    v5.@Padded = insert_value v4 0.i64 v1;
+    v5.@Padded = agg.make @Padded v1 v3;
     mstore v2 v5 @Padded;
     return;
 }}
@@ -791,7 +787,7 @@ fn local_objects_move_through_calls_without_copies() {
             "target = \"{triple}\"
 func inline(never) private %fill(v0.i64) -> [i64; 32] {{
 block0:
-    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v1.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     return v1;
 }}
 func inline(never) private %sum(v0.[i64; 32]) -> i64 {{
@@ -871,7 +867,7 @@ fn owned_arguments_skip_the_callee_copy() {
             "target = \"{triple}\"
 func inline(never) private %fill(v0.i64) -> [i64; 32] {{
 block0:
-    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v1.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     return v1;
 }}
 func inline(never) private %consume(v0.[i64; 32]) -> i64 {{
@@ -924,9 +920,8 @@ fn argument_fields_pass_in_place() {
             "target = \"{triple}\"
 func inline(never) private %fill(v0.i64) -> [[i64; 32]; 2] {{
 block0:
-    v1.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 0.i64 undef.[i64; 32];
-    v2.[i64; 32] = insert_value undef.[i64; 32] 3.i64 v0;
-    v3.[[i64; 32]; 2] = insert_value v1 1.i64 v2;
+    v2.[i64; 32] = agg.make [i64; 32] undef.i64 undef.i64 undef.i64 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v3.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v2;
     return v3;
 }}
 func inline(never) private %glance({marks} v0.objref<[i64; 32]>) -> i64 {{

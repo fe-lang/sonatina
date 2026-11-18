@@ -53,8 +53,7 @@ func private %__DepositContract_init(v0.i256) {
         jump block1;
 
     block1:
-        v7.@layout_14 = insert_value undef.@layout_14 0.i256 undef.@layout_13;
-        v8.@layout_14 = insert_value v7 1.i256 31.i256;
+        v8.@layout_14 = agg.make @layout_14 undef.@layout_13 31.i256;
         v9.i256 = call %core__lib__range__impl_trait_Range_83a5__len__g7b34_bb33 v8;
         jump block2;
 
@@ -228,11 +227,7 @@ func private %__DepositContract_recv_0_0(v0.@layout_0, v1.@layout_0, v2.@layout_
         v226.i256 = evm_sload v225;
         v227.i64 = call %core__lib__num__impl_trait_S_bdb7__downcast_truncate__gaa81_62fa v226;
         v228.@layout_0 = call %std__lib__evm__ssz__serialize_u64__gcd5c_9b6c v227;
-        v231.@layout_12 = insert_value undef.@layout_12 0.i256 v0;
-        v233.@layout_12 = insert_value v231 1.i256 v1;
-        v235.@layout_12 = insert_value v233 2.i256 v223;
-        v238.@layout_12 = insert_value v235 3.i256 v2;
-        v239.@layout_12 = insert_value v238 4.i256 v228;
+        v239.@layout_12 = agg.make @layout_12 v0 v1 v223 v2 v228;
         call %emit__gba21 v239;
         v241.i256 = add v4 32.i256;
         v242.i256 = evm_sload v241;
@@ -482,8 +477,7 @@ func private %__DepositContract_recv_0_0(v0.@layout_0, v1.@layout_0, v2.@layout_
         evm_sstore v268 v270;
         v274.i256 = add v4 32.i256;
         v275.i256 = evm_sload v274;
-        v278.@layout_14 = insert_value undef.@layout_14 0.i256 undef.@layout_13;
-        v279.@layout_14 = insert_value v278 1.i256 32.i256;
+        v279.@layout_14 = agg.make @layout_14 undef.@layout_13 32.i256;
         v280.i256 = call %core__lib__range__impl_trait_Range_83a5__len__g7b34_c5ca v279;
         jump block26;
 
@@ -532,8 +526,7 @@ func private %__DepositContract_recv_0_1(v0.i256) -> i256 {
     block1:
         v7.i256 = add v0 32.i256;
         v8.i256 = evm_sload v7;
-        v11.@layout_14 = insert_value undef.@layout_14 0.i256 undef.@layout_13;
-        v13.@layout_14 = insert_value v11 1.i256 32.i256;
+        v13.@layout_14 = agg.make @layout_14 undef.@layout_13 32.i256;
         v14.i256 = call %core__lib__range__impl_trait_Range_83a5__len__g7b34_bb33 v13;
         jump block2;
 
@@ -840,8 +833,7 @@ func inline(always) private %std__lib__abi__sol__impl_SolEncoder_ce34__at_3420(v
     block1:
         v2.i256 = mload v1 i256;
         v3.i256 = mload v1 i256;
-        v6.@layout_4 = insert_value undef.@layout_4 0.i256 v2;
-        v8.@layout_4 = insert_value v6 1.i256 v3;
+        v8.@layout_4 = agg.make @layout_4 v2 v3;
         return v8;
 }
 
@@ -854,8 +846,7 @@ func inline(always) private %std__lib__abi__sol__impl_SolEncoder_ce34__at_4bf1(v
     block1:
         v2.i256 = mload v1 i256;
         v3.i256 = mload v1 i256;
-        v6.@layout_4 = insert_value undef.@layout_4 0.i256 v2;
-        v8.@layout_4 = insert_value v6 1.i256 v3;
+        v8.@layout_4 = agg.make @layout_4 v2 v3;
         return v8;
 }
 
@@ -868,8 +859,7 @@ func inline(always) private %std__lib__abi__sol__impl_SolEncoder_ce34__at_9011(v
     block1:
         v2.i256 = mload v1 i256;
         v3.i256 = mload v1 i256;
-        v6.@layout_4 = insert_value undef.@layout_4 0.i256 v2;
-        v8.@layout_4 = insert_value v6 1.i256 v3;
+        v8.@layout_4 = agg.make @layout_4 v2 v3;
         return v8;
 }
 
@@ -882,8 +872,7 @@ func inline(always) private %std__lib__abi__sol__impl_SolEncoder_ce34__at_bbb9(v
     block1:
         v2.i256 = mload v1 i256;
         v3.i256 = mload v1 i256;
-        v6.@layout_4 = insert_value undef.@layout_4 0.i256 v2;
-        v8.@layout_4 = insert_value v6 1.i256 v3;
+        v8.@layout_4 = agg.make @layout_4 v2 v3;
         return v8;
 }
 
@@ -896,8 +885,7 @@ func inline(always) private %std__lib__abi__sol__impl_SolEncoder_ce34__at_d097(v
     block1:
         v2.i256 = mload v1 i256;
         v3.i256 = mload v1 i256;
-        v6.@layout_4 = insert_value undef.@layout_4 0.i256 v2;
-        v8.@layout_4 = insert_value v6 1.i256 v3;
+        v8.@layout_4 = agg.make @layout_4 v2 v3;
         return v8;
 }
 
@@ -1004,8 +992,7 @@ func inline(always) private %checked_dynamic_payload_after_head(v0.@layout_5, v1
         jump block4;
 
     block4:
-        v24.@layout_6 = insert_value undef.@layout_6 0.i256 v7;
-        v27.@layout_6 = insert_value v24 1.i256 v10;
+        v27.@layout_6 = agg.make @layout_6 v7 v10;
         return v27;
 
     block5:
@@ -1287,10 +1274,7 @@ func inline(always) private %compute_deposit_data_root(v0.@layout_0, v1.@layout_
         v29.i64 = mload v4 i64;
         v30.i256 = call %std__lib__evm__ssz__u64_chunk_c47c v29;
         v32.i256 = call %hash_tree_root__g5ba4 v2;
-        v34.@layout_15 = insert_value undef.@layout_15 0.i256 v26;
-        v35.@layout_15 = insert_value v34 1.i256 v28;
-        v37.@layout_15 = insert_value v35 2.i256 v30;
-        v39.@layout_15 = insert_value v37 3.i256 v32;
+        v39.@layout_15 = agg.make @layout_15 v26 v28 v30 v32;
         v40.i256 = call %merkleize v39;
         return v40;
 
@@ -1484,9 +1468,7 @@ func private %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4
         v13.i256 = call %alloc v12;
         v14.i256 = mload v3 i256;
         call %copy_to_memory_unchecked_aligned v0 v13 v14 v12;
-        v17.@layout_7 = insert_value undef.@layout_7 0.i256 v13;
-        v18.@layout_7 = insert_value v17 1.i256 v10;
-        v20.@layout_7 = insert_value v18 2.i256 v12;
+        v20.@layout_7 = agg.make @layout_7 v13 v10 v12;
         return v20;
 }
 
@@ -1507,9 +1489,7 @@ func private %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4
         v13.i256 = call %alloc v12;
         v14.i256 = mload v3 i256;
         call %copy_to_memory_unchecked_aligned v0 v13 v14 v12;
-        v17.@layout_7 = insert_value undef.@layout_7 0.i256 v13;
-        v18.@layout_7 = insert_value v17 1.i256 v10;
-        v20.@layout_7 = insert_value v18 2.i256 v12;
+        v20.@layout_7 = agg.make @layout_7 v13 v10 v12;
         return v20;
 }
 
@@ -2083,10 +2063,7 @@ func inline(always) private %impl_trait_Deposit__decode_from__gd20d(v0.@layout_5
 
     block8:
         v45.@layout_1 = call %decode_msg_field_from__gc24a v0 v34 v40 v4;
-        v48.@layout_8 = insert_value undef.@layout_8 0.i256 v7;
-        v51.@layout_8 = insert_value v48 1.i256 v21;
-        v54.@layout_8 = insert_value v51 2.i256 v32;
-        v56.@layout_8 = insert_value v54 3.i256 v45;
+        v56.@layout_8 = agg.make @layout_8 v7 v21 v32 v45;
         return v56;
 }
 
@@ -2111,7 +2088,7 @@ func inline(always) private %impl_trait_SupportsInterface__decode_from__gd20d(v0
         v5.i256 = mload v2 i256;
         v6.i256 = mload v2 i256;
         v7.@layout_2 = call %decode_msg_field_from__g4cde v0 v5 v6 v4;
-        v10.@layout_9 = insert_value undef.@layout_9 0.i256 v7;
+        v10.@layout_9 = agg.make @layout_9 v7;
         return v10;
 }
 
@@ -2135,7 +2112,7 @@ func inline(always) private %std__lib__abi__sol__types__impl_trait_FixedBytes_7a
         v4.i256 = mload v2 i256;
         v5.i256 = call %std__lib__evm__calldata__impl_trait_CallData_087c__word_at_b85c v0 v4;
         v7.i256 = call %std__lib__abi__sol__types__decode_fixed_bytes_word_db98 v5 4.i256;
-        v10.@layout_2 = insert_value undef.@layout_2 0.i256 v7;
+        v10.@layout_2 = agg.make @layout_2 v7;
         return v10;
 }
 
@@ -2149,7 +2126,7 @@ func inline(always) private %std__lib__abi__sol__types__impl_trait_FixedBytes_7a
         v4.i256 = mload v2 i256;
         v5.i256 = call %std__lib__evm__calldata__impl_trait_CallData_087c__word_at_b85c_0 v0 v4;
         v7.i256 = call %std__lib__abi__sol__types__decode_fixed_bytes_word_db98_0 v5 4.i256;
-        v10.@layout_2 = insert_value undef.@layout_2 0.i256 v7;
+        v10.@layout_2 = agg.make @layout_2 v7;
         return v10;
 }
 
@@ -2216,7 +2193,7 @@ func inline(always) private %std__lib__abi__sol__types__impl_trait_FixedBytes_7a
         v4.i256 = mload v2 i256;
         v5.i256 = call %std__lib__evm__calldata__impl_trait_CallData_087c__word_at_a84e v0 v4;
         v7.i256 = call %std__lib__abi__sol__types__decode_fixed_bytes_word_78ae v5 32.i256;
-        v10.@layout_1 = insert_value undef.@layout_1 0.i256 v7;
+        v10.@layout_1 = agg.make @layout_1 v7;
         return v10;
 }
 
@@ -2230,7 +2207,7 @@ func inline(always) private %std__lib__abi__sol__types__impl_trait_FixedBytes_7a
         v4.i256 = mload v2 i256;
         v5.i256 = call %std__lib__evm__calldata__impl_trait_CallData_087c__word_at_a84e_0 v0 v4;
         v7.i256 = call %std__lib__abi__sol__types__decode_fixed_bytes_word_78ae_0 v5 32.i256;
-        v10.@layout_1 = insert_value undef.@layout_1 0.i256 v7;
+        v10.@layout_1 = agg.make @layout_1 v7;
         return v10;
 }
 
@@ -2621,11 +2598,7 @@ func inline(always) private %emit__gcd5c(v0.@layout_12) {
         v7.@layout_0 = extract_value v0 2.i256;
         v9.@layout_0 = extract_value v0 3.i256;
         v11.@layout_0 = extract_value v0 4.i256;
-        v13.@layout_3 = insert_value undef.@layout_3 0.i256 v3;
-        v14.@layout_3 = insert_value v13 1.i256 v5;
-        v15.@layout_3 = insert_value v14 2.i256 v7;
-        v16.@layout_3 = insert_value v15 3.i256 v9;
-        v17.@layout_3 = insert_value v16 4.i256 v11;
+        v17.@layout_3 = agg.make @layout_3 v3 v5 v7 v9 v11;
         v18.@layout_6 = call %encode_event_payload v17;
         v19.i256 = extract_value v18 0.i256;
         v20.i256 = extract_value v18 1.i256;
@@ -2794,8 +2767,7 @@ func inline(always) private %encode_alloc(v0.@layout_3) -> @layout_6 {
         obj.store v9 v10;
         v11.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_67e8 v4;
         call %encode__g8ee2 v0 v4;
-        v14.@layout_6 = insert_value undef.@layout_6 0.i256 v11;
-        v15.@layout_6 = insert_value v14 1.i256 v2;
+        v15.@layout_6 = agg.make @layout_6 v11 v2;
         return v15;
 }
 
@@ -2872,8 +2844,7 @@ func inline(always) private %encode_event_payload(v0.@layout_3) -> @layout_6 {
         v4.*i8 = evm_malloc v3;
         v5.i256 = ptr_to_int v4 i256;
         call %encode_event_to_ptr v0 v5;
-        v9.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
-        v11.@layout_6 = insert_value v9 1.i256 v3;
+        v11.@layout_6 = agg.make @layout_6 v5 v3;
         return v11;
 
     block3:
@@ -3151,8 +3122,7 @@ func private %encode_single_root_alloc__gac80(v0.i256) -> @layout_6 {
         obj.store v9 v10;
         v11.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_4dfb v4;
         call %encode_single_root__g2e64 v0 v4;
-        v14.@layout_6 = insert_value undef.@layout_6 0.i256 v11;
-        v15.@layout_6 = insert_value v14 1.i256 v2;
+        v15.@layout_6 = agg.make @layout_6 v11 v2;
         return v15;
 }
 
@@ -3172,8 +3142,7 @@ func private %encode_single_root_alloc__g3201(v0.@layout_0) -> @layout_6 {
         obj.store v9 v10;
         v11.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_cf0e v4;
         call %encode_single_root__gd044 v0 v4;
-        v14.@layout_6 = insert_value undef.@layout_6 0.i256 v11;
-        v15.@layout_6 = insert_value v14 1.i256 v2;
+        v15.@layout_6 = agg.make @layout_6 v11 v2;
         return v15;
 }
 
@@ -3193,8 +3162,7 @@ func private %encode_single_root_alloc__g09ca(v0.i1) -> @layout_6 {
         obj.store v9 v10;
         v11.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_1652 v4;
         call %encode_single_root__ge927 v0 v4;
-        v14.@layout_6 = insert_value undef.@layout_6 0.i256 v11;
-        v15.@layout_6 = insert_value v14 1.i256 v2;
+        v15.@layout_6 = agg.make @layout_6 v11 v2;
         return v15;
 }
 
@@ -3360,9 +3328,7 @@ func private %from_abi_tail(v0.i256, v1.i256, v2.i256) -> @layout_0 {
         v6.i256 = mload v3 i256;
         v7.i256 = mload v4 i256;
         v8.i256 = mload v5 i256;
-        v11.@layout_0 = insert_value undef.@layout_0 0.i256 v6;
-        v13.@layout_0 = insert_value v11 1.i256 v7;
-        v15.@layout_0 = insert_value v13 2.i256 v8;
+        v15.@layout_0 = agg.make @layout_0 v6 v7 v8;
         return v15;
 }
 
@@ -4809,9 +4775,7 @@ func inline(always) private %std__lib__evm__ssz__serialize_u64__gcd5c_5bd2(v0.i6
         v15.i64 = mload v1 i64;
         v16.i256 = call %std__lib__evm__ssz__u64_chunk_2ffc v15;
         call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_72e2 v8 v16;
-        v20.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
-        v22.@layout_0 = insert_value v20 1.i256 8.i256;
-        v24.@layout_0 = insert_value v22 2.i256 64.i256;
+        v24.@layout_0 = agg.make @layout_0 v4 8.i256 64.i256;
         return v24;
 }
 
@@ -4837,9 +4801,7 @@ func inline(always) private %std__lib__evm__ssz__serialize_u64__gcd5c_9b6c(v0.i6
         v15.i64 = mload v1 i64;
         v16.i256 = call %std__lib__evm__ssz__u64_chunk_c47c v15;
         call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_2754 v8 v16;
-        v20.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
-        v22.@layout_0 = insert_value v20 1.i256 8.i256;
-        v24.@layout_0 = insert_value v22 2.i256 64.i256;
+        v24.@layout_0 = agg.make @layout_0 v4 8.i256 64.i256;
         return v24;
 }
 

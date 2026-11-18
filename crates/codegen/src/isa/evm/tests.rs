@@ -3732,8 +3732,7 @@ global private const [i256; 1] $values = [1];
 func private %verify(v0.constref<[i256; 1]>) -> @Result {
 block0:
     v1.@Err = enum.make @Err #Bad;
-    v2.@Result = insert_value undef.@Result 0.i8 0.i1;
-    v3.@Result = insert_value v2 1.i8 v1;
+    v3.@Result = agg.make @Result 0.i1 v1;
     return v3;
 }
 

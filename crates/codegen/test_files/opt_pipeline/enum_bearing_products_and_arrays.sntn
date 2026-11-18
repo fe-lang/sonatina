@@ -16,8 +16,7 @@ type @TwoEnums = { @OptionI256, @Flag };
 func private %struct_case(v0.i256) -> i256 {
 block0:
     v1.@OptionI256 = enum.make @OptionI256 #Some (v0);
-    v2.@Wrapper = insert_value undef.@Wrapper 0.i8 v1;
-    v3.@Wrapper = insert_value v2 1.i8 1.i256;
+    v3.@Wrapper = agg.make @Wrapper v1 1.i256;
     v4.@OptionI256 = extract_value v3 0.i8;
     enum.assert_variant v4 #Some;
     v5.i256 = enum.extract v4 #Some 0.i8;
@@ -30,8 +29,7 @@ func private %array_case(v0.i256) -> i256 {
 block0:
     v1.@OptionI256 = enum.make @OptionI256 #None;
     v2.@OptionI256 = enum.make @OptionI256 #Some (v0);
-    v3.[@OptionI256; 2] = insert_value undef.[@OptionI256; 2] 0.i8 v1;
-    v4.[@OptionI256; 2] = insert_value v3 1.i8 v2;
+    v4.[@OptionI256; 2] = agg.make [@OptionI256; 2] v1 v2;
     v5.@OptionI256 = extract_value v4 1.i8;
     enum.assert_variant v5 #Some;
     v6.i256 = enum.extract v5 #Some 0.i8;
@@ -42,8 +40,7 @@ func private %two_enum_case(v0.i256, v1.i256) -> i256 {
 block0:
     v2.@OptionI256 = enum.make @OptionI256 #Some (v0);
     v3.@Flag = enum.make @Flag #On (v1);
-    v4.@TwoEnums = insert_value undef.@TwoEnums 0.i8 v2;
-    v5.@TwoEnums = insert_value v4 1.i8 v3;
+    v5.@TwoEnums = agg.make @TwoEnums v2 v3;
     v6.@OptionI256 = extract_value v5 0.i8;
     enum.assert_variant v6 #Some;
     v7.i256 = enum.extract v6 #Some 0.i8;

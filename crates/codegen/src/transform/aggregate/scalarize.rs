@@ -3422,18 +3422,16 @@ func private %f(v0.i1, v1.i1, v2.i256, v3.i256) -> i256 {
     block0:
         br v0 block2 block4;
     block1:
-        v5.@pair = insert_value v4 1.i8 v3;
+        v5.@pair = agg.make @pair v2 v3;
         jump block3;
     block2:
-        v4.@pair = insert_value undef.@pair 0.i8 v2;
         br v1 block1 block4;
     block3:
         v8.@pair = phi (v5 block1) (v7 block4);
         v9.i256 = extract_value v8 0.i8;
         return v9;
     block4:
-        v6.@pair = insert_value undef.@pair 0.i8 v3;
-        v7.@pair = insert_value v6 1.i8 v2;
+        v7.@pair = agg.make @pair v3 v2;
         jump block3;
 }
 "#,
@@ -3476,13 +3474,11 @@ func private %f(v0.i1, v1.i1, v2.i256) -> i256 {
         br v0 block1 block2;
 
     block1:
-        v4.@slice = insert_value undef.@slice 0.i8 v2;
-        v5.@slice = insert_value v4 1.i8 11.i256;
+        v5.@slice = agg.make @slice v2 11.i256;
         jump block3;
 
     block2:
-        v6.@slice = insert_value undef.@slice 0.i8 v2;
-        v7.@slice = insert_value v6 1.i8 22.i256;
+        v7.@slice = agg.make @slice v2 22.i256;
         jump block3;
 
     block3:
@@ -3491,8 +3487,7 @@ func private %f(v0.i1, v1.i1, v2.i256) -> i256 {
         br v1 block4 block5;
 
     block4:
-        v9.@slice = insert_value undef.@slice 0.i8 99.i256;
-        v10.@slice = insert_value v9 1.i8 33.i256;
+        v10.@slice = agg.make @slice 99.i256 33.i256;
         mstore v3 v10 @slice;
         jump block5;
 
@@ -3727,7 +3722,7 @@ type @pair = { i256, i256 };
 func private %f(v0.i1, v1.i256) -> i256 {
     block0:
         v2.objref<@pair> = obj.alloc @pair;
-        v3.@pair = insert_value undef.@pair 0.i8 v1;
+        v3.@pair = agg.make @pair v1 undef.i256;
         br v0 block1 block2;
     block1:
         v4.@pair = insert_value v3 1.i8 v1;
@@ -3933,8 +3928,7 @@ type @slice = { i256, i256 };
 func private %f(v0.i256, v1.i256) -> i256 {
     block0:
         v2.objref<@slice> = obj.alloc @slice;
-        v3.@slice = insert_value undef.@slice 0.i8 v0;
-        v4.@slice = insert_value v3 1.i8 v1;
+        v4.@slice = agg.make @slice v0 v1;
         obj.store v2 v4;
         v5.@slice = obj.load v2;
         v6.i256 = extract_value v5 1.i8;
@@ -4844,23 +4838,7 @@ target = "evm-ethereum-osaka"
 
 func private %f(v0.i256) -> i256 {
     block0:
-        v1.[i256; 17] = insert_value undef.[i256; 17] 0.i8 v0;
-        v2.[i256; 17] = insert_value v1 1.i8 v0;
-        v3.[i256; 17] = insert_value v2 2.i8 v0;
-        v4.[i256; 17] = insert_value v3 3.i8 v0;
-        v5.[i256; 17] = insert_value v4 4.i8 v0;
-        v6.[i256; 17] = insert_value v5 5.i8 v0;
-        v7.[i256; 17] = insert_value v6 6.i8 v0;
-        v8.[i256; 17] = insert_value v7 7.i8 v0;
-        v9.[i256; 17] = insert_value v8 8.i8 v0;
-        v10.[i256; 17] = insert_value v9 9.i8 v0;
-        v11.[i256; 17] = insert_value v10 10.i8 v0;
-        v12.[i256; 17] = insert_value v11 11.i8 v0;
-        v13.[i256; 17] = insert_value v12 12.i8 v0;
-        v14.[i256; 17] = insert_value v13 13.i8 v0;
-        v15.[i256; 17] = insert_value v14 14.i8 v0;
-        v16.[i256; 17] = insert_value v15 15.i8 v0;
-        v17.[i256; 17] = insert_value v16 16.i8 v0;
+        v17.[i256; 17] = agg.make [i256; 17] v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0;
         v18.i256 = extract_value v17 16.i8;
         return v18;
 }
@@ -4874,8 +4852,8 @@ func private %f(v0.i256) -> i256 {
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
             assert!(
-                dumped.contains("insert_value"),
-                "wide aggregate insert_value web should not scalarize:\n{dumped}"
+                dumped.contains("agg.make"),
+                "a wide `agg.make` should not scalarize:\n{dumped}"
             );
             assert!(
                 dumped.contains("extract_value"),
@@ -5388,8 +5366,7 @@ func private %f(v0.i1, v1.i1, v2.i256, v3.i256) -> i256 {
         jump block3;
 
     block3:
-        v4.@slice = insert_value undef.@slice 0.i8 v2;
-        v5.@slice = insert_value v4 1.i8 v3;
+        v5.@slice = agg.make @slice v2 v3;
         v6.@slice = phi (v5 block1) (v5 block2);
         br v1 block4 block5;
 
@@ -5445,8 +5422,7 @@ type @pair = { i256, i256 };
 
 func private %f(v0.i256) -> i256 {
     block0:
-        v1.@pair = insert_value undef.@pair 0.i8 v0;
-        v2.@pair = insert_value v1 1.i8 v0;
+        v2.@pair = agg.make @pair v0 v0;
         jump block1;
 
     block1:

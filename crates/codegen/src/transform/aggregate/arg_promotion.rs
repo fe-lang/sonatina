@@ -593,11 +593,7 @@ block0:
     v6.i256 = obj.load v5;
     v7.objref<i256> = obj.proj v0 3.i8;
     v8.i256 = obj.load v7;
-    v9.[i256; 5] = insert_value undef.[i256; 5] 0.i8 v2;
-    v10.[i256; 5] = insert_value v9 1.i8 v4;
-    v11.[i256; 5] = insert_value v10 2.i8 v6;
-    v12.[i256; 5] = insert_value v11 3.i8 v8;
-    v13.[i256; 5] = insert_value v12 4.i8 0.i256;
+    v13.[i256; 5] = agg.make [i256; 5] v2 v4 v6 v8 0.i256;
     return ({returns});
 }}
 "#

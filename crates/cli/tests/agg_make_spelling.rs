@@ -102,9 +102,13 @@ const EXPECTED: &[(&str, &str, &str)] = &[
     ),
     // Fe's FeProofs precompiles (`AGG_MAKE_SPELLING_DIRS`): in `r2__ga0f0`,
     // `r2__g0068` and `r2__g276b` a loop phi joins a call result, rebuilt by
-    // ABI expansion as an insert chain, and a fresh value: as chains the phi
-    // is split field by field, with an `agg.make` it is left to scalarization,
-    // which orders the leaf phis otherwise (-40, -38 and +2 bytes).
+    // ABI expansion with `agg.make`, and Fe's fresh value: as an insert chain
+    // the phi is left to scalarization, as an `agg.make` it is split field by
+    // field, and the leaf phis come in another order (+40, +38 and -2 bytes;
+    // `EcrecoverPrecompile`'s root +2). Not explained instruction by
+    // instruction: `add__g2cdf` of the unoptimized module at O0, -20 bytes as
+    // `agg.make`.
+    ("Precompiles/precompiles.sona", "Evm", "O0"),
     ("Precompiles/precompiles.sona", "Evm", "O1"),
     ("Precompiles/precompiles.sona", "Evm", "O2"),
     ("Precompiles/precompiles.sona", "Evm", "Os"),

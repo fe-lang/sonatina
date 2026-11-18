@@ -1747,7 +1747,7 @@ type @Pair = { i256, i256 };
 func private %f() -> i256 {
 block0:
     v0.objref<i256> = obj.alloc i256;
-    v1.@Pair = insert_value undef.@Pair 0.i8 11.i256;
+    v1.@Pair = agg.make @Pair 11.i256 undef.i256;
     v2.i256 = extract_value v1 0.i8;
     v3.i256 = add v2 1.i256;
     obj.store v0 v3;
@@ -1924,7 +1924,7 @@ type @Pair = {{ i256, i256 }};
 func private %f() -> @Pair {{
 block0:
     v0.objref<@Pair> = obj.alloc @Pair;
-    v1.@Pair = insert_value undef.@Pair 0.i8 11.i256;
+    v1.@Pair = agg.make @Pair 11.i256 undef.i256;
 {inserts}
     v301.@Pair = insert_value v300 1.i8 22.i256;
     obj.store v0 v301;

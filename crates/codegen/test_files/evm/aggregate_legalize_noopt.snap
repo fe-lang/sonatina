@@ -44,14 +44,14 @@ entry:
 agg_noopt:
   block0:
     JUMPDEST
-    PUSH0  // evm_mstore v2 v0;
+    PUSH0  // evm_mstore v3 v0;
     MSTORE
-    PUSH1 0x20 (32)  // evm_mstore v3 v1;
+    PUSH1 0x20 (32)  // evm_mstore v4 v1;
     MSTORE
-    PUSH0  // v5.i256 = evm_mload v2;
+    PUSH0  // v6.i256 = evm_mload v3;
     MLOAD
-    PUSH1 0x20 (32)  // v7.i256 = evm_mload v3;
+    PUSH1 0x20 (32)  // v8.i256 = evm_mload v4;
     MLOAD
-    ADD  // v8.i256 = add v5 v7;
-    SWAP1  // return v8;
+    ADD  // v9.i256 = add v6 v8;
+    SWAP1  // return v9;
     JUMP

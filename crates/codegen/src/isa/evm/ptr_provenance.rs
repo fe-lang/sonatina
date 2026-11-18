@@ -1804,8 +1804,7 @@ type @Bytes = {i256, i256};
 
 func public %from_ptr(v0.i256, v1.i256) -> @Bytes {
 block0:
-    v2.@Bytes = insert_value undef.@Bytes 0.i256 v0;
-    v3.@Bytes = insert_value v2 1.i256 v1;
+    v3.@Bytes = agg.make @Bytes v0 v1;
     return v3;
 }
 

@@ -15,8 +15,7 @@ func inline(never) private %select(v0.objref<[i256; 2]>, v1.i256) -> @Nested {
 block0:
     v2.objref<i256> = obj.index v0 v1;
     v4.@Selection = enum.make @Selection #Some (42.i256, v2);
-    v5.@Nested = insert_value undef.@Nested 0.i256 7.i256;
-    v6.@Nested = insert_value v5 1.i256 v4;
+    v6.@Nested = agg.make @Nested 7.i256 v4;
     return v6;
 }
 

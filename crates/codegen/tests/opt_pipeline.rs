@@ -1247,8 +1247,7 @@ type @wrapper = {@option_i256, i256};
 func private %entry(v0.i256) -> i256 {
     block0:
         v1.@option_i256 = enum.make @option_i256 #Some (v0);
-        v2.@wrapper = insert_value undef.@wrapper 0.i8 v1;
-        v3.@wrapper = insert_value v2 1.i8 1.i256;
+        v3.@wrapper = agg.make @wrapper v1 1.i256;
         v4.@option_i256 = extract_value v3 0.i8;
         v5.i1 = enum.is_variant v4 #Some;
         br v5 block1 block2;
@@ -2559,9 +2558,7 @@ func private %with_capacity(v0.i64) -> @vec {
         jump block5;
     block5:
         v6.*i8 = phi (v4 block3) (v5 block4);
-        v7.@vec = insert_value undef.@vec 0.i64 v6;
-        v8.@vec = insert_value v7 1.i64 0.i64;
-        v9.@vec = insert_value v8 2.i64 v0;
+        v9.@vec = agg.make @vec v6 0.i64 v0;
         v10.i64 = ptr_to_int v6 i64;
         v11.i1 = is_zero v10;
         br v11 block6 block7;

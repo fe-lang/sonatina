@@ -36,8 +36,7 @@ func private %alloca(v0.i16) -> i8 {
 #[(7.i8, 4660.i16) -> 4660.i16]
 func private %aggregate_struct_store_load(v0.i8, v1.i16) -> i16 {
     block0:
-        v2.@pair = insert_value undef.@pair 0.i8 v0;
-        v3.@pair = insert_value v2 1.i8 v1;
+        v3.@pair = agg.make @pair v0 v1;
         v4.*@pair = alloca @pair;
         mstore v4 v3 @pair;
         v5.@pair = mload v4 @pair;
@@ -48,8 +47,7 @@ func private %aggregate_struct_store_load(v0.i8, v1.i16) -> i16 {
 #[(5.i16, 9.i16) -> 9.i16]
 func private %aggregate_array_store_load(v0.i16, v1.i16) -> i16 {
     block0:
-        v2.[i16; 2] = insert_value undef.[i16; 2] 0.i8 v0;
-        v3.[i16; 2] = insert_value v2 1.i8 v1;
+        v3.[i16; 2] = agg.make [i16; 2] v0 v1;
         v4.*[i16; 2] = alloca [i16; 2];
         mstore v4 v3 [i16; 2];
         v5.[i16; 2] = mload v4 [i16; 2];
@@ -60,10 +58,8 @@ func private %aggregate_array_store_load(v0.i16, v1.i16) -> i16 {
 #[(7.i32, 11.i64, 13.i32) -> 22.i64]
 func private %nested_aggregate_store_load_matches_gep(v0.i32, v1.i64, v2.i32) -> i64 {
     block0:
-        v3.@inner = insert_value undef.@inner 0.i8 v0;
-        v4.@inner = insert_value v3 1.i8 v1;
-        v5.@outer = insert_value undef.@outer 0.i8 v4;
-        v6.@outer = insert_value v5 1.i8 v2;
+        v4.@inner = agg.make @inner v0 v1;
+        v6.@outer = agg.make @outer v4 v2;
         v7.*@outer = alloca @outer;
         mstore v7 v6 @outer;
         v8.@outer = mload v7 @outer;

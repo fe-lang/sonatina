@@ -32,7 +32,7 @@ block0:
 func private %take_maker() {
 block0:
     v0.*(i256, i256) -> objref<@pair> = get_function_ptr %make_pair;
-    v1.@maker_box = insert_value undef.@maker_box 0.i8 v0;
+    v1.@maker_box = agg.make @maker_box v0;
     call %consume_box v1;
     return;
 }

@@ -189,8 +189,7 @@ block2:
     jump block3;
 block3:
     v8.i256 = phi (v5 block1) (v4 block2);
-    v9.@Pair = insert_value undef.@Pair 0.i8 v8;
-    v10.@Pair = insert_value v9 1.i8 v5;
+    v10.@Pair = agg.make @Pair v8 v5;
     return v10;
 }
 func public %run(v0.*i256, v1.*i64, v2.*i256) {
@@ -305,8 +304,7 @@ block1:
     v13.i64 = phi (0.i64 block0) (v14 block1);
     v9.@Half = extract_value v7 0.i64;
     v10.@Half = extract_value v7 1.i64;
-    v11.@Whole = insert_value undef.@Whole 0.i64 v10;
-    v12.@Whole = insert_value v11 1.i64 v8;
+    v12.@Whole = agg.make @Whole v10 v8;
     v14.i64 = add v13 1.i64;
     v15.i1 = lt v14 v2;
     br v15 block1 block2;
@@ -952,11 +950,7 @@ block5:
     v19.i64 = trunc v15 i64;
     v20.i128 = shr 64.i128 v15;
     v21.i64 = trunc v20 i64;
-    v22.[i64; 5] = insert_value undef.[i64; 5] 0.i256 v12;
-    v23.[i64; 5] = insert_value v22 1.i256 v16;
-    v24.[i64; 5] = insert_value v23 2.i256 v18;
-    v25.[i64; 5] = insert_value v24 3.i256 v19;
-    v26.[i64; 5] = insert_value v25 4.i256 v21;
+    v26.[i64; 5] = agg.make [i64; 5] v12 v16 v18 v19 v21;
     mstore v6 v26 [i64; 5];
     return;
 }

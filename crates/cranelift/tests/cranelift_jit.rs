@@ -417,9 +417,7 @@ block0:
 func public %bump_local(v1.i64) -> i64 {
 block0:
     v0.objref<@Rec> = obj.alloc @Rec;
-    v2.@Rec = insert_value undef.@Rec 0.i8 0.i8;
-    v3.@Rec = insert_value v2 1.i8 0.i64;
-    v4.@Rec = insert_value v3 2.i8 0.i256;
+    v4.@Rec = agg.make @Rec 0.i8 0.i64 0.i256;
     obj.store v0 v4;
     call %bump v0 v1;
     v5.objref<i64> = obj.proj v0 1.i8;
@@ -725,9 +723,8 @@ block2:
 block3:
     v4.@OptionI64 = phi (v2 block1) (v3 block2);
     v5.@OptionI64 = enum.make @OptionI64 #None;
-    v6.[@OptionI64; 2] = insert_value undef.[@OptionI64; 2] 0.i64 v5;
-    v7.[@OptionI64; 2] = insert_value v6 1.i64 v4;
-    v8.@Options = insert_value undef.@Options 0.i64 v7;
+    v7.[@OptionI64; 2] = agg.make [@OptionI64; 2] v5 v4;
+    v8.@Options = agg.make @Options v7;
     v9.i64 = call %read v8;
     return v9;
 }

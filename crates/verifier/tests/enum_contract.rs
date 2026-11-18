@@ -447,8 +447,7 @@ func private %references() -> [objref<i256>; 2] {
 block0:
  v0.objref<i256> = obj.alloc i256;
  obj.store v0 31.i256;
- v1.[objref<i256>; 2] = insert_value undef.[objref<i256>; 2] 0.i8 v0;
- v2.[objref<i256>; 2] = insert_value v1 1.i8 v0;
+ v2.[objref<i256>; 2] = agg.make [objref<i256>; 2] v0 v0;
  return v2;
 }
 func private %entry"#,

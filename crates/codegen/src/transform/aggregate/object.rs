@@ -814,7 +814,7 @@ block0:
     obj.store v3 v0;
     v4.objref<i256> = obj.proj v2 1.i8;
     obj.store v4 v1;
-    v5.@wrapper = insert_value undef.@wrapper 0.i8 v2;
+    v5.@wrapper = agg.make @wrapper v2;
     v6.i256 = call %sum_wrapper v5;
     return v6;
 }

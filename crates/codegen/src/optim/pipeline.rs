@@ -1522,8 +1522,7 @@ func private %entry(v0.objref<@Pair>, v1.i256) -> i256 {
 block0:
     v2.objref<i256> = obj.proj v0 0.i8;
     v3.i256 = obj.load v2;
-    v4.@Pair = insert_value undef.@Pair 0.i8 v3;
-    v5.@Pair = insert_value v4 1.i8 v1;
+    v5.@Pair = agg.make @Pair v3 v1;
     v6.objref<@Pair> = obj.alloc @Pair;
     obj.store v6 v5;
     v7.objref<i256> = obj.proj v6 0.i8;

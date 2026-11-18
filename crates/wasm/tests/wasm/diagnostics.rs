@@ -245,11 +245,11 @@ func private %take(v0.@P) -> i32 {
 }
 func public %f(v0.i32) -> i32 {
     block0:
-        v1.@P = insert_value undef.@P 1.i32 v0;
+        v1.@P = agg.make @P undef.i32 v0;
         v2.i32 = call %take v1;
         return v2;
 }",
-            "insert_value",
+            "agg.make",
         ),
         (
             "a call to the module's `free` that binds a result",

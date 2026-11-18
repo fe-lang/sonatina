@@ -473,15 +473,7 @@ block0:
     v23.i64 = trunc v22 i64;
     v24.i128 = add v6 v9;
     v25.i64 = trunc v24 i64;
-    v26.[i64; 9] = insert_value undef.[i64; 9] 0.i256 v10;
-    v27.[i64; 9] = insert_value v26 1.i256 v12;
-    v28.[i64; 9] = insert_value v27 2.i256 v13;
-    v29.[i64; 9] = insert_value v28 3.i256 v15;
-    v30.[i64; 9] = insert_value v29 4.i256 v17;
-    v31.[i64; 9] = insert_value v30 5.i256 v19;
-    v32.[i64; 9] = insert_value v31 6.i256 v21;
-    v33.[i64; 9] = insert_value v32 7.i256 v23;
-    v34.[i64; 9] = insert_value v33 8.i256 v25;
+    v34.[i64; 9] = agg.make [i64; 9] v10 v12 v13 v15 v17 v19 v21 v23 v25;
     mstore v3 v34 [i64; 9];
     return;
 }
@@ -581,17 +573,8 @@ block0:
     v49.i128 = add v28 v11;
     v50.i128 = shr 64.i128 v49;
     v51.i64 = trunc v50 i64;
-    v52.[i64; 10] = insert_value undef.[i64; 10] 0.i256 v18;
-    v53.[i64; 10] = insert_value v52 1.i256 v24;
-    v54.[i64; 10] = insert_value v53 2.i256 v30;
-    v55.[i64; 10] = insert_value v54 3.i256 v32;
-    v56.[i64; 10] = insert_value v55 4.i256 v34;
-    v57.[i64; 10] = insert_value v56 5.i256 v40;
-    v58.[i64; 10] = insert_value v57 6.i256 v46;
-    v59.[i64; 10] = insert_value v58 7.i256 v48;
-    v60.[i64; 10] = insert_value v59 8.i256 v51;
     v61.i64 = trunc v49 i64;
-    v62.[i64; 10] = insert_value v60 9.i256 v61;
+    v62.[i64; 10] = agg.make [i64; 10] v18 v24 v30 v32 v34 v40 v46 v48 v51 v61;
     mstore v2 v62 [i64; 10];
     return;
 }
@@ -687,12 +670,7 @@ block0:
     v30.i64 = trunc v29 i64;
     v31.i128 = shr 127.i128 v29;
     v32.i64 = trunc v31 i64;
-    v25.[i64; 6] = insert_value undef.[i64; 6] 0.i256 v14;
-    v26.[i64; 6] = insert_value v25 1.i256 v16;
-    v27.[i64; 6] = insert_value v26 2.i256 v22;
-    v28.[i64; 6] = insert_value v27 3.i256 v24;
-    v33.[i64; 6] = insert_value v28 4.i256 v30;
-    v34.[i64; 6] = insert_value v33 5.i256 v32;
+    v34.[i64; 6] = agg.make [i64; 6] v14 v16 v22 v24 v30 v32;
     mstore v1 v34 [i64; 6];
     return;
 }

@@ -519,19 +519,15 @@ block0:
     v2.i256 = extract_value v1 0.i8;
     v3.i256 = extract_value v1 1.i8;
     v4.i256 = extract_value v0 1.i8;
-    v5.@inner = insert_value undef.@inner 0.i8 v3;
-    v6.@inner = insert_value v5 1.i8 v2;
-    v7.@pair = insert_value undef.@pair 0.i8 v6;
-    v8.@pair = insert_value v7 1.i8 v4;
+    v6.@inner = agg.make @inner v3 v2;
+    v8.@pair = agg.make @pair v6 v4;
     return v8;
 }
 
 func public %entry(v0.i256, v1.i256, v2.i256) -> i256 {
 block0:
-    v3.@inner = insert_value undef.@inner 0.i8 v0;
-    v4.@inner = insert_value v3 1.i8 v1;
-    v5.@pair = insert_value undef.@pair 0.i8 v4;
-    v6.@pair = insert_value v5 1.i8 v2;
+    v4.@inner = agg.make @inner v0 v1;
+    v6.@pair = agg.make @pair v4 v2;
     v7.@pair = call %twist v6;
     v8.@inner = extract_value v7 0.i8;
     v9.i256 = extract_value v8 0.i8;
@@ -586,15 +582,13 @@ func private %swap(v0.@pair) -> @pair {
 block0:
     v1.i256 = extract_value v0 0.i8;
     v2.i256 = extract_value v0 1.i8;
-    v3.@pair = insert_value undef.@pair 0.i8 v2;
-    v4.@pair = insert_value v3 1.i8 v1;
+    v4.@pair = agg.make @pair v2 v1;
     return v4;
 }
 
 func public %entry(v0.i256, v1.i256) -> i256 {
 block0:
-    v2.@pair = insert_value undef.@pair 0.i8 v0;
-    v3.@pair = insert_value v2 1.i8 v1;
+    v3.@pair = agg.make @pair v0 v1;
     v4.@pair = call %swap v3;
     v5.i256 = extract_value v4 0.i8;
     return v5;
@@ -662,8 +656,7 @@ block2:
 
 block3:
     v8.@option_i256 = phi (v6 block1) (v7 block2);
-    v9.@wrapper = insert_value undef.@wrapper 0.i8 v8;
-    v10.@wrapper = insert_value v9 1.i8 v2;
+    v10.@wrapper = agg.make @wrapper v8 v2;
     return v10;
 }
 
@@ -681,8 +674,7 @@ block2:
 
 block3:
     v4.@option_i256 = phi (v2 block1) (v3 block2);
-    v5.@wrapper = insert_value undef.@wrapper 0.i8 v4;
-    v6.@wrapper = insert_value v5 1.i8 5.i256;
+    v6.@wrapper = agg.make @wrapper v4 5.i256;
     v7.@wrapper = call %twist v6;
     v8.@option_i256 = extract_value v7 0.i8;
     v9.i1 = enum.is_variant v8 #Some;
@@ -747,8 +739,7 @@ func private %swap(v0.@pair) -> @pair {
 block0:
     v1.i256 = extract_value v0 0.i8;
     v2.i256 = extract_value v0 1.i8;
-    v3.@pair = insert_value undef.@pair 0.i8 v2;
-    v4.@pair = insert_value v3 1.i8 v1;
+    v4.@pair = agg.make @pair v2 v1;
     return v4;
 }
 
@@ -811,15 +802,14 @@ func private %swap(v0.@pair) -> @pair {
 block0:
     v1.i256 = extract_value v0 0.i8;
     v2.i256 = extract_value v0 1.i8;
-    v3.@pair = insert_value undef.@pair 0.i8 v2;
-    v4.@pair = insert_value v3 1.i8 v1;
+    v4.@pair = agg.make @pair v2 v1;
     return v4;
 }
 
 func private %register_swap() {
 block0:
     v0.*(@pair) -> @pair = get_function_ptr %swap;
-    v1.@swap_box = insert_value undef.@swap_box 0.i8 v0;
+    v1.@swap_box = agg.make @swap_box v0;
     call %consume_swap v1;
     return;
 }

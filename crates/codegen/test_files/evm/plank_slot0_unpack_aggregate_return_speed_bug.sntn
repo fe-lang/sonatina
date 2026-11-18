@@ -45,13 +45,7 @@ func private %unpack(v0.i256) -> @Slot0 {
         v30.i256 = and v28 1.i256;
         v32.i1 = gt v30 0.i256;
         v34.i256 = and v0 1461501637330902918203684832716283019655932542975.i256;
-        v36.@Slot0 = insert_value undef.@Slot0 0.i256 v34;
-        v37.@Slot0 = insert_value v36 1.i256 v11;
-        v39.@Slot0 = insert_value v37 2.i256 v16;
-        v41.@Slot0 = insert_value v39 3.i256 v19;
-        v43.@Slot0 = insert_value v41 4.i256 v22;
-        v45.@Slot0 = insert_value v43 5.i256 v26;
-        v47.@Slot0 = insert_value v45 6.i256 v32;
+        v47.@Slot0 = agg.make @Slot0 v34 v11 v16 v19 v22 v26 v32;
         return v47;
 }
 

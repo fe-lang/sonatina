@@ -33,8 +33,7 @@ block0:
 
 func inline(never) private %make_pair(v0.i64, v1.i64) -> @Pair {
 block0:
-    v2.@Pair = insert_value undef.@Pair 0.i64 v0;
-    v3.@Pair = insert_value v2 1.i64 v1;
+    v3.@Pair = agg.make @Pair v0 v1;
     return v3;
 }
 

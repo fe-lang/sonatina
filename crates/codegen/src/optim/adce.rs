@@ -681,8 +681,7 @@ type @pair = {i256, i256};
 
 func private %f(v0.i1) {
     block0:
-        v1.@pair = insert_value undef.@pair 0.i256 4.i256;
-        v2.@pair = insert_value v1 1.i256 4.i256;
+        v2.@pair = agg.make @pair 4.i256 4.i256;
         jump block1;
 
     block1:

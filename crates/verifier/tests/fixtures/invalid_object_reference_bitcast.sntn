@@ -6,7 +6,7 @@ block0:
  v0.objref<@E> = obj.alloc @E;
  enum.write_variant v0 #Some (17.i256);
  v1.objref<i256> = enum.proj v0 #Some 0.i8;
- v2.@Holder = insert_value undef.@Holder 0.i8 v0;
+ v2.@Holder = agg.make @Holder v0;
  v3.*@E = bitcast v2 *@E;
  mstore v3 0.i256 i256;
  v4.i256 = obj.load v1;

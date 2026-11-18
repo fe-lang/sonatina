@@ -1859,10 +1859,10 @@ func private %f(v0.i1, v1.i256, v2.i256) -> @pair {
 block0:
     br v0 block1 block2;
 block1:
-    v3.@pair = insert_value undef.@pair 0.i8 v1;
+    v3.@pair = agg.make @pair v1 undef.i256;
     jump block3;
 block2:
-    v4.@pair = insert_value undef.@pair 0.i8 v2;
+    v4.@pair = agg.make @pair v2 undef.i256;
     jump block3;
 block3:
     v5.@pair = phi (v3 block1) (v4 block2);
