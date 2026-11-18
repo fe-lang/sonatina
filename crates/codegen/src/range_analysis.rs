@@ -220,6 +220,24 @@ impl RangeAnalysis {
         &self.exit_envs[block]
     }
 
+    /// Keep the facts of one incoming edge separate from the joined facts.
+    pub(crate) fn incoming_env(
+        &self,
+        func: &Function,
+        pred: BlockId,
+        block: BlockId,
+    ) -> Option<RangeEnv> {
+        if !self.is_reachable(pred) {
+            return None;
+        }
+        let refined = refine_edge(func, pred, block, self.exit_env(pred), &self.maybe_undef)?;
+        let mut env = refined.clone();
+        let edges = [(pred, refined)];
+        let index = FxHashMap::from_iter([(pred, 0)]);
+        apply_phi_entry_facts(func, block, &edges, &index, &mut env);
+        Some(env)
+    }
+
     pub fn is_reachable(&self, block: BlockId) -> bool {
         self.reachable[block]
     }

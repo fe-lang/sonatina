@@ -62,16 +62,43 @@ impl CheckedArithElim {
             }
 
             let mut env = analysis.entry_env(block).clone();
+            // A join can lose correlations: each incoming path may prove an
+            // operation safe even when the hull of the operand ranges cannot.
+            // Keep a bounded set of edge environments for short, acyclic joins.
+            let preds: Vec<_> = cfg.preds_of(block).copied().collect();
+            let mut incoming: Vec<_> = if (2..=4).contains(&preds.len())
+                && func.layout.iter_inst(block).take(65).count() <= 64
+                && preds.iter().all(|&pred| !dom.dominates(block, pred))
+            {
+                preds
+                    .into_iter()
+                    .filter_map(|pred| analysis.incoming_env(func, pred, block))
+                    .collect()
+            } else {
+                Vec::new()
+            };
             for inst in func.layout.iter_inst(block) {
                 if func.dfg.is_phi(inst) {
                     continue;
                 }
 
-                if let Some(plan) = plan_inst(func, &analysis, &env, inst) {
+                let plan = plan_inst(func, &analysis, &env, inst).or_else(|| {
+                    let first = incoming.first()?;
+                    let plan = plan_inst(func, &analysis, first, inst)?;
+                    incoming
+                        .iter()
+                        .skip(1)
+                        .all(|edge| plan_inst(func, &analysis, edge, inst).is_some())
+                        .then_some(plan)
+                });
+                if let Some(plan) = plan {
                     self.plans.push(plan);
                 }
 
                 analysis.transfer_inst(func, &mut env, inst);
+                for edge in &mut incoming {
+                    analysis.transfer_inst(func, edge, inst);
+                }
             }
         }
 
@@ -269,6 +296,100 @@ mod tests {
         module
             .func_store
             .view(id, |func| FuncWriter::new(id, func).dump_string())
+    }
+
+    #[test]
+    fn incoming_paths_preserve_multiply_add_bounds() {
+        for (last_digit, removes_add) in [(5, true), (6, false)] {
+            let output = optimized(&format!(
+                r#"
+target = "evm-ethereum-osaka"
+func public %test(v0.i8, v1.i8) -> i1 {{
+block0:
+    v2.i1 = lt v1 10.i8;
+    br v2 block1 block5;
+block1:
+    v3.i1 = le v0 25.i8;
+    br v3 block2 block5;
+block2:
+    v4.i1 = eq v0 25.i8;
+    br v4 block3 block4;
+block3:
+    v5.i1 = le v1 {last_digit}.i8;
+    br v5 block4 block5;
+block4:
+    (v6.i8, v7.i1) = umulo v0 10.i8;
+    (v8.i8, v9.i1) = uaddo v6 v1;
+    v10.i1 = or v7 v9;
+    return v10;
+block5:
+    return 1.i1;
+}}
+"#
+            ));
+            assert!(!output.contains("umulo"), "{output}");
+            assert_eq!(!output.contains("uaddo"), removes_add, "{output}");
+        }
+    }
+
+    #[test]
+    fn incoming_paths_keep_undef_dependent_checks() {
+        let output = optimized(
+            r#"
+target = "evm-ethereum-osaka"
+func public %test(v0.i8, v1.i8) -> i1 {
+block0:
+    v11.i8 = add v0 undef.i8;
+    v2.i1 = lt v1 10.i8;
+    br v2 block1 block5;
+block1:
+    v3.i1 = le v11 25.i8;
+    br v3 block2 block5;
+block2:
+    v4.i1 = eq v11 25.i8;
+    br v4 block3 block4;
+block3:
+    v5.i1 = le v1 5.i8;
+    br v5 block4 block5;
+block4:
+    (v6.i8, v7.i1) = umulo v11 10.i8;
+    (v8.i8, v9.i1) = uaddo v6 v1;
+    v10.i1 = or v7 v9;
+    return v10;
+block5:
+    return 1.i1;
+}
+"#,
+        );
+        // Main still treats undef as a separate choice at each use. A guard
+        // on v11 therefore cannot establish a bound for its later uses.
+        assert!(output.contains("umulo"), "{output}");
+        assert!(output.contains("uaddo"), "{output}");
+    }
+
+    #[test]
+    fn incoming_phi_pairs_preserve_correlations() {
+        for (right, safe) in [(5, true), (6, false)] {
+            let output = optimized(&format!(
+                r#"
+target = "evm-ethereum-osaka"
+func public %test(v0.i1) -> i1 {{
+block0:
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v1.i8 = phi (1.i8 block1) (250.i8 block2);
+    v2.i8 = phi (254.i8 block1) ({right}.i8 block2);
+    (v3.i8, v4.i1) = uaddo v1 v2;
+    return v4;
+}}
+"#
+            ));
+            assert_eq!(!output.contains("uaddo"), safe, "{output}");
+        }
     }
 
     #[test]
