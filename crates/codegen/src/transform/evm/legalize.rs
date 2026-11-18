@@ -1256,6 +1256,7 @@ impl<'a> FunctionLegalizer<'a> {
             .map_or(value, |or| *or.lhs());
         if self.value_fits_narrow_locally(range_value, 256 - shift) {
             let overflow = self.func.dfg.make_imm_value(Immediate::zero(Type::I1));
+            self.provenance[overflow] = Some(ScalarWidth::Bool);
             return Some((result, overflow));
         }
         let high = self.insert_before_one(
@@ -2992,5 +2993,31 @@ block0:
             "entry",
         );
         assert!(dumped.contains("return 0.i1;"), "{dumped}");
+    }
+    #[test]
+    fn proven_false_overflow_flag_can_be_zero_extended() {
+        assert_proven_false_overflow_flag_can_be_extended("zext");
+    }
+
+    #[test]
+    fn proven_false_overflow_flag_can_be_sign_extended() {
+        assert_proven_false_overflow_flag_can_be_extended("sext");
+    }
+
+    fn assert_proven_false_overflow_flag_can_be_extended(extension: &str) {
+        for swapped in [false, true] {
+            let operands = if swapped { "4.i256 v1" } else { "v1 4.i256" };
+            // No pre-existing i1 constant may supply the new false flag's width.
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %entry(v0.i8) -> i256 {{\nblock0:\n v1.i256 = zext v0 i256;\n (v2.i256, v3.i1) = umulo {operands};\n v4.i256 = {extension} v3 i256;\n return v4;\n}}"
+            );
+            let dumped = legalize_and_dump(&source, "entry");
+            assert!(!dumped.contains("umulo"), "{dumped}");
+            assert!(
+                !dumped.contains(" = zext ") && !dumped.contains(" = sext "),
+                "{dumped}"
+            );
+            assert!(dumped.contains("0.i1"), "{dumped}");
+        }
     }
 }
