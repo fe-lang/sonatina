@@ -2036,9 +2036,8 @@ impl<'a> FunctionLegalizer<'a> {
             None => return,
         };
         match width {
-            ScalarWidth::Full256 => {}
             ScalarWidth::Bool => self.replace_with_aliases(inst, &[arg]),
-            ScalarWidth::Narrow(_) => {
+            ScalarWidth::Full256 | ScalarWidth::Narrow(_) => {
                 let zero = self.zero_i256();
                 let raw = self.insert_before_one(
                     inst,
