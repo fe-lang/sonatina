@@ -1,0 +1,81 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/bool_word_copy_index.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 70 bytes
+  total: 70 bytes
+
+functions:
+  mem: global_dyn_base=0x1060 arena_base=0x1020 scratch_peak_words=0 stable_chain_peak_words=2
+  entry: ir_blocks=1 ir_insts=6 vcode_ops=17 fixups=4 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  insert_self: ir_blocks=1 ir_insts=8 vcode_ops=20 fixups=0 imm_bytes=10
+    mem: scratch_words=0 stable_words=2 stable_mode=StableAbs(base=0x1020) entry_abs_words=0 abs_words_end=2
+  read_element: ir_blocks=1 ir_insts=3 vcode_ops=7 fixups=0 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case dirty_index: calldata_len=32 success reason=Return gas_used=22194 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1054
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    PUSH2 0x1000 (4096)  // evm_mstore 4096.i256 v1;
+    MSTORE
+    PUSH1 `pc + (3)`  // call %insert_self;
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH1 `pc + (3)`  // v3.i256 = call %read_element;
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    PUSH0  // evm_mstore v0 v3;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
+    PUSH0
+    RETURN
+
+// func inline(never) private %insert_self()
+insert_self:
+  block0:
+    JUMPDEST
+    PUSH2 0x1000 (4096)  // v2.i256 = evm_mload v1;
+    MLOAD
+    PUSH1 0x1 (1)  // v4.i256 = and v2 1.i256;
+    AND
+    PUSH1 0x40 (64)  // evm_mcopy v0 8192.i256 64.i256;
+    PUSH2 0x2000 (8192)
+    PUSH2 0x1020 (4128)
+    MCOPY
+    DUP1  // v11.i256 = shl 5.i256 v4;
+    PUSH1 0x5 (5)
+    SHL
+    PUSH2 0x1020 (4128)  // v12.i256 = add v0 v11;
+    ADD
+    MSTORE  // evm_mstore v12 v4;
+    PUSH1 0x40 (64)  // evm_mcopy 8192.i256 v0 64.i256;
+    PUSH2 0x1020 (4128)
+    PUSH2 0x2000 (8192)
+    MCOPY
+    JUMP  // return;
+
+// func inline(never) private %read_element() -> i256
+read_element:
+  block0:
+    JUMPDEST
+    PUSH2 0x2020 (8224)  // v3.i256 = evm_mload 8224.i256;
+    MLOAD
+    PUSH1 0x1 (1)  // v5.i256 = and v3 1.i256;
+    AND
+    SWAP1  // return v5;
+    JUMP

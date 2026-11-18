@@ -198,6 +198,39 @@ fn bool_member_reads(ctx: &ModuleCtx, func: &Function) -> FxHashSet<InstId> {
         .collect()
 }
 
+/// The `i1`s read from an aggregate member or memory whose only uses store them as `i1`s, into
+/// memory or an aggregate member. Such a copy carries the word it read: a load and a store of
+/// the same type carry the slot's word, and every read that uses the value as an `i1` still goes
+/// through a `bitcast` to `i1`.
+fn bool_word_copies(func: &Function, bool_member_reads: &FxHashSet<InstId>) -> FxHashSet<ValueId> {
+    func.layout
+        .iter_block()
+        .flat_map(|block| func.layout.iter_inst(block))
+        .filter(|inst| {
+            bool_member_reads.contains(inst)
+                || func
+                    .dfg
+                    .downcast::<&Mload>(*inst)
+                    .is_some_and(|load| *load.ty() == Type::I1)
+        })
+        .filter_map(|inst| func.dfg.inst_result(inst))
+        .filter(|&value| {
+            func.dfg.users(value).all(|&user| {
+                func.dfg.downcast::<&Mstore>(user).is_some_and(|store| {
+                    *store.value() == value && *store.addr() != value && *store.ty() == Type::I1
+                }) || func
+                    .dfg
+                    .downcast::<&InsertValue>(user)
+                    .is_some_and(|insert| {
+                        *insert.value() == value
+                            && *insert.dest() != value
+                            && *insert.idx() != value
+                    })
+            })
+        })
+        .collect()
+}
+
 fn legalize_immediate(imm: sonatina_ir::Immediate) -> sonatina_ir::Immediate {
     legalize_evm_scalar_immediate(imm).expect("EVM immediate legalization only supports scalars")
 }
@@ -342,6 +375,8 @@ struct FunctionLegalizer<'a> {
     bool_member_reads: FxHashSet<InstId>,
     /// The `insert_value`s and `bitcast`s that put an `i1` into an aggregate.
     widened_aggregate_members: FxHashSet<InstId>,
+    /// The `i1` reads that only stores use, and the words they read, which those stores copy.
+    bool_word_copies: FxHashSet<ValueId>,
 }
 
 impl<'a> FunctionLegalizer<'a> {
@@ -354,6 +389,7 @@ impl<'a> FunctionLegalizer<'a> {
 
         let bool_member_reads = bool_member_reads(ctx, func);
         let widened_aggregate_members = widened_aggregate_members(ctx, func);
+        let bool_word_copies = bool_word_copies(func, &bool_member_reads);
         Self {
             ctx,
             func,
@@ -361,6 +397,7 @@ impl<'a> FunctionLegalizer<'a> {
             provenance,
             bool_member_reads,
             widened_aggregate_members,
+            bool_word_copies,
         }
     }
 
@@ -2747,20 +2784,34 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                // A `bitcast` to `i1` keeps the low bit of the word.
                 let result = if width == ScalarWidth::Bool {
-                    self.insert_before_one(
-                        inst,
-                        Bitcast::new(self.evm_inst_set(), raw, Type::I1),
-                        Type::I1,
-                        Some(ScalarWidth::Bool),
-                    )
+                    self.bool_from_word(inst, raw)
                 } else {
                     self.normalize_and_retag_width(inst, raw, width)
                 };
                 self.replace_with_aliases(inst, &[result]);
             }
         }
+    }
+
+    /// The `i1` that `inst` reads from `word`: the word itself when only stores of it as an `i1`
+    /// use it, or else its low bit, which a `bitcast` to `i1` keeps.
+    fn bool_from_word(&mut self, inst: InstId, word: ValueId) -> ValueId {
+        let result = self
+            .func
+            .dfg
+            .inst_result(inst)
+            .expect("an `i1` read has a result");
+        if self.bool_word_copies.contains(&result) {
+            self.bool_word_copies.insert(word);
+            return word;
+        }
+        self.insert_before_one(
+            inst,
+            Bitcast::new(self.evm_inst_set(), word, Type::I1),
+            Type::I1,
+            Some(ScalarWidth::Bool),
+        )
     }
 
     /// Lowers a freeze. The zero that replaces `freeze undef` may be an immediate no value had
@@ -2796,13 +2847,22 @@ impl<'a> FunctionLegalizer<'a> {
                 Some(ScalarWidth::Full256),
             )
         };
-        let result = self.insert_before_one(
-            inst,
-            Bitcast::new(is, raw, Type::I1),
-            Type::I1,
-            Some(ScalarWidth::Bool),
-        );
+        let result = self.bool_from_word(inst, raw);
         self.replace_with_aliases(inst, &[result]);
+    }
+
+    /// The word that `inst` stores for `value`, an `i1`: the word a copied `i1` was read from, or
+    /// else the `i1` widened through a `bitcast`.
+    fn word_from_bool(&mut self, inst: InstId, value: ValueId) -> ValueId {
+        if self.bool_word_copies.contains(&value) {
+            return value;
+        }
+        self.insert_before_one(
+            inst,
+            Bitcast::new(self.evm_inst_set(), value, Type::I256),
+            Type::I256,
+            Some(ScalarWidth::Full256),
+        )
     }
 
     /// Widens an `i1` put into an aggregate, whose `i1` members are words.
@@ -2810,12 +2870,7 @@ impl<'a> FunctionLegalizer<'a> {
         let is = self.evm_inst_set();
         if let Some(insert) = downcast::<&InsertValue>(is, self.func.dfg.inst(inst)) {
             let (dest, idx, value) = (*insert.dest(), *insert.idx(), *insert.value());
-            let word = self.insert_before_one(
-                inst,
-                Bitcast::new(is, value, Type::I256),
-                Type::I256,
-                Some(ScalarWidth::Full256),
-            );
+            let word = self.word_from_bool(inst, value);
             self.func
                 .dfg
                 .replace_inst(inst, Box::new(InsertValue::new(is, dest, idx, word)));
@@ -2823,12 +2878,7 @@ impl<'a> FunctionLegalizer<'a> {
             let bitcast = *downcast::<&Bitcast>(is, self.func.dfg.inst(inst))
                 .expect("a widened member is inserted or bitcast");
             let (from, ty) = (*bitcast.from(), *bitcast.ty());
-            let word = self.insert_before_one(
-                inst,
-                Bitcast::new(is, from, Type::I256),
-                Type::I256,
-                Some(ScalarWidth::Full256),
-            );
+            let word = self.word_from_bool(inst, from);
             let ty = self.types.legalize_type(self.ctx, ty);
             self.func
                 .dfg
@@ -2846,15 +2896,7 @@ impl<'a> FunctionLegalizer<'a> {
                     self.normalize_bits_for_width(inst, extended, ScalarWidth::Narrow(bits));
                 (value, ty)
             }
-            Some(ScalarWidth::Bool) => {
-                let word = self.insert_before_one(
-                    inst,
-                    Bitcast::new(self.evm_inst_set(), value, Type::I256),
-                    Type::I256,
-                    Some(ScalarWidth::Full256),
-                );
-                (word, Type::I256)
-            }
+            Some(ScalarWidth::Bool) => (self.word_from_bool(inst, value), Type::I256),
             Some(ScalarWidth::Full256) | None => (value, ty),
         };
         self.func.dfg.replace_inst(
