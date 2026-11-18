@@ -619,28 +619,23 @@ block3:
 fn shared_frame_slots_keep_live_views_loop_values_and_call_arguments() {
     // A loop temporary and a call result would reuse `v5`'s slot if its view
     // `v6`, live across the loop, did not keep it alive.
-    let reverse: String = (0..32)
+    let extracts: String = (0..32)
         .map(|index| {
-            let source = if index == 0 {
-                "undef.[i64; 32]".to_string()
-            } else {
-                format!("v{}", index * 2)
-            };
             format!(
-                "    v{}.i64 = extract_value v0 {}.i64;\n    v{}.[i64; 32] = insert_value {source} {index}.i64 v{};\n",
-                index * 2 + 1,
-                31 - index,
-                index * 2 + 2,
-                index * 2 + 1
+                "    v{}.i64 = extract_value v0 {}.i64;\n",
+                index + 1,
+                31 - index
             )
         })
         .collect();
+    let elems: String = (1..=32).map(|value| format!(" v{value}")).collect();
     let source = format!(
         r#"
 type @Big = {{[i64; 32], [i64; 32]}};
 func inline(never) private %reverse(v0.[i64; 32]) -> [i64; 32] {{
 block0:
-{reverse}    return v64;
+{extracts}    v64.[i64; 32] = agg.make [i64; 32]{elems};
+    return v64;
 }}
 func public %mix(v0.*@Big, v1.*@Big, v2.i64, v3.*[i64; 32], v4.*[i64; 32]) {{
 block0:

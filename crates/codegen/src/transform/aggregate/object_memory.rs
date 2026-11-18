@@ -1707,8 +1707,7 @@ func private %f() -> i256 {{
 block0:
     v0.objref<@Pair> = obj.alloc @Pair;
     v1.objref<@Pair> = obj.alloc @Pair;
-    v2.@Pair = insert_value undef.@Pair 0.i8 {field};
-    v3.@Pair = insert_value v2 1.i8 22.i256;
+    v3.@Pair = agg.make @Pair {field} 22.i256;
     obj.store v0 v3;
     v4.@Pair = obj.load v0;
     obj.store v0 undef.@Pair;

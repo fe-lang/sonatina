@@ -124,23 +124,16 @@ fn wide_division_stays_within_text_budget() {
 #[test]
 fn aggregate_construction_has_linear_code_size_and_executes_large_arrays() {
     for length in [64, 4096] {
-        let inserts = (0..length)
-            .map(|index| {
-                let source = if index == 0 {
-                    format!("undef.[i8; {length}]")
-                } else {
-                    format!("v{}", index * 2 + 1)
-                };
-                format!(
-                    "v{}.i8 = add v1 {}.i8;\nv{}.[i8; {length}] = insert_value {source} {index}.i64 v{};\n",
-                    index * 2 + 2, index % 251, index * 2 + 3, index * 2 + 2,
-                )
-            })
+        let adds = (0..length)
+            .map(|index| format!("v{}.i8 = add v1 {}.i8;\n", index + 2, index % 251))
+            .collect::<String>();
+        let elems = (0..length)
+            .map(|index| format!(" v{}", index + 2))
             .collect::<String>();
         let triple = native_isa(host_architecture()).triple();
-        let last = length * 2 + 1;
+        let last = length + 2;
         let source = format!(
-            "target = \"{triple}\"\nfunc public %construct(v0.*[i8; {length}], v1.i8) {{\nblock0:\n{inserts}mstore v0 v{last} [i8; {length}];\nreturn;\n}}"
+            "target = \"{triple}\"\nfunc public %construct(v0.*[i8; {length}], v1.i8) {{\nblock0:\n{adds}v{last}.[i8; {length}] = agg.make [i8; {length}]{elems};\nmstore v0 v{last} [i8; {length}];\nreturn;\n}}"
         );
         for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
             let module = sonatina_parser::parse_module(&source).unwrap().module;
@@ -388,7 +381,7 @@ block0:
     mstore v0 undef.[i64; {length}] [i64; {length}];
     v4.[i64; {length}] = call %update v3 99.i64;
     mstore v1 v4 [i64; {length}];
-    v5.@Pair = insert_value undef.@Pair 0.i64 v3;
+    v5.@Pair = agg.make @Pair v3 undef.[i64; {length}];
     mstore v2 v5 @Pair;
     return;
 }}
@@ -580,19 +573,16 @@ fn loads_pass_other_loads_to_their_uses() {
 }
 
 #[test]
-fn undef_insert_chains_zero_only_unwritten_bytes() {
-    // A chain that writes both halves needs no zero fill, one that writes a
-    // half zeroes the other, past the inline limit, and padding is zeroed
+fn agg_make_zeroes_only_unwritten_bytes() {
+    // An `agg.make` that writes both halves needs no zero fill, one with an
+    // `undef` half zeroes it, past the inline limit, and padding is zeroed
     // inline.
     let triple = native_isa(host_architecture()).triple();
     let cases = [
-        (
-            "v3.@T = insert_value undef.@T 0.i64 v2;\n    v4.@T = insert_value v3 1.i64 v2;",
-            false,
-        ),
-        ("v4.@T = insert_value undef.@T 1.i64 v2;", true),
+        ("v4.@T = agg.make @T v2 v2;", false),
+        ("v4.@T = agg.make @T undef.[i64; 64] v2;", true),
     ];
-    for (inserts, zero_fill) in cases {
+    for (make, zero_fill) in cases {
         let source = format!(
             r#"target = "{triple}"
 type @T = {{[i64; 64], [i64; 64]}};
@@ -600,7 +590,7 @@ type @Padded = {{i8, [i64; 32]}};
 func public %build(v0.*[i64; 64], v1.*@T) {{
 block0:
     v2.[i64; 64] = mload v0 [i64; 64];
-    {inserts}
+    {make}
     mstore v1 v4 @T;
     return;
 }}
@@ -624,11 +614,7 @@ block0:
                 },
             )
             .unwrap();
-        assert_eq!(
-            imports(artifact.as_bytes(), "memset"),
-            zero_fill,
-            "{inserts}"
-        );
+        assert_eq!(imports(artifact.as_bytes(), "memset"), zero_fill, "{make}");
         #[cfg(feature = "jit")]
         {
             let artifact = CraneliftJitBackend::new()
@@ -647,8 +633,8 @@ block0:
             let mut output = vec![-1; 128];
             unsafe { build(input.as_ptr(), output.as_mut_ptr()) };
             let first: &[i64] = if zero_fill { &[0; 64] } else { &input };
-            assert_eq!(output[..64], first[..], "{inserts}");
-            assert_eq!(output[64..], input[..], "{inserts}");
+            assert_eq!(output[..64], first[..], "{make}");
+            assert_eq!(output[64..], input[..], "{make}");
             let mut padded = vec![0xa5u8; 8 + 256];
             unsafe { pad(input.as_ptr(), 7, padded.as_mut_ptr()) };
             assert_eq!(padded[..8], [7, 0, 0, 0, 0, 0, 0, 0]);
@@ -709,12 +695,10 @@ fn aggregates_skip_temporary_copies() {
 block0:
     br v0 block1 block2;
 block1:
-    v3.@Pair = insert_value undef.@Pair 0.i64 v1;
-    v4.@Pair = insert_value v3 1.i64 v2;
+    v4.@Pair = agg.make @Pair v1 v2;
     return v4;
 block2:
-    v5.@Pair = insert_value undef.@Pair 0.i64 v2;
-    v6.@Pair = insert_value v5 1.i64 v1;
+    v6.@Pair = agg.make @Pair v2 v1;
     return v6;
 }",
             4,
@@ -731,7 +715,7 @@ block0:
             "func private %wrap(v0.*[i64; 32], v1.*@Pair) {
 block0:
     v2.[i64; 32] = mload v0 [i64; 32];
-    v3.@Pair = insert_value undef.@Pair 1.i64 v2;
+    v3.@Pair = agg.make @Pair undef.[i64; 32] v2;
     mstore v1 v3 @Pair;
     return;
 }",

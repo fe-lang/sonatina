@@ -2457,7 +2457,7 @@ func private %pass_nested(v0.@nested) -> @nested {
 
 func private %partial_pair(v0.i256) -> @pair {
     block0:
-        v1.@pair = insert_value undef.@pair 0.i8 v0;
+        v1.@pair = agg.make @pair v0 undef.i256;
         return v1;
 }
 
@@ -2492,9 +2492,8 @@ func public %empty_payload_result() -> i1 {
 
 func public %nested_argument(v0.i256) -> i256 {
     block0:
-        v1.@pair = insert_value undef.@pair 0.i8 v0;
-        v2.@nested = insert_value undef.@nested 1.i8 v1;
-        v3.@nested = insert_value v2 0.i8 v0;
+        v1.@pair = agg.make @pair v0 undef.i256;
+        v3.@nested = agg.make @nested v0 v1;
         v4.@nested = call %pass_nested v3;
         v5.@pair = extract_value v4 1.i8;
         v6.i256 = extract_value v5 1.i8;
@@ -2746,9 +2745,7 @@ func private %read(v0.objref<@triple>) -> @triple {
         v4.i256 = obj.load v3;
         v5.objref<i256> = obj.proj v0 2.i8;
         v6.i256 = obj.load v5;
-        v7.@triple = insert_value undef.@triple 0.i256 v2;
-        v8.@triple = insert_value v7 1.i256 v4;
-        v9.@triple = insert_value v8 2.i256 v6;
+        v9.@triple = agg.make @triple v2 v4 v6;
         return v9;
 }
 "#,
@@ -2817,6 +2814,15 @@ fn loaded_aggregate_reconstruction_preserves_full_growth_limits() {
 #[test]
 fn loaded_aggregate_reconstruction_only_discounts_distinct_matching_scalar_loads() {
     let source = loaded_triple_module();
+    // The loads written over a destination one field at a time.
+    let inserts = |dest: &str| {
+        format!(
+            "v7.@triple = insert_value {dest} 0.i256 v2;\n        \
+             v8.@triple = insert_value v7 1.i256 v4;\n        \
+             v9.@triple = insert_value v8 2.i256 v6;"
+        )
+    };
+    let make = "v9.@triple = agg.make @triple v2 v4 v6;";
     for (name, source) in [
         (
             "aggregate argument destination",
@@ -2825,7 +2831,7 @@ fn loaded_aggregate_reconstruction_only_discounts_distinct_matching_scalar_loads
                     "%read(v0.objref<@triple>)",
                     "%read(v0.objref<@triple>, v10.@triple)",
                 )
-                .replace("insert_value undef.@triple", "insert_value v10")
+                .replace(make, &inserts("v10"))
                 .replace("call %read v0;", "call %read v0 undef.@triple;"),
         ),
         (
@@ -2836,13 +2842,13 @@ fn loaded_aggregate_reconstruction_only_discounts_distinct_matching_scalar_loads
                     "declare external %unknown() -> @triple;\nfunc private %read",
                 )
                 .replace(
-                    "v7.@triple = insert_value undef.@triple",
-                    "v10.@triple = call %unknown;\n        v7.@triple = insert_value v10",
+                    make,
+                    &format!("v10.@triple = call %unknown;\n        {}", inserts("v10")),
                 ),
         ),
         (
             "different field",
-            source.replace("insert_value v8 2.i256 v6", "insert_value v8 0.i256 v6"),
+            source.replace(make, "v9.@triple = agg.make @triple v6 v4 undef.i256;"),
         ),
         (
             "repeated load",
@@ -2908,7 +2914,7 @@ fn loaded_reconstruction_discounts_require_scalarizable_callsite_uses() {
             .replace("return v9;", "return (v9, v10);")
             .replace("v1.i256) -> i256", "v1.i256, v5.@triple) -> i256")
             .replace("v2.@triple = call %read v0;", "(v2.@triple, v6.@triple) = call %read v0 v5;")
-            .replace("v4.i256 = extract_value v2 0.i8;", "v7.@pair = insert_value undef.@pair 0.i8 v2;\n        v8.@pair = insert_value v7 1.i8 v6;\n        v9.@triple = extract_value v8 0.i8;\n        v4.i256 = extract_value v9 0.i8;"),
+            .replace("v4.i256 = extract_value v2 0.i8;", "v8.@pair = agg.make @pair v2 v6;\n        v9.@triple = extract_value v8 0.i8;\n        v4.i256 = extract_value v9 0.i8;"),
     ] {
         let source = source.replace(
             "func private %read",
@@ -2974,7 +2980,7 @@ fn assert_reconstruction_cleanup(module: &mut Module) {
         let caller = find_func(module, &format!("caller{index}"));
         module.func_store.view(caller, |func| {
             let text = FuncWriter::new(caller, func).dump_string();
-            assert!(!text.contains("insert_value"), "{text}");
+            assert!(!text.contains("agg.make"), "{text}");
         });
     }
 }

@@ -1297,8 +1297,7 @@ block2:
 fn i256_values_cross_loop_carried_aggregates() {
     // `v12` is extracted from the phi before the back edge copies the
     // updated pair into it, and is read after the loop.
-    let body = "    v7.@Pair = insert_value undef.@Pair 0.i64 v4;
-    v8.@Pair = insert_value v7 1.i64 v5;
+    let body = "    v8.@Pair = agg.make @Pair v4 v5;
     jump block1;
 block1:
     v10.@Pair = phi (v8 block0) (v16 block1);

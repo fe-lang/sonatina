@@ -1557,17 +1557,16 @@ block0:
 
     #[test]
     fn inserted_values_live_in_their_fields() {
-        // The call result and the inner chain only fill fields of the outer
-        // chain, so they are built in its storage.
+        // The call result and the inner `agg.make` only fill fields of the
+        // outer one, so they are built in its storage.
         let sizes = slot_sizes(
             r#"
 declare external %g() -> [i64; 32];
 func public %f(v0.*[[i64; 32]; 2]) {
 block0:
     v1.[i64; 32] = call %g;
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 5.i64;
-    v3.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 0.i64 v1;
-    v4.[[i64; 32]; 2] = insert_value v3 1.i64 v2;
+    v2.[i64; 32] = agg.make [i64; 32] 5.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v4.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v1 v2;
     mstore v0 v4 [[i64; 32]; 2];
     return;
 }
@@ -1597,7 +1596,9 @@ block0:
 
     #[test]
     fn values_for_rewritten_fields_keep_their_storage() {
-        // Field 0 is written twice, so `v1` and `v2` cannot both live there.
+        // Field 0 is written twice, so `v1` and `v2` cannot both live there:
+        // `v1`, which only the `agg.make` reads, is built in it, and `v2`,
+        // inserted over it afterwards, keeps its own slot.
         let sizes = slot_sizes(
             r#"
 declare external %g() -> [i64; 32];
@@ -1605,19 +1606,19 @@ func public %f(v0.*[[i64; 32]; 2]) {
 block0:
     v1.[i64; 32] = call %g;
     v2.[i64; 32] = call %g;
-    v3.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 0.i64 v1;
+    v3.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v1 undef.[i64; 32];
     v4.[[i64; 32]; 2] = insert_value v3 0.i64 v2;
     mstore v0 v4 [[i64; 32]; 2];
     return;
 }
 "#,
         );
-        assert_eq!(sizes, [256, 256, 512]);
+        assert_eq!(sizes, [512, 256]);
     }
 
     #[test]
     fn stored_chains_are_built_at_their_destination() {
-        // `v2`'s chain is only stored into `v1`; `v5`'s store into memory
+        // `v3` is only stored into `v1`; `v5`'s store into memory
         // follows a load of memory, which may read it, so it is built in a
         // slot and copied.
         let sizes = slot_sizes(
@@ -1625,11 +1626,10 @@ block0:
 func public %f(v0.i64, v4.*i64, v7.*[i64; 32]) {
 block0:
     v1.objref<[i64; 32]> = obj.alloc [i64; 32];
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
-    v3.[i64; 32] = insert_value v2 1.i64 v0;
+    v3.[i64; 32] = agg.make [i64; 32] v0 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     obj.store v1 v3;
     v8.objref<[i64; 32]> = obj.from_ptr v7;
-    v5.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v5.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     v6.i64 = mload v4 i64;
     obj.store v8 v5;
     mstore v4 v6 i64;
@@ -1643,7 +1643,7 @@ block0:
     #[test]
     fn chains_stored_into_local_objects_are_built_there_across_other_effects() {
         // Nothing but its own uses reaches `v1`, so neither the store to
-        // memory nor the call between `v2`'s chain and `v1`'s store sees `v1`
+        // memory nor the call between `v2` and `v1`'s store sees `v1`
         // written early.
         let sizes = slot_sizes(
             r#"
@@ -1651,12 +1651,11 @@ declare external %g(i64) -> i64;
 func public %f(v0.i64, v7.*i64) {
 block0:
     v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     mstore v7 v0 i64;
     v3.i64 = call %g v0;
-    v4.[i64; 32] = insert_value undef.[i64; 32] 5.i64 v3;
-    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
-    v6.[[i64; 32]; 2] = insert_value v5 0.i64 v4;
+    v4.[i64; 32] = agg.make [i64; 32] undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v3 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v6.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v4 v2;
     obj.store v1 v6;
     return;
 }
@@ -1677,10 +1676,10 @@ block0:
     v14.objref<[i64; 32]> = obj.index v1 1.i64;
     v3.objref<i64> = obj.index v14 2.i64;
     obj.store v3 v0;
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     v4.i64 = obj.load v3;
     mstore v10 v4 i64;
-    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
+    v5.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v2;
     obj.store v1 v5;
     return;
 }
@@ -1691,8 +1690,8 @@ block0:
 
     #[test]
     fn chains_stored_into_local_objects_keep_storage_when_they_insert_its_loads() {
-        // `v4` reads `v1`'s first field in place where `v6` inserts it,
-        // after `v5` would have written the second.
+        // `v4` reads `v1`'s first field in place where `v6` puts it, after
+        // `v3` would have written the second.
         let sizes = slot_sizes(
             r#"
 func public %f(v0.i64) {
@@ -1702,9 +1701,8 @@ block0:
     v7.objref<i64> = obj.index v2 3.i64;
     obj.store v7 v0;
     v4.[i64; 32] = obj.load v2;
-    v3.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
-    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v3;
-    v6.[[i64; 32]; 2] = insert_value v5 0.i64 v4;
+    v3.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v6.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v4 v3;
     obj.store v1 v6;
     return;
 }
@@ -1715,18 +1713,16 @@ block0:
 
     #[test]
     fn stored_chains_build_their_embedded_chains_at_the_destination() {
-        // `v4`'s chain, built before its parent's starts, fills a field of
-        // the chain stored into `v1`, so both are built in `v1`.
+        // `v3` and `v5` fill fields of the `agg.make` stored into `v1`, so
+        // all three are built in `v1`.
         let sizes = slot_sizes(
             r#"
 func public %f(v0.i64) {
 block0:
     v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
-    v3.[i64; 32] = insert_value v2 1.i64 v0;
-    v4.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v3;
-    v5.[i64; 32] = insert_value undef.[i64; 32] 2.i64 v0;
-    v6.[[i64; 32]; 2] = insert_value v4 0.i64 v5;
+    v3.[i64; 32] = agg.make [i64; 32] v0 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v5.[i64; 32] = agg.make [i64; 32] undef.i64 undef.i64 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v6.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v5 v3;
     obj.store v1 v6;
     return;
 }
@@ -1751,8 +1747,7 @@ func public %f(v0.i64, v1.*@change) {
 block0:
     v2.objref<@change> = obj.from_ptr v1;
     v3.@kind = enum.make @kind #Storage (v0, v0, v0, 1.i1);
-    v4.@change = insert_value undef.@change 0.i64 v0;
-    v5.@change = insert_value v4 1.i64 v3;
+    v5.@change = agg.make @change v0 v3;
     obj.store v2 v5;
     return;
 }
@@ -1771,9 +1766,9 @@ block0:
 func public %f(v0.i64, v7.*i64, v8.*[[i64; 32]; 2]) {
 block0:
     v1.objref<[[i64; 32]; 2]> = obj.from_ptr v8;
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     mstore v7 v0 i64;
-    v4.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
+    v4.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v2;
     obj.store v1 v4;
     return;
 }
@@ -1789,7 +1784,7 @@ block0:
             r#"
 func private %f(v0.objref<[i64; 32]>, v1.i64) {
 block0:
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v1;
+    v2.[i64; 32] = agg.make [i64; 32] v1 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     v3.objref<i64> = obj.index v0 0.i64;
     v4.i64 = obj.load v3;
     v5.[i64; 32] = insert_value v2 1.i64 v4;

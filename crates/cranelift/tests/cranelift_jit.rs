@@ -1776,15 +1776,14 @@ fn aggregate_memory_ops_copy_complete_values() {
         Type::I64,
     ));
 
-    let mut value = function_builder.make_undef_value(array_type);
-    for (index, element) in [11i64, 22, 33, 44, 55].into_iter().enumerate() {
-        let index = function_builder.make_imm_value(index as i64);
-        let element = function_builder.make_imm_value(element);
-        value = function_builder.insert_inst(
-            data::InsertValue::new(instructions, value, index, element),
-            array_type,
-        );
-    }
+    let elements = [11i64, 22, 33, 44, 55]
+        .into_iter()
+        .map(|element| function_builder.make_imm_value(element))
+        .collect();
+    let value = function_builder.insert_inst(
+        data::AggMake::new(instructions, array_type, elements),
+        array_type,
+    );
     function_builder.insert_inst_no_result(data::Mstore::new(
         instructions,
         target,
@@ -1840,18 +1839,15 @@ fn aggregate_returns_copy_the_complete_value() {
         let mut function_builder = builder.func_builder::<InstInserter>(make);
         let entry = function_builder.append_block();
         function_builder.switch_to_block(entry);
-        let mut value = function_builder.make_undef_value(aggregate_type);
-        let head_index = function_builder.make_imm_value(0i8);
         let head =
             function_builder.make_imm_value(Immediate::from_i256(I256::from(17u8), Type::I256));
-        value = function_builder.insert_inst(
-            data::InsertValue::new(instructions, value, head_index, head),
-            aggregate_type,
-        );
-        let tail_index = function_builder.make_imm_value(1i8);
         let tail = function_builder.make_imm_value(29i64);
-        value = function_builder.insert_inst(
-            data::InsertValue::new(instructions, value, tail_index, tail),
+        let value = function_builder.insert_inst(
+            data::AggMake::new(
+                instructions,
+                aggregate_type,
+                smallvec::smallvec![head, tail],
+            ),
             aggregate_type,
         );
         function_builder
