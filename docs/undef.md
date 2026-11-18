@@ -31,11 +31,20 @@ Using the unspecified value is undefined behavior only:
 - as the condition of a `br` or the scrutinee of a `br_table`;
 - as the address or object operand of a load, a store or any other access
   through a pointer or object reference;
+- as an index that selects a member or computes an address: `gep`,
+  `obj.index`, `const.index`, `insert_value`, `extract_value`, the field of
+  `enum.extract` or `enum.proj`;
 - in a trusted variant assumption: `enum.assert_variant`, `enum.extract`.
 
 Avoiding these is the frontend's obligation. An unspecified word that reaches
 observable output (return data, a log, `sstore`, the data of an external call)
 is emitted as some bits; there is no obligation there.
+
+An operand that sets what an effect does rather than being data is taken as
+some value of its type when it is unspecified, as if frozen: a length or size,
+the gas, value or target of a call, the salt of `evm_create2`, an offset into
+calldata, code or return data, the size of an allocation. An unspecified `i8`
+length is a length from 0 to 255; an unspecified `i256` length is any word.
 
 Division or remainder by zero, or by an unspecified divisor, is a separate
 question that this page does not settle.
@@ -44,19 +53,33 @@ question that this page does not settle.
 
 Every scalar a typed store writes occupies a slot; on EVM each scalar, narrow
 ones included, takes one 32-byte word, and a typed store writes all of it. A
-slot of an `alloca` or object that no store has written holds the unspecified
-value, and a typed load of a slot gives what the last store to it wrote.
+typed load of a slot gives what the last typed store to it wrote. A slot that
+nothing wrote, or that was last written another way, holds the unspecified
+value; a typed load does not make it a value of its type.
+
+A copy of whole slots, by `memcopy`, `evm_mcopy`, or a load and store of the
+same type, gives each destination slot the value its source slot held,
+specified or not. A slot a copy covers only in part is written another way.
+
+A raw read of a slot that holds the unspecified value (`evm_mload`,
+`evm_keccak256`, the source of `evm_mcopy`) sees some bytes: `evm_mload` of
+them is the unspecified value, and so is a hash of them, and as output they
+are emitted as some bits.
 
 The contents of raw EVM memory that no typed store wrote (fresh `evm_malloc`
 memory, the bytes past a buffer, bytes written by `evm_mstore8`, a word that
-overlaps several slots) are not defined here. The EVM reads zero there; the
-byte-level memory model is an open question.
+overlaps several slots) are not defined here otherwise. The EVM reads zero
+there; the byte-level memory model is an open question.
 
 ## Lowering
 
 Every backend materializes a literal `undef` as zero. Any other unspecified
 value has whatever bits the compiled code computes or the memory holds: a slot
 no store wrote reads its old contents.
+
+On EVM a narrow value's word is normalized, or the value is unspecified and the
+word may be any word; `freeze` and effect operands are where such a value is
+made a value of its type, by masking the word.
 
 ## Rules for passes
 
@@ -73,3 +96,10 @@ may be unspecified is therefore always allowed: `sub x x` to 0 and `eq x x` to
   gives 1 and the target the unspecified value.
 
 A pass that needs such a form first freezes the operand.
+
+A fact an analysis derives about a value, such as its known bits or its range,
+describes the word the compiled code computes, also where the value is
+unspecified; `freeze x` has `x`'s facts only because `freeze` is the identity on
+that word. A pass that refines an unspecified value to a particular value must
+pick one every such fact allows. Refining a literal `undef` to zero is always
+allowed, since analyses take nothing from it.
