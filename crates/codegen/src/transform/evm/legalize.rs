@@ -3052,10 +3052,30 @@ impl<'a> FunctionLegalizer<'a> {
         )
     }
 
-    /// Lowers `freeze undef`. The zero that replaces it may be an immediate no value had
-    /// before; it takes the freeze's width.
+    /// Masks the word a narrow integer freeze makes concrete, and lowers `freeze undef`. The zero
+    /// that replaces `freeze undef` may be an immediate no value had before; it takes the freeze's
+    /// width.
     fn rewrite_freeze(&mut self, inst: InstId) {
         let width = self.single_result_width(inst);
+        let arg = *downcast::<&Freeze>(self.evm_inst_set(), self.func.dfg.inst(inst))
+            .expect("a freeze")
+            .arg();
+        // A narrow word is a value of its type or holds the unspecified value, and `freeze` makes
+        // it a value of its type. The mask is on a word-typed freeze, so it is not skipped on the
+        // width the argument is tagged with; known bits may drop it later.
+        if let Some(width @ ScalarWidth::Narrow(_)) = width
+            && !matches!(self.func.dfg.value(arg), Value::Undef { .. })
+        {
+            let frozen = self.insert_before_one(
+                inst,
+                Freeze::new(self.evm_inst_set(), arg),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let result = self.normalize_and_retag_width(inst, frozen, width);
+            self.replace_with_aliases(inst, &[result]);
+            return;
+        }
         if let Some(lowered) = lower_frozen_undef(self.func, inst)
             && self.width_of(lowered).is_none()
         {
