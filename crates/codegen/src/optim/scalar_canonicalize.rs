@@ -177,6 +177,9 @@ fn canonicalize_binary_inst(
     if let Some(rewrite) = canonicalize_evm_byte(func, inst, kind, lhs, rhs) {
         return Some(rewrite);
     }
+    if let Some(rewrite) = canonicalize_evm_signextend(func, inst, kind, lhs, rhs) {
+        return Some(rewrite);
+    }
     match kind {
         BinaryInstKind::Eq
             if func.dfg.value_ty(lhs).is_integral() && func.dfg.value_ty(rhs).is_integral() =>
@@ -308,6 +311,44 @@ fn canonicalize_evm_byte(
     }
     Some(InstSpec::Binary {
         kind: BinaryInstKind::EvmByte,
+        lhs: Operand::Imm(Immediate::from_i256(
+            I256::from(31 - count.as_usize() / 8),
+            Type::I256,
+        )),
+        rhs: Operand::Value(*shift.value()),
+    })
+}
+
+/// Select SIGNEXTEND for byte-aligned left/arithmetic-right shift pairs.
+/// Keep shared or cross-block producers to avoid extending source liveness.
+fn canonicalize_evm_signextend(
+    func: &Function,
+    inst: InstId,
+    kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<InstSpec> {
+    if func.ctx().triple.architecture != Architecture::Evm
+        || kind != BinaryInstKind::Sar
+        || func.dfg.value_ty(lhs) != Type::I256
+        || func.dfg.value_ty(rhs) != Type::I256
+    {
+        return None;
+    }
+    let count = imm_to_u256(func.dfg.value_imm(lhs)?);
+    if count == U256::zero() || count > U256::from(248) || count % U256::from(8) != U256::zero() {
+        return None;
+    }
+    let producer = func.dfg.value_inst(rhs)?;
+    let shift = func.dfg.downcast::<&arith::Shl>(producer)?;
+    if imm_to_u256(func.dfg.value_imm(*shift.bits())?) != count
+        || func.dfg.users_num(rhs) != 1
+        || func.layout.inst_block(producer) != func.layout.inst_block(inst)
+    {
+        return None;
+    }
+    Some(InstSpec::Binary {
+        kind: BinaryInstKind::EvmSignExtend,
         lhs: Operand::Imm(Immediate::from_i256(
             I256::from(31 - count.as_usize() / 8),
             Type::I256,
@@ -511,6 +552,11 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
                 BinaryInstKind::EvmByte => {
                     Some(Box::new(evm::EvmByte::new(is.has_evm_byte()?, lhs, rhs)))
                 }
+                BinaryInstKind::EvmSignExtend => Some(Box::new(evm::EvmSignExtend::new(
+                    is.has_evm_sign_extend()?,
+                    lhs,
+                    rhs,
+                ))),
                 BinaryInstKind::Udiv => Some(Box::new(arith::Udiv::new(is.has_udiv()?, lhs, rhs))),
                 BinaryInstKind::EvmUdiv => {
                     Some(Box::new(evm::EvmUdiv::new(is.has_evm_udiv()?, lhs, rhs)))
@@ -580,6 +626,7 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             BinaryInstKind::Sar => is.has_sar().is_some(),
             BinaryInstKind::And => is.has_and().is_some(),
             BinaryInstKind::EvmByte => is.has_evm_byte().is_some(),
+            BinaryInstKind::EvmSignExtend => is.has_evm_sign_extend().is_some(),
             BinaryInstKind::Udiv => is.has_udiv().is_some(),
             BinaryInstKind::EvmUdiv => is.has_evm_udiv().is_some(),
             _ => false,
@@ -1150,5 +1197,62 @@ block0:
             ScalarCanonicalize::new().run(func);
         });
         assert!(!dump_func(&module, f).contains("evm_byte"));
+    }
+    #[test]
+    fn selects_signextend_for_each_byte_width() {
+        for shift in (8..=248).step_by(8) {
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i256 {{\nblock0:\n v1.i256 = shl {shift}.i256 v0;\n v2.i256 = sar {shift}.i256 v1;\n return v2;\n}}"
+            );
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(
+                dumped.contains(&format!("evm_signextend {}.i256 v0", 31 - shift / 8)),
+                "{dumped}"
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_unmatched_sign_shifts() {
+        for (target, ty, shift) in [
+            ("evm-ethereum-osaka", "i256", 13),
+            ("evm-ethereum-osaka", "i256", 256),
+            ("evm-ethereum-osaka", "i16", 8),
+            ("x86_64-unknown-native", "i256", 8),
+        ] {
+            let source = format!(
+                "target = \"{target}\"\nfunc public %f(v0.{ty}) -> {ty} {{\nblock0:\n v1.{ty} = shl {shift}.{ty} v0;\n v2.{ty} = sar {shift}.{ty} v1;\n return v2;\n}}"
+            );
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            assert!(!dump_func(&module, f).contains("evm_signextend"));
+        }
+    }
+    #[test]
+    fn keeps_shared_and_cross_block_sign_shifts() {
+        for body in [
+            "v1.i256 = shl 248.i256 v0; v2.i256 = sar 240.i256 v1; return v2;",
+            "v1.i256 = shl 248.i256 v0; v2.i256 = sar 248.i256 v1; v3.i256 = add v1 v2; return v3;",
+            "v1.i256 = shl 248.i256 v0; jump block1;\nblock1:\n v2.i256 = sar 248.i256 v1; return v2;",
+        ] {
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i256 {{\nblock0:\n{body}\n}}"
+            );
+            let (module, f) = parse_test_module(&source.replace("; ", ";\n"));
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(
+                !dumped.contains("evm_signextend") && !dumped.contains("evm_byte"),
+                "{dumped}"
+            );
+        }
     }
 }
