@@ -150,8 +150,8 @@ accesses and keep it alive for the call.
 
 Do not infer general C compatibility from the platform calling convention.
 In particular, C aggregate-by-value signatures, `_Bool`, narrow signed
-parameters/results, variadic calls and arbitrary multiple returns do not
-have a documented mapping here. Use explicit scalar/pointer wrappers,
+parameters/results and arbitrary multiple returns do not have a documented
+mapping here. Use explicit scalar/pointer wrappers,
 extending or truncating narrow values inside Sonatina. `i128` is supported
 in the native ABI, but is not part of this portable C subset. Likewise an
 `i256` result is not interchangeable with a C struct result.
@@ -183,6 +183,19 @@ symbol-registration interface. Native memory helpers may require platform
 libc symbols: aggregate copies and zero fills above 128 bytes call `memcpy` and
 `memset`.
 
+An external declaration whose parameters end in `...`, such as
+`declare external %fcntl(i32, i32, ...) -> i32;`, imports a C variadic
+function. Its fixed parameters are `i32`, `i64` or pointers, and a call may
+pass more `i32`, `i64` or pointer arguments after them, which the callee's
+`va_arg` reads as 32-bit, 64-bit or pointer values. Extend narrower values
+to `i32` first, as C's default argument promotions do. On AArch64 macOS
+each extra argument takes an eight-byte stack slot of its own, as Apple's
+convention requires. On x86-64, `%al`, which bounds the vector registers a
+System V variadic call uses, is left unset; extra arguments are never
+floating point, so a callee that reads it at most saves registers it need
+not. A variadic function has no address in Sonatina: `get_function_ptr`
+and `sym_addr` reject it.
+
 Representable `undef` values surviving to native translation are materialized
 as zero, null or zero-filled aggregate storage. This is a backend choice,
 not a guarantee that earlier IR optimization preserves a particular undef
@@ -202,8 +215,9 @@ are.
 unsupported; `sym_addr` of a global is its address. Dynamic
 allocation and object materialization use the allocation and lifetime rules
 above.
-There are no first-class function values, indirect calls, varargs, floating
-point operations or EVM-specific runtime services in this slice. Division
+There are no first-class function values, indirect calls, variadic
+definitions, floating point operations or EVM-specific runtime services in
+this slice. Division
 by zero is undefined at the IR level; callers must not rely on an EVM-style
 zero result or a uniform trap policy across widths. `i128` and `i256`
 divisions call a divider function local to each object.

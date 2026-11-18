@@ -164,6 +164,7 @@ pub struct FuncDeclaration {
     pub cold: bool,
     pub name: FunctionName,
     pub params: Vec<FuncParamType>,
+    pub variadic: bool,
     pub ret_types: Vec<Type>,
 }
 
@@ -187,15 +188,20 @@ impl FromSyntax<Error> for FuncParamType {
 impl FromSyntax<Error> for FuncDeclaration {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         let linkage = node.parse_str(Rule::linkage);
+        let (params, variadic) = node.descend_into(Rule::function_param_type_list, |n| {
+            (
+                n.multi(Rule::function_param_type),
+                n.get_opt(Rule::variadic).is_some(),
+            )
+        });
 
         FuncDeclaration {
             linkage,
             inline_hint: node.single_opt(Rule::inline_hint).unwrap_or_default(),
             cold: node.get_opt(Rule::cold).is_some(),
             name: node.single(Rule::function_identifier),
-            params: node.descend_into(Rule::function_param_type_list, |n| {
-                n.multi(Rule::function_param_type)
-            }),
+            params,
+            variadic,
             ret_types: node
                 .descend_into_opt(Rule::function_ret_type, |n| n.multi(Rule::type_name))
                 .unwrap_or_default(),

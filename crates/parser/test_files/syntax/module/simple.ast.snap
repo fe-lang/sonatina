@@ -43,6 +43,7 @@ Module {
                     },
                 },
             ],
+            variadic: false,
             ret_types: [
                 Type {
                     kind: Int(

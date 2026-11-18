@@ -4,9 +4,9 @@ use sonatina_codegen::{
     backend::{Backend, BackendOptions},
     compile::OptLevel,
 };
-use sonatina_cranelift::CraneliftObjectBackend;
 #[cfg(feature = "jit")]
-use sonatina_cranelift::{CraneliftError, CraneliftJitBackend};
+use sonatina_cranelift::CraneliftJitBackend;
+use sonatina_cranelift::{CraneliftError, CraneliftObjectBackend};
 use sonatina_ir::{Module, Type};
 use sonatina_triple::TargetTriple;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
@@ -247,4 +247,19 @@ fn jit_rejects_sp1_without_translating_it() {
         errors.as_slice(),
         [CraneliftError::UnsupportedTarget(_)]
     ));
+}
+
+#[test]
+fn variadic_imports_are_rejected() {
+    let module = parse(
+        "declare external %log(i32, ...);\nfunc public %main() -> i32 {\nblock0:\n    call %log 1.i32 2.i64;\n    return 0.i32;\n}",
+    );
+    let errors = CraneliftObjectBackend::new()
+        .compile_module(&module, &BackendOptions::default())
+        .err()
+        .unwrap();
+    assert!(
+        matches!(errors.as_slice(), [CraneliftError::Translation(text)] if text.contains("variadic")),
+        "{errors:?}"
+    );
 }

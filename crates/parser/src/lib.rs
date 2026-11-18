@@ -122,6 +122,7 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
             let ret_tys = ctx.ret_tys(&builder, &func.ret_types);
 
             let mut sig = Signature::new(&func.name.name, func.linkage, &params, &ret_tys);
+            sig.set_variadic(func.variadic);
             for (idx, param) in func.params.iter().enumerate() {
                 if param.nocapture {
                     sig.set_nocapture_arg(idx);
@@ -1308,6 +1309,54 @@ func private %read(noalias nocapture readonly v0.objref<i256>, readonly v1.objre
             "func private %read(noalias nocapture readonly v0.objref<i256>, readonly v1.objref<i256>, nocapture v2.objref<i256>) -> i256 {"
         ));
         assert_eq!(marks(&printed), (parsed, printed.clone()));
+    }
+
+    #[test]
+    fn test_variadic_declarations_roundtrip() {
+        let s = r#"
+target = "x86_64-unknown-native"
+
+declare external %fcntl(i32, i32, ...) -> i32;
+declare external %any(...);
+declare external %fixed(i32);
+
+func public %nonblock(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %fcntl v0 4.i32 2048.i32;
+        call %any;
+        return v1;
+}
+"#;
+        let variadic = |source: &str| {
+            let parsed = parse_module(source).unwrap();
+            let flags = ["fcntl", "any", "fixed"].map(|name| {
+                let func = parsed
+                    .module
+                    .ctx
+                    .declared_funcs
+                    .iter()
+                    .find_map(|entry| (entry.value().name() == name).then(|| *entry.key()))
+                    .expect("function should be declared");
+                parsed.module.ctx.func_sig(func, ir::Signature::is_variadic)
+            });
+            let printed =
+                ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug)
+                    .dump_string();
+            (flags, printed)
+        };
+        let (flags, printed) = variadic(s);
+        assert_eq!(flags, [true, true, false]);
+        assert!(printed.contains("declare external %fcntl(i32, i32, ...) -> i32;"));
+        assert!(printed.contains("declare external %any(...);"));
+        assert!(printed.contains("declare external %fixed(i32);"));
+        assert!(printed.contains("v1.i32 = call %fcntl v0 4.i32 2048.i32;"));
+        assert_eq!(variadic(&printed), (flags, printed.clone()));
+
+        for misplaced in ["(..., i32)", "(i32, ..., ...)", "(i32, ...,)", "(i32 ...)"] {
+            let source =
+                format!("target = \"x86_64-unknown-native\"\n\ndeclare external %f{misplaced};\n");
+            assert!(parse_module(&source).is_err(), "{misplaced}");
+        }
     }
 
     #[test]

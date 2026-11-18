@@ -209,3 +209,30 @@ func public %pair() -> (i8, i1) {
     let mut machine = Machine::new(parsed.module);
     let _ = machine.run(pair, vec![]);
 }
+
+#[test]
+#[should_panic(expected = "the interpreter cannot call %log, which has no body")]
+fn interpreter_rejects_calls_to_variadic_externals() {
+    let source = r#"
+target = "x86_64-unknown-native"
+
+declare external %log(i32, ...) -> i32;
+
+func public %main() -> i32 {
+    block0:
+        v0.i32 = call %log 1.i32 2.i32 3.i64;
+        return v0;
+}
+"#;
+
+    let parsed = sonatina_parser::parse_module(source).expect("module should parse");
+    let main = parsed
+        .module
+        .ctx
+        .declared_funcs
+        .iter()
+        .find_map(|entry| (entry.value().name() == "main").then(|| *entry.key()))
+        .expect("main should be declared");
+    let mut machine = Machine::new(parsed.module);
+    let _ = machine.run(main, vec![]);
+}

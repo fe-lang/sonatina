@@ -386,6 +386,10 @@ pub struct Signature {
     /// The sorted indices of the arguments marked `readonly`; see
     /// [`Self::is_readonly_arg`].
     readonly_args: SmallVec<[usize; 4]>,
+
+    /// Whether calls may pass arguments after `args`; see
+    /// [`Self::is_variadic`].
+    variadic: bool,
 }
 
 impl Signature {
@@ -397,6 +401,7 @@ impl Signature {
             ret_tys: ret_tys.into(),
             nocapture_args: SmallVec::new(),
             readonly_args: SmallVec::new(),
+            variadic: false,
         }
     }
 
@@ -434,6 +439,18 @@ impl Signature {
 
     pub fn args(&self) -> &[Type] {
         &self.args
+    }
+
+    /// Whether this is the signature of a C variadic function: a call passes
+    /// `args` and may pass more arguments after them, each an `i32`, an `i64`
+    /// or a pointer. Only an external function can be variadic.
+    pub fn is_variadic(&self) -> bool {
+        self.variadic
+    }
+
+    /// Makes this signature variadic or not; see [`Self::is_variadic`].
+    pub fn set_variadic(&mut self, variadic: bool) {
+        self.variadic = variadic;
     }
 
     /// Whether argument `idx` is a `nocapture` object reference: no reference
@@ -555,6 +572,12 @@ where
             }
             self.write_arg_marks(w, idx)?;
             arg.write(w, ctx)?;
+        }
+        if self.variadic {
+            if !self.args.is_empty() {
+                write!(w, ", ")?;
+            }
+            write!(w, "...")?;
         }
         write!(w, ")")?;
 

@@ -22,8 +22,9 @@ triple_component = _{ (ASCII_ALPHANUMERIC | "_")+ }
 
 declaration              = _{ function_declaration | struct_declaration | enum_declaration | gv_declaration }
 function_declaration     =  { "declare" ~ inline_hint? ~ cold? ~ linkage ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
-function_param_type_list =  { "(" ~ (function_param_type ~ ",")* ~ function_param_type? ~ ")" }
+function_param_type_list =  { "(" ~ (function_param_type ~ ",")* ~ (function_param_type | variadic)? ~ ")" }
 function_param_type      =  { nocapture? ~ readonly? ~ type_name }
+variadic                 =  { "..." }
 struct_declaration       =  { "type" ~ struct_identifier ~ "=" ~ struct_fields ~ ";" }
 enum_declaration         =  { "type" ~ struct_identifier ~ "=" ~ "enum" ~ "{" ~ NEWLINE* ~ enum_variant_list ~ NEWLINE* ~ "}" ~ ";" }
 enum_variant_list        = ${ (NEWLINE* ~ enum_variant_line ~ "," )* ~ NEWLINE* ~ enum_variant_line? }
