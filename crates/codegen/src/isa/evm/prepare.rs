@@ -10,7 +10,7 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     machinst::lower::{SectionMembership, SectionWorkModule},
     module_analysis::{CallGraphSchedule, SccRef},
-    stackalloc::{Action, Allocator, StackifyAlloc},
+    stackalloc::{Action, StackifyAlloc},
 };
 use sonatina_ir::{
     AccessKind, AccessLoc, BlockId, Function, GlobalVariableRef, InstDowncast, InstId, InstSetExt,
@@ -34,7 +34,7 @@ use super::{
     EvmBackend, LateCleanupProfile,
     dyn_sp::{FuncDynSpPlan, compute_machine_dyn_sp_plan},
     emit::{
-        FinalAlloc, LateBlockAliasPlan, compute_function_entry_jump_targets,
+        FinalAlloc, LateBlockAliasPlan, block_action_sites, compute_function_entry_jump_targets,
         compute_late_block_alias_plan, immediate_u32, rewrite_evm_local_fallthrough_layout,
     },
     fixed_slots,
@@ -663,27 +663,17 @@ fn machine_fixed_memory_write_ranges(
     let mut accesses = SecondaryMap::new();
     let mut ranges = Vec::new();
     for block in function.layout.iter_block() {
-        accesses[block] = function.layout.entry_block() == Some(block)
-            && alloc.enter_function(function).iter().any(memory_action);
+        accesses[block] = block_action_sites(function, alloc, block)
+            .any(|(_, actions)| actions.iter().any(memory_action));
         for inst in function.layout.iter_inst(block) {
-            accesses[block] |= alloc
-                .pre_inst(inst)
-                .iter()
-                .chain(alloc.post_inst(inst))
-                .any(memory_action);
-            match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
-                // Call-preserve actions are injected after this analysis.
-                EvmMachineInstKind::Call(_) => accesses[block] = true,
-                EvmMachineInstKind::BrTable(branch) => {
-                    accesses[block] |= branch.table().iter().enumerate().any(|(index, _)| {
-                        alloc.br_table_case(inst, index).iter().any(memory_action)
-                    });
-                }
-                _ => {}
+            // Call-preserve actions are injected after this analysis.
+            if matches!(
+                isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                EvmMachineInstKind::Call(_)
+            ) {
+                accesses[block] = true;
             }
-            if let Some(range) = machine_fixed_memory_write_range(function, isa, inst) {
-                ranges.push(range);
-            }
+            ranges.extend(machine_fixed_memory_write_range(function, isa, inst));
         }
     }
     // A write cannot conflict with a final spill if every remaining path halts

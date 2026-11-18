@@ -5,18 +5,15 @@ use sonatina_ir::Module;
 use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, ValueId,
     cfg::ControlFlowGraph,
-    inst::evm::{inst_set::EvmInstKind, machine_inst_set::EvmMachineInstKind},
-    isa::{
-        Isa,
-        evm::{Evm, EvmMachine},
-    },
+    inst::evm::inst_set::EvmInstKind,
+    isa::{Isa, evm::Evm},
     module::FuncRef,
 };
 
 use crate::{
     bitset::BitSet,
     module_analysis::CallGraphSchedule,
-    stackalloc::{Action, Allocator, StackifyAlloc},
+    stackalloc::{Action, ActionSite, StackifyAlloc},
 };
 
 use crate::isa::evm::memory_plan::align_up_to_word;
@@ -33,7 +30,7 @@ use super::{
 use super::{
     super::{
         MachineFuncPlan, ObjLoc,
-        emit::FinalAlloc,
+        emit::{FinalAlloc, block_action_sites},
         memory_plan::{
             self, BackendSpillReserve, FinalScratchReserveRange, MachineStackifyAnalysis,
             StableMode, WORD_BYTES,
@@ -79,7 +76,6 @@ pub(crate) fn compute_malloc_spill_bounds(
     }
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(machine);
-    let machine_isa = EvmMachine::new(machine.dfg.ctx.triple);
     let mut bounds: SecondaryMap<BlockId, u32> = SecondaryMap::new();
     let action_bound = |action: &Action| match *action {
         Action::MemLoadAbs(addr) | Action::MemStoreAbs(addr) => addr
@@ -90,29 +86,10 @@ pub(crate) fn compute_malloc_spill_bounds(
         _ => 0,
     };
     for block in machine.layout.iter_block() {
-        let bound = &mut bounds[block];
-        if machine.layout.entry_block() == Some(block) {
-            *bound = alloc
-                .enter_function(machine)
-                .iter()
-                .map(action_bound)
-                .max()
-                .unwrap_or(0);
-        }
-        for inst in machine.layout.iter_inst(block) {
-            for action in alloc.pre_inst(inst).iter().chain(alloc.post_inst(inst)) {
-                *bound = (*bound).max(action_bound(action));
-            }
-            if let EvmMachineInstKind::BrTable(branch) =
-                machine_isa.inst_set().resolve_inst(machine.dfg.inst(inst))
-            {
-                for (index, _) in branch.table().iter().enumerate() {
-                    for action in alloc.br_table_case(inst, index) {
-                        *bound = (*bound).max(action_bound(action));
-                    }
-                }
-            }
-        }
+        bounds[block] = block_action_sites(machine, alloc, block)
+            .filter_map(|(_, actions)| actions.iter().map(action_bound).max())
+            .max()
+            .unwrap_or(0);
     }
     let full_bound = bounds.values().copied().max().unwrap_or(0);
     let blocks: Vec<_> = cfg.post_order().collect();
@@ -677,8 +654,7 @@ pub(crate) fn allocate_final_spills(
 pub(crate) enum SpillAccess<W> {
     Load(W),
     /// `kills` is false for stores that may not run before every later access
-    /// in the block: `br_table` case actions after the first, and actions after
-    /// a block's terminator.
+    /// in the block: `br_table` case actions after the first.
     Store {
         word: W,
         kills: bool,
@@ -693,44 +669,24 @@ pub(crate) fn spill_word_accesses<W: Copy>(
     alloc: &StackifyAlloc,
     word: impl Fn(&Action) -> Option<(W, bool)>,
 ) -> SecondaryMap<BlockId, Vec<SpillAccess<W>>> {
-    let machine_isa = EvmMachine::new(function.dfg.ctx.triple);
-    let entry = function.layout.entry_block();
     let mut accesses: SecondaryMap<BlockId, Vec<SpillAccess<W>>> = SecondaryMap::new();
-    let push = |accesses: &mut Vec<SpillAccess<W>>, actions: &[Action], kills: bool| {
-        accesses.extend(actions.iter().filter_map(|action| {
-            let (word, stores) = word(action)?;
-            Some(if stores {
-                SpillAccess::Store { word, kills }
-            } else {
-                SpillAccess::Load(word)
-            })
-        }));
-    };
     let mut entry_accesses = 0;
     for block in function.layout.iter_block() {
-        let block_accesses = &mut accesses[block];
-        if entry == Some(block) {
-            push(block_accesses, &alloc.enter_function(function), true);
-            entry_accesses = block_accesses.len();
-        }
-        let last_inst = function.layout.last_inst_of(block);
-        for inst in function.layout.iter_inst(block) {
-            push(block_accesses, alloc.pre_inst(inst), true);
+        for (site, actions) in block_action_sites(function, alloc, block) {
             // Case actions run in order until a case matches, so only the
             // first case's actions run on every path through the dispatch.
-            if let EvmMachineInstKind::BrTable(br) =
-                machine_isa.inst_set().resolve_inst(function.dfg.inst(inst))
-            {
-                for case_idx in 0..br.table().len() {
-                    let actions = alloc.br_table_case(inst, case_idx);
-                    push(block_accesses, actions, case_idx == 0);
-                }
+            let kills = !matches!(site, ActionSite::Case(_, case) if case != 0);
+            accesses[block].extend(actions.iter().filter_map(|action| {
+                let (word, stores) = word(action)?;
+                Some(if stores {
+                    SpillAccess::Store { word, kills }
+                } else {
+                    SpillAccess::Load(word)
+                })
+            }));
+            if site == ActionSite::Entry {
+                entry_accesses = accesses[block].len();
             }
-            push(
-                block_accesses,
-                alloc.post_inst(inst),
-                Some(inst) != last_inst,
-            );
         }
     }
     debug_assert_eq!(

@@ -1,6 +1,7 @@
 mod alloc;
 mod insn;
 mod layout;
+mod sites;
 mod stack;
 
 pub(crate) use alloc::FinalAlloc;
@@ -8,6 +9,7 @@ pub(crate) use layout::{
     LateBlockAliasPlan, compute_function_entry_jump_targets, compute_late_block_alias_plan,
     materialize_jumpdests, referenced_insn_label_targets, rewrite_evm_local_fallthrough_layout,
 };
+pub(crate) use sites::{block_action_sites, emits_after};
 pub(crate) use stack::{
     dup_op, fold_stack_actions, immediate_u32, is_plain_inst, is_push_opcode, perform_action,
     perform_actions, prune_redundant_opcode_sequences, push_immediate_u256, push_op,
