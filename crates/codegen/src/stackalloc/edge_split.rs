@@ -3,11 +3,7 @@ use std::collections::BTreeMap;
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{BlockId, ControlFlowGraph, Function};
 
-use crate::{
-    cfg_edit::{CfgEditor, CleanupMode},
-    critical_edge::CriticalEdgeSplitter,
-    domtree::DomTree,
-};
+use crate::{cfg_edit::CfgEditor, critical_edge::CriticalEdgeSplitter, domtree::DomTree};
 
 /// Establishes the edge preconditions of the stackify allocator (`stackalloc::stackify`).
 ///
@@ -100,7 +96,7 @@ impl StackifyEdgeSplitter {
         // Preserve the old `(from, to)` bridge-creation order for distinct edges; use the branch
         // slot only to order parallel edges that previously collapsed into one operation.
         edges.sort_unstable();
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         for (from, _, branch_slot) in edges {
             editor.split_out_edge(from, branch_slot);
         }

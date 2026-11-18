@@ -3,7 +3,7 @@ use rustc_hash::FxHashSet;
 use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId, ValueId};
 
 use crate::{
-    cfg_edit::{CfgEditor, CleanupMode},
+    cfg_edit::CfgEditor,
     domtree::DomTree,
     loop_analysis::{Loop, LoopTree},
     transform::aggregate::ObjectMemoryAnalysis,
@@ -160,7 +160,7 @@ impl LicmSolver {
             .copied()
             .filter(|block| !lpt.is_in_loop(*block, lp))
             .collect();
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         let preheader = editor.create_or_reuse_loop_preheader(lp_header, &original_preheaders)?;
         *cfg = editor.into_cfg();
 

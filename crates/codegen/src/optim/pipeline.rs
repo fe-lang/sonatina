@@ -23,7 +23,6 @@ use crate::{
         func_behavior,
         tail_position::{recursive_tail_callees, tail_callers, tail_calls, tail_switches},
     },
-    cfg_edit::CleanupMode,
     compile::OptLevel,
     domtree::DomTree,
     loop_analysis::LoopTree,
@@ -980,7 +979,7 @@ fn run_pass(
         }
         Pass::CfgCleanup => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.cfg_cleanup").entered();
-            CfgCleanup::new(CleanupMode::Strict).run(func)
+            CfgCleanup::new().run(func)
         }
         Pass::AggregateCombine => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_combine").entered();
@@ -1172,7 +1171,7 @@ fn run_pass(
             };
             let cleaned = {
                 let _span = trace_span!("sonatina.optim.pipeline.sccp.cleanup").entered();
-                CfgCleanup::new(CleanupMode::Strict).run(func)
+                CfgCleanup::new().run(func)
             };
             changed || cleaned
         }
@@ -1210,7 +1209,7 @@ fn run_pass(
             };
             let cleaned = {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.cleanup").entered();
-                CfgCleanup::new(CleanupMode::Strict).run(func)
+                CfgCleanup::new().run(func)
             };
             changed || cleaned
         }

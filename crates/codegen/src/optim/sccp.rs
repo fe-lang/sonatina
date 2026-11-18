@@ -28,10 +28,7 @@ use super::{
     const_eval::{BlockEdge, ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys},
     sccp_simplify::{AuxDeps, SimplifyAction, SimplifyCtx, simplify_inst},
 };
-use crate::{
-    analysis::known_bits::KnownBitsQuery,
-    cfg_edit::{CfgEditor, CleanupMode},
-};
+use crate::{analysis::known_bits::KnownBitsQuery, cfg_edit::CfgEditor};
 
 #[derive(Debug)]
 pub struct SccpSolver {
@@ -69,7 +66,7 @@ impl SccpSolver {
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) -> bool {
         self.clear();
 
-        let mut changed = CfgCleanup::new(CleanupMode::Strict).run(func);
+        let mut changed = CfgCleanup::new().run(func);
         let constref_value_tys = collect_constref_value_tys(func);
         let const_paths = analyze_const_paths(func, &constref_value_tys);
 
@@ -133,7 +130,7 @@ impl SccpSolver {
         };
         changed |= self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
 
-        changed |= CfgCleanup::new(CleanupMode::Strict).run(func);
+        changed |= CfgCleanup::new().run(func);
         cfg.compute(func);
 
         changed |= AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects).run(func);
@@ -475,7 +472,7 @@ impl SccpSolver {
 
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) -> bool {
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         let mut changed = false;
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
@@ -1286,7 +1283,7 @@ mod tests {
                 cfg.compute(func);
                 let mut solver = SccpSolver::new();
                 solver.run(func, &mut cfg);
-                CfgCleanup::new(CleanupMode::Strict).run(func);
+                CfgCleanup::new().run(func);
             });
         }
     }
@@ -1317,7 +1314,7 @@ mod tests {
             cfg.compute(func);
             let mut solver = SccpSolver::new();
             solver.run(func, &mut cfg);
-            CfgCleanup::new(CleanupMode::Strict).run(func);
+            CfgCleanup::new().run(func);
         });
     }
 
@@ -1344,7 +1341,7 @@ mod tests {
             cfg.compute(func);
             let mut solver = SccpSolver::new();
             solver.run(func, &mut cfg);
-            CfgCleanup::new(CleanupMode::Strict).run(func);
+            CfgCleanup::new().run(func);
 
             let block = func.layout.entry_block().expect("entry block");
             let term = func.layout.last_inst_of(block).expect("return");
@@ -1432,7 +1429,7 @@ block0:{body}}}
             cfg.compute(func);
             let mut solver = SccpSolver::new();
             solver.run(func, &mut cfg);
-            CfgCleanup::new(CleanupMode::Strict).run(func);
+            CfgCleanup::new().run(func);
 
             let mut has_zero_add = false;
             for block in func.layout.iter_block() {
@@ -1491,7 +1488,7 @@ block0:{body}}}
             cfg.compute(func);
             let mut solver = SccpSolver::new();
             solver.run(func, &mut cfg);
-            CfgCleanup::new(CleanupMode::Strict).run(func);
+            CfgCleanup::new().run(func);
 
             let mut has_all_zero_gep = false;
             let mut has_bitcast = false;

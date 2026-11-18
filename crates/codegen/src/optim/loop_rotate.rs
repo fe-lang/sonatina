@@ -41,7 +41,7 @@ use sonatina_ir::{
 
 use super::inst_size;
 use crate::{
-    cfg_edit::{CfgEditor, CleanupMode, clone_inst_before, defined_in, iter_phis_in_block},
+    cfg_edit::{CfgEditor, clone_inst_before, defined_in, iter_phis_in_block},
     domtree::DomTree,
     loop_analysis::LoopTree,
 };
@@ -59,7 +59,7 @@ impl LoopRotate {
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         let mut domtree = DomTree::new();
         let mut lpt = LoopTree::new();
         domtree.compute(editor.cfg());

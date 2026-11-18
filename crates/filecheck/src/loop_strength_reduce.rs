@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use sonatina_codegen::{
-    cfg_edit::CleanupMode,
     domtree::DomTree,
     loop_analysis::LoopTree,
     optim::{
@@ -23,7 +22,7 @@ pub struct LoopStrengthReduceTransform {
 
 impl FuncTransform for LoopStrengthReduceTransform {
     fn transform(&mut self, func: &mut Function) {
-        CfgCleanup::new(CleanupMode::Strict).run(func);
+        CfgCleanup::new().run(func);
         BranchCanonicalize::new().run(func);
 
         self.cfg.compute(func);
@@ -47,7 +46,7 @@ impl FuncTransform for LoopStrengthReduceTransform {
 
         self.cfg.compute(func);
         SccpSolver::new().run(func, &mut self.cfg);
-        CfgCleanup::new(CleanupMode::Strict).run(func);
+        CfgCleanup::new().run(func);
     }
 
     fn test_root(&self) -> PathBuf {

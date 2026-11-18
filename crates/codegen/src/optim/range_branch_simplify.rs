@@ -1,7 +1,7 @@
 use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId, inst::control_flow::BranchKind};
 
 use crate::{
-    cfg_edit::{CfgEditor, CleanupMode},
+    cfg_edit::CfgEditor,
     domtree::DomTree,
     loop_analysis::LoopTree,
     range_analysis::{RangeAnalysis, RangeEnv, condition_truth_in_env},
@@ -99,7 +99,7 @@ fn plan_branch(
 }
 
 fn apply_plans(func: &mut Function, plans: &[RewritePlan]) -> bool {
-    let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+    let mut editor = CfgEditor::new(func);
     let mut changed = false;
 
     for plan in plans {

@@ -17,7 +17,7 @@ use crate::{
         AffineIv, BasicInductionVar, LoopId, MatchedAffineAddr, StepKind,
         detect_basic_iv_probes_for_loop, detect_basic_ivs_for_loop, match_affine_addr_details,
     },
-    cfg_edit::{CfgEditor, CleanupMode},
+    cfg_edit::CfgEditor,
     domtree::DomTree,
     loop_analysis::{Loop, LoopTree},
 };
@@ -327,7 +327,7 @@ fn ensure_preheader(
         .copied()
         .filter(|pred| !lpt.is_in_loop(*pred, loop_id))
         .collect();
-    let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+    let mut editor = CfgEditor::new(func);
     let preheader = editor.create_or_reuse_loop_preheader(header, &outside_preds)?;
     *cfg = editor.into_cfg();
 
@@ -1426,7 +1426,7 @@ func public %const_base() -> i256 {
     }
 
     fn run_lsr_pipeline(func_ref: FuncRef, func: &mut Function) -> String {
-        CfgCleanup::new(CleanupMode::Strict).run(func);
+        CfgCleanup::new().run(func);
         BranchCanonicalize::new().run(func);
 
         let mut cfg = ControlFlowGraph::default();
@@ -1453,7 +1453,7 @@ func public %const_base() -> i256 {
 
         cfg.compute(func);
         SccpSolver::new().run(func, &mut cfg);
-        CfgCleanup::new(CleanupMode::Strict).run(func);
+        CfgCleanup::new().run(func);
 
         let verify_cfg = VerifierConfig::for_level(VerificationLevel::Fast);
         let report = verify_function(func.ctx(), func_ref, func, &verify_cfg);

@@ -1,6 +1,6 @@
 use sonatina_ir::{BlockId, ControlFlowGraph, Function};
 
-use crate::cfg_edit::{CfgEditor, CleanupMode};
+use crate::cfg_edit::CfgEditor;
 
 #[derive(Debug, Default)]
 pub struct CriticalEdgeSplitter;
@@ -37,7 +37,7 @@ impl CriticalEdgeSplitter {
             return;
         }
 
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         for (from, branch_slot) in critical_edges {
             editor.split_out_edge(from, branch_slot);
         }

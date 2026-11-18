@@ -55,7 +55,7 @@ use super::{
     simplify_expr::{ConstantFacts, ExprFactProvider, SimplifiedResult, simplify_inst_with_facts},
 };
 use crate::{
-    cfg_edit::{CfgEditor, CleanupMode, clone_inst_before, defined_in, remove_phi_incoming_from},
+    cfg_edit::{CfgEditor, clone_inst_before, defined_in, remove_phi_incoming_from},
     domtree::DomTree,
 };
 
@@ -72,7 +72,7 @@ impl JumpThread {
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         let mut domtree = DomTree::new();
         domtree.compute(editor.cfg());
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();

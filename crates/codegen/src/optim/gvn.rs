@@ -25,7 +25,7 @@ use sonatina_ir::{
 use crate::{
     analysis::known_bits::{KnownBits, KnownBitsQuery},
     bitset::BitSet,
-    cfg_edit::{CfgEditor, CleanupMode},
+    cfg_edit::CfgEditor,
     cfg_scc::CfgSccAnalysis,
     domtree::{DomTree, DominatorTreeTraversable},
     optim::{
@@ -2654,7 +2654,7 @@ impl<'a> RedundantCodeRemover<'a> {
 
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) -> bool {
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         let mut changed = false;
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();

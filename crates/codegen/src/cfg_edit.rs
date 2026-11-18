@@ -9,11 +9,6 @@ use sonatina_ir::{
 };
 use vec_collections::VecSet;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CleanupMode {
-    Strict,
-}
-
 /// Structured CFG editing helpers that keep CFG preds and phi incoming sets consistent.
 ///
 /// Passes that mutate terminators directly without repairing successor phis should run a
@@ -31,7 +26,7 @@ pub struct CfgEditor<'f> {
 }
 
 impl<'f> CfgEditor<'f> {
-    pub fn new(func: &'f mut Function, CleanupMode::Strict: CleanupMode) -> Self {
+    pub fn new(func: &'f mut Function) -> Self {
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
         Self {
@@ -1213,7 +1208,7 @@ mod tests {
         isa::Isa,
     };
 
-    use super::{CfgEditor, CleanupMode, simplify_trivial_phis_in_block};
+    use super::{CfgEditor, simplify_trivial_phis_in_block};
     use sonatina_ir::{BlockId, ControlFlowGraph, Function, cfg::CfgEdge};
 
     /// Checks the CFG that [`CfgEditor`]'s edits maintain against one computed from `func`.
@@ -1273,7 +1268,7 @@ block2:
             let [b0, b1, _] = func.layout.iter_block().collect::<Vec<_>>()[..] else {
                 panic!("three blocks");
             };
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             let term = editor.func().layout.last_inst_of(b0).unwrap();
             let jump = Jump::new_unchecked(editor.func().inst_set(), b1);
             editor.func_mut().dfg.replace_inst(term, Box::new(jump));
@@ -1314,7 +1309,7 @@ block2:
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             assert!(editor.replace_succ_allow_existing_pred(b0, b1, b2, &[]));
 
             let phi_inst = editor.func().layout.first_inst_of(b2).unwrap();
@@ -1355,7 +1350,7 @@ block2:
                 panic!("expected three blocks");
             };
 
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             assert!(editor.retain_out_edges(*b0, &[false, true, false]));
 
             let term = editor.func().layout.last_inst_of(*b0).unwrap();
@@ -1400,7 +1395,7 @@ block3:
                 panic!("expected four blocks");
             };
 
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             let phi_inst = editor.func().layout.first_inst_of(*b3).unwrap();
             let eleven = editor.func_mut().dfg.make_imm_value(11i32);
             assert!(editor.retarget_out_edge(*b0, 1, *b3, &[(phi_inst, eleven)]));
@@ -1470,7 +1465,7 @@ block2:
                 panic!("expected three blocks");
             };
 
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             assert!(editor.retarget_out_edge(*b0, 1, *b1, &[]));
 
             let phi_inst = editor.func().layout.first_inst_of(*b1).unwrap();
@@ -1514,7 +1509,7 @@ block2:
 
             let phi_inst = func.layout.first_inst_of(*b1).unwrap();
             let incoming = func.dfg.cast_phi(phi_inst).unwrap().args()[0].0;
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             let first_mid = editor.split_out_edge(*b0, 0);
             let second_mid = editor.split_out_edge(*b0, 1);
 
@@ -1551,7 +1546,7 @@ block2:
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             let block = editor.func().layout.entry_block().unwrap();
             let first_inst = editor.func().layout.first_inst_of(block).unwrap();
             let arg0 = editor.func().arg_values[0];
@@ -1631,7 +1626,7 @@ block2:
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             let preheader = editor
                 .create_or_reuse_loop_preheader(b3, &[b1, b2])
                 .expect("preheader must be created");
@@ -1694,7 +1689,7 @@ block2:
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             let preheader = editor
                 .create_or_reuse_loop_preheader(b0, &[])
                 .expect("entry-only loop should create a reachable preheader");
@@ -1744,7 +1739,7 @@ block2:
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             assert!(editor.create_or_reuse_loop_preheader(b0, &[]).is_none());
             assert_eq!(editor.func().layout.entry_block(), Some(b0));
             assert_eq!(editor.func().layout.iter_block().count(), 3);
@@ -1835,7 +1830,7 @@ block2:
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             assert!(editor.merge_linear_successor(b1));
             assert!(!editor.func().layout.is_block_inserted(b2));
 
@@ -1883,7 +1878,7 @@ block2:
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             assert!(editor.fold_trampoline_block(b1));
 
             let b0_succs: Vec<_> = editor.cfg().succs_of(b0).copied().collect();
@@ -1935,7 +1930,7 @@ block4:
                 panic!("expected five blocks");
             };
 
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             assert!(editor.forward_bridge_block(*b3));
             assert!(!editor.func().layout.is_block_inserted(*b3));
 
@@ -1990,7 +1985,7 @@ block5:
                 panic!("expected six blocks");
             };
 
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             assert!(editor.forward_bridge_block(*b3));
             assert!(!editor.func().layout.is_block_inserted(*b3));
 
@@ -2061,7 +2056,7 @@ block4:
                 panic!("expected five blocks");
             };
 
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             assert!(!editor.forward_bridge_block(*b3));
             assert!(editor.func().layout.is_block_inserted(*b3));
 
@@ -2095,7 +2090,7 @@ block2:
             let [b0, b1, b2] = blocks.as_slice() else {
                 panic!("expected three blocks");
             };
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             let term = editor.func().layout.last_inst_of(*b0).unwrap();
             let (old_block, new_block) = editor.split_block_at(term);
             assert_eq!(old_block, *b0);
@@ -2143,7 +2138,7 @@ block3:
             let [b0, b1, b2, b3] = blocks.as_slice() else {
                 panic!("expected four blocks");
             };
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             let phi_args = |editor: &CfgEditor, block| {
                 let phi_inst = editor.func().layout.first_inst_of(block).unwrap();
                 editor.func().dfg.cast_phi(phi_inst).unwrap().args().len()

@@ -12,7 +12,7 @@ use sonatina_ir::{
 use sonatina_triple::Architecture;
 
 use crate::{
-    cfg_edit::{CfgEditor, CleanupMode, trivial_phi_input},
+    cfg_edit::{CfgEditor, trivial_phi_input},
     optim::const_eval::{
         ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys, eval_const_path_subtree,
     },
@@ -491,7 +491,7 @@ impl AggregateScalarize {
                 .unwrap_or(usize::MAX)
         });
 
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         for promoted in promoted_roots {
             let Some(inst) = promoted.root_inst() else {
                 continue;
