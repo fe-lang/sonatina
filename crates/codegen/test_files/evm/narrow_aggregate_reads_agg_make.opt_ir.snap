@@ -20,7 +20,7 @@ func public %entry() {
         v3.i256 = call %read;
         mstore 0.i32 v3 i256;
         call %dirty;
-        v4.i256 = call %phi_read v2;
+        v4.i256 = call %phi_read;
         mstore 32.i32 v4 i256;
         call %dirty;
         v6.i256 = call %nested_read v2;
@@ -55,16 +55,9 @@ func inline(never) private %dirty() {
         return;
 }
 
-func inline(never) private %phi_read(v0.i1) -> i256 {
+func inline(never) private %phi_read() -> i256 {
     block0:
-        br v0 block3 block2;
-
-    block2:
-        jump block3;
-
-    block3:
-        v12.i8 = phi (undef.i8 block0) (undef.i8 block2);
-        v5.i8 = freeze v12;
+        v5.i8 = freeze undef.i8;
         v6.i256 = zext v5 i256;
         return v6;
 }
@@ -77,27 +70,23 @@ func inline(never) private %nested_read(v0.i1) -> i256 {
         jump block3;
 
     block3:
-        v12.i8 = phi (undef.i8 block0) (0.i8 block2);
-        v7.i8 = freeze v12;
+        v15.i8 = phi (undef.i8 block0) (0.i8 block2);
+        v7.i8 = freeze v15;
         v8.i256 = zext v7 i256;
         return v8;
 }
 
 func inline(never) private %dynamic_read(v0.i1, v1.i256) -> i256 {
     block0:
-        br v0 block1 block2;
-
-    block1:
-        v2.[i8; 3] = agg.make [i8; 3] undef.i8 0.i8 0.i8;
-        jump block3;
+        br v0 block3 block2;
 
     block2:
-        v3.[i8; 3] = agg.make [i8; 3] 0.i8 0.i8 0.i8;
         jump block3;
 
     block3:
-        v4.[i8; 3] = phi (v2 block1) (v3 block2);
-        v5.i8 = extract_value v4 v1;
+        v10.i8 = phi (undef.i8 block0) (0.i8 block2);
+        v13.[i8; 3] = agg.make [i8; 3] v10 0.i8 0.i8;
+        v5.i8 = extract_value v13 v1;
         v6.i8 = freeze v5;
         v7.i256 = zext v6 i256;
         return v7;
