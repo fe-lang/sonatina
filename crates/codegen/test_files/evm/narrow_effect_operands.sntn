@@ -1,0 +1,393 @@
+#! evm.config: { opt: 0 }
+#! evm.case: log0_len
+#!   calldata: u256(288) u256(1)
+#!   expect: return u256(87112285931760246646623899502532662133024)
+#! evm.case: keccak_len
+#!   calldata: u256(288) u256(2)
+#!   expect: return u256(34218061809452268432200777139272404190796654879412065689440649586741442773280)
+#! evm.case: mcopy_len
+#!   calldata: u256(288) u256(3)
+#!   expect: return u256(435561429658801233233119497512663310663968)
+#! evm.case: calldata_copy_len
+#!   calldata: u256(288) u256(4)
+#!   expect: return u256(87112285931760246646623899502532662133024)
+#! evm.case: calldata_copy_offset
+#!   calldata: u256(288) u256(5)
+#!   expect: return u256(1701411834604692317316873037158841057568)
+#! evm.case: calldata_load_offset
+#!   calldata: u256(288) u256(6)
+#!   expect: return u256(2041694201525630780780247644590609269024)
+#! evm.case: malloc_size
+#!   calldata: u256(288) u256(7)
+#!   expect: return u256(10889035741470030830827987437816582766880)
+#! evm.case: memcopy_len
+#!   calldata: u256(288) u256(8)
+#!   expect: return u256(435561429658801233233119497512663310663968)
+#! evm.case: memzero_len
+#!   calldata: u256(288) u256(9)
+#!   expect: return u256(87112285931760246646623899502532662133024)
+#! evm.case: alloc_dynamic_size
+#!   calldata: u256(288) u256(10)
+#!   expect: return u256(10889035741470030830827987437816582766880)
+#! evm.case: call_arg_len
+#!   calldata: u256(288) u256(11)
+#!   expect: return u256(10889035741470030830827987437816582766880)
+#! evm.case: call_ret_len
+#!   calldata: u256(288) u256(12)
+#!   expect: return u256(435561429658801233233119497512663310663968)
+#! evm.case: return_data_copy_len
+#!   calldata: u256(288) u256(13)
+#!   expect: return u256(435561429658801233233119497512663310663968)
+
+target = "evm-ethereum-osaka"
+
+type @words = { i256 };
+type @fields = { i8 };
+
+# Each case reads, as `{ i8 }`, a slot last written as the `i256` word 288 (0x120), which
+# gives the unspecified `i8`, and uses it unfrozen as one operand that sets what an effect
+# does: a length, size or offset. Taken as an `i8` it is 32 (0x120 & 0xff); without a mask it
+# would be 288. Each case returns `observable << 128 | slot word`.
+func public %entry() {
+    block0:
+        v1.i256 = evm_calldata_load 32.i32;
+        br_table v1 block99 (1.i256 block1) (2.i256 block2) (3.i256 block3) (4.i256 block4) (5.i256 block5) (6.i256 block6) (7.i256 block7) (8.i256 block8) (9.i256 block9) (10.i256 block10) (11.i256 block11) (12.i256 block12) (13.i256 block13);
+
+    block1:
+        v101.i256 = call %log0_len;
+        mstore 0.i32 v101 i256;
+        evm_return 0.i32 32.i32;
+
+    block2:
+        v102.i256 = call %keccak_len;
+        mstore 0.i32 v102 i256;
+        evm_return 0.i32 32.i32;
+
+    block3:
+        v103.i256 = call %mcopy_len;
+        mstore 0.i32 v103 i256;
+        evm_return 0.i32 32.i32;
+
+    block4:
+        v104.i256 = call %calldata_copy_len;
+        mstore 0.i32 v104 i256;
+        evm_return 0.i32 32.i32;
+
+    block5:
+        v105.i256 = call %calldata_copy_offset;
+        mstore 0.i32 v105 i256;
+        evm_return 0.i32 32.i32;
+
+    block6:
+        v106.i256 = call %calldata_load_offset;
+        mstore 0.i32 v106 i256;
+        evm_return 0.i32 32.i32;
+
+    block7:
+        v107.i256 = call %malloc_size;
+        mstore 0.i32 v107 i256;
+        evm_return 0.i32 32.i32;
+
+    block8:
+        v108.i256 = call %memcopy_len;
+        mstore 0.i32 v108 i256;
+        evm_return 0.i32 32.i32;
+
+    block9:
+        v109.i256 = call %memzero_len;
+        mstore 0.i32 v109 i256;
+        evm_return 0.i32 32.i32;
+
+    block10:
+        v110.i256 = call %alloc_dynamic_size;
+        mstore 0.i32 v110 i256;
+        evm_return 0.i32 32.i32;
+
+    block11:
+        v111.i256 = call %call_arg_len;
+        mstore 0.i32 v111 i256;
+        evm_return 0.i32 32.i32;
+
+    block12:
+        v112.i256 = call %call_ret_len;
+        mstore 0.i32 v112 i256;
+        evm_return 0.i32 32.i32;
+
+    block13:
+        v113.i256 = call %return_data_copy_len;
+        mstore 0.i32 v113 i256;
+        evm_return 0.i32 32.i32;
+
+    block99:
+        evm_return 0.i32 0.i32;
+}
+
+func inline(never) private %dirty(v0.i256) {
+    block0:
+        v3.*@words = alloca @words;
+        v4.@words = insert_value undef.@words 0.i8 v0;
+        mstore v3 v4 @words;
+        evm_sstore 0.i256 v3;
+        return;
+}
+
+func inline(never) private %log0_len() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = evm_malloc 1024.i256;
+        evm_log0 v3 v2;
+        v9.i256 = evm_msize;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %keccak_len() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = evm_malloc 1024.i256;
+        v8.i256 = evm_keccak256 v3 v2;
+        v7.i256 = evm_msize;
+        v9.i256 = xor v7 v8;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %mcopy_len() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = evm_malloc 1024.i256;
+        v4.*i8 = evm_malloc 1024.i256;
+        evm_mcopy v4 v3 v2;
+        v9.i256 = evm_msize;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %calldata_copy_len() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = evm_malloc 1024.i256;
+        evm_calldata_copy v3 0.i256 v2;
+        v9.i256 = evm_msize;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %calldata_copy_offset() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = evm_malloc 64.i256;
+        evm_calldata_copy v3 v2 32.i256;
+        v9.i256 = evm_mload v3;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %calldata_load_offset() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v9.i256 = evm_calldata_load v2;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %malloc_size() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = evm_malloc v2;
+        v4.*i8 = evm_malloc 32.i256;
+        v5.i256 = ptr_to_int v3 i256;
+        v6.i256 = ptr_to_int v4 i256;
+        v9.i256 = sub v6 v5;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %memcopy_len() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = evm_malloc 1024.i256;
+        v4.*i8 = evm_malloc 1024.i256;
+        memcopy v4 v3 v2;
+        v9.i256 = evm_msize;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %memzero_len() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = evm_malloc 1024.i256;
+        memzero v3 v2;
+        v9.i256 = evm_msize;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %alloc_dynamic_size() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = mem.alloc_dynamic v2;
+        v4.*i8 = evm_malloc 32.i256;
+        v5.i256 = ptr_to_int v3 i256;
+        v6.i256 = ptr_to_int v4 i256;
+        v9.i256 = sub v6 v5;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %call_arg_len() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = evm_malloc 1024.i256;
+        v8.i256 = evm_call 100000.i256 4.i256 0.i256 v3 v2 0.i256 0.i256;
+        v9.i256 = evm_return_data_size;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %call_ret_len() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = evm_malloc 1024.i256;
+        v4.*i8 = evm_malloc 1024.i256;
+        v8.i256 = evm_call 100000.i256 4.i256 0.i256 v3 512.i256 v4 v2;
+        v9.i256 = evm_msize;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+func inline(never) private %return_data_copy_len() -> i256 {
+    block0:
+        v80.*@words = alloca @words;
+        v81.i256 = evm_calldata_load 0.i32;
+        v82.@words = insert_value undef.@words 0.i8 v81;
+        mstore v80 v82 @words;
+        v0.*@fields = bitcast v80 *@fields;
+        v1.@fields = mload v0 @fields;
+        v2.i8 = extract_value v1 0.i8;
+        v3.*i8 = evm_malloc 1024.i256;
+        v4.*i8 = evm_malloc 1024.i256;
+        v8.i256 = evm_call 100000.i256 4.i256 0.i256 v3 512.i256 0.i256 0.i256;
+        evm_return_data_copy v4 0.i256 v2;
+        v9.i256 = evm_msize;
+        v90.i256 = ptr_to_int v0 i256;
+        v91.i256 = evm_mload v90;
+        v92.i256 = shl 128.i256 v9;
+        v93.i256 = or v92 v91;
+        return v93;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
