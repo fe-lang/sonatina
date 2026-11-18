@@ -1,5 +1,7 @@
 target = "evm-ethereum-osaka"
 
+global private const [i256; 3] $words = [200, 100, 4294967496];
+
 # sameln: func public %stored_on_every_path(v0.i1, v1.i256) -> i256 {
 # check:       v4.i256 = mload v2 i256;
 # not:         and v4
@@ -143,6 +145,84 @@ block0:
     v3.i256 = mload v1 i256;
     v4.i256 = and v3 255.i256;
     return v4;
+}
+
+# sameln: func public %code_size_copy() -> i256 {
+# check:       v3.i256 = mload v5 i256;
+# not:         and v3
+# check:       return v3;
+func public %code_size_copy() -> i256 {
+block0:
+    v1.*[i256; 2] = alloca [i256; 2];
+    v2.i256 = evm_code_size;
+    evm_code_copy v1 v2 64.i256;
+    v5.*i256 = gep v1 0.i256 1.i256;
+    v3.i256 = mload v5 i256;
+    v4.i256 = and v3 255.i256;
+    return v4;
+}
+
+# sameln: func public %narrow_constant_words(v0.i1) -> i256 {
+# check:       v7.i256 = mload v1 i256;
+# not:         and v7
+# check:       return v7;
+func public %narrow_constant_words(v0.i1) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    v2.i256 = sym_addr $words;
+    br v0 block1 block2;
+
+block1:
+    evm_code_copy v1 v2 32.i256;
+    jump block3;
+
+block2:
+    v3.i256 = add v2 32.i256;
+    evm_code_copy v1 v3 32.i256;
+    jump block3;
+
+block3:
+    v7.i256 = mload v1 i256;
+    v8.i256 = and v7 255.i256;
+    return v8;
+}
+
+# sameln: func public %wide_constant_word(v0.i1) -> i256 {
+# check:       v8.i256 = and v7 255.i256;
+# nextln:      return v8;
+func public %wide_constant_word(v0.i1) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    v2.i256 = sym_addr $words;
+    br v0 block1 block2;
+
+block1:
+    evm_code_copy v1 v2 32.i256;
+    jump block3;
+
+block2:
+    v3.i256 = add v2 64.i256;
+    evm_code_copy v1 v3 32.i256;
+    jump block3;
+
+block3:
+    v7.i256 = mload v1 i256;
+    v8.i256 = and v7 255.i256;
+    return v8;
+}
+
+# sameln: func public %copy_past_global() -> i256 {
+# check:       v8.i256 = and v7 255.i256;
+# nextln:      return v8;
+func public %copy_past_global() -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    v2.i256 = sym_addr $words;
+    v3.i256 = add v2 96.i256;
+    evm_code_copy v1 v3 32.i256;
+    v7.i256 = mload v1 i256;
+    v8.i256 = and v7 255.i256;
+    return v8;
 }
 
 func private %pure(v0.i256) -> i256 {

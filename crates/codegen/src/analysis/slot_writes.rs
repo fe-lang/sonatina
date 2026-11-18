@@ -1,4 +1,4 @@
-//! The stores that may have written the word each load of a local slot reads.
+//! The writes that may have stored the word each load of a local slot reads.
 //!
 //! A slot is an `alloca` whose address the function uses only as the address of its own memory
 //! accesses, so no object reference can name it. A forward dataflow tracks, for each location of
@@ -10,17 +10,35 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    AccessKind, BlockId, ControlFlowGraph, Function, InstId, ValueId, inst::data::Alloca,
+    AccessKind, BlockId, ControlFlowGraph, Function, InstId, Type, U256, ValueId,
+    inst::{
+        arith::Add,
+        data::{Alloca, SymAddr, SymbolRef},
+        evm::{EvmCodeCopy, EvmCodeSize},
+    },
 };
 
 use crate::{
-    analysis::memory_access::{BaseObject, LinearLocKey, MemoryAccessAnalysis, TrackedLocKey},
+    analysis::{
+        known_bits::KnownBits,
+        memory_access::{BaseObject, LinearLocKey, MemoryAccessAnalysis, TrackedLocKey},
+    },
+    object::encode_gv_initializer_to_bytes,
     optim::load_store::{collect_alloca_visibility, forwardable_read_key, store_value_of_inst},
 };
 
-/// Each load of a local slot whose word a store of the load's type wrote on every path to it, and
-/// the values those stores may have written.
-pub(crate) fn local_slot_load_writes(func: &Function) -> FxHashMap<ValueId, Vec<ValueId>> {
+/// A write that may have stored the word a load reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SlotWrite {
+    /// A store of this value, of the load's type.
+    Value(ValueId),
+    /// A copy of a word of code, with these bits.
+    Bits(KnownBits),
+}
+
+/// Each load of a local slot whose word a write stored on every path to it, and the writes that
+/// may have.
+pub(crate) fn local_slot_load_writes(func: &Function) -> FxHashMap<ValueId, Vec<SlotWrite>> {
     let mut analysis = MemoryAccessAnalysis::new();
     let local = collect_alloca_visibility(func, &mut analysis).local_only;
     if local.is_empty() {
@@ -82,7 +100,7 @@ pub(crate) fn local_slot_load_writes(func: &Function) -> FxHashMap<ValueId, Vec<
 /// The writes that may have last stored each location of a local slot.
 #[derive(Clone, Debug, Default)]
 struct SlotState {
-    cells: FxHashMap<LinearLocKey, Vec<ValueId>>,
+    cells: FxHashMap<LinearLocKey, Vec<SlotWrite>>,
 }
 
 /// Write lists compare as sets, so the solver's fixpoint does not depend on the order a meet
@@ -129,7 +147,7 @@ impl Solver {
         func: &Function,
         inst: InstId,
         state: &mut SlotState,
-        loads: Option<&mut FxHashMap<ValueId, Vec<ValueId>>>,
+        loads: Option<&mut FxHashMap<ValueId, Vec<SlotWrite>>>,
     ) {
         // A slot an `alloca` makes again holds nothing an earlier one stored.
         if func.dfg.downcast::<&Alloca>(inst).is_some() {
@@ -159,14 +177,79 @@ impl Solver {
             state.cells.retain(|key, _| {
                 !analysis.access_may_alias_key(func, access, &TrackedLocKey::Linear(key.clone()))
             });
-            if access.must_happen
-                && let Some(TrackedLocKey::Linear(key)) = analysis.trackable_exact_loc(func, access)
+            if !access.must_happen {
+                continue;
+            }
+
+            if let Some(TrackedLocKey::Linear(key)) = analysis.trackable_exact_loc(func, access)
                 && is_local(&key.base)
                 && let Some(value) =
                     store_value_of_inst(func, inst, &TrackedLocKey::Linear(key.clone()))
             {
-                state.cells.insert(key, vec![value]);
+                state.cells.insert(key, vec![SlotWrite::Value(value)]);
+            } else if let Some(copy) = func.dfg.downcast::<&EvmCodeCopy>(inst)
+                && let Some(range) = analysis.trackable_linear_range(func, access)
+                && is_local(&range.base)
+                && let Some(bytes) = code_bytes(func, *copy.code_offset(), range.bytes)
+            {
+                // `mload` reads a word big-endian.
+                for (word, offset) in bytes
+                    .as_chunks::<32>()
+                    .0
+                    .iter()
+                    .zip((range.offset..).step_by(32))
+                {
+                    let word = U256::from_big_endian(word);
+                    let key = LinearLocKey {
+                        space: range.space,
+                        base: range.base.clone(),
+                        offset,
+                        bytes: 32,
+                        ty: Type::I256,
+                    };
+                    let bits = KnownBits::normalized(Type::I256, !word, word);
+                    state.cells.insert(key, vec![SlotWrite::Bits(bits)]);
+                }
             }
         }
     }
+}
+
+/// The `len` bytes of code from `offset`, when they are the bytes of a constant global, or past
+/// the end of the code, where the EVM copies zeros.
+fn code_bytes(func: &Function, mut offset: ValueId, len: i64) -> Option<Vec<u8>> {
+    let len = usize::try_from(len).ok()?;
+    let mut start = 0usize;
+    while let Some(add) = func
+        .dfg
+        .value_inst(offset)
+        .and_then(|inst| func.dfg.downcast::<&Add>(inst))
+    {
+        let (base, imm) = match (
+            func.dfg.value_imm(*add.lhs()),
+            func.dfg.value_imm(*add.rhs()),
+        ) {
+            (_, Some(imm)) => (*add.lhs(), imm),
+            (Some(imm), _) => (*add.rhs(), imm),
+            _ => return None,
+        };
+        let imm = imm.as_i256();
+        if imm.is_negative() {
+            return None;
+        }
+        start = start.checked_add(usize::try_from(imm.to_u256()).ok()?)?;
+        offset = base;
+    }
+
+    let inst = func.dfg.value_inst(offset)?;
+    if func.dfg.downcast::<&EvmCodeSize>(inst).is_some() {
+        return Some(vec![0; len]);
+    }
+    let SymbolRef::Global(gv) = func.dfg.downcast::<&SymAddr>(inst)?.sym() else {
+        return None;
+    };
+    let bytes = encode_gv_initializer_to_bytes(func.ctx(), *gv).ok()?;
+    bytes
+        .get(start..start.checked_add(len)?)
+        .map(<[u8]>::to_vec)
 }

@@ -13,7 +13,7 @@ use sonatina_ir::{
 };
 
 use crate::{
-    analysis::slot_writes::local_slot_load_writes,
+    analysis::slot_writes::{SlotWrite, local_slot_load_writes},
     optim::const_eval::{
         ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys,
         eval_const_path_dynamic_domain_immediates, eval_const_path_immediate,
@@ -106,7 +106,7 @@ pub struct KnownBitsQuery {
     value_tys: SecondaryMap<ValueId, Option<Type>>,
     immediates: SecondaryMap<ValueId, Option<Immediate>>,
     const_paths: ConstPathAnalysis,
-    slot_writes: FxHashMap<ValueId, Vec<ValueId>>,
+    slot_writes: FxHashMap<ValueId, Vec<SlotWrite>>,
 }
 
 #[cfg(test)]
@@ -187,8 +187,10 @@ impl KnownBitsQuery {
             worklist.push_back(value);
         }
         for (&load, writes) in &self.slot_writes {
-            for &value in writes {
-                dependents[value].push(load);
+            for write in writes {
+                if let SlotWrite::Value(value) = *write {
+                    dependents[value].push(load);
+                }
             }
         }
 
@@ -268,11 +270,14 @@ impl KnownBitsQuery {
         }
     }
 
-    /// A load of a local slot reads a word one of the stores that reach it wrote.
-    fn slot_load_known_bits(&self, func: &Function, values: &[ValueId], ty: Type) -> KnownBits {
-        values
+    /// A load of a local slot reads the word one of the writes that reach it stored.
+    fn slot_load_known_bits(&self, func: &Function, writes: &[SlotWrite], ty: Type) -> KnownBits {
+        writes
             .iter()
-            .map(|&value| self.known_of(func, value))
+            .map(|write| match *write {
+                SlotWrite::Value(value) => self.known_of(func, value),
+                SlotWrite::Bits(bits) => bits,
+            })
             .reduce(|acc, bits| acc.meet(bits, ty))
             .unwrap_or_else(|| KnownBits::unknown(ty))
     }
