@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2461
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/chz_castling_rights_gvn_regression_noopt.sntn
 ---
@@ -570,27 +571,27 @@ set_piece:
     MLOAD
     PUSH1 0xff (255)  // v9.i256 = and v6 v7;
     AND
-    PUSH1 0x2 (2)  // v18.i256 = shl 2.i256 v9;
+    PUSH1 0x2 (2)  // v18.i256 = shl v17 v9;
     SHL
-    PUSH1 0xf (15)  // v23.i256 = shl v18 15.i256;
+    PUSH1 0xf (15)  // v24.i256 = shl v18 v23;
     DUP2
     SHL
-    PUSH1 0xa0 (160)  // v24.i256 = evm_mload v3;
+    PUSH1 0xa0 (160)  // v28.i256 = evm_mload v3;
     MLOAD
-    SWAP1  // v25.i256 = not v23;
+    SWAP1  // v29.i256 = not v24;
     NOT
-    AND  // v26.i256 = and v24 v25;
-    PUSH1 0xe0 (224)  // v27.i256 = evm_mload v5;
+    AND  // v30.i256 = and v28 v29;
+    PUSH1 0xe0 (224)  // v31.i256 = evm_mload v5;
     MLOAD
-    PUSH1 0xff (255)  // v28.i256 = and v27 v7;
+    PUSH1 0xff (255)  // v32.i256 = and v31 v7;
     AND
-    PUSH1 0xf (15)  // v30.i256 = and v28 15.i256;
+    PUSH1 0xf (15)  // v25.i256 = and v32 v23;
     AND
-    SWAP1  // v31.i256 = shl v18 v30;
+    SWAP1  // v26.i256 = shl v18 v25;
     SWAP2
     SHL
-    OR  // v32.i256 = or v26 v31;
-    SWAP1  // return v32;
+    OR  // v27.i256 = or v30 v26;
+    SWAP1  // return v27;
     JUMP
 
 // func private %path_clear_file(v0.i256, v1.i256, v2.i256, v3.i256) -> i256
@@ -883,20 +884,20 @@ piece_at:
     MLOAD
     PUSH1 0xff (255)  // v7.i256 = and v4 v5;
     AND
-    PUSH1 0x2 (2)  // v16.i256 = shl 2.i256 v7;
+    PUSH1 0x2 (2)  // v16.i256 = shl v14 v7;
     SHL
-    PUSH1 0xa0 (160)  // v20.i256 = evm_mload v2;
+    PUSH1 0xa0 (160)  // v15.i256 = evm_mload v2;
     MLOAD
-    SWAP1  // v21.i256 = shr v16 v20;
+    SWAP1  // v20.i256 = shr v16 v15;
     SHR
-    PUSH1 0xf (15)  // v23.i256 = and v21 15.i256;
+    PUSH1 0xf (15)  // v18.i256 = and v20 15.i256;
     AND
-    PUSH1 `pc + (4)`  // v24.i256 = call %downcast_truncate__g0587 v23;
+    PUSH1 `pc + (4)`  // v19.i256 = call %downcast_truncate__g0587 v18;
     SWAP1
     PUSH1 FuncRef(4)
     JUMP
     JUMPDEST
-    SWAP1  // return v24;
+    SWAP1  // return v19;
     JUMP
 
 // func private %downcast_truncate__g0587(v0.i256) -> i256

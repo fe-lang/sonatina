@@ -1212,10 +1212,78 @@ impl<'a> FunctionLegalizer<'a> {
         );
     }
 
+    /// A full-width unsigned product by 2^k overflows exactly when any of
+    /// the input's top k bits are set. Avoid multiplying and dividing back.
+    fn full_width_pow2_product(
+        &mut self,
+        inst: InstId,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Option<(ValueId, ValueId)> {
+        let (value, shift) =
+            [(lhs, rhs), (rhs, lhs)]
+                .into_iter()
+                .find_map(|(value, constant)| {
+                    let constant = self.func.dfg.value_imm(constant)?.as_i256().to_u256();
+                    if constant <= U256::one()
+                        || constant & (constant - U256::one()) != U256::zero()
+                    {
+                        return None;
+                    }
+                    Some((value, constant.trailing_zeros() as u16))
+                })?;
+        let low_shift = self.shift_value(shift);
+        let high_shift = self.shift_value(256 - shift);
+        let result = self.insert_before_one(
+            inst,
+            arith::Shl::new(self.evm_inst_set(), low_shift, value),
+            Type::I256,
+            Some(ScalarWidth::Full256),
+        );
+        // Widening retags a narrow value with OR zero. Look through that
+        // identity to retain the source width's proof that the product fits.
+        let range_value = self
+            .func
+            .dfg
+            .value_inst(value)
+            .and_then(|inst| self.func.dfg.downcast::<&Or>(inst))
+            .filter(|or| {
+                self.func
+                    .dfg
+                    .value_imm(*or.rhs())
+                    .is_some_and(Immediate::is_zero)
+            })
+            .map_or(value, |or| *or.lhs());
+        if self.value_fits_narrow_locally(range_value, 256 - shift) {
+            let overflow = self.func.dfg.make_imm_value(Immediate::zero(Type::I1));
+            return Some((result, overflow));
+        }
+        let high = self.insert_before_one(
+            inst,
+            arith::Shr::new(self.evm_inst_set(), high_shift, value),
+            Type::I256,
+            Some(ScalarWidth::Full256),
+        );
+        let zero = self.zero_i256();
+        let overflow = self.insert_before_one(
+            inst,
+            Ne::new(self.evm_inst_set(), high, zero),
+            Type::I1,
+            Some(ScalarWidth::Bool),
+        );
+        Some((result, overflow))
+    }
+
     fn rewrite_umulo(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
         let result_width = self
             .width_of(self.func.dfg.inst_results(inst)[0])
             .expect("missing result width");
+        if result_width == ScalarWidth::Full256
+            && let Some((result, overflow)) = self.full_width_pow2_product(inst, lhs, rhs)
+        {
+            self.replace_with_aliases(inst, &[result, overflow]);
+            return;
+        }
         let raw = self.insert_before_one(
             inst,
             Mul::new(self.evm_inst_set(), lhs, rhs),
@@ -1265,6 +1333,19 @@ impl<'a> FunctionLegalizer<'a> {
         let width = self
             .single_result_width(inst)
             .expect("missing saturating mul result width");
+        if width == ScalarWidth::Full256
+            && let Some((raw, overflow)) = self.full_width_pow2_product(inst, lhs, rhs)
+        {
+            let overflow_mask = self.bool_to_mask_i256(inst, overflow);
+            let result = self.insert_before_one(
+                inst,
+                Or::new(self.evm_inst_set(), raw, overflow_mask),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            self.replace_with_aliases(inst, &[result]);
+            return;
+        }
         if width == ScalarWidth::Full256 {
             let raw = self.insert_before_one(
                 inst,
@@ -2861,5 +2942,55 @@ block0:
         assert!(dumped.contains("255.i256"), "{dumped}");
         assert!(dumped.contains("248.i256"), "{dumped}");
         assert!(!dumped.contains(" = mload v0 i8;"), "{dumped}");
+    }
+
+    #[test]
+    fn full_width_power_of_two_products_use_high_bit_checks() {
+        for shift in [1, 5, 64, 128, 255] {
+            let constant = sonatina_ir::U256::one() << shift;
+            for swapped in [false, true] {
+                let operands = if swapped {
+                    format!("{constant}.i256 v0")
+                } else {
+                    format!("v0 {constant}.i256")
+                };
+                let source = format!(
+                    "target = \"evm-ethereum-osaka\"\nfunc public %entry(v0.i256) -> i256 {{\nblock0:\n (v1.i256, v2.i1) = umulo {operands};\n v3.i256 = zext v2 i256;\n v4.i256 = add v1 v3;\n return v4;\n}}"
+                );
+                let dumped = legalize_and_dump(&source, "entry");
+                assert!(dumped.contains(&format!("shl {shift}.i256 v0")), "{dumped}");
+                assert!(
+                    dumped.contains(&format!("shr {}.i256 v0", 256 - shift)),
+                    "{dumped}"
+                );
+                assert!(!dumped.contains("evm_udiv"), "{dumped}");
+                let source = format!(
+                    "target = \"evm-ethereum-osaka\"\nfunc public %entry(v0.i256) -> i256 {{\nblock0:\n v1.i256 = umulsat {operands};\n return v1;\n}}"
+                );
+                let dumped = legalize_and_dump(&source, "entry");
+                assert!(
+                    dumped.contains(&format!("shr {}.i256 v0", 256 - shift)),
+                    "{dumped}"
+                );
+                assert!(!dumped.contains("evm_udiv"), "{dumped}");
+            }
+        }
+    }
+
+    #[test]
+    fn widened_small_products_keep_overflow_proven_false() {
+        let dumped = legalize_and_dump(
+            r#"
+target = "evm-ethereum-osaka"
+func public %entry(v0.i8) -> i1 {
+block0:
+    v1.i256 = zext v0 i256;
+    (v2.i256, v3.i1) = umulo v1 4.i256;
+    return v3;
+}
+"#,
+            "entry",
+        );
+        assert!(dumped.contains("return 0.i1;"), "{dumped}");
     }
 }
