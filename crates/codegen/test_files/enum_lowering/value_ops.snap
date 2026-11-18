@@ -12,11 +12,10 @@ type @OptionI256 = enum {
 
 func private %use_value(v0.i256) -> i256 {
     block0:
-        v9.@__enum_lowered_OptionI256_0 = insert_value undef.@__enum_lowered_OptionI256_0 0.i64 1.i1;
-        v11.@__enum_lowered_OptionI256_0 = insert_value v9 1.i64 v0;
-        v12.i1 = extract_value v11 0.i64;
-        v13.i1 = extract_value v11 0.i64;
-        v14.i1 = eq v13 1.i1;
-        v15.i256 = extract_value v11 1.i64;
-        return v15;
+        v7.@__enum_lowered_OptionI256_0 = agg.make @__enum_lowered_OptionI256_0 1.i1 v0;
+        v9.i1 = extract_value v7 0.i64;
+        v10.i1 = extract_value v7 0.i64;
+        v11.i1 = eq v10 1.i1;
+        v13.i256 = extract_value v7 1.i64;
+        return v13;
 }
