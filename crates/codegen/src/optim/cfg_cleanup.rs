@@ -6,13 +6,11 @@ use sonatina_ir::{
 
 use crate::cfg_edit::{CfgEditor, CleanupMode};
 
-pub struct CfgCleanup {
-    mode: CleanupMode,
-}
+pub struct CfgCleanup;
 
 impl CfgCleanup {
-    pub fn new(mode: CleanupMode) -> Self {
-        Self { mode }
+    pub fn new(CleanupMode::Strict: CleanupMode) -> Self {
+        Self
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
@@ -20,10 +18,9 @@ impl CfgCleanup {
             return false;
         }
 
-        let mut editor = CfgEditor::new(func, self.mode);
+        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
 
         let mut changed = editor.trim_after_terminator();
-        changed |= ensure_blocks_terminated(editor.func_mut(), self.mode);
         if changed {
             editor.recompute_cfg();
         }
@@ -52,9 +49,7 @@ impl CfgCleanup {
             }
         }
 
-        if matches!(self.mode, CleanupMode::Strict) {
-            assert_ir_invariants(editor.func(), editor.cfg());
-        }
+        assert_ir_invariants(editor.func(), editor.cfg());
 
         changed
     }
@@ -180,30 +175,6 @@ fn prune_unreachable(editor: &mut CfgEditor<'_>) -> bool {
     }
 
     editor.delete_blocks_unreachable(&unreachable)
-}
-
-fn ensure_blocks_terminated(func: &mut Function, mode: CleanupMode) -> bool {
-    let blocks: Vec<_> = func.layout.iter_block().collect();
-    let mut changed = false;
-
-    for block in blocks {
-        let term = func.layout.last_inst_of(block);
-        if term.is_some_and(|inst| func.dfg.is_terminator(inst)) {
-            continue;
-        }
-
-        match mode {
-            CleanupMode::Strict => panic!("block {block:?} does not end with a terminator"),
-            CleanupMode::RepairWithUndef => {
-                let unreachable = Unreachable::new_unchecked(func.inst_set());
-                InstInserter::at_location(CursorLocation::BlockBottom(block))
-                    .insert_inst_data(func, unreachable);
-                changed = true;
-            }
-        }
-    }
-
-    changed
 }
 
 fn assert_phis_leading(func: &Function, block: BlockId) {
@@ -348,7 +319,7 @@ func private %caller() {
         assert!(module.ctx.func_effects(exit_now).never_returns());
 
         module.func_store.modify(caller, |func| {
-            assert!(CfgCleanup::new(CleanupMode::RepairWithUndef).run(func));
+            assert!(CfgCleanup::new(CleanupMode::Strict).run(func));
 
             let block = func.layout.entry_block().expect("entry block");
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
@@ -401,7 +372,7 @@ block1:
 
         let test_run = find_func(&module, "test_run");
         module.func_store.modify(test_run, |func| {
-            assert!(CfgCleanup::new(CleanupMode::RepairWithUndef).run(func));
+            assert!(CfgCleanup::new(CleanupMode::Strict).run(func));
 
             let dumped = FuncWriter::new(test_run, func).dump_string();
             assert!(dumped.contains("unreachable;"));
@@ -445,7 +416,7 @@ func private %caller() {
 
         let caller = find_func(&module, "caller");
         module.func_store.modify(caller, |func| {
-            assert!(CfgCleanup::new(CleanupMode::RepairWithUndef).run(func));
+            assert!(CfgCleanup::new(CleanupMode::Strict).run(func));
 
             let block2 = func
                 .layout
@@ -514,7 +485,7 @@ block4:
 
         let dead_region = find_func(&module, "dead_region");
         module.func_store.modify(dead_region, |func| {
-            assert!(CfgCleanup::new(CleanupMode::RepairWithUndef).run(func));
+            assert!(CfgCleanup::new(CleanupMode::Strict).run(func));
 
             let dumped = FuncWriter::new(dead_region, func).dump_string();
             assert!(!dumped.contains("eq "));

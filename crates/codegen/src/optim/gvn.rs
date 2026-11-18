@@ -2701,7 +2701,7 @@ impl<'a> RedundantCodeRemover<'a> {
 
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) -> bool {
-        let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
+        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
         let mut changed = false;
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();

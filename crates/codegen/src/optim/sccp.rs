@@ -71,12 +71,7 @@ impl SccpSolver {
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) -> bool {
         self.clear();
 
-        let cleanup_mode = if cfg!(debug_assertions) {
-            CleanupMode::Strict
-        } else {
-            CleanupMode::RepairWithUndef
-        };
-        let mut changed = CfgCleanup::new(cleanup_mode).run(func);
+        let mut changed = CfgCleanup::new(CleanupMode::Strict).run(func);
         let constref_value_tys = collect_constref_value_tys(func);
         let const_paths = analyze_const_paths(func, &constref_value_tys);
 
@@ -128,7 +123,7 @@ impl SccpSolver {
         #[cfg(debug_assertions)]
         self.assert_no_executable_inst_results_are_bot(func);
 
-        let edges_removed = self.remove_unreachable_edges(func, cleanup_mode);
+        let edges_removed = self.remove_unreachable_edges(func);
         changed |= edges_removed;
         cfg.compute(func);
         // Solving only reads the function, so its known bits still hold
@@ -140,7 +135,7 @@ impl SccpSolver {
         };
         changed |= self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
 
-        changed |= CfgCleanup::new(cleanup_mode).run(func);
+        changed |= CfgCleanup::new(CleanupMode::Strict).run(func);
         cfg.compute(func);
 
         changed |= AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects).run(func);
@@ -533,8 +528,8 @@ impl SccpSolver {
     }
 
     /// Remove unreachable edges and blocks.
-    fn remove_unreachable_edges(&self, func: &mut Function, mode: CleanupMode) -> bool {
-        let mut editor = CfgEditor::new(func, mode);
+    fn remove_unreachable_edges(&self, func: &mut Function) -> bool {
+        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
         let mut changed = false;
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
@@ -723,8 +718,6 @@ impl SccpSolver {
     fn try_fold_phi(&self, func: &mut Function, inst: InstId) -> bool {
         let block = func.layout.inst_block(inst);
         let phi_value = func.dfg.inst_result(inst).expect("phi has no result");
-        let phi_ty = func.dfg.value_ty(phi_value);
-
         let reachable_preds: BTreeSet<_> = func
             .dfg
             .cast_phi(inst)
@@ -735,7 +728,7 @@ impl SccpSolver {
             .filter(|pred| self.is_reachable(func, *pred, block))
             .collect();
 
-        let (changed, fold_arg, phi_empty) = func.dfg.edit_phi(inst, |phi| {
+        let (changed, fold_arg) = func.dfg.edit_phi(inst, |phi| {
             let old_len = phi.args().len();
             phi.retain(|pred| reachable_preds.contains(&pred));
             let changed = old_len != phi.args().len();
@@ -748,26 +741,15 @@ impl SccpSolver {
                 );
             }
 
-            (
-                changed,
-                (phi.args().len() == 1).then(|| phi.args()[0].0),
-                phi.args().is_empty(),
-            )
+            let fold_arg = match phi.args().as_slice() {
+                &[(arg, _)] if arg != phi_value => Some(arg),
+                _ => None,
+            };
+            (changed, fold_arg)
         });
 
-        let fold_arg = if fold_arg.is_none() && phi_empty {
-            Some(func.dfg.make_undef_value(phi_ty))
-        } else {
-            fold_arg
-        };
-
-        // Remove phi function if it has 0 or 1 arguments.
+        // Remove phi function if it has one argument.
         if let Some(phi_arg) = fold_arg {
-            let phi_arg = if phi_arg == phi_value {
-                func.dfg.make_undef_value(phi_ty)
-            } else {
-                phi_arg
-            };
             if Self::alias_preserves_index_immediate_validity(func, phi_value, phi_arg) {
                 func.dfg.change_to_alias(phi_value, phi_arg);
                 InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);

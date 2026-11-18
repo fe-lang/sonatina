@@ -12,7 +12,6 @@ use vec_collections::VecSet;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CleanupMode {
     Strict,
-    RepairWithUndef,
 }
 
 /// Structured CFG editing helpers that keep CFG preds and phi incoming sets consistent.
@@ -29,18 +28,16 @@ pub struct CfgEditor<'f> {
     func: &'f mut Function,
     cfg: ControlFlowGraph,
     cfg_is_fresh: bool,
-    mode: CleanupMode,
 }
 
 impl<'f> CfgEditor<'f> {
-    pub fn new(func: &'f mut Function, mode: CleanupMode) -> Self {
+    pub fn new(func: &'f mut Function, CleanupMode::Strict: CleanupMode) -> Self {
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
         Self {
             func,
             cfg,
             cfg_is_fresh: true,
-            mode,
         }
     }
 
@@ -193,7 +190,7 @@ impl<'f> CfgEditor<'f> {
     }
 
     pub fn remove_succ(&mut self, from: BlockId, to: BlockId) -> bool {
-        let changed = remove_succ_and_repair_phis(self.func, self.mode, from, to);
+        let changed = remove_succ_and_repair_phis(self.func, from, to);
         if changed {
             self.recompute_blocks(&[from]);
         }
@@ -232,12 +229,10 @@ impl<'f> CfgEditor<'f> {
         }
 
         for dest in removed_dests {
-            if !self.func.layout.is_block_inserted(dest) {
-                if matches!(self.mode, CleanupMode::Strict) {
-                    panic!("branch target {dest:?} is not inserted");
-                }
-                continue;
-            }
+            assert!(
+                self.func.layout.is_block_inserted(dest),
+                "branch target {dest:?} is not inserted"
+            );
             remove_phi_incoming_from(self.func, dest, from);
             simplify_trivial_phis_in_block(self.func, dest);
         }
@@ -266,10 +261,10 @@ impl<'f> CfgEditor<'f> {
             return false;
         }
 
-        let old_to_inserted = self.func.layout.is_block_inserted(old_to);
-        if !old_to_inserted && matches!(self.mode, CleanupMode::Strict) {
-            panic!("branch target {old_to:?} is not inserted");
-        }
+        assert!(
+            self.func.layout.is_block_inserted(old_to),
+            "branch target {old_to:?} is not inserted"
+        );
 
         let old_has_other_edge = old_dests
             .iter()
@@ -284,7 +279,7 @@ impl<'f> CfgEditor<'f> {
             .dfg
             .rewrite_branch_edge_dest(term, edge_idx, new_to);
 
-        if old_to_inserted && !old_has_other_edge {
+        if !old_has_other_edge {
             remove_phi_incoming_from(self.func, old_to, from);
             simplify_trivial_phis_in_block(self.func, old_to);
         }
@@ -304,7 +299,7 @@ impl<'f> CfgEditor<'f> {
 
     pub fn prune_phi_to_current_preds(&mut self, block: BlockId) -> bool {
         let preds = self.cfg.preds_as_slice(block);
-        prune_phi_to_preds(self.func, block, preds, self.mode)
+        prune_phi_to_preds(self.func, block, preds)
     }
 
     pub fn split_block_at(&mut self, at: InstId) -> (BlockId, BlockId) {
@@ -354,13 +349,10 @@ impl<'f> CfgEditor<'f> {
             .insert_inst_data(self.func, self.func.dfg.make_jump(new_block));
 
         for succ in succs {
-            if !self.func.layout.is_block_inserted(succ) {
-                if matches!(self.mode, CleanupMode::Strict) {
-                    panic!("branch target {succ:?} is not inserted");
-                }
-                continue;
-            }
-
+            assert!(
+                self.func.layout.is_block_inserted(succ),
+                "branch target {succ:?} is not inserted"
+            );
             replace_phi_incoming_block(self.func, succ, from, new_block);
             simplify_trivial_phis_in_block(self.func, succ);
         }
@@ -787,7 +779,7 @@ impl<'f> CfgEditor<'f> {
                         continue;
                     }
 
-                    let removed = remove_succ_and_repair_phis(func, self.mode, pred, block);
+                    let removed = remove_succ_and_repair_phis(func, pred, block);
                     assert!(removed, "edge {pred:?} -> {block:?} does not exist");
                     edited_preds.push(pred);
                 }
@@ -875,10 +867,10 @@ impl<'f> CfgEditor<'f> {
         if old_to == new_to {
             return false;
         }
-        let old_to_inserted = self.func.layout.is_block_inserted(old_to);
-        if !old_to_inserted && matches!(self.mode, CleanupMode::Strict) {
-            panic!("branch target {old_to:?} is not inserted");
-        }
+        assert!(
+            self.func.layout.is_block_inserted(old_to),
+            "branch target {old_to:?} is not inserted"
+        );
 
         let term = self.branch_terminator(from);
         let branch_info = self.func.dfg.branch_info(term).unwrap();
@@ -892,10 +884,8 @@ impl<'f> CfgEditor<'f> {
             .dfg
             .rewrite_branch_edges_to_block(term, old_to, new_to);
 
-        if old_to_inserted {
-            remove_phi_incoming_from(self.func, old_to, from);
-            simplify_trivial_phis_in_block(self.func, old_to);
-        }
+        remove_phi_incoming_from(self.func, old_to, from);
+        simplify_trivial_phis_in_block(self.func, old_to);
 
         if from_already_preds_new_to && allow_existing_pred {
             assert!(
@@ -968,12 +958,7 @@ impl<'f> CfgEditor<'f> {
     }
 }
 
-fn remove_succ_and_repair_phis(
-    func: &mut Function,
-    mode: CleanupMode,
-    from: BlockId,
-    to: BlockId,
-) -> bool {
+fn remove_succ_and_repair_phis(func: &mut Function, from: BlockId, to: BlockId) -> bool {
     let Some(term) = func.layout.last_inst_of(from) else {
         panic!("block {from:?} has no terminator");
     };
@@ -990,13 +975,10 @@ fn remove_succ_and_repair_phis(
     }
 
     func.dfg.remove_branch_edges_to_block(term, to);
-
-    if !func.layout.is_block_inserted(to) {
-        if matches!(mode, CleanupMode::Strict) {
-            panic!("branch target {to:?} is not inserted");
-        }
-        return true;
-    }
+    assert!(
+        func.layout.is_block_inserted(to),
+        "branch target {to:?} is not inserted"
+    );
 
     remove_phi_incoming_from(func, to, from);
     simplify_trivial_phis_in_block(func, to);
@@ -1158,57 +1140,38 @@ pub(crate) fn simplify_trivial_phis_in_block(func: &mut Function, block: BlockId
     changed
 }
 
+/// The one value among `phi_inst`'s inputs other than its own result. A phi with no such input
+/// is in a block that no path from the entry reaches, and goes when that block does.
+pub(crate) fn trivial_phi_input(func: &Function, phi_inst: InstId) -> Option<ValueId> {
+    let phi_value = func.dfg.inst_result(phi_inst)?;
+    let mut inputs = func
+        .dfg
+        .cast_phi(phi_inst)?
+        .args()
+        .iter()
+        .map(|&(value, _)| value)
+        .filter(|&value| value != phi_value);
+    let first = inputs.next()?;
+    inputs.all(|value| value == first).then_some(first)
+}
+
 pub(crate) fn simplify_trivial_phi(func: &mut Function, phi_inst: InstId) -> bool {
-    let phi_value = func.dfg.inst_result(phi_inst).expect("phi has no result");
-    let ty = func.dfg.value_ty(phi_value);
-
-    let phi = func.dfg.cast_phi(phi_inst).unwrap();
-    let arg = match phi.args().first() {
-        None => func.dfg.make_undef_value(ty),
-        Some(&(first, _)) if phi.args().iter().all(|(value, _)| *value == first) => {
-            if first == phi_value {
-                func.dfg.make_undef_value(ty)
-            } else {
-                first
-            }
-        }
-        Some(_) => {
-            let mut non_self = None;
-            for &(value, _) in phi.args() {
-                if value == phi_value {
-                    continue;
-                }
-
-                match non_self {
-                    Some(existing) if existing != value => return false,
-                    Some(_) => {}
-                    None => non_self = Some(value),
-                }
-            }
-
-            non_self.unwrap_or_else(|| func.dfg.make_undef_value(ty))
-        }
+    let Some(input) = trivial_phi_input(func, phi_inst) else {
+        return false;
     };
-
-    func.dfg.change_to_alias(phi_value, arg);
+    let phi_value = func.dfg.inst_result(phi_inst).expect("phi has no result");
+    func.dfg.change_to_alias(phi_value, input);
     InstInserter::at_location(CursorLocation::At(phi_inst)).remove_inst(func);
     true
 }
 
-pub fn prune_phi_to_preds(
-    func: &mut Function,
-    block: BlockId,
-    preds: &[BlockId],
-    mode: CleanupMode,
-) -> bool {
+pub fn prune_phi_to_preds(func: &mut Function, block: BlockId, preds: &[BlockId]) -> bool {
     let mut changed = false;
 
     for phi_inst in iter_phis_in_block(func, block).collect::<Vec<_>>() {
-        let (removed_any, missing) = func.dfg.edit_phi(phi_inst, |phi| {
-            let mut missing = Vec::new();
+        changed |= func.dfg.edit_phi(phi_inst, |phi| {
             let old_len = phi.args().len();
             phi.retain(|pred| preds.binary_search(&pred).is_ok());
-            let removed_any = phi.args().len() != old_len;
 
             let mut seen = Vec::with_capacity(phi.args().len());
             for &(_, pred) in phi.args() {
@@ -1220,30 +1183,14 @@ pub fn prune_phi_to_preds(
             }
             seen.sort_unstable();
 
-            for &pred in preds {
-                if seen.binary_search(&pred).is_ok() {
-                    continue;
-                }
-
-                match mode {
-                    CleanupMode::Strict => {
-                        panic!("phi {phi_inst:?} in {block:?} missing incoming from {pred:?}");
-                    }
-                    CleanupMode::RepairWithUndef => missing.push(pred),
-                }
+            for pred in preds {
+                assert!(
+                    seen.binary_search(pred).is_ok(),
+                    "phi {phi_inst:?} in {block:?} missing incoming from {pred:?}"
+                );
             }
-            (removed_any, missing)
+            phi.args().len() != old_len
         });
-        changed |= removed_any;
-
-        if !missing.is_empty() {
-            let phi_result = func.dfg.inst_result(phi_inst).expect("phi has no result");
-            let undef = func.dfg.make_undef_value(func.dfg.value_ty(phi_result));
-            for pred in missing {
-                func.dfg.append_phi_arg(phi_inst, undef, pred);
-            }
-            changed = true;
-        }
     }
 
     changed
@@ -2163,6 +2110,61 @@ block2:
             let branch_info = editor.func().dfg.branch_info(new_term).unwrap();
             let branch_succs: Vec<_> = branch_info.dests().into_iter().collect();
             assert_eq!(branch_succs, vec![*b1, *b1]);
+        });
+    }
+
+    #[test]
+    fn phis_left_without_inputs_go_with_their_blocks() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1) -> i32 {
+block0:
+    br v0 block1 block3;
+
+block1:
+    v1.i32 = phi (7.i32 block0) (v1 block1);
+    br v0 block1 block2;
+
+block2:
+    v2.i32 = phi (v1 block1);
+    v3.i32 = add v2 1.i32;
+    return v3;
+
+block3:
+    return 9.i32;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [b0, b1, b2, b3] = blocks.as_slice() else {
+                panic!("expected four blocks");
+            };
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let phi_args = |editor: &CfgEditor, block| {
+                let phi_inst = editor.func().layout.first_inst_of(block).unwrap();
+                editor.func().dfg.cast_phi(phi_inst).unwrap().args().len()
+            };
+
+            // The loop's phi keeps only itself, and the exit's phi nothing.
+            assert!(editor.remove_succ(*b0, *b1));
+            assert_eq!(phi_args(&editor, *b1), 1);
+            assert!(editor.remove_succ(*b1, *b2));
+            assert_eq!(phi_args(&editor, *b2), 0);
+            assert!(
+                editor
+                    .func()
+                    .dfg
+                    .value_ids()
+                    .all(|value| !matches!(editor.func().dfg.value(value), Value::Undef { .. }))
+            );
+
+            assert!(editor.delete_blocks_unreachable(&[*b1, *b2]));
+            let blocks: Vec<_> = editor.func().layout.iter_block().collect();
+            assert_eq!(blocks, [*b0, *b3]);
         });
     }
 }
