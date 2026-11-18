@@ -1,0 +1,123 @@
+#! evm.config: { opt: 0 }
+#! evm.case: calldata_mload_signextend
+#!   calldata: u256(0) u256(511)
+#!   expect: return u256(255) u256(255) u256(255)
+#! evm.case: calldata_size
+#!   calldata: u256(1) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0)
+#!   expect: return u256(64)
+#! evm.case: memory_storage_transient
+#!   calldata: u256(2)
+#!   expect: return u256(255) u256(255) u256(255)
+#! evm.case: keccak256
+#!   calldata: u256(3) u256(12345)
+#!   expect: return u256(1)
+#! evm.case: create
+#!   calldata: u256(4)
+#!   expect: return u256(1)
+#! evm.case: signextend
+#!   calldata: u256(5) u256(128)
+#!   expect: return u256(128)
+#! evm.case: bool_calldata_even
+#!   calldata: u256(6) u256(2)
+#!   expect: return u256(0)
+#! evm.case: bool_calldata_odd
+#!   calldata: u256(6) u256(3)
+#!   expect: return u256(1)
+
+target = "evm-ethereum-osaka"
+
+# EVM instructions with a narrow result give a word cut to the result type: its
+# low bits, or for an `i1` its low bit.
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        br_table v0 block1 (1.i256 block2) (2.i256 block3) (3.i256 block4) (4.i256 block5) (5.i256 block6) (6.i256 block7);
+
+    # A word of 511 read as an `i8` from calldata and memory, and an `i8`
+    # sign-extended from bit 7, are each 255.
+    block1:
+        v1.i8 = evm_calldata_load 32.i32;
+        v2.i256 = zext v1 i256;
+        mstore 0.i32 v2 i256;
+        v3.i256 = evm_calldata_load 32.i32;
+        mstore 32.i32 v3 i256;
+        v4.i8 = evm_mload 32.i32;
+        v5.i256 = zext v4 i256;
+        mstore 32.i32 v5 i256;
+        v6.i8 = evm_signextend 0.i8 v1;
+        v7.i256 = zext v6 i256;
+        mstore 64.i32 v7 i256;
+        evm_return 0.i32 96.i32;
+
+    # 320 bytes of calldata is 64 as an `i8`.
+    block2:
+        v10.i8 = evm_calldata_size;
+        v11.i256 = zext v10 i256;
+        mstore 0.i32 v11 i256;
+        evm_return 0.i32 32.i32;
+
+    block3:
+        mstore 256.i32 511.i256 i256;
+        v20.i8 = evm_mload 256.i32;
+        v21.i256 = zext v20 i256;
+        mstore 0.i32 v21 i256;
+        evm_sstore 7.i256 767.i256;
+        v22.i8 = evm_sload 7.i256;
+        v23.i256 = zext v22 i256;
+        mstore 32.i32 v23 i256;
+        evm_tstore 7.i256 1023.i256;
+        v24.i8 = evm_tload 7.i256;
+        v25.i256 = zext v24 i256;
+        mstore 64.i32 v25 i256;
+        evm_return 0.i32 96.i32;
+
+    # The `i8` hash is the low byte of the word.
+    block4:
+        v30.i256 = evm_calldata_load 32.i32;
+        mstore 0.i32 v30 i256;
+        v31.i8 = evm_keccak256 0.i256 32.i256;
+        v32.i256 = evm_keccak256 0.i256 32.i256;
+        v33.i256 = zext v31 i256;
+        v34.i256 = and v32 255.i256;
+        v35.i1 = eq v33 v34;
+        v36.i256 = zext v35 i256;
+        mstore 0.i32 v36 i256;
+        evm_return 0.i32 32.i32;
+
+    # The `i8` address of a new contract is below 256.
+    block5:
+        v40.i8 = evm_create 0.i256 0.i256 0.i256;
+        v41.i256 = zext v40 i256;
+        v42.i1 = lt v41 256.i256;
+        v43.i256 = zext v42 i256;
+        mstore 0.i32 v43 i256;
+        evm_return 0.i32 32.i32;
+
+    # 0x80 sign-extended from bit 7 is 0x80 as an `i8`.
+    block6:
+        v50.i256 = evm_calldata_load 32.i32;
+        v51.i8 = trunc v50 i8;
+        v52.i8 = evm_signextend 0.i8 v51;
+        v53.i256 = zext v52 i256;
+        mstore 0.i32 v53 i256;
+        evm_return 0.i32 32.i32;
+
+    # A word of 2 read as an `i1` is false, and a word of 3 is true.
+    block7:
+        v60.i1 = evm_calldata_load 32.i32;
+        br v60 block8 block9;
+
+    block8:
+        mstore 0.i32 1.i256 i256;
+        evm_return 0.i32 32.i32;
+
+    block9:
+        mstore 0.i32 0.i256 i256;
+        evm_return 0.i32 32.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
