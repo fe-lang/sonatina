@@ -2103,7 +2103,7 @@ fn translate_function(
                     }
 
                     // Unless the value was built in this field.
-                    if !frame.inserts_in_place(inst_id) {
+                    if !frame.in_place(inst_id, idx) {
                         store_field(
                             function,
                             *insert.value(),
@@ -2460,10 +2460,32 @@ fn translate_function(
                         let result_ty = function.dfg.value_ty(result);
                         let addr =
                             storage_address(&frame, function, result, &value_map, &mut builder)?;
-                        // Padding is not part of the value, so it keeps
-                        // whatever it holds.
+                        // `undef` fields are zero, written first as for an
+                        // insert chain on undef. Padding is not part of the
+                        // value, so it keeps whatever it holds.
+                        let mut written = Vec::new();
+                        let mut stored = Vec::new();
                         for (idx, &field) in make.values().iter().enumerate() {
                             let (offset, ty) = aggregate_elem_offset(&module.ctx, result_ty, idx)?;
+                            if is_undef(function, field) {
+                                continue;
+                            }
+                            written.push((offset as u32, value_storage_size(ty, &module.ctx)?));
+                            if !frame.in_place(inst_id, idx) {
+                                stored.push((field, offset, ty));
+                            }
+                        }
+                        if written.len() < make.values().len() {
+                            zero_unwritten_fields(
+                                result_ty,
+                                addr,
+                                written,
+                                &module.ctx,
+                                target_config,
+                                &mut builder,
+                            )?;
+                        }
+                        for (field, offset, ty) in stored {
                             store_field(
                                 function,
                                 field,
