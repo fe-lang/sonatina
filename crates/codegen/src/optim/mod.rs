@@ -40,3 +40,13 @@ pub mod switch_formation;
 pub(crate) mod uniform_const_arg;
 
 pub use pipeline::{Pass, Pipeline, Step};
+use sonatina_ir::{Function, InstId, inst::data::AggMake};
+
+/// The instructions `inst` stands for in a size budget: one, or one per
+/// operand for an `agg.make`, as for the insert chain it replaces, so that how
+/// a fresh aggregate is spelled does not change what a budget allows.
+pub(crate) fn inst_size(func: &Function, inst: InstId) -> usize {
+    func.dfg
+        .downcast::<&AggMake>(inst)
+        .map_or(1, |make| make.values().len())
+}

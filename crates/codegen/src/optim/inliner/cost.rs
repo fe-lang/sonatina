@@ -9,6 +9,7 @@ use sonatina_ir::{
 use crate::{
     cfg_scc::has_cycle,
     module_analysis::ModuleInfo,
+    optim::inst_size,
     transform::aggregate::{objref_element_ty, scalarize::AggregateScalarize, shape},
 };
 
@@ -597,12 +598,7 @@ fn compute_inlinee_summary(
     for block in reachable_rpo {
         blocks += 1;
         for inst_id in func.layout.iter_inst(block) {
-            // An `agg.make` costs what the `insert_value` chain on undef
-            // building the same value does: one instruction per operand.
-            let weight = func
-                .dfg
-                .downcast::<&data::AggMake>(inst_id)
-                .map_or(1, |make| make.values().len());
+            let weight = inst_size(func, inst_id);
             insts += weight;
 
             if func.dfg.downcast::<&data::ObjLoad>(inst_id).is_some() {
