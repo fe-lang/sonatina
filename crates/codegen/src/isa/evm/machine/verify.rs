@@ -1,5 +1,5 @@
 use sonatina_ir::{
-    Function, InstSetExt, Module, Type, Value, ValueId,
+    Function, InstSetExt, Module, Type, ValueId,
     inst::evm::machine_inst_set::EvmMachineInstKind,
     isa::{Isa, evm::EvmMachine},
     module::FuncRef,
@@ -55,20 +55,6 @@ pub(crate) fn verify_machine_function(
                     "EVM machine IR contains unsupported instruction at inst{}: {}",
                     inst.as_u32(),
                     inst_data.as_text()
-                ));
-            }
-            // Machine IR has no `undef`: machine lowering gives each `undef` operand the
-            // immediate zero.
-            if let Some(undef) = inst_data
-                .collect_values()
-                .into_iter()
-                .find(|&value| matches!(function.dfg.value(value), Value::Undef { .. }))
-            {
-                return Err(format!(
-                    "EVM machine inst{} in func {} has an `undef` operand v{}",
-                    inst.as_u32(),
-                    func_ref.as_u32(),
-                    undef.as_u32()
                 ));
             }
             // What runs once per call sits at the top of the entry block.

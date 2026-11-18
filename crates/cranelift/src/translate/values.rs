@@ -61,6 +61,9 @@ pub(super) fn insert_clif_results(
     }
 }
 
+/// Why an `undef` is an error here.
+const NOT_CONCRETE: &str = "translation takes concrete IR: `concretize` leaves no `undef`";
+
 pub(super) fn resolve_value(
     function: &Function,
     value_id: ValueId,
@@ -72,9 +75,7 @@ pub(super) fn resolve_value(
     }
     let value = function.dfg.value(value_id);
     match value {
-        Value::Immediate { ty: Type::I256, .. }
-        | Value::Undef { ty: Type::I256 }
-        | Value::Zero { ty: Type::I256 } => Err(format!(
+        Value::Immediate { ty: Type::I256, .. } | Value::Zero { ty: Type::I256 } => Err(format!(
             "i256 value v{} has no single Cranelift value",
             value_id.0
         )),
@@ -87,19 +88,18 @@ pub(super) fn resolve_value(
                 Ok(val)
             }
         },
-        Value::Undef { ty } | Value::Zero { ty } => {
+        Value::Undef { .. } => Err(format!("v{}: {NOT_CONCRETE}", value_id.0)),
+        Value::Zero { ty } => {
             let ctx = function.ctx();
             if is_aggregate(ctx, *ty) {
                 // Aggregate consumers zero their destination (`store_indirect`)
                 // or a slot of their own (`resolve_operand`), or take zero
                 // parts (`resolve_parts`).
                 return Err(format!(
-                    "undef aggregate v{} needs a storage-aware consumer",
+                    "zero aggregate v{} needs a storage-aware consumer",
                     value_id.0
                 ));
             }
-            // This is a backend choice for surviving undef values, not an IR
-            // promise that optimizations must preserve zero.
             let pointer_ty = sonatina_scalar_type_to_clif_or_err(ctx.type_layout.pointer_repl())?;
             let clif_ty = sonatina_type_to_clif_or_err(*ty, pointer_ty)?;
             Ok(scalar_constant(clif_ty, 0, builder))
@@ -114,7 +114,7 @@ pub(super) fn resolve_value(
     }
 }
 
-/// The limbs of an i256 value. Undef reads as zero, like other undef values.
+/// The limbs of an i256 value.
 pub(super) fn resolve_i256(
     function: &Function,
     value_id: ValueId,
@@ -129,9 +129,7 @@ pub(super) fn resolve_i256(
             imm: Immediate::I256(imm),
             ..
         } => Ok(constant_limbs(imm.to_u256(), builder)),
-        Value::Undef { ty: Type::I256 } | Value::Zero { ty: Type::I256 } => {
-            Ok(constant_limbs(U256::zero(), builder))
-        }
+        Value::Zero { ty: Type::I256 } => Ok(constant_limbs(U256::zero(), builder)),
         value => Err(format!("unresolved i256 value v{}: {value:?}", value_id.0)),
     }
 }

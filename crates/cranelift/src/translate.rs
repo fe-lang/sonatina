@@ -1144,21 +1144,11 @@ fn translate_function(
                         value_map.insert(result, result_val);
                     }
                 }
-                // Every use of a translated value sees one value, and an
-                // undefined one reads as zero, so freezing changes nothing.
-                NativeInstKind::Freeze(freeze) => {
-                    let result = function
-                        .dfg
-                        .inst_result(inst_id)
-                        .ok_or("freeze has no result")?;
-                    if function.dfg.value_ty(result) == Type::I256 {
-                        let limbs =
-                            resolve_i256(function, *freeze.arg(), &value_map, &mut builder)?;
-                        value_map.insert_limbs(result, limbs);
-                    } else {
-                        let arg = resolve_value(function, *freeze.arg(), &value_map, &mut builder)?;
-                        value_map.insert(result, arg);
-                    }
+                NativeInstKind::Freeze(_) => {
+                    return Err(
+                        "translation takes concrete IR: `concretize` leaves no `freeze`"
+                            .to_string(),
+                    );
                 }
                 NativeInstKind::Bitcast(bitcast)
                     if [function.dfg.value_ty(*bitcast.from()), *bitcast.ty()]
@@ -2436,7 +2426,7 @@ fn translate_function(
                         let mut stored = Vec::new();
                         for (idx, &field) in make.values().iter().enumerate() {
                             let (offset, ty) = aggregate_elem_offset(&module.ctx, result_ty, idx)?;
-                            if reads_as_zero(function, field) {
+                            if is_zero_literal(function, field) {
                                 continue;
                             }
                             written.push((offset as u32, value_storage_size(ty, &module.ctx)?));
