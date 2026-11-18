@@ -2,7 +2,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    Function, InstId, InstSetExt, Type, ValueId,
+    Function, InstId, InstSetExt, Type, Value, ValueId,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
     module::ModuleCtx,
@@ -809,6 +809,50 @@ fn non_code_address_uses(function: &Function, isa: &Evm) -> FxHashSet<ValueId> {
     }
 }
 
+/// The provenance of `zero.ty`, that of the `agg.make` of its leaves' zeros.
+/// An integer or enum tag is raw, as the immediate 0 is. A null pointer or
+/// object reference has none, the provenance of `undef`: `concretize` turns
+/// each `undef` into a `zero`, and with this every decision made on a pointer
+/// is the one made on `undef`. It also means an access through `zero.*T` is
+/// undefined behavior: the analyses take it to reach no memory. To make the
+/// null pointer a raw address instead, which may reach the low fixed slots,
+/// give it `raw: true` here and recompute the escape summaries after
+/// `concretize`.
+fn zero_provenance(module: &ModuleCtx, ty: Type) -> Provenance {
+    let raw = Provenance {
+        raw: true,
+        ..Provenance::default()
+    };
+    let Type::Compound(compound) = ty else {
+        return if ty.is_integral() || ty.is_enum_tag() {
+            raw
+        } else {
+            Provenance::default()
+        };
+    };
+    let fields = match module.with_ty_store(|store| store.resolve_compound(compound).clone()) {
+        CompoundType::Ptr(_)
+        | CompoundType::ObjRef(_)
+        | CompoundType::ConstRef(_)
+        | CompoundType::Func { .. } => return Provenance::default(),
+        // The tag is raw, and a field adds no more.
+        CompoundType::Enum(_) => return raw,
+        CompoundType::Array { elem, len } => {
+            if len == 0 {
+                vec![]
+            } else {
+                vec![elem]
+            }
+        }
+        CompoundType::Struct(data) => data.fields,
+    };
+    let mut prov = Provenance::default();
+    for field in fields {
+        let _ = prov.union_with(&zero_provenance(module, field));
+    }
+    prov
+}
+
 pub(crate) fn compute_provenance(
     function: &Function,
     module: &ModuleCtx,
@@ -818,7 +862,13 @@ pub(crate) fn compute_provenance(
     let non_code_uses = non_code_address_uses(function, isa);
     let mut prov: SecondaryMap<ValueId, Provenance> = SecondaryMap::new();
     for value in function.dfg.value_ids() {
-        prov[value].raw = function.dfg.value_is_imm(value);
+        prov[value] = match function.dfg.value(value) {
+            Value::Zero { ty } => zero_provenance(module, *ty),
+            _ => Provenance {
+                raw: function.dfg.value_is_imm(value),
+                ..Provenance::default()
+            },
+        };
     }
 
     for (idx, &arg) in function.arg_values.iter().enumerate() {
@@ -1991,6 +2041,65 @@ block0:
                 "callee allocations have no local instruction identity"
             );
         }
+    }
+
+    /// A phi of an alloca's address and an integer zero is raw: spelled as the
+    /// immediate, as `zero.i256` and as a field of a zero aggregate.
+    #[test]
+    fn integer_zeros_are_raw_like_immediate_zero() {
+        for zero in ["0.i256", "zero.i256", "v3"] {
+            let provenance = ret_provenance(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+type @pair = {{i256, *i256}};
+func public %f(v0.i1) -> i256 {{
+block0:
+    v1.*i256 = alloca i256;
+    v2.i256 = ptr_to_int v1 i256;
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    v3.i256 = extract_value zero.@pair 0.i8;
+    jump block3;
+block3:
+    v4.i256 = phi (v2 block1) ({zero} block2);
+    return v4;
+}}
+"#
+                ),
+                "f",
+            );
+            assert!(provenance.may_be_raw(), "{zero}: {provenance:?}");
+            assert!(
+                !provenance.names_allocation(|_| false),
+                "{zero}: {provenance:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn null_pointers_have_no_provenance() {
+        let provenance = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+func public %f(v0.i1) -> *i256 {
+block0:
+    v1.*i256 = alloca i256;
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v2.*i256 = phi (v1 block1) (zero.*i256 block2);
+    return v2;
+}
+"#,
+            "f",
+        );
+        assert!(provenance.names_allocation(|_| false), "{provenance:?}");
     }
 
     #[test]
