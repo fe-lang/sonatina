@@ -282,6 +282,9 @@ fn canonicalize_binary_inst(
             return Some(rewrite);
         }
     }
+    if let Some(rewrite) = fold_shifted_sign_test(func, inst, kind, lhs, rhs) {
+        return Some(rewrite);
+    }
     match kind {
         BinaryInstKind::Eq
             if func.dfg.value_ty(lhs).is_integral() && func.dfg.value_ty(rhs).is_integral() =>
@@ -476,6 +479,63 @@ fn fold_bitwise_pair(
         kind,
         lhs: Operand::Value(x),
         rhs: Operand::Value(y),
+    })
+}
+
+/// Arithmetic right shifts preserve the sign, including oversized shifts.
+/// Match constant shift counts.
+fn fold_shifted_sign_test(
+    func: &Function,
+    inst: InstId,
+    mut kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<InstSpec> {
+    if !matches!(
+        kind,
+        BinaryInstKind::Slt | BinaryInstKind::Sle | BinaryInstKind::Sgt | BinaryInstKind::Sge
+    ) {
+        return None;
+    }
+    let (shifted, bound) = if let Some(bound) = func.dfg.value_imm(rhs) {
+        (lhs, bound)
+    } else {
+        let bound = func.dfg.value_imm(lhs)?;
+        kind = match kind {
+            BinaryInstKind::Slt => BinaryInstKind::Sgt,
+            BinaryInstKind::Sgt => BinaryInstKind::Slt,
+            BinaryInstKind::Sle => BinaryInstKind::Sge,
+            BinaryInstKind::Sge => BinaryInstKind::Sle,
+            _ => unreachable!(),
+        };
+        (rhs, bound)
+    };
+    if !bound.ty().is_integral() {
+        return None;
+    }
+    let sign_test = match kind {
+        BinaryInstKind::Slt | BinaryInstKind::Sge => bound.is_zero(),
+        BinaryInstKind::Sgt | BinaryInstKind::Sle => bound == Immediate::all_one(bound.ty()),
+        _ => unreachable!(),
+    };
+    if !sign_test {
+        return None;
+    }
+    let producer = func.dfg.value_inst(shifted)?;
+    if func.dfg.inst(producer).kind() != InstClassKind::Binary(BinaryInstKind::Sar)
+        || func.dfg.users_num(shifted) != 1
+        || func.layout.inst_block(producer) != func.layout.inst_block(inst)
+    {
+        return None;
+    }
+    let [count, input] = func.dfg.inst(producer).collect_values()[..] else {
+        return None;
+    };
+    func.dfg.value_imm(count)?;
+    Some(InstSpec::Binary {
+        kind,
+        lhs: Operand::Value(input),
+        rhs: Operand::Imm(bound),
     })
 }
 
@@ -1078,6 +1138,10 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
                 BinaryInstKind::Eq => Some(Box::new(cmp::Eq::new(is.has_eq()?, lhs, rhs))),
                 BinaryInstKind::Lt => Some(Box::new(cmp::Lt::new(is.has_lt()?, lhs, rhs))),
                 BinaryInstKind::Gt => Some(Box::new(cmp::Gt::new(is.has_gt()?, lhs, rhs))),
+                BinaryInstKind::Sge => Some(Box::new(cmp::Sge::new(is.has_sge()?, lhs, rhs))),
+                BinaryInstKind::Sgt => Some(Box::new(cmp::Sgt::new(is.has_sgt()?, lhs, rhs))),
+                BinaryInstKind::Sle => Some(Box::new(cmp::Sle::new(is.has_sle()?, lhs, rhs))),
+                BinaryInstKind::Slt => Some(Box::new(cmp::Slt::new(is.has_slt()?, lhs, rhs))),
                 BinaryInstKind::EvmByte => {
                     Some(Box::new(evm::EvmByte::new(is.has_evm_byte()?, lhs, rhs)))
                 }
@@ -1167,6 +1231,10 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             BinaryInstKind::Eq => is.has_eq().is_some(),
             BinaryInstKind::Lt => is.has_lt().is_some(),
             BinaryInstKind::Gt => is.has_gt().is_some(),
+            BinaryInstKind::Sge => is.has_sge().is_some(),
+            BinaryInstKind::Sgt => is.has_sgt().is_some(),
+            BinaryInstKind::Sle => is.has_sle().is_some(),
+            BinaryInstKind::Slt => is.has_slt().is_some(),
             BinaryInstKind::EvmByte => is.has_evm_byte().is_some(),
             BinaryInstKind::EvmSignExtend => is.has_evm_sign_extend().is_some(),
             BinaryInstKind::EvmUmod => is.has_evm_umod().is_some(),
@@ -1964,6 +2032,51 @@ block0:
                 !dumped.contains("evm_signextend") && !dumped.contains("evm_byte"),
                 "{dumped}"
             );
+        }
+    }
+
+    #[test]
+    fn signed_shift_tests_only_need_the_original_sign() {
+        for (ty, target) in [
+            ("i8", "x86_64-unknown-native"),
+            ("i256", "evm-ethereum-osaka"),
+        ] {
+            for shift in [1, 7, 8, 64, 127] {
+                for (op, bound) in [("slt", "0"), ("sge", "0"), ("sgt", "-1"), ("sle", "-1")] {
+                    let source = format!(
+                        "target = \"{target}\"\nfunc public %f(v0.{ty}) -> i1 {{\nblock0:\n v1.{ty} = sar {shift}.{ty} v0;\n v2.i1 = {op} v1 {bound}.{ty};\n return v2;\n}}"
+                    );
+                    let (module, f) = parse_test_module(&source);
+                    module.func_store.modify(f, |func| {
+                        ScalarCanonicalize::new().run(func);
+                    });
+                    let dumped = dump_func(&module, f);
+                    assert!(
+                        dumped.contains(&format!("{op} v0 {bound}.{ty}")),
+                        "{dumped}"
+                    );
+                    assert!(!dumped.contains("sar "), "{dumped}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shifted_sign_tests_keep_other_bounds_and_shared_or_dynamic_shifts() {
+        for body in [
+            "v1.i256 = sar 8.i256 v0; v2.i1 = slt v1 1.i256; return v2;",
+            "v1.i256 = sar 8.i256 v0; v2.i1 = sgt v1 0.i256; return v2;",
+            "v1.i256 = sar v0 v0; v2.i1 = slt v1 0.i256; return v2;",
+            "v1.i256 = sar 8.i256 v0; v2.i1 = slt v1 0.i256; v3.i1 = eq v1 1.i256; v4.i1 = or v2 v3; return v4;",
+            "v1.i256 = sar 8.i256 v0; jump block1;\nblock1:\n v2.i1 = slt v1 0.i256; return v2;",
+        ] {
+            let source = format!("target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i1 {{\nblock0:\n{body}\n}}").replace("; ", ";\n");
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(dumped.contains("sar "), "{dumped}");
         }
     }
 
