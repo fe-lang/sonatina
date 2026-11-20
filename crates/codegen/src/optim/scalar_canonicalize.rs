@@ -195,6 +195,9 @@ fn canonicalize_binary_inst(
     lhs: ValueId,
     rhs: ValueId,
 ) -> Option<InstSpec> {
+    if let Some(rewrite) = fold_bitwise_pair(func, inst, kind, lhs, rhs) {
+        return Some(rewrite);
+    }
     if let Some(rewrite) = canonicalize_evm_byte(func, inst, kind, lhs, rhs) {
         return Some(rewrite);
     }
@@ -286,6 +289,63 @@ fn canonicalize_binary_inst(
         }
         _ => None,
     }
+}
+
+// Keep matched intermediates local and single-use so rewriting removes work
+// without extending dependencies across block boundaries.
+fn local_bitwise_producer(func: &Function, root: InstId, value: ValueId) -> Option<InstId> {
+    let producer = func.dfg.value_inst(value)?;
+    (func.dfg.users_num(value) == 1
+        && func.layout.inst_block(producer) == func.layout.inst_block(root))
+    .then_some(producer)
+}
+
+fn fold_bitwise_pair(
+    func: &Function,
+    inst: InstId,
+    outer: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<InstSpec> {
+    use BinaryInstKind::{And, Or, Xor};
+    if !matches!(outer, And | Or | Xor) || !func.dfg.value_ty(lhs).is_integral() {
+        return None;
+    }
+    let left = local_bitwise_producer(func, inst, lhs)?;
+    let right = local_bitwise_producer(func, inst, rhs)?;
+    let InstClassKind::Binary(a) = func.dfg.inst(left).kind() else {
+        return None;
+    };
+    let InstClassKind::Binary(b) = func.dfg.inst(right).kind() else {
+        return None;
+    };
+    if !matches!(a, And | Or | Xor) || !matches!(b, And | Or | Xor) {
+        return None;
+    }
+    let [x, y] = func.dfg.inst(left).collect_values()[..] else {
+        return None;
+    };
+    let [u, v] = func.dfg.inst(right).collect_values()[..] else {
+        return None;
+    };
+    if !((x == u && y == v) || (x == v && y == u)) {
+        return None;
+    }
+    let kind = match (outer, a, b) {
+        (And, And, Or) | (And, Or, And) => And,
+        (And, Or, Xor) | (And, Xor, Or) => Xor,
+        (Or, And, Or | Xor) | (Or, Or | Xor, And) | (Or, Or, Xor) | (Or, Xor, Or) => Or,
+        (Xor, And, Or) | (Xor, Or, And) => Xor,
+        (Xor, And, Xor) | (Xor, Xor, And) => Or,
+        (Xor, Or, Xor) | (Xor, Xor, Or) => And,
+        _ => return None,
+    };
+    // Both original inputs remain operands, preserving strict undef dependencies.
+    Some(InstSpec::Binary {
+        kind,
+        lhs: Operand::Value(x),
+        rhs: Operand::Value(y),
+    })
 }
 
 /// Move an invertible constant operation into an equality's bound.
@@ -650,6 +710,8 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
                 BinaryInstKind::Shr => Some(Box::new(arith::Shr::new(is.has_shr()?, lhs, rhs))),
                 BinaryInstKind::Sar => Some(Box::new(arith::Sar::new(is.has_sar()?, lhs, rhs))),
                 BinaryInstKind::And => Some(Box::new(logic::And::new(is.has_and()?, lhs, rhs))),
+                BinaryInstKind::Xor => Some(Box::new(logic::Xor::new(is.has_xor()?, lhs, rhs))),
+                BinaryInstKind::Or => Some(Box::new(logic::Or::new(is.has_or()?, lhs, rhs))),
                 BinaryInstKind::Ne => Some(Box::new(cmp::Ne::new(is.has_ne()?, lhs, rhs))),
                 BinaryInstKind::Eq => Some(Box::new(cmp::Eq::new(is.has_eq()?, lhs, rhs))),
                 BinaryInstKind::EvmByte => {
@@ -728,6 +790,8 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             BinaryInstKind::Shr => is.has_shr().is_some(),
             BinaryInstKind::Sar => is.has_sar().is_some(),
             BinaryInstKind::And => is.has_and().is_some(),
+            BinaryInstKind::Xor => is.has_xor().is_some(),
+            BinaryInstKind::Or => is.has_or().is_some(),
             BinaryInstKind::Ne => is.has_ne().is_some(),
             BinaryInstKind::Eq => is.has_eq().is_some(),
             BinaryInstKind::EvmByte => is.has_evm_byte().is_some(),
@@ -1450,6 +1514,92 @@ block0:
             });
             let dumped = dump_func(&module, f);
             assert!(dumped.contains(retained), "{dumped}");
+        }
+    }
+
+    #[test]
+    fn folds_bitwise_pairs_in_each_operand_order() {
+        for ty in ["i1", "i8", "i256"] {
+            for (outer, a, b, expected) in [
+                ("and", "and", "or", "and"),
+                ("and", "or", "xor", "xor"),
+                ("or", "and", "or", "or"),
+                ("or", "and", "xor", "or"),
+                ("or", "or", "xor", "or"),
+                ("xor", "and", "or", "xor"),
+                ("xor", "and", "xor", "or"),
+                ("xor", "or", "xor", "and"),
+            ] {
+                for (a, b) in [(a, b), (b, a)] {
+                    for reverse in [false, true] {
+                        let (u, v) = if reverse { ("v1", "v0") } else { ("v0", "v1") };
+                        let source = format!(
+                            "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.{ty}, v1.{ty}) -> {ty} {{\nblock0:\n v2.{ty} = {a} v0 v1;\n v3.{ty} = {b} {u} {v};\n v4.{ty} = {outer} v2 v3;\n return v4;\n}}"
+                        );
+                        let (module, f) = parse_test_module(&source);
+                        module.func_store.modify(f, |func| {
+                            ScalarCanonicalize::new().run(func);
+                        });
+                        let dumped = dump_func(&module, f);
+                        assert!(
+                            dumped.contains(&format!(" = {expected} v0 v1;")),
+                            "{dumped}"
+                        );
+                        assert_eq!(dumped.matches(" = ").count(), 1, "{dumped}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bitwise_pairs_retain_undef_operands() {
+        let source = r#"target = "evm-ethereum-osaka"
+func public %f(v0.i256) -> i256 {
+block0:
+ v1.i256 = add undef.i256 v0;
+ v2.i256 = and v0 v1;
+ v3.i256 = xor v0 v1;
+ v4.i256 = or v2 v3;
+ return v4;
+}"#;
+        let (module, f) = parse_test_module(source);
+        module.func_store.modify(f, |func| {
+            ScalarCanonicalize::new().run(func);
+        });
+        let dumped = dump_func(&module, f);
+        assert!(dumped.contains("add undef.i256 v0"), "{dumped}");
+        assert!(dumped.contains("or v0 v1"), "{dumped}");
+        assert!(!dumped.contains(" = and "), "{dumped}");
+        assert!(!dumped.contains(" = xor "), "{dumped}");
+    }
+
+    #[test]
+    fn preserves_shared_cross_block_and_mismatched_bitwise_pairs() {
+        for (right, shared, cross_block) in [
+            ("or v0 v1", true, false),
+            ("or v0 v1", false, true),
+            ("or v0 v0", false, false),
+        ] {
+            let branch = if cross_block {
+                "jump block1;\nblock1:"
+            } else {
+                ""
+            };
+            let tail = if shared {
+                "v5.i256 = add v2 v4;\nreturn v5;"
+            } else {
+                "return v4;"
+            };
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256, v1.i256) -> i256 {{\nblock0:\n v2.i256 = and v0 v1;\n {branch}\n v3.i256 = {right};\n v4.i256 = xor v2 v3;\n {tail}\n}}"
+            );
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(dumped.contains("xor v2 v3"), "{dumped}");
         }
     }
 }

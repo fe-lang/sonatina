@@ -1,0 +1,32 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/bitwise_pair_identity.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 12 bytes
+  total: 12 bytes
+
+functions:
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
+  entry: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case input_0: calldata_len=64 success reason=Return gas_used=21283 gas_refunded=0 logs=0 output=call len=32 tx_gas=21256 runtime_gas=27
+  case input_1: calldata_len=64 success reason=Return gas_used=21667 gas_refunded=0 logs=0 output=call len=32 tx_gas=21640 runtime_gas=27
+  case input_2: calldata_len=64 success reason=Return gas_used=21667 gas_refunded=0 logs=0 output=call len=32 tx_gas=21640 runtime_gas=27
+  case input_3: calldata_len=64 success reason=Return gas_used=22051 gas_refunded=0 logs=0 output=call len=32 tx_gas=22024 runtime_gas=27
+  case input_4: calldata_len=64 success reason=Return gas_used=21307 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=27
+  case input_5: calldata_len=64 success reason=Return gas_used=21679 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=27
+  case input_6: calldata_len=64 success reason=Return gas_used=21679 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=27
+  case input_7: calldata_len=64 success reason=Return gas_used=21307 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=27
+  case input_8: calldata_len=64 success reason=Return gas_used=21307 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=27
+  case input_9: calldata_len=64 success reason=Return gas_used=22051 gas_refunded=0 logs=0 output=call len=32 tx_gas=22024 runtime_gas=27
+  case input_10: calldata_len=64 success reason=Return gas_used=22051 gas_refunded=0 logs=0 output=call len=32 tx_gas=22024 runtime_gas=27
+  case input_11: calldata_len=64 success reason=Return gas_used=22039 gas_refunded=0 logs=0 output=call len=32 tx_gas=22012 runtime_gas=27
+  case input_12: calldata_len=64 success reason=Return gas_used=22039 gas_refunded=0 logs=0 output=call len=32 tx_gas=22012 runtime_gas=27
+  case input_13: calldata_len=64 success reason=Return gas_used=22051 gas_refunded=0 logs=0 output=call len=32 tx_gas=22024 runtime_gas=27
+  case input_14: calldata_len=64 success reason=Return gas_used=22051 gas_refunded=0 logs=0 output=call len=32 tx_gas=22024 runtime_gas=27

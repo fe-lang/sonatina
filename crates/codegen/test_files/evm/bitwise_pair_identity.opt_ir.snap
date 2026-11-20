@@ -1,0 +1,22 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/bitwise_pair_identity.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v4.i256 = xor v0 v1;
+        mstore 0.i256 v4 i256;
+        evm_return 0.i256 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
