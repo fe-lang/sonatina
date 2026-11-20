@@ -8,6 +8,8 @@ use sonatina_ir::{
 
 use sonatina_triple::Architecture;
 
+use crate::isa::evm::immediate_materialization_plan;
+
 use super::simplify_expr::{
     ZextI1CompareRewrite, canonicalize_cast_chain, imm_to_u256, integral_bit_width,
     nontrivial_pow2_shift, simplify_cast, simplify_zext_i1_compare,
@@ -156,6 +158,25 @@ impl ScalarCanonicalize {
                     .filter(|&replacement| supports_inst_spec(func, replacement))
                     .map(|replacement| RewritePlan::ReplaceInst { inst, replacement })
             }
+            InstClassKind::Unary(UnaryInstKind::IsZero) => {
+                let values = inst_data.collect_values();
+                let [value] = values.as_slice() else {
+                    return None;
+                };
+                let ty = func.dfg.value_ty(*value);
+                if !ty.is_integral() {
+                    return None;
+                }
+                fold_constant_comparison(
+                    func,
+                    inst,
+                    BinaryInstKind::Eq,
+                    *value,
+                    Immediate::zero(ty),
+                )
+                .filter(|&replacement| supports_inst_spec(func, replacement))
+                .map(|replacement| RewritePlan::ReplaceInst { inst, replacement })
+            }
             InstClassKind::Unary(_) | InstClassKind::Phi | InstClassKind::Opaque => None,
         }
     }
@@ -179,6 +200,18 @@ fn canonicalize_binary_inst(
     }
     if let Some(rewrite) = canonicalize_evm_signextend(func, inst, kind, lhs, rhs) {
         return Some(rewrite);
+    }
+    if matches!(kind, BinaryInstKind::Eq | BinaryInstKind::Ne) {
+        let operands = func
+            .dfg
+            .value_imm(rhs)
+            .map(|bound| (lhs, bound))
+            .or_else(|| func.dfg.value_imm(lhs).map(|bound| (rhs, bound)));
+        if let Some((value, bound)) = operands
+            && let Some(rewrite) = fold_constant_comparison(func, inst, kind, value, bound)
+        {
+            return Some(rewrite);
+        }
     }
     match kind {
         BinaryInstKind::Eq
@@ -253,6 +286,74 @@ fn canonicalize_binary_inst(
         }
         _ => None,
     }
+}
+
+/// Move an invertible constant operation into an equality's bound.
+/// Keep shared producers and cross-block live ranges, and reject costly bounds.
+fn fold_constant_comparison(
+    func: &Function,
+    inst: InstId,
+    kind: BinaryInstKind,
+    value: ValueId,
+    bound: Immediate,
+) -> Option<InstSpec> {
+    let ty = func.dfg.value_ty(value);
+    if !ty.is_integral() || bound.ty() != ty {
+        return None;
+    }
+    let producer = func.dfg.value_inst(value)?;
+    if func.dfg.users_num(value) != 1
+        || func.layout.inst_block(producer) != func.layout.inst_block(inst)
+    {
+        return None;
+    }
+    let inner_kind = func.dfg.inst(producer).kind();
+    if !matches!(
+        inner_kind,
+        InstClassKind::Binary(BinaryInstKind::Add | BinaryInstKind::Sub | BinaryInstKind::Xor)
+    ) {
+        return None;
+    }
+    let [lhs, rhs] = func.dfg.inst(producer).collect_values()[..] else {
+        return None;
+    };
+    let original_bound = bound;
+    let (input, constant, bound) = if let Some(c) = func.dfg.value_imm(rhs) {
+        let new_bound = match inner_kind {
+            InstClassKind::Binary(BinaryInstKind::Add) => bound - c,
+            InstClassKind::Binary(BinaryInstKind::Sub) => bound + c,
+            InstClassKind::Binary(BinaryInstKind::Xor) => bound ^ c,
+            _ => unreachable!(),
+        };
+        (lhs, c, new_bound)
+    } else {
+        let c = func.dfg.value_imm(lhs)?;
+        let new_bound = match inner_kind {
+            InstClassKind::Binary(BinaryInstKind::Add) => bound - c,
+            InstClassKind::Binary(BinaryInstKind::Sub) => c - bound,
+            InstClassKind::Binary(BinaryInstKind::Xor) => bound ^ c,
+            _ => unreachable!(),
+        };
+        (rhs, c, new_bound)
+    };
+    // Price the actual EVM materialization, including NOT and shifted constants.
+    // Stay no more expensive than the larger original constant in either metric.
+    if func.ctx().triple.architecture == Architecture::Evm {
+        if ty != Type::I256 {
+            return None;
+        }
+        let a = immediate_materialization_plan(original_bound).cost();
+        let b = immediate_materialization_plan(constant).cost();
+        let new = immediate_materialization_plan(bound).cost();
+        if new.gas > a.gas.max(b.gas) || new.bytes > a.bytes.max(b.bytes) {
+            return None;
+        }
+    }
+    Some(InstSpec::Binary {
+        kind,
+        lhs: Operand::Value(input),
+        rhs: Operand::Imm(bound),
+    })
 }
 
 /// Select BYTE when a byte-aligned shift and mask extract one byte.
@@ -549,6 +650,8 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
                 BinaryInstKind::Shr => Some(Box::new(arith::Shr::new(is.has_shr()?, lhs, rhs))),
                 BinaryInstKind::Sar => Some(Box::new(arith::Sar::new(is.has_sar()?, lhs, rhs))),
                 BinaryInstKind::And => Some(Box::new(logic::And::new(is.has_and()?, lhs, rhs))),
+                BinaryInstKind::Ne => Some(Box::new(cmp::Ne::new(is.has_ne()?, lhs, rhs))),
+                BinaryInstKind::Eq => Some(Box::new(cmp::Eq::new(is.has_eq()?, lhs, rhs))),
                 BinaryInstKind::EvmByte => {
                     Some(Box::new(evm::EvmByte::new(is.has_evm_byte()?, lhs, rhs)))
                 }
@@ -625,6 +728,8 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             BinaryInstKind::Shr => is.has_shr().is_some(),
             BinaryInstKind::Sar => is.has_sar().is_some(),
             BinaryInstKind::And => is.has_and().is_some(),
+            BinaryInstKind::Ne => is.has_ne().is_some(),
+            BinaryInstKind::Eq => is.has_eq().is_some(),
             BinaryInstKind::EvmByte => is.has_evm_byte().is_some(),
             BinaryInstKind::EvmSignExtend => is.has_evm_sign_extend().is_some(),
             BinaryInstKind::Udiv => is.has_udiv().is_some(),
@@ -1253,6 +1358,98 @@ block0:
                 !dumped.contains("evm_signextend") && !dumped.contains("evm_byte"),
                 "{dumped}"
             );
+        }
+    }
+
+    #[test]
+    fn equality_moves_invertible_constants_into_the_bound() {
+        for (ty, target) in [
+            ("i8", "x86_64-unknown-native"),
+            ("i256", "evm-ethereum-osaka"),
+        ] {
+            for (op, operands, bound, expected) in [
+                ("add", "v0 10", "40", "30"),
+                ("add", "10 v0", "40", "30"),
+                ("sub", "v0 10", "40", "50"),
+                ("sub", "10 v0", "3", "7"),
+                ("xor", "v0 10", "40", "34"),
+                ("xor", "10 v0", "40", "34"),
+            ] {
+                let operands = operands.replace("10", &format!("10.{ty}"));
+                for comparison in ["eq", "ne"] {
+                    for reversed in [false, true] {
+                        let args = if reversed {
+                            format!("{bound}.{ty} v1")
+                        } else {
+                            format!("v1 {bound}.{ty}")
+                        };
+                        let source = format!(
+                            "target = \"{target}\"\nfunc public %f(v0.{ty}) -> i1 {{\nblock0:\n v1.{ty} = {op} {operands};\n v2.i1 = {comparison} {args};\n return v2;\n}}"
+                        );
+                        let (module, f) = parse_test_module(&source);
+                        module.func_store.modify(f, |func| {
+                            ScalarCanonicalize::new().run(func);
+                        });
+                        let dumped = dump_func(&module, f);
+                        assert!(
+                            dumped.contains(&format!("{comparison} v0 {expected}.{ty}")),
+                            "{dumped}"
+                        );
+                        assert!(!dumped.contains(&format!(" = {op} ")), "{dumped}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zero_tests_fold_xor_constants() {
+        let (module, f) = parse_test_module(
+            "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i1 {\nblock0:\n v1.i256 = xor v0 85.i256;\n v2.i1 = is_zero v1;\n return v2;\n}",
+        );
+        module.func_store.modify(f, |func| {
+            ScalarCanonicalize::new().run(func);
+        });
+        let dumped = dump_func(&module, f);
+        assert!(dumped.contains("eq v0 85.i256"), "{dumped}");
+        assert!(!dumped.contains("xor "), "{dumped}");
+    }
+
+    #[test]
+    fn equality_preserves_shared_cross_block_checked_and_costly_producers() {
+        for (body, retained) in [
+            (
+                "v1.i256 = add v0 100.i256; v2.i1 = eq v1 1.i256; return v2;",
+                "add ",
+            ),
+            (
+                "v1.i256 = add v0 1.i256; v2.i1 = eq v1 340282366920938463463374607431768211456.i256; return v2;",
+                "add ",
+            ),
+            (
+                "v1.i256 = xor v0 85.i256; v2.i1 = eq v1 102.i256; v3.i1 = eq v1 99.i256; v4.i1 = or v2 v3; return v4;",
+                "xor ",
+            ),
+            (
+                "v1.i256 = xor v0 85.i256; jump block1;\nblock1:\n v2.i1 = eq v1 102.i256; return v2;",
+                "xor ",
+            ),
+            (
+                "(v1.i256, v2.i1) = uaddo v0 100.i256; v3.i1 = eq v1 150.i256; v4.i1 = or v2 v3; return v4;",
+                "uaddo ",
+            ),
+            (
+                "v1.i256 = mul v0 10.i256; v2.i1 = eq v1 40.i256; return v2;",
+                "mul ",
+            ),
+        ] {
+            let source = format!("target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i1 {{\nblock0:\n{body}\n}}").replace("; ", ";\n");
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(dumped.contains(retained), "{dumped}");
         }
     }
 }

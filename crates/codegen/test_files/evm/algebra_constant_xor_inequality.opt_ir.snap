@@ -1,0 +1,22 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/algebra_constant_xor_inequality.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v2.i1 = ne v0 51.i256;
+        v3.i256 = zext v2 i256;
+        mstore 0.i256 v3 i256;
+        evm_return 0.i256 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
