@@ -156,6 +156,15 @@ impl ScalarCanonicalize {
                     .filter(|&replacement| supports_inst_spec(func, replacement))
                     .map(|replacement| RewritePlan::ReplaceInst { inst, replacement })
             }
+            InstClassKind::Unary(UnaryInstKind::IsZero) => {
+                let values = inst_data.collect_values();
+                let [value] = values.as_slice() else {
+                    return None;
+                };
+                canonicalize_quotient_zero_test(func, inst, *value, true)
+                    .filter(|&replacement| supports_inst_spec(func, replacement))
+                    .map(|replacement| RewritePlan::ReplaceInst { inst, replacement })
+            }
             InstClassKind::Unary(_) | InstClassKind::Phi | InstClassKind::Opaque => None,
         }
     }
@@ -179,6 +188,21 @@ fn canonicalize_binary_inst(
     }
     if let Some(rewrite) = canonicalize_evm_signextend(func, inst, kind, lhs, rhs) {
         return Some(rewrite);
+    }
+    if matches!(kind, BinaryInstKind::Eq | BinaryInstKind::Ne) {
+        let quotient = if func.dfg.value_imm(rhs).is_some_and(Immediate::is_zero) {
+            Some(lhs)
+        } else if func.dfg.value_imm(lhs).is_some_and(Immediate::is_zero) {
+            Some(rhs)
+        } else {
+            None
+        };
+        if let Some(quotient) = quotient
+            && let Some(rewrite) =
+                canonicalize_quotient_zero_test(func, inst, quotient, kind == BinaryInstKind::Eq)
+        {
+            return Some(rewrite);
+        }
     }
     match kind {
         BinaryInstKind::Eq
@@ -253,6 +277,53 @@ fn canonicalize_binary_inst(
         }
         _ => None,
     }
+}
+
+/// x / d is zero exactly when x < d, for a nonzero unsigned divisor.
+/// Require the quotient to disappear without extending liveness across blocks.
+fn canonicalize_quotient_zero_test(
+    func: &Function,
+    inst: InstId,
+    quotient: ValueId,
+    is_zero: bool,
+) -> Option<InstSpec> {
+    if !func.dfg.value_ty(quotient).is_integral() {
+        return None;
+    }
+    let producer = func.dfg.value_inst(quotient)?;
+    if !matches!(
+        func.dfg.inst(producer).kind(),
+        InstClassKind::Binary(BinaryInstKind::Udiv | BinaryInstKind::EvmUdiv)
+    ) || func.dfg.users_num(quotient) != 1
+        || func.layout.inst_block(producer) != func.layout.inst_block(inst)
+    {
+        return None;
+    }
+    let [value, divisor] = func.dfg.inst(producer).collect_values()[..] else {
+        return None;
+    };
+    let divisor = func.dfg.value_imm(divisor)?;
+    // Preserve division by one and the compact shift spelling for powers of two.
+    // A comparison can require a much wider PUSH without saving runtime gas.
+    if divisor.is_zero()
+        || divisor == Immediate::one(divisor.ty())
+        || nontrivial_pow2_shift(divisor).is_some()
+    {
+        return None;
+    }
+    Some(InstSpec::Binary {
+        kind: if is_zero {
+            BinaryInstKind::Lt
+        } else {
+            BinaryInstKind::Gt
+        },
+        lhs: Operand::Value(value),
+        rhs: Operand::Imm(if is_zero {
+            divisor
+        } else {
+            divisor - Immediate::one(divisor.ty())
+        }),
+    })
 }
 
 /// Select BYTE when a byte-aligned shift and mask extract one byte.
@@ -549,6 +620,8 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
                 BinaryInstKind::Shr => Some(Box::new(arith::Shr::new(is.has_shr()?, lhs, rhs))),
                 BinaryInstKind::Sar => Some(Box::new(arith::Sar::new(is.has_sar()?, lhs, rhs))),
                 BinaryInstKind::And => Some(Box::new(logic::And::new(is.has_and()?, lhs, rhs))),
+                BinaryInstKind::Lt => Some(Box::new(cmp::Lt::new(is.has_lt()?, lhs, rhs))),
+                BinaryInstKind::Gt => Some(Box::new(cmp::Gt::new(is.has_gt()?, lhs, rhs))),
                 BinaryInstKind::EvmByte => {
                     Some(Box::new(evm::EvmByte::new(is.has_evm_byte()?, lhs, rhs)))
                 }
@@ -625,6 +698,8 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             BinaryInstKind::Shr => is.has_shr().is_some(),
             BinaryInstKind::Sar => is.has_sar().is_some(),
             BinaryInstKind::And => is.has_and().is_some(),
+            BinaryInstKind::Lt => is.has_lt().is_some(),
+            BinaryInstKind::Gt => is.has_gt().is_some(),
             BinaryInstKind::EvmByte => is.has_evm_byte().is_some(),
             BinaryInstKind::EvmSignExtend => is.has_evm_sign_extend().is_some(),
             BinaryInstKind::Udiv => is.has_udiv().is_some(),
@@ -1253,6 +1328,76 @@ block0:
                 !dumped.contains("evm_signextend") && !dumped.contains("evm_byte"),
                 "{dumped}"
             );
+        }
+    }
+
+    #[test]
+    fn quotient_zero_tests_use_unsigned_comparisons() {
+        for (ty, div, target) in [
+            ("i8", "udiv", "x86_64-unknown-native"),
+            ("i256", "evm_udiv", "evm-ethereum-osaka"),
+        ] {
+            for (test, expected) in [
+                ("eq v1 0.TY", "lt v0 10.TY"),
+                ("eq 0.TY v1", "lt v0 10.TY"),
+                ("is_zero v1", "lt v0 10.TY"),
+                ("ne v1 0.TY", "gt v0 9.TY"),
+                ("ne 0.TY v1", "gt v0 9.TY"),
+            ] {
+                let test = test.replace("TY", ty);
+                let source = format!(
+                    "target = \"{target}\"\nfunc public %f(v0.{ty}) -> i1 {{\nblock0:\n v1.{ty} = {div} v0 10.{ty};\n v2.i1 = {test};\n return v2;\n}}"
+                );
+                let (module, f) = parse_test_module(&source);
+                module.func_store.modify(f, |func| {
+                    ScalarCanonicalize::new().run(func);
+                });
+                let dumped = dump_func(&module, f);
+                assert!(dumped.contains(&expected.replace("TY", ty)), "{dumped}");
+                assert!(!dumped.contains(&format!(" = {div} ")), "{dumped}");
+            }
+        }
+    }
+
+    #[test]
+    fn quotient_zero_tests_keep_unsupported_or_shared_divisions() {
+        for body in [
+            "v1.i256 = evm_sdiv v0 10.i256; v2.i1 = is_zero v1; return v2;",
+            "v1.i256 = evm_udiv v0 0.i256; v2.i1 = is_zero v1; return v2;",
+            "v1.i256 = evm_udiv 10.i256 v0; v2.i1 = is_zero v1; return v2;",
+            "v1.i256 = evm_udiv v0 10.i256; v2.i1 = is_zero v1; v3.i1 = lt v1 3.i256; v4.i1 = or v2 v3; return v4;",
+            "v1.i256 = evm_udiv v0 10.i256; jump block1;\nblock1:\n v2.i1 = is_zero v1; return v2;",
+        ] {
+            let source = format!("target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i1 {{\nblock0:\n{body}\n}}").replace("; ", ";\n");
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(dumped.contains("div "), "{dumped}");
+        }
+    }
+
+    #[test]
+    fn quotient_zero_tests_preserve_trivial_and_power_of_two_divisors() {
+        for divisor in ["1", "256", "18446744073709551616"] {
+            for test in ["is_zero v1", "eq v1 0.i256", "ne v1 0.i256"] {
+                let source = format!(
+                    "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i1 {{\nblock0:\n v1.i256 = evm_udiv v0 {divisor}.i256;\n v2.i1 = {test};\n return v2;\n}}"
+                );
+                let (module, f) = parse_test_module(&source);
+                module.func_store.modify(f, |func| {
+                    ScalarCanonicalize::new().run(func);
+                });
+                let dumped = dump_func(&module, f);
+                assert!(
+                    !dumped.contains(" = lt ") && !dumped.contains(" = gt "),
+                    "{dumped}"
+                );
+                if divisor == "18446744073709551616" {
+                    assert!(dumped.contains("shr 64.i256 v0"), "{dumped}");
+                }
+            }
         }
     }
 }
