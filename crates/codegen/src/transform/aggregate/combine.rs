@@ -656,7 +656,7 @@ impl AggregateCombine {
         }
 
         let block = func.layout.inst_block(inst);
-        let agg_phi_value = append_phi_at_block_top(func, block, agg_ty, agg_args);
+        let agg_phi_value = insert_phi_before(func, inst, agg_ty, agg_args);
         let new_extract = append_non_phi_after_phi_region(
             func,
             block,
@@ -728,8 +728,8 @@ impl AggregateCombine {
         }
 
         let block = func.layout.inst_block(inst);
-        let base_phi = append_phi_at_block_top(func, block, base_ty, base_args);
-        let payload_phi = append_phi_at_block_top(func, block, payload_ty, payload_args);
+        let base_phi = insert_phi_before(func, inst, base_ty, base_args);
+        let payload_phi = insert_phi_before(func, inst, payload_ty, payload_args);
         let new_insert = append_non_phi_after_phi_region(
             func,
             block,
@@ -1313,10 +1313,13 @@ fn enum_proj_of_value(func: &Function, value: ValueId) -> Option<data::EnumProj>
     func.dfg.downcast::<&data::EnumProj>(inst).cloned()
 }
 
-/// A phi of `args` at the top of `block`, or `undef` if every argument is.
-fn append_phi_at_block_top(
+/// A phi of `args` just before `at`, the phi being rewritten, or `undef` if every argument is.
+/// The phis one rewrite makes stay in the order they are made, so a split, nested ones included,
+/// is in field order wherever and in whatever order it happens; a block's phi order is its entry
+/// stack order.
+fn insert_phi_before(
     func: &mut Function,
-    block: BlockId,
+    at: InstId,
     ty: Type,
     args: control_flow::PhiArgs,
 ) -> ValueId {
@@ -1324,8 +1327,12 @@ fn append_phi_at_block_top(
         return func.dfg.make_undef_value(ty);
     }
     let phi = control_flow::Phi::new_unchecked(func.inst_set(), args);
-    let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
-    let inst = cursor.prepend_inst_data(func, phi);
+    let loc = func.layout.prev_inst_of(at).map_or(
+        CursorLocation::BlockTop(func.layout.inst_block(at)),
+        CursorLocation::At,
+    );
+    let mut cursor = InstInserter::at_location(loc);
+    let inst = cursor.insert_inst_data(func, phi);
     let value = func.dfg.make_value(Value::Inst {
         inst,
         result_idx: 0,

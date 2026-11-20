@@ -196,8 +196,8 @@ func public %ac_loop_phi_extract(v0.@slice, v1.@slice) -> i256 {
 
 # sameln: func public %ac_loop_phi_insert(v0.@slice, v1.@slice) -> i256 {
 # check:     block1:
-# check:         phi (10.i256 block0) (20.i256 block2);
 # check:         phi (v0 block0) (v1 block2);
+# check:         phi (10.i256 block0) (20.i256 block2);
 # check:     block3:
 # check:         return v13;
 func public %ac_loop_phi_insert(v0.@slice, v1.@slice) -> i256 {
