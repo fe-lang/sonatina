@@ -1,0 +1,39 @@
+target = "evm-ethereum-london"
+
+type @inner = { i256, i256 };
+type @outer = { i256, @inner };
+
+# A phi of nested insert chains splits into one phi per leaf, in field order.
+# sameln: func public %ac_nested_phi_order(v0.i1, v1.i256, v2.i256, v3.i256) -> i256 {
+# check:     block3:
+# check:         phi (v3 block1) (v1 block2);
+# nextln:        phi (v1 block1) (v2 block2);
+# nextln:        phi (v2 block1) (v3 block2);
+func public %ac_nested_phi_order(v0.i1, v1.i256, v2.i256, v3.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v4.@inner = insert_value undef.@inner 0.i8 v1;
+        v5.@inner = insert_value v4 1.i8 v2;
+        v6.@outer = insert_value undef.@outer 0.i8 v3;
+        v7.@outer = insert_value v6 1.i8 v5;
+        jump block3;
+
+    block2:
+        v8.@inner = insert_value undef.@inner 0.i8 v2;
+        v9.@inner = insert_value v8 1.i8 v3;
+        v10.@outer = insert_value undef.@outer 0.i8 v1;
+        v11.@outer = insert_value v10 1.i8 v9;
+        jump block3;
+
+    block3:
+        v12.@outer = phi (v7 block1) (v11 block2);
+        v13.i256 = extract_value v12 0.i8;
+        v14.@inner = extract_value v12 1.i8;
+        v15.i256 = extract_value v14 0.i8;
+        v16.i256 = extract_value v14 1.i8;
+        v17.i256 = add v13 v15;
+        v18.i256 = add v17 v16;
+        return v18;
+}

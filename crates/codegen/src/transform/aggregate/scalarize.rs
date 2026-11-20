@@ -1509,10 +1509,13 @@ impl AggregateScalarize {
                     .unwrap_or_else(|| panic!("missing aggregate shape for scalarizable phi"));
 
                 let mut leaf_phis: LeafValues = SmallVec::new();
+                // The leaf phis take the aggregate phi's place, in leaf order.
+                let mut loc = CursorLocation::At(inst);
                 for leaf in shape.leaves {
-                    let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
+                    let mut cursor = InstInserter::at_location(loc);
                     let phi = control_flow::Phi::new_unchecked(func.inst_set(), SmallVec::new());
-                    let phi_inst = cursor.prepend_inst_data(func, phi);
+                    let phi_inst = cursor.insert_inst_data(func, phi);
+                    loc = CursorLocation::At(phi_inst);
                     let phi_res = func.dfg.make_value(Value::Inst {
                         inst: phi_inst,
                         result_idx: 0,
