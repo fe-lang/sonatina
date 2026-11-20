@@ -1,0 +1,43 @@
+target = "x86_64-unknown-native"
+
+# sameln: func public %exact(v0.i8) -> i8 {
+# check: v1.i8 = and v0 -4.i8;
+# check: v2.i8 = sar 2.i8 v1;
+# check: return v2;
+func public %exact(v0.i8) -> i8 {
+block0:
+ v1.i8 = and v0 -4.i8;
+ v2.i8 = sdiv v1 4.i8;
+ return v2;
+}
+
+# sameln: func public %nonnegative(v0.i8) -> i8 {
+# check: v1.i8 = and v0 127.i8;
+# check: v2.i8 = shr 2.i8 v1;
+# check: return v2;
+func public %nonnegative(v0.i8) -> i8 {
+block0:
+ v1.i8 = and v0 127.i8;
+ v2.i8 = sdiv v1 4.i8;
+ return v2;
+}
+
+# sameln: func public %inexact(v0.i8) -> i8 {
+# check: v1.i8 = sdiv v0 4.i8;
+# check: return v1;
+func public %inexact(v0.i8) -> i8 {
+block0:
+ v1.i8 = sdiv v0 4.i8;
+ return v1;
+}
+
+# sameln: func public %negative_min(v0.i8) -> i8 {
+# check: v1.i8 = and v0 -4.i8;
+# check: v2.i8 = sdiv v1 -128.i8;
+# check: return v2;
+func public %negative_min(v0.i8) -> i8 {
+block0:
+ v1.i8 = and v0 -4.i8;
+ v2.i8 = sdiv v1 -128.i8;
+ return v2;
+}
