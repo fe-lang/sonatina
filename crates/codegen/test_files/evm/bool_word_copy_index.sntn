@@ -1,0 +1,42 @@
+#! evm.config: { vcode: true, opt: 0 }
+#! evm.case: dirty_index
+#!   calldata: u256(3)
+#!   expect: return u256(1)
+
+target = "evm-ethereum-osaka"
+
+# An `i1` read from a slot whose word is 3 is both the index and the value of
+# an insert into `[i1; 2]`. As an index it is used as an `i1`, so the read keeps
+# the low bit: element 1 of the array is set, and reads back as 1.
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        mstore 4096.i32 v0 i256;
+        call %insert_self;
+        v1.i256 = call %read_element;
+        mstore 0.i32 v1 i256;
+        evm_return 0.i32 32.i32;
+}
+
+func inline(never) private %insert_self() {
+    block0:
+        v0.i1 = mload 4096.i32 i1;
+        v1.[i1; 2] = mload 8192.i32 [i1; 2];
+        v2.[i1; 2] = insert_value v1 v0 v0;
+        mstore 8192.i32 v2 [i1; 2];
+        return;
+}
+
+func inline(never) private %read_element() -> i256 {
+    block0:
+        v0.[i1; 2] = mload 8192.i32 [i1; 2];
+        v1.i1 = extract_value v0 1.i256;
+        v2.i256 = zext v1 i256;
+        return v2;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

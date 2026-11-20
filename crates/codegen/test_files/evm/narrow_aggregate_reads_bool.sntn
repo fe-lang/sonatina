@@ -1,0 +1,34 @@
+#! evm.config: { opt: 2 }
+#! evm.case: dirty_bool
+#!   calldata: u256(2)
+#!   expect: return u256(0)
+
+target = "evm-ethereum-osaka"
+
+type @B = { i1, i256 };
+
+# The `i1` member of an aggregate in memory is a word. Reading it keeps the low
+# bit, so a word of 2 reads as `false`, and `zext` of the frozen member is 0.
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        mstore 4096.i32 v0 i256;
+        v1.i256 = call %read;
+        mstore 0.i32 v1 i256;
+        evm_return 0.i32 32.i32;
+}
+
+func inline(never) private %read() -> i256 {
+    block0:
+        v0.@B = mload 4096.i32 @B;
+        v1.i1 = extract_value v0 0.i8;
+        v2.i1 = freeze v1;
+        v3.i256 = zext v2 i256;
+        return v3;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

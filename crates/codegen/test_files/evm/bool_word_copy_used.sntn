@@ -1,0 +1,52 @@
+#! evm.config: { vcode: true, opt: 2 }
+#! evm.case: dirty_even
+#!   calldata: u256(2)
+#!   expect: return u256(0)
+#! evm.case: dirty_odd
+#!   calldata: u256(3)
+#!   expect: return u256(3)
+
+target = "evm-ethereum-osaka"
+
+type @B = { i1, i256 };
+
+# The copied member is also used as an `i1`, so its read keeps the low bit of
+# the word, and the copy stores that bit.
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        mstore 4096.i32 v0 i256;
+        v1.i256 = call %copy_and_use;
+        v2.i256 = call %branch_on_copy;
+        v3.i256 = shl 1.i256 v1;
+        v4.i256 = or v3 v2;
+        mstore 0.i32 v4 i256;
+        evm_return 0.i32 32.i32;
+}
+
+func inline(never) private %copy_and_use() -> i256 {
+    block0:
+        v0.@B = mload 4096.i32 @B;
+        v1.i1 = extract_value v0 0.i8;
+        mstore 8192.i32 v1 i1;
+        v2.i256 = zext v1 i256;
+        return v2;
+}
+
+func inline(never) private %branch_on_copy() -> i256 {
+    block0:
+        v0.i1 = mload 8192.i32 i1;
+        br v0 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
