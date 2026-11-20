@@ -1,7 +1,11 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     ControlFlowGraph, Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
-    inst::{BinaryInstKind, InstClassKind, logic::And},
+    inst::{
+        BinaryInstKind, InstClassKind,
+        arith::{Sar, Shr},
+        logic::And,
+    },
 };
 
 use sonatina_triple::Architecture;
@@ -18,7 +22,8 @@ use crate::{
 };
 
 use super::simplify_expr::{
-    ExprFactProvider, SimplifiedResult, simplify_binary_with_facts, simplify_unary_with_same_inner,
+    ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_binary_with_facts,
+    simplify_unary_with_same_inner,
 };
 
 pub struct KnownBitsSimplify {
@@ -129,6 +134,7 @@ impl KnownBitsSimplify {
         // A loop-carried value that no undef reaches is defined.
         let maybe_undef = maybe_undef_values(func);
         let mut counts = Vec::new();
+        let mut divisions = Vec::new();
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
             let mut range_env = range_analysis
@@ -143,6 +149,9 @@ impl KnownBitsSimplify {
                     range_env: range_env.as_ref(),
                     maybe_undef: &maybe_undef,
                 };
+                if let Some(plan) = signed_pow2_division(func, &scalar_facts, inst) {
+                    divisions.push(plan);
+                }
                 match self.plan_inst(func, &facts, inst) {
                     Some((plan, false)) => self.plans.push(plan),
                     Some((plan, true)) => self.demand_plans.push(plan),
@@ -163,6 +172,19 @@ impl KnownBitsSimplify {
             }
         }
 
+        // These replacements retain the dividend and its full value semantics.
+        // Later aliases therefore update their operands just like other users.
+        let divided = !divisions.is_empty();
+        for (inst, shift, arithmetic) in divisions {
+            let dividend = func.dfg.inst(inst).collect_values()[0];
+            let count = func.dfg.make_imm_value(shift);
+            let replacement: Box<dyn sonatina_ir::Inst> = if arithmetic {
+                Box::new(Sar::new_unchecked(func.inst_set(), count, dividend))
+            } else {
+                Box::new(Shr::new_unchecked(func.inst_set(), count, dividend))
+            };
+            func.dfg.replace_inst(inst, replacement);
+        }
         let masked = !counts.is_empty();
         for (inst, count, mask) in counts {
             mask_shift_count(func, inst, count, mask);
@@ -173,7 +195,7 @@ impl KnownBitsSimplify {
             std::mem::swap(&mut self.plans, &mut self.demand_plans);
         }
         if self.plans.is_empty() {
-            return (masked, false);
+            return (masked || divided, false);
         }
 
         let resolved = resolve_replacements(&self.plans);
@@ -273,6 +295,55 @@ impl KnownBitsSimplify {
         };
         Some((plan, from_demand))
     }
+}
+
+/// Signed division by a positive power of two needs no rounding correction
+/// when the dividend is nonnegative, or all discarded bits are known zero.
+/// Use the existing facts query and retain the dividend, including undef.
+fn signed_pow2_division(
+    func: &Function,
+    facts: &ScalarFacts<'_, '_>,
+    inst: InstId,
+) -> Option<(InstId, Immediate, bool)> {
+    if !matches!(
+        func.dfg.inst(inst).kind(),
+        InstClassKind::Binary(BinaryInstKind::Sdiv | BinaryInstKind::EvmSdiv)
+    ) {
+        return None;
+    }
+    let [lhs, rhs] = func.dfg.inst(inst).collect_values()[..] else {
+        return None;
+    };
+    let ty = func.dfg.value_ty(lhs);
+    if !ty.is_integral()
+        || (func.ctx().triple.architecture == Architecture::Evm && ty != Type::I256)
+    {
+        return None;
+    }
+    let divisor = func.dfg.value_imm(rhs)?;
+    let shift = nontrivial_pow2_shift(divisor)?;
+    let width = type_bits(ty);
+    if shift >= usize::from(width - 1) {
+        return None;
+    }
+    let bits = facts.known_bits(lhs);
+    let arithmetic = if bits.all_zero_in(U256::one() << (width - 1)) {
+        false
+    } else if bits.all_zero_in((U256::one() << shift) - 1) {
+        true
+    } else {
+        return None;
+    };
+    if (arithmetic && func.inst_set().has_sar().is_none())
+        || (!arithmetic && func.inst_set().has_shr().is_none())
+    {
+        return None;
+    }
+    Some((
+        inst,
+        Immediate::from_i256(I256::from(shift), ty),
+        arithmetic,
+    ))
 }
 
 fn has_variable_shift(func: &Function) -> bool {
