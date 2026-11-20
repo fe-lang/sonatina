@@ -255,6 +255,12 @@ fn canonicalize_binary_inst(
             rhs: Operand::Value(x),
         });
     }
+    if let Some(rewrite) = fold_shifted_byte(func, inst, kind, lhs, rhs) {
+        return Some(rewrite);
+    }
+    if let Some(rewrite) = fold_dynamic_pow2_division(func, inst, kind, lhs, rhs) {
+        return Some(rewrite);
+    }
     if let Some(rewrite) = canonicalize_evm_byte(func, inst, kind, lhs, rhs) {
         return Some(rewrite);
     }
@@ -635,6 +641,94 @@ fn fold_complemented_arithmetic(func: &Function, inst: InstId, value: ValueId) -
         }
         _ => None,
     }
+}
+
+/// Select the original byte directly instead of shifting the whole word.
+/// Keep shared/cross-block producers and indexes selecting shifted-in zeros.
+fn fold_shifted_byte(
+    func: &Function,
+    inst: InstId,
+    kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<InstSpec> {
+    if kind != BinaryInstKind::EvmByte
+        || func.ctx().triple.architecture != Architecture::Evm
+        || func.dfg.value_ty(lhs) != Type::I256
+        || func.dfg.value_ty(rhs) != Type::I256
+    {
+        return None;
+    }
+    let index = imm_to_u256(func.dfg.value_imm(lhs)?);
+    if index >= U256::from(32) {
+        return None;
+    }
+    let producer = func.dfg.value_inst(rhs)?;
+    let producer_kind = func.dfg.inst(producer).kind();
+    if !matches!(
+        producer_kind,
+        InstClassKind::Binary(BinaryInstKind::Shl | BinaryInstKind::Shr)
+    ) || func.dfg.users_num(rhs) != 1
+        || func.layout.inst_block(producer) != func.layout.inst_block(inst)
+    {
+        return None;
+    }
+    let [count, word] = func.dfg.inst(producer).collect_values()[..] else {
+        return None;
+    };
+    let count = imm_to_u256(func.dfg.value_imm(count)?);
+    if count >= U256::from(256) || count % U256::from(8) != U256::zero() {
+        return None;
+    }
+    let bytes = count / U256::from(8);
+    let index = match producer_kind {
+        InstClassKind::Binary(BinaryInstKind::Shl) if index + bytes < U256::from(32) => {
+            index + bytes
+        }
+        InstClassKind::Binary(BinaryInstKind::Shr) if index >= bytes => index - bytes,
+        _ => return None,
+    };
+    Some(InstSpec::Binary {
+        kind: BinaryInstKind::EvmByte,
+        lhs: Operand::Imm(Immediate::from_i256(I256::from(index), Type::I256)),
+        rhs: Operand::Value(word),
+    })
+}
+
+/// EVM division by `1 << n` is `x >> n`, including n >= 256 (both yield zero).
+/// Keep shared/cross-block divisors, including those still used by a zero check.
+fn fold_dynamic_pow2_division(
+    func: &Function,
+    inst: InstId,
+    kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<InstSpec> {
+    if kind != BinaryInstKind::EvmUdiv
+        || func.ctx().triple.architecture != Architecture::Evm
+        || func.dfg.value_ty(lhs) != Type::I256
+        || func.dfg.value_ty(rhs) != Type::I256
+    {
+        return None;
+    }
+    let producer = func.dfg.value_inst(rhs)?;
+    if func.dfg.inst(producer).kind() != InstClassKind::Binary(BinaryInstKind::Shl)
+        || func.dfg.users_num(rhs) != 1
+        || func.layout.inst_block(producer) != func.layout.inst_block(inst)
+    {
+        return None;
+    }
+    let [count, one] = func.dfg.inst(producer).collect_values()[..] else {
+        return None;
+    };
+    if func.dfg.value_imm(one) != Some(Immediate::one(Type::I256)) {
+        return None;
+    }
+    Some(InstSpec::Binary {
+        kind: BinaryInstKind::Shr,
+        lhs: Operand::Value(count),
+        rhs: Operand::Value(lhs),
+    })
 }
 
 /// Select BYTE when a byte-aligned shift and mask extract one byte.
@@ -1570,6 +1664,129 @@ block0:
             });
             let dumped = dump_func(&module, f);
             assert!(!dumped.contains("evm_byte"), "{dumped}");
+        }
+    }
+
+    #[test]
+    fn selects_bytes_through_shifts_at_every_valid_position() {
+        for op in ["shl", "shr"] {
+            for count in (8..256).step_by(8) {
+                for index in 0..32 {
+                    let adjusted = if op == "shl" {
+                        index + count / 8
+                    } else {
+                        index - count / 8
+                    };
+                    if !(0..32).contains(&adjusted) {
+                        continue;
+                    }
+                    let source = format!(
+                        "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i256 {{\nblock0:\n v1.i256 = {op} {count}.i256 v0;\n v2.i256 = evm_byte {index}.i256 v1;\n return v2;\n}}"
+                    );
+                    let (module, f) = parse_test_module(&source);
+                    module.func_store.modify(f, |func| {
+                        ScalarCanonicalize::new().run(func);
+                    });
+                    let dumped = dump_func(&module, f);
+                    assert!(
+                        dumped.contains(&format!("evm_byte {adjusted}.i256 v0")),
+                        "{dumped}"
+                    );
+                    assert!(!dumped.contains(&format!(" = {op} ")), "{dumped}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn preserves_unmatched_or_shared_shifted_bytes() {
+        for (op, count, index, shared, cross_block) in [
+            ("shl", "4.i256", "0.i256", false, false),
+            ("shr", "v3", "1.i256", false, false),
+            ("shl", "8.i256", "v3", false, false),
+            ("shl", "256.i256", "0.i256", false, false),
+            ("shl", "8.i256", "32.i256", false, false),
+            ("shl", "8.i256", "31.i256", false, false),
+            ("shr", "8.i256", "0.i256", false, false),
+            ("shl", "8.i256", "0.i256", true, false),
+            ("shl", "8.i256", "0.i256", false, true),
+        ] {
+            let branch = if cross_block {
+                "jump block1;\nblock1:"
+            } else {
+                ""
+            };
+            let tail = if shared {
+                "v4.i256 = add v1 v2;\n return v4;"
+            } else {
+                "return v2;"
+            };
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256, v3.i256) -> i256 {{\nblock0:\n v1.i256 = {op} {count} v0;\n {branch}\n v2.i256 = evm_byte {index} v1;\n {tail}\n}}"
+            );
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(
+                dumped.contains(&format!(
+                    "evm_byte {} v2",
+                    if index == "v3" { "v1" } else { index }
+                )),
+                "{dumped}"
+            );
+        }
+    }
+
+    #[test]
+    fn divides_by_dynamic_power_of_two_with_evm_semantics() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+func public %f(v0.i256, v1.i256) -> i256 {
+block0:
+ v2.i256 = shl v1 1.i256;
+ v3.i256 = evm_udiv v0 v2;
+ return v3;
+}
+"#;
+        let (module, f) = parse_test_module(source);
+        module.func_store.modify(f, |func| {
+            ScalarCanonicalize::new().run(func);
+        });
+        let dumped = dump_func(&module, f);
+        assert!(dumped.contains("shr v1 v0"), "{dumped}");
+        assert!(!dumped.contains("evm_udiv"), "{dumped}");
+    }
+
+    #[test]
+    fn preserves_unmatched_dynamic_divisors() {
+        for (op, one, shared, cross_block) in [
+            ("udiv", 1, false, false),
+            ("evm_sdiv", 1, false, false),
+            ("evm_udiv", 2, false, false),
+            ("evm_udiv", 1, true, false),
+            ("evm_udiv", 1, false, true),
+        ] {
+            let branch = if cross_block {
+                "jump block1;\nblock1:"
+            } else {
+                ""
+            };
+            let tail = if shared {
+                "v4.i256 = add v2 v3;\n return v4;"
+            } else {
+                "return v3;"
+            };
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256, v1.i256) -> i256 {{\nblock0:\n v2.i256 = shl v1 {one}.i256;\n {branch}\n v3.i256 = {op} v0 v2;\n {tail}\n}}"
+            );
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(dumped.contains(&format!("{op} v0 v2")), "{dumped}");
         }
     }
 
