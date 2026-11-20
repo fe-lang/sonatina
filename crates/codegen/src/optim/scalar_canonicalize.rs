@@ -158,6 +158,12 @@ impl ScalarCanonicalize {
                     .filter(|&replacement| supports_inst_spec(func, replacement))
                     .map(|replacement| RewritePlan::ReplaceInst { inst, replacement })
             }
+            InstClassKind::Unary(UnaryInstKind::Not) => {
+                let value = inst_data.collect_values()[0];
+                fold_complemented_arithmetic(func, inst, value)
+                    .filter(|&replacement| supports_inst_spec(func, replacement))
+                    .map(|replacement| RewritePlan::ReplaceInst { inst, replacement })
+            }
             InstClassKind::Unary(UnaryInstKind::IsZero) => {
                 let values = inst_data.collect_values();
                 let [value] = values.as_slice() else {
@@ -235,6 +241,19 @@ fn canonicalize_binary_inst(
     }
     if let Some(rewrite) = fold_bitwise_pair(func, inst, kind, lhs, rhs) {
         return Some(rewrite);
+    }
+    if kind == BinaryInstKind::Sub
+        && func.dfg.value_ty(lhs).is_integral()
+        && (func.ctx().triple.architecture != Architecture::Evm
+            || func.dfg.value_ty(lhs) == Type::I256)
+        && let Some(x) = local_not_source(func, inst, lhs)
+        && let Some(y) = local_not_source(func, inst, rhs)
+    {
+        return Some(InstSpec::Binary {
+            kind,
+            lhs: Operand::Value(y),
+            rhs: Operand::Value(x),
+        });
     }
     if let Some(rewrite) = canonicalize_evm_byte(func, inst, kind, lhs, rhs) {
         return Some(rewrite);
@@ -551,6 +570,71 @@ fn fold_constant_comparison(
         lhs: Operand::Value(input),
         rhs: Operand::Imm(bound),
     })
+}
+
+fn local_not_source(func: &Function, root: InstId, value: ValueId) -> Option<ValueId> {
+    let producer = local_single_use_producer(func, root, value)?;
+    if func.dfg.inst(producer).kind() != InstClassKind::Unary(UnaryInstKind::Not) {
+        return None;
+    }
+    Some(func.dfg.inst(producer).collect_values()[0])
+}
+
+fn fold_complemented_arithmetic(func: &Function, inst: InstId, value: ValueId) -> Option<InstSpec> {
+    let ty = func.dfg.value_ty(value);
+    if !ty.is_integral()
+        || (func.ctx().triple.architecture == Architecture::Evm && ty != Type::I256)
+    {
+        return None;
+    }
+    let producer = local_single_use_producer(func, inst, value)?;
+    let kind = func.dfg.inst(producer).kind();
+    let [lhs, rhs] = func.dfg.inst(producer).collect_values()[..] else {
+        return None;
+    };
+    match kind {
+        InstClassKind::Binary(BinaryInstKind::Sub)
+            if func.dfg.value_imm(rhs) == Some(Immediate::one(ty)) =>
+        {
+            // ~((1 << n) - 1) = (-1) << n, including oversized counts.
+            if let Some(shift) = local_single_use_producer(func, inst, lhs)
+                && func.dfg.inst(shift).kind() == InstClassKind::Binary(BinaryInstKind::Shl)
+            {
+                let values = func.dfg.inst(shift).collect_values();
+                if func.dfg.value_imm(values[1]) == Some(Immediate::one(ty)) {
+                    return Some(InstSpec::Binary {
+                        kind: BinaryInstKind::Shl,
+                        lhs: Operand::Value(values[0]),
+                        rhs: Operand::Imm(Immediate::from_i256(I256::from(-1), ty)),
+                    });
+                }
+            }
+            Some(InstSpec::Binary {
+                kind: BinaryInstKind::Sub,
+                lhs: Operand::Imm(Immediate::zero(ty)),
+                rhs: Operand::Value(lhs),
+            })
+        }
+        InstClassKind::Binary(BinaryInstKind::Add | BinaryInstKind::Sub) => {
+            let (x, y) = if let Some(x) = local_not_source(func, inst, lhs) {
+                (x, rhs)
+            } else if kind == InstClassKind::Binary(BinaryInstKind::Add) {
+                (local_not_source(func, inst, rhs)?, lhs)
+            } else {
+                return None;
+            };
+            Some(InstSpec::Binary {
+                kind: if kind == InstClassKind::Binary(BinaryInstKind::Add) {
+                    BinaryInstKind::Sub
+                } else {
+                    BinaryInstKind::Add
+                },
+                lhs: Operand::Value(x),
+                rhs: Operand::Value(y),
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Select BYTE when a byte-aligned shift and mask extract one byte.
@@ -1851,6 +1935,81 @@ block0:
                     assert!(dumped.contains("shr 64.i256 v0"), "{dumped}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn folds_complemented_wrapping_arithmetic() {
+        for (ty, target) in [
+            ("i256", "evm-ethereum-osaka"),
+            ("i8", "x86_64-unknown-native"),
+        ] {
+            for (body, expected) in [
+                (
+                    format!("v2.{ty} = sub v0 1.{ty};\n v3.{ty} = not v2;"),
+                    format!("sub 0.{ty} v0"),
+                ),
+                (
+                    format!("v2.{ty} = not v0;\n v3.{ty} = add v2 v1;\n v4.{ty} = not v3;"),
+                    "sub v0 v1".into(),
+                ),
+                (
+                    format!("v2.{ty} = not v0;\n v3.{ty} = add v1 v2;\n v4.{ty} = not v3;"),
+                    "sub v0 v1".into(),
+                ),
+                (
+                    format!("v2.{ty} = not v0;\n v3.{ty} = sub v2 v1;\n v4.{ty} = not v3;"),
+                    "add v0 v1".into(),
+                ),
+                (
+                    format!("v2.{ty} = not v0;\n v3.{ty} = not v1;\n v4.{ty} = sub v2 v3;"),
+                    "sub v1 v0".into(),
+                ),
+                (
+                    format!(
+                        "v2.{ty} = shl v0 1.{ty};\n v3.{ty} = sub v2 1.{ty};\n v4.{ty} = not v3;"
+                    ),
+                    format!("shl v0 -1.{ty}"),
+                ),
+            ] {
+                let result = if body.contains("v4.") { "v4" } else { "v3" };
+                let source = format!(
+                    "target = \"{target}\"\nfunc public %f(v0.{ty}, v1.{ty}) -> {ty} {{\nblock0:\n {body}\n return {result};\n}}"
+                );
+                let (module, f) = parse_test_module(&source);
+                module.func_store.modify(f, |func| {
+                    ScalarCanonicalize::new().run(func);
+                    // The pipeline removes newly dead nested producers after rewriting.
+                    super::prune_dead_pure_insts(func);
+                });
+                let dumped = dump_func(&module, f);
+                assert!(dumped.contains(&expected), "{dumped}");
+                assert_eq!(dumped.matches(" = ").count(), 1, "{dumped}");
+            }
+        }
+    }
+
+    #[test]
+    fn preserves_shared_or_cross_block_complemented_arithmetic() {
+        for (shared, cross_block) in [(true, false), (false, true)] {
+            let branch = if cross_block {
+                "jump block1;\nblock1:"
+            } else {
+                ""
+            };
+            let tail = if shared {
+                "v3.i256 = add v1 v2;\nreturn v3;"
+            } else {
+                "return v2;"
+            };
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i256 {{\nblock0:\n v1.i256 = sub v0 1.i256;\n {branch}\n v2.i256 = not v1;\n {tail}\n}}"
+            );
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            assert!(dump_func(&module, f).contains("not v1"));
         }
     }
 }
