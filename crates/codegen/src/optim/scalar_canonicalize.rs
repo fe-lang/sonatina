@@ -180,6 +180,9 @@ fn canonicalize_binary_inst(
     if let Some(rewrite) = canonicalize_evm_signextend(func, inst, kind, lhs, rhs) {
         return Some(rewrite);
     }
+    if let Some(rewrite) = canonicalize_signed_top_field(func, inst, kind, lhs, rhs) {
+        return Some(rewrite);
+    }
     match kind {
         BinaryInstKind::Eq
             if func.dfg.value_ty(lhs).is_integral() && func.dfg.value_ty(rhs).is_integral() =>
@@ -253,6 +256,49 @@ fn canonicalize_binary_inst(
         }
         _ => None,
     }
+}
+
+/// A signed field ending at bit 255 is one arithmetic shift of the word.
+/// BYTE 0 is also a spelling of SHR 248 after byte-extraction selection.
+fn canonicalize_signed_top_field(
+    func: &Function,
+    inst: InstId,
+    kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<InstSpec> {
+    if kind != BinaryInstKind::EvmSignExtend
+        || func.ctx().triple.architecture != Architecture::Evm
+        || func.dfg.value_ty(lhs) != Type::I256
+        || func.dfg.value_ty(rhs) != Type::I256
+    {
+        return None;
+    }
+    let byte = imm_to_u256(func.dfg.value_imm(lhs)?);
+    if byte >= U256::from(31) {
+        return None;
+    }
+    let producer = func.dfg.value_inst(rhs)?;
+    if func.dfg.users_num(rhs) != 1
+        || func.layout.inst_block(producer) != func.layout.inst_block(inst)
+    {
+        return None;
+    }
+    let [count, word] = func.dfg.inst(producer).collect_values()[..] else {
+        return None;
+    };
+    let count = imm_to_u256(func.dfg.value_imm(count)?);
+    let shift = 248 - byte.as_usize() * 8;
+    match func.dfg.inst(producer).kind() {
+        InstClassKind::Binary(BinaryInstKind::Shr) if count == U256::from(shift) => {}
+        InstClassKind::Binary(BinaryInstKind::EvmByte) if byte.is_zero() && count.is_zero() => {}
+        _ => return None,
+    }
+    Some(InstSpec::Binary {
+        kind: BinaryInstKind::Sar,
+        lhs: Operand::Imm(Immediate::from_i256(I256::from(shift), Type::I256)),
+        rhs: Operand::Value(word),
+    })
 }
 
 /// Select BYTE when a byte-aligned shift and mask extract one byte.
@@ -1253,6 +1299,50 @@ block0:
                 !dumped.contains("evm_signextend") && !dumped.contains("evm_byte"),
                 "{dumped}"
             );
+        }
+    }
+
+    #[test]
+    fn signed_top_fields_use_arithmetic_shifts() {
+        for shift in (8..=248).step_by(8) {
+            let byte = 31 - shift / 8;
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i256 {{\nblock0:\n v1.i256 = shr {shift}.i256 v0;\n v2.i256 = evm_signextend {byte}.i256 v1;\n return v2;\n}}"
+            );
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(dumped.contains(&format!("sar {shift}.i256 v0")), "{dumped}");
+            assert!(!dumped.contains("evm_signextend"), "{dumped}");
+        }
+        let (module, f) = parse_test_module(
+            "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i256 {\nblock0:\n v1.i256 = evm_byte 0.i256 v0;\n v2.i256 = evm_signextend 0.i256 v1;\n return v2;\n}",
+        );
+        module.func_store.modify(f, |func| {
+            ScalarCanonicalize::new().run(func);
+        });
+        assert!(dump_func(&module, f).contains("sar 248.i256 v0"));
+    }
+
+    #[test]
+    fn signed_top_fields_keep_mismatched_shared_and_cross_block_sources() {
+        for body in [
+            "v1.i256 = shr 8.i256 v0; v2.i256 = evm_signextend 1.i256 v1; return v2;",
+            "v1.i256 = shr 256.i256 v0; v2.i256 = evm_signextend 0.i256 v1; return v2;",
+            "v1.i256 = shr 248.i256 v0; v2.i256 = evm_signextend 32.i256 v1; return v2;",
+            "v1.i256 = evm_byte 1.i256 v0; v2.i256 = evm_signextend 0.i256 v1; return v2;",
+            "v1.i256 = shr 192.i256 v0; v2.i256 = evm_signextend 7.i256 v1; v3.i256 = add v1 v2; return v3;",
+            "v1.i256 = shr 192.i256 v0; jump block1;\nblock1:\n v2.i256 = evm_signextend 7.i256 v1; return v2;",
+        ] {
+            let source = format!("target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i256 {{\nblock0:\n{body}\n}}").replace("; ", ";\n");
+            let (module, f) = parse_test_module(&source);
+            module.func_store.modify(f, |func| {
+                ScalarCanonicalize::new().run(func);
+            });
+            let dumped = dump_func(&module, f);
+            assert!(dumped.contains("evm_signextend"), "{dumped}");
         }
     }
 }
