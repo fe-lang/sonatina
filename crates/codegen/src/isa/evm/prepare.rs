@@ -35,7 +35,8 @@ use super::{
     dyn_sp::{FuncDynSpPlan, compute_machine_dyn_sp_plan},
     emit::{
         FinalAlloc, LateBlockAliasPlan, block_action_sites, compute_function_entry_jump_targets,
-        compute_late_block_alias_plan, immediate_u32, rewrite_evm_local_fallthrough_layout,
+        compute_late_block_alias_plan, evm_emission_block_order, immediate_u32,
+        rewrite_evm_local_fallthrough_layout,
     },
     fixed_slots,
     heap_plan::compute_heap_bound_provenance,
@@ -1033,7 +1034,6 @@ fn prepare_machine_section_after_pipeline(
                 let func_map =
                     expect_func_entry(&machine.source_to_machine.funcs, func, "source map");
                 let alloc = analysis.alloc;
-                let block_order = analysis.block_order;
                 let mut stackify_trace = analysis.trace;
                 let optional_placement = optional_final_spill_placements
                     .get(&func)
@@ -1096,7 +1096,7 @@ fn prepare_machine_section_after_pipeline(
                         function,
                         &final_spills.alloc,
                         &frame_summary,
-                        &block_order,
+                        &evm_emission_block_order(function),
                     )
                 });
                 let LateBlockAliasPlan {

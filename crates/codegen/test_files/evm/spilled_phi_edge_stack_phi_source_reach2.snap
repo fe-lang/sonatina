@@ -6,15 +6,15 @@ input_file: test_files/evm/spilled_phi_edge_stack_phi_source_reach2.sntn
 evm.config: stack_reach=2 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 52 bytes
-  total: 52 bytes
+  section runtime: 51 bytes
+  total: 51 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
-  entry: ir_blocks=7 ir_insts=16 vcode_ops=43 fixups=4 imm_bytes=4
+  entry: ir_blocks=7 ir_insts=16 vcode_ops=42 fixups=4 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case zero: calldata_len=32 success reason=Return gas_used=21188 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=60
-  case one: calldata_len=32 success reason=Return gas_used=21262 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=122
-  case three: calldata_len=32 success reason=Return gas_used=21362 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=222
+  case zero: calldata_len=32 success reason=Return gas_used=21195 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=67
+  case one: calldata_len=32 success reason=Return gas_used=21249 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=109
+  case three: calldata_len=32 success reason=Return gas_used=21349 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=209

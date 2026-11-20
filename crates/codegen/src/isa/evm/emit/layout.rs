@@ -211,6 +211,72 @@ pub(crate) fn compute_late_block_alias_plan(
     }
 }
 
+/// The order to emit `function`'s reachable blocks in: the reverse postorder
+/// of [`ControlFlowGraph::post_order`]'s walk, except at a `br` whose nonzero
+/// destination enters a loop nested directly in the branch's own loop (or an
+/// outermost loop, for a branch in none), as the loop's header or a block
+/// that jumps to it. The walk then takes that destination first, so the zero
+/// destination follows the branch, where `JUMPI` falls through:
+///
+/// - For a guard around the nested loop, the zero destination skips it, and
+///   the nested loop's blocks come before the code both reach, so the nested
+///   loop's exit falls into that code instead of jumping past the skip.
+/// - For a top-tested loop header whose body enters the nested loop, the zero
+///   destination is the exit, and the header enters its body without
+///   inverting its condition on every iteration.
+///
+/// Taken in block order, which follows the IR layout, either could go the
+/// other way.
+pub(crate) fn evm_emission_block_order(function: &Function) -> Vec<BlockId> {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+    let mut dom = DomTree::new();
+    dom.compute(&cfg);
+    let mut loops = LoopTree::new();
+    loops.compute(&cfg, &dom);
+    let loop_entry = |block: BlockId| {
+        let term = function.layout.last_inst_of(block)?;
+        let BranchKind::Br(br) = function.dfg.branch_info(term)?.branch_kind() else {
+            return None;
+        };
+        let dest = *br.nz_dest();
+        let header = block_jump_dest(function, dest).unwrap_or(dest);
+        let lp = loops.loop_of_block(header)?;
+        (loops.loop_header(lp) == header && loops.parent_loop(lp) == loops.loop_of_block(block))
+            .then_some(dest)
+    };
+
+    let Some(entry) = cfg.entry() else {
+        return Vec::new();
+    };
+    // As in `CfgPostOrder`: 0 unvisited, 1 visited, 2 finished, and the walk
+    // takes the successor pushed last first.
+    let mut state: SecondaryMap<BlockId, u8> = SecondaryMap::new();
+    let mut stack = vec![entry];
+    let mut order = Vec::new();
+    while let Some(&block) = stack.last() {
+        if state[block] == 0 {
+            state[block] = 1;
+            let loop_dest = loop_entry(block);
+            let unvisited = |succ: &BlockId| state[*succ] == 0;
+            stack.extend(
+                cfg.succs_of(block)
+                    .copied()
+                    .filter(|succ| unvisited(succ) && Some(*succ) != loop_dest),
+            );
+            stack.extend(loop_dest.filter(unvisited));
+        } else {
+            stack.pop();
+            if state[block] == 1 {
+                state[block] = 2;
+                order.push(block);
+            }
+        }
+    }
+    order.reverse();
+    order
+}
+
 pub(crate) fn rewrite_evm_local_fallthrough_layout(
     function: &Function,
     aliases: &FxHashMap<BlockId, BlockId>,

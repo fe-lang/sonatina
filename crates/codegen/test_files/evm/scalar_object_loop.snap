@@ -6,19 +6,19 @@ input_file: test_files/evm/scalar_object_loop.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 52 bytes
-  total: 52 bytes
+  section runtime: 51 bytes
+  total: 51 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
-  entry: ir_blocks=9 ir_insts=19 vcode_ops=45 fixups=4 imm_bytes=3
+  entry: ir_blocks=9 ir_insts=19 vcode_ops=44 fixups=4 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case empty: calldata_len=64 success reason=Return gas_used=21318 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=50
-  case one: calldata_len=64 success reason=Return gas_used=21377 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=97
-  case two: calldata_len=64 success reason=Return gas_used=21443 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=163
-  case sixteen: calldata_len=64 success reason=Return gas_used=22355 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=1087
-  case sixty_four: calldata_len=64 success reason=Return gas_used=25523 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=4255
-  case maximum_without_overflow: calldata_len=64 success reason=Return gas_used=21749 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=97
-  case overflow: calldata_len=64 revert gas_used=21754 output_len=0 tx_gas=21652 runtime_gas=102
+  case empty: calldata_len=64 success reason=Return gas_used=21325 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=57
+  case one: calldata_len=64 success reason=Return gas_used=21364 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=84
+  case two: calldata_len=64 success reason=Return gas_used=21430 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=150
+  case sixteen: calldata_len=64 success reason=Return gas_used=22342 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=1074
+  case sixty_four: calldata_len=64 success reason=Return gas_used=25510 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=4242
+  case maximum_without_overflow: calldata_len=64 success reason=Return gas_used=21736 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=84
+  case overflow: calldata_len=64 revert gas_used=21752 output_len=0 tx_gas=21652 runtime_gas=100

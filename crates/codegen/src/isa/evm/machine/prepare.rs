@@ -174,7 +174,6 @@ fn prepare_machine_stackify_analysis(
 
     let mut dom = DomTree::new();
     dom.compute(&cfg);
-    let block_order = dom.rpo().to_owned();
 
     let mut liveness = Liveness::new();
     liveness.compute(function, &cfg);
@@ -225,7 +224,6 @@ fn prepare_machine_stackify_analysis(
 
     MachineStackifyAnalysis {
         alloc,
-        block_order,
         stable_final_spill_values,
         trace,
     }

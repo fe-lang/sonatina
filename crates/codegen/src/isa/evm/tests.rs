@@ -37,8 +37,8 @@ use std::sync::Arc;
 use self::{
     dyn_sp::DynSpInitKind,
     emit::{
-        FinalAlloc, materialize_jumpdests, prune_redundant_opcode_sequences,
-        rewrite_evm_local_fallthrough_layout,
+        FinalAlloc, evm_emission_block_order, materialize_jumpdests,
+        prune_redundant_opcode_sequences, rewrite_evm_local_fallthrough_layout,
     },
     machine::{
         final_spills::{
@@ -670,6 +670,221 @@ block3:
     return v4;
 }
 "#;
+
+fn emission_order_from_src(src: &str) -> Vec<u32> {
+    let parsed = parse_module(src).expect("module parses");
+    let func = find_func(&parsed.module, "main");
+    parsed.module.func_store.view(func, |function| {
+        evm_emission_block_order(function)
+            .into_iter()
+            .map(|block| block.0)
+            .collect()
+    })
+}
+
+fn rpo_from_src(src: &str) -> Vec<u32> {
+    let parsed = parse_module(src).expect("module parses");
+    let func = find_func(&parsed.module, "main");
+    parsed.module.func_store.view(func, |function| {
+        let mut cfg = ControlFlowGraph::new();
+        cfg.compute(function);
+        let mut dom = DomTree::new();
+        dom.compute(&cfg);
+        dom.rpo().iter().map(|block| block.0).collect()
+    })
+}
+
+fn lowered_opcodes(src: &str) -> Vec<u8> {
+    let parsed = parse_module(src).expect("module parses");
+    let f = find_func(&parsed.module, "main");
+    let backend = osaka_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &[f], f))
+        .expect("prepare should succeed");
+    let lowered = backend
+        .lower_function(&prepared, f)
+        .expect("function lowers");
+    lowered
+        .block_order
+        .iter()
+        .flat_map(|&block| lowered.vcode.block_insns(block))
+        .map(|inst| lowered.vcode.insts[inst] as u8)
+        .collect()
+}
+
+/// An outer loop whose header enters a nested loop on its nonzero side and
+/// skips it to the latch on its zero side, with the edges split as stackify
+/// splits them: `block2` enters the nested loop, `block3` skips it.
+const NESTED_LOOP_SKIP_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256, v1.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v2.i256 = phi (0.i256 block0) (v8 block8);
+    v3.i1 = lt 0.i256 v1;
+    br v3 block2 block3;
+
+block2:
+    jump block4;
+
+block3:
+    jump block6;
+
+block4:
+    v4.i256 = phi (0.i256 block2) (v5 block7);
+    v5.i256 = add v4 1.i256;
+    v6.i1 = lt v5 v1;
+    br v6 block7 block5;
+
+block7:
+    jump block4;
+
+block5:
+    jump block6;
+
+block6:
+    v8.i256 = add v2 1.i256;
+    v9.i1 = lt v8 v0;
+    br v9 block8 block9;
+
+block8:
+    jump block1;
+
+block9:
+    return v8;
+}
+"#;
+
+#[test]
+fn emission_order_puts_nested_loop_skip_after_its_branch() {
+    // In block order, the skip `block3` would stand between the nested
+    // loop's exit `block5` and the latch `block6`.
+    assert_eq!(
+        rpo_from_src(NESTED_LOOP_SKIP_SRC),
+        [0, 1, 2, 4, 5, 7, 3, 6, 8, 9]
+    );
+    assert_eq!(
+        emission_order_from_src(NESTED_LOOP_SKIP_SRC),
+        [0, 1, 3, 2, 4, 5, 6, 8, 9, 7]
+    );
+}
+
+#[test]
+fn emission_order_puts_exit_after_top_tested_header_of_nested_loop() {
+    // A top-tested outer loop whose body `block2` enters the nested loop: the
+    // exit `block9` follows the header, which enters its body on nonzero.
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256, v1.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v2.i256 = phi (0.i256 block0) (v8 block6);
+    v3.i1 = lt v2 v0;
+    br v3 block2 block9;
+
+block2:
+    jump block4;
+
+block4:
+    v4.i256 = phi (0.i256 block2) (v5 block7);
+    v5.i256 = add v4 1.i256;
+    v6.i1 = lt v5 v1;
+    br v6 block7 block5;
+
+block7:
+    jump block4;
+
+block5:
+    jump block6;
+
+block6:
+    v8.i256 = add v2 1.i256;
+    jump block1;
+
+block9:
+    return v2;
+}
+"#;
+    assert_eq!(rpo_from_src(src), [0, 1, 2, 4, 5, 6, 7, 9]);
+    assert_eq!(emission_order_from_src(src), [0, 1, 9, 2, 4, 5, 6, 7]);
+}
+
+#[test]
+fn emission_order_keeps_block_order_at_loop_header_without_nested_loop() {
+    assert_eq!(
+        emission_order_from_src(HOT_LOOP_LT_SRC),
+        rpo_from_src(HOT_LOOP_LT_SRC)
+    );
+}
+
+#[test]
+fn emission_order_keeps_block_order_when_zero_side_enters_the_loop() {
+    let src = NESTED_LOOP_SKIP_SRC.replace("br v3 block2 block3;", "br v3 block3 block2;");
+    assert_eq!(emission_order_from_src(&src), rpo_from_src(&src));
+}
+
+/// The nested-loop shape of [`NESTED_LOOP_SKIP_SRC`] before edge splitting,
+/// with the latch `block3` laid out after the nested loop `block2`. The guard
+/// compares two values, so machine lowering keeps the nested loop on its
+/// nonzero side.
+const NESTED_LOOP_LATCH_AFTER_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256, v1.i256) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v2.i256 = phi (0.i256 block0) (v8 block3);
+    v3.i256 = phi (0.i256 block0) (v9 block3);
+    v4.i1 = lt v2 v1;
+    br v4 block2 block3;
+
+block2:
+    v5.i256 = phi (0.i256 block1) (v6 block2);
+    v7.i256 = phi (v3 block1) (v10 block2);
+    v6.i256 = add v5 1.i256;
+    v10.i256 = add v7 v5;
+    v11.i1 = lt v6 v1;
+    br v11 block2 block3;
+
+block3:
+    v9.i256 = phi (v3 block1) (v10 block2);
+    v8.i256 = add v2 1.i256;
+    v12.i1 = lt v8 v0;
+    br v12 block1 block4;
+
+block4:
+    return v9;
+}
+"#;
+
+#[test]
+fn nested_loop_emission_does_not_follow_ir_block_order() {
+    // Machine blocks are numbered in IR layout order, so laying the latch out
+    // before the nested loop renumbers every block after the header.
+    let latch_first = NESTED_LOOP_LATCH_AFTER_SRC.replacen(
+        "block2:\n    v5.i256",
+        "block3:\n    v9.i256 = phi (v3 block1) (v10 block2);\n    v8.i256 = add v2 1.i256;\n    v12.i1 = lt v8 v0;\n    br v12 block1 block4;\n\nblock2:\n    v5.i256",
+        1,
+    );
+    let latch_first = latch_first.replacen(
+        "    br v11 block2 block3;\n\nblock3:\n    v9.i256 = phi (v3 block1) (v10 block2);\n    v8.i256 = add v2 1.i256;\n    v12.i1 = lt v8 v0;\n    br v12 block1 block4;\n",
+        "    br v11 block2 block3;\n",
+        1,
+    );
+    assert_ne!(latch_first, NESTED_LOOP_LATCH_AFTER_SRC);
+    assert_eq!(
+        lowered_opcodes(&latch_first),
+        lowered_opcodes(NESTED_LOOP_LATCH_AFTER_SRC)
+    );
+}
 
 #[test]
 fn local_fallthrough_layout_rewrites_hot_loop_header_window() {
