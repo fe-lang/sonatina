@@ -395,13 +395,8 @@ fn enum_child_value_from_source(
             if *enum_make.variant() != variant {
                 return Some(Some(func.dfg.make_undef_value(child_ty)));
             }
-            return Some(
-                enum_make
-                    .values()
-                    .get(usize::try_from(field).ok()?)
-                    .copied()
-                    .or_else(|| Some(func.dfg.make_undef_value(child_ty))),
-            );
+            // The verifier checks that `enum.make` gives every field of its variant.
+            return Some(Some(enum_make.values()[field as usize]));
         }
         _ => aggregate,
     };

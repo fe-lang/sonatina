@@ -120,7 +120,11 @@ pub(super) fn try_inline_callsite_full(
 
     let reachable: FxHashSet<BlockId> = rpo.iter().copied().collect();
     if !validated_callees.contains(&callee_key) {
-        validate_full_inline_callee_rewriteability(callee, &rpo, &reachable)?;
+        let ret_tys: SmallVec<[Type; 2]> = call_results
+            .iter()
+            .map(|&result| caller.dfg.value_ty(result))
+            .collect();
+        validate_full_inline_callee_rewriteability(callee, &rpo, &reachable, &ret_tys)?;
         validated_callees.insert(callee_key);
     }
 
@@ -296,38 +300,24 @@ pub(super) fn try_inline_callsite_full(
             .rewrite_branch_edges_to_block(term, cont_block, entry_new);
     }
 
-    if !call_results.is_empty() {
+    // A callee that never returns leaves the call's results without a value: the continuation,
+    // which holds their uses, is deleted below.
+    if !returns.is_empty() {
         let func = editor.func_mut();
 
         for (result_idx, &call_result) in call_results.iter().enumerate() {
-            let call_result_ty = func.dfg.value_ty(call_result);
-
-            match returns.len() {
-                0 => {
-                    let undef = func.dfg.make_undef_value(call_result_ty);
-                    func.dfg.change_to_alias(call_result, undef);
-                }
-                1 => {
-                    let value = returns[0]
-                        .values
-                        .get(result_idx)
-                        .copied()
-                        .filter(|&value| func.dfg.value_ty(value) == call_result_ty)
-                        .unwrap_or_else(|| func.dfg.make_undef_value(call_result_ty));
+            match returns.as_slice() {
+                [return_site] => {
+                    let value = return_site.values[result_idx];
                     let value = defined_result(func, cont_block, value, taint);
                     func.dfg.change_to_alias(call_result, value);
                 }
                 _ => {
-                    let mut args = SmallVec::with_capacity(returns.len());
-                    for return_site in &returns {
-                        let value = return_site
-                            .values
-                            .get(result_idx)
-                            .copied()
-                            .filter(|&value| func.dfg.value_ty(value) == call_result_ty)
-                            .unwrap_or_else(|| func.dfg.make_undef_value(call_result_ty));
-                        args.push((value, return_site.from_block));
-                    }
+                    let call_result_ty = func.dfg.value_ty(call_result);
+                    let args = returns
+                        .iter()
+                        .map(|return_site| (return_site.values[result_idx], return_site.from_block))
+                        .collect();
 
                     let phi = func.dfg.make_phi(args);
                     let phi_inst = func.dfg.make_inst(phi);
@@ -349,6 +339,33 @@ pub(super) fn try_inline_callsite_full(
                 }
             }
         }
+    }
+
+    if returns.is_empty() {
+        // No path from the entry reaches the continuation now, nor any block only it reaches,
+        // so the region holds every use of the call's results.
+        editor.recompute_cfg();
+        let reachable = editor.cfg().reachable_blocks();
+        let mut dead = vec![cont_block];
+        let mut next = 0;
+        while let Some(&block) = dead.get(next) {
+            next += 1;
+            for &succ in editor.cfg().succs_of(block) {
+                if !reachable[succ] && !dead.contains(&succ) {
+                    dead.push(succ);
+                }
+            }
+        }
+        // The region starts with the inlined call, already counted as removed.
+        let func = editor.func();
+        call_changes.removed.extend(
+            dead.iter()
+                .flat_map(|&block| func.layout.iter_inst(block))
+                .filter(|&inst| inst != call_inst)
+                .filter_map(|inst| func.dfg.call_info(inst))
+                .map(|call| call.callee()),
+        );
+        editor.delete_blocks_unreachable(&dead);
     }
 
     if editor.func().layout.is_inst_inserted(call_inst) {
@@ -429,6 +446,7 @@ fn validate_full_inline_callee_rewriteability(
     callee: &Function,
     rpo: &[BlockId],
     reachable: &FxHashSet<BlockId>,
+    ret_tys: &[Type],
 ) -> Result<(), FullInlineFail> {
     let layout_blocks: FxHashSet<BlockId> = callee.layout.iter_block().collect();
     let arg_values: FxHashSet<ValueId> = callee.arg_values.iter().copied().collect();
@@ -499,14 +517,29 @@ fn validate_full_inline_callee_rewriteability(
         return Err(FullInlineFail::MalformedCallee);
     }
 
+    let returns: Vec<_> = rpo
+        .iter()
+        .filter_map(|&block| callee.dfg.return_args(callee.layout.last_inst_of(block)?))
+        .collect();
+    // Each return gives the call one value of each result type.
+    if returns.iter().any(|values| {
+        values.len() != ret_tys.len()
+            || values
+                .iter()
+                .zip(ret_tys)
+                .any(|(&value, &ty)| callee.dfg.value_ty(value) != ty)
+    }) {
+        return Err(FullInlineFail::MalformedCallee);
+    }
+
     // A call result is never undef, and no freeze in the caller defines an
     // enum part that may be.
     let taint = UndefTaint::default();
-    let mut returned = rpo
-        .iter()
-        .filter_map(|&block| callee.dfg.return_args(callee.layout.last_inst_of(block)?))
-        .flatten();
-    if returned.any(|&value| !taint.can_define(callee, value)) {
+    if returns
+        .into_iter()
+        .flatten()
+        .any(|&value| !taint.can_define(callee, value))
+    {
         return Err(FullInlineFail::UndefinedEnum);
     }
     Ok(())

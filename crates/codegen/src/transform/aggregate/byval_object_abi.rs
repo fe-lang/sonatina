@@ -975,9 +975,10 @@ impl ObjectAggregateAbi {
     }
 
     fn insert_entry_obj_load(&self, function: &mut Function, object: ValueId, ty: Type) -> ValueId {
-        let Some(entry) = function.layout.entry_block() else {
-            return function.dfg.make_undef_value(ty);
-        };
+        let entry = function
+            .layout
+            .entry_block()
+            .expect("an argument with users belongs to a body");
         let loc = CursorLocation::BlockTop(entry);
         let mut cursor = InstInserter::at_location(loc);
         let load_inst = cursor.insert_inst_data(
