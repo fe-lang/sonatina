@@ -4,7 +4,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, I256, Immediate, Inst, InstId, Module, Type, U256, Value, ValueId,
+    Function, I256, Immediate, Inst, InstId, InstSetExt, Module, Type, U256, Value, ValueId,
     inst::{
         BinaryInstKind, UnaryInstKind,
         arith::{
@@ -20,7 +20,7 @@ use sonatina_ir::{
         evm::{
             EvmCodeLoad, EvmExp, EvmMalloc, EvmMcopy, EvmSaddsat, EvmSdiv, EvmSdivo, EvmSmod,
             EvmSmodo, EvmSmulsat, EvmSsubsat, EvmUaddsat, EvmUdiv, EvmUdivo, EvmUmod, EvmUmodo,
-            EvmUmulsat, EvmUsubsat,
+            EvmUmulsat, EvmUsubsat, inst_set::EvmInstKind,
         },
         logic::{self, And, Or, Xor},
     },
@@ -229,6 +229,196 @@ fn bool_word_copies(func: &Function, bool_member_reads: &FxHashSet<InstId>) -> F
             })
         })
         .collect()
+}
+
+/// Whether an instruction of `kind` gives a word that a result of `width` need not hold, so that
+/// the word must be cut to the result type. Every kind is listed, so a new instruction does not
+/// compile until it is classified.
+fn gives_wider_word(kind: EvmInstKind<'_>, width: ScalarWidth) -> bool {
+    match kind {
+        // A word read from the environment, memory, storage or a hash, or the address `create`
+        // makes: any word, whatever the result type.
+        EvmInstKind::EvmKeccak256(_)
+        | EvmInstKind::EvmAddress(_)
+        | EvmInstKind::EvmBalance(_)
+        | EvmInstKind::EvmOrigin(_)
+        | EvmInstKind::EvmCaller(_)
+        | EvmInstKind::EvmCallValue(_)
+        | EvmInstKind::EvmCalldataLoad(_)
+        | EvmInstKind::EvmCalldataSize(_)
+        | EvmInstKind::EvmCodeSize(_)
+        | EvmInstKind::EvmGasPrice(_)
+        | EvmInstKind::EvmExtCodeSize(_)
+        | EvmInstKind::EvmReturnDataSize(_)
+        | EvmInstKind::EvmExtCodeHash(_)
+        | EvmInstKind::EvmBlockHash(_)
+        | EvmInstKind::EvmCoinBase(_)
+        | EvmInstKind::EvmTimestamp(_)
+        | EvmInstKind::EvmNumber(_)
+        | EvmInstKind::EvmPrevRandao(_)
+        | EvmInstKind::EvmGasLimit(_)
+        | EvmInstKind::EvmChainId(_)
+        | EvmInstKind::EvmSelfBalance(_)
+        | EvmInstKind::EvmBaseFee(_)
+        | EvmInstKind::EvmBlobHash(_)
+        | EvmInstKind::EvmBlobBaseFee(_)
+        | EvmInstKind::EvmMload(_)
+        | EvmInstKind::EvmSload(_)
+        | EvmInstKind::EvmMsize(_)
+        | EvmInstKind::EvmGas(_)
+        | EvmInstKind::EvmTload(_)
+        | EvmInstKind::EvmCreate(_)
+        | EvmInstKind::EvmCreate2(_) => true,
+        // A narrow value sign-extended to 256 bits. Its operands share the result type, so at
+        // `i1` it gives 0 or 1.
+        EvmInstKind::EvmSignExtend(_) => width != ScalarWidth::Bool,
+        // Rewritten elsewhere in legalization to a value of the result type.
+        EvmInstKind::Neg(_)
+        | EvmInstKind::Add(_)
+        | EvmInstKind::Uaddo(_)
+        | EvmInstKind::Uaddsat(_)
+        | EvmInstKind::Saddo(_)
+        | EvmInstKind::Saddsat(_)
+        | EvmInstKind::Mul(_)
+        | EvmInstKind::Sub(_)
+        | EvmInstKind::Usubo(_)
+        | EvmInstKind::Usubsat(_)
+        | EvmInstKind::Ssubo(_)
+        | EvmInstKind::Ssubsat(_)
+        | EvmInstKind::Umulo(_)
+        | EvmInstKind::Umulsat(_)
+        | EvmInstKind::Smulo(_)
+        | EvmInstKind::Smulsat(_)
+        | EvmInstKind::Snego(_)
+        | EvmInstKind::Sdiv(_)
+        | EvmInstKind::Udiv(_)
+        | EvmInstKind::Umod(_)
+        | EvmInstKind::Smod(_)
+        | EvmInstKind::Shl(_)
+        | EvmInstKind::Shr(_)
+        | EvmInstKind::Sar(_)
+        | EvmInstKind::Sext(_)
+        | EvmInstKind::Zext(_)
+        | EvmInstKind::Trunc(_)
+        | EvmInstKind::Bitcast(_)
+        | EvmInstKind::PtrToInt(_)
+        | EvmInstKind::Not(_)
+        | EvmInstKind::Select(_)
+        | EvmInstKind::Bswap(_)
+        | EvmInstKind::Clz(_)
+        | EvmInstKind::Ctz(_)
+        | EvmInstKind::EvmSdiv(_)
+        | EvmInstKind::EvmSdivo(_)
+        | EvmInstKind::EvmUdivo(_)
+        | EvmInstKind::EvmSmod(_)
+        | EvmInstKind::EvmUmodo(_)
+        | EvmInstKind::EvmSmodo(_)
+        | EvmInstKind::EvmExp(_)
+        | EvmInstKind::Mload(_) => false,
+        // No wider than an operand of the result type, or below one: bitwise logic, unsigned
+        // division and remainder, `addmod` and `mulmod`, a byte of the word, saturation at the
+        // type the instruction names.
+        EvmInstKind::And(_)
+        | EvmInstKind::Or(_)
+        | EvmInstKind::Xor(_)
+        | EvmInstKind::EvmUdiv(_)
+        | EvmInstKind::EvmUmod(_)
+        | EvmInstKind::EvmAddMod(_)
+        | EvmInstKind::EvmMulMod(_)
+        | EvmInstKind::EvmByte(_)
+        | EvmInstKind::EvmUaddsat(_)
+        | EvmInstKind::EvmSaddsat(_)
+        | EvmInstKind::EvmUsubsat(_)
+        | EvmInstKind::EvmSsubsat(_)
+        | EvmInstKind::EvmUmulsat(_)
+        | EvmInstKind::EvmSmulsat(_) => false,
+        // 0 or 1: comparisons and the success flag of a call.
+        EvmInstKind::Lt(_)
+        | EvmInstKind::Gt(_)
+        | EvmInstKind::Slt(_)
+        | EvmInstKind::Sgt(_)
+        | EvmInstKind::Le(_)
+        | EvmInstKind::Ge(_)
+        | EvmInstKind::Sle(_)
+        | EvmInstKind::Sge(_)
+        | EvmInstKind::Eq(_)
+        | EvmInstKind::Ne(_)
+        | EvmInstKind::IsZero(_)
+        | EvmInstKind::EvmCall(_)
+        | EvmInstKind::EvmCallCode(_)
+        | EvmInstKind::EvmDelegateCall(_)
+        | EvmInstKind::EvmStaticCall(_) => false,
+        // A value passed on from elsewhere, which its producer made a value of its type: a phi
+        // input, a returned value, the argument of `black_box` or `freeze`, or a member an insert
+        // or a typed store put there.
+        EvmInstKind::Phi(_)
+        | EvmInstKind::Call(_)
+        | EvmInstKind::BlackBox(_)
+        | EvmInstKind::Freeze(_)
+        | EvmInstKind::ExtractValue(_) => false,
+        // A word or pointer result, which the verifier requires, or an aggregate.
+        EvmInstKind::EvmKeccak256Words(_)
+        | EvmInstKind::EvmCodeLoad(_)
+        | EvmInstKind::EvmMalloc(_)
+        | EvmInstKind::MemAllocDynamic(_)
+        | EvmInstKind::IntToPtr(_)
+        | EvmInstKind::Gep(_)
+        | EvmInstKind::GetFunctionPtr(_)
+        | EvmInstKind::SymAddr(_)
+        | EvmInstKind::SymSize(_)
+        | EvmInstKind::Alloca(_)
+        | EvmInstKind::InsertValue(_) => false,
+        // Objects, constant references and enums are lowered before EVM legalization.
+        EvmInstKind::ObjAlloc(_)
+        | EvmInstKind::ConstRef(_)
+        | EvmInstKind::ConstProj(_)
+        | EvmInstKind::ConstIndex(_)
+        | EvmInstKind::ConstLoad(_)
+        | EvmInstKind::ObjProj(_)
+        | EvmInstKind::ObjIndex(_)
+        | EvmInstKind::ObjLoad(_)
+        | EvmInstKind::ObjStore(_)
+        | EvmInstKind::EnumMake(_)
+        | EvmInstKind::EnumTag(_)
+        | EvmInstKind::EnumIsVariant(_)
+        | EvmInstKind::EnumAssertVariant(_)
+        | EvmInstKind::EnumAssertVariantRef(_)
+        | EvmInstKind::EnumExtract(_)
+        | EvmInstKind::EnumSetTag(_)
+        | EvmInstKind::EnumWriteVariant(_)
+        | EvmInstKind::EnumGetTag(_)
+        | EvmInstKind::EnumProj(_)
+        | EvmInstKind::ObjMaterializeStack(_)
+        | EvmInstKind::ObjFromPtr(_) => false,
+        // No result.
+        EvmInstKind::Jump(_)
+        | EvmInstKind::Br(_)
+        | EvmInstKind::BrTable(_)
+        | EvmInstKind::Return(_)
+        | EvmInstKind::Unreachable(_)
+        | EvmInstKind::Mstore(_)
+        | EvmInstKind::Memzero(_)
+        | EvmInstKind::Memcopy(_)
+        | EvmInstKind::EvmStop(_)
+        | EvmInstKind::EvmInvalid(_)
+        | EvmInstKind::EvmCalldataCopy(_)
+        | EvmInstKind::EvmCodeCopy(_)
+        | EvmInstKind::EvmExtCodeCopy(_)
+        | EvmInstKind::EvmReturnDataCopy(_)
+        | EvmInstKind::EvmMstore(_)
+        | EvmInstKind::EvmMstore8(_)
+        | EvmInstKind::EvmSstore(_)
+        | EvmInstKind::EvmMcopy(_)
+        | EvmInstKind::EvmTstore(_)
+        | EvmInstKind::EvmLog0(_)
+        | EvmInstKind::EvmLog1(_)
+        | EvmInstKind::EvmLog2(_)
+        | EvmInstKind::EvmLog3(_)
+        | EvmInstKind::EvmLog4(_)
+        | EvmInstKind::EvmReturn(_)
+        | EvmInstKind::EvmRevert(_)
+        | EvmInstKind::EvmSelfDestruct(_) => false,
+    }
 }
 
 fn legalize_immediate(imm: sonatina_ir::Immediate) -> sonatina_ir::Immediate {
@@ -561,6 +751,19 @@ impl<'a> FunctionLegalizer<'a> {
             self.replace_with_aliases(inst, &[result]);
             return;
         }
+        if let Some(width @ (ScalarWidth::Bool | ScalarWidth::Narrow(_))) =
+            self.single_result_width(inst)
+            && gives_wider_word(is.resolve_inst(self.func.dfg.inst(inst)), width)
+        {
+            // The word is cut to the result type, as the interpreter does.
+            let copy = self.func.dfg.clone_inst(inst);
+            let copy = self.func.dfg.make_inst_dyn(copy);
+            let raw =
+                self.place_before(inst, copy, &[Type::I256], &[Some(ScalarWidth::Full256)])[0];
+            let result = self.word_to_width(inst, raw, width);
+            self.replace_with_aliases(inst, &[result]);
+            return;
+        }
         if let Some((lhs, rhs)) =
             downcast::<&EvmSdiv>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
@@ -795,6 +998,17 @@ impl<'a> FunctionLegalizer<'a> {
         widths: &[Option<ScalarWidth>],
     ) -> SmallVec<[ValueId; 2]> {
         let inst = self.func.dfg.make_inst(data);
+        self.place_before(before, inst, result_tys, widths)
+    }
+
+    /// Places `inst`, which has no results yet, before `before` and gives it results.
+    fn place_before(
+        &mut self,
+        before: InstId,
+        inst: InstId,
+        result_tys: &[Type],
+        widths: &[Option<ScalarWidth>],
+    ) -> SmallVec<[ValueId; 2]> {
         self.func.propagate_inst_attribution(inst, before);
         self.func.layout.insert_inst_before(inst, before);
         let mut results = SmallVec::new();
@@ -2784,13 +2998,19 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                let result = if width == ScalarWidth::Bool {
-                    self.bool_from_word(inst, raw)
-                } else {
-                    self.normalize_and_retag_width(inst, raw, width)
-                };
+                let result = self.word_to_width(inst, raw, width);
                 self.replace_with_aliases(inst, &[result]);
             }
+        }
+    }
+
+    /// The value of `width` that `inst` gives for `word`: its low bits, or for an `i1` its low
+    /// bit.
+    fn word_to_width(&mut self, inst: InstId, word: ValueId, width: ScalarWidth) -> ValueId {
+        if width == ScalarWidth::Bool {
+            self.bool_from_word(inst, word)
+        } else {
+            self.normalize_and_retag_width(inst, word, width)
         }
     }
 
@@ -2887,17 +3107,11 @@ impl<'a> FunctionLegalizer<'a> {
     }
 
     fn rewrite_mstore(&mut self, inst: InstId, addr: ValueId, value: ValueId, ty: Type) {
-        let ty = self.types.legalize_type(self.ctx, ty);
-        // Memory holds words: an `i1` is stored as the word it widens to.
-        let (value, ty) = match scalar_width_for_type(self.ctx, ty) {
-            Some(ScalarWidth::Narrow(bits)) => {
-                let extended = self.zero_extend_to_i256(inst, value);
-                let value =
-                    self.normalize_bits_for_width(inst, extended, ScalarWidth::Narrow(bits));
-                (value, ty)
-            }
-            Some(ScalarWidth::Bool) => (self.word_from_bool(inst, value), Type::I256),
-            Some(ScalarWidth::Full256) | None => (value, ty),
+        // Memory holds words: an `i1` is stored as the word it widens to, and a narrower integer
+        // is already a word of its type.
+        let (value, ty) = match self.types.legalize_type(self.ctx, ty) {
+            Type::I1 => (self.word_from_bool(inst, value), Type::I256),
+            ty => (value, ty),
         };
         self.func.dfg.replace_inst(
             inst,
