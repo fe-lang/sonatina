@@ -1,0 +1,43 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 2461
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/unsigned_quotient_zero.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 12 bytes
+  total: 12 bytes
+
+functions:
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
+  entry: ir_blocks=1 ir_insts=4 vcode_ops=10 fixups=0 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case input_0: calldata_len=32 success reason=Return gas_used=21155 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=27
+  case input_1: calldata_len=32 success reason=Return gas_used=21167 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=27
+  case input_9: calldata_len=32 success reason=Return gas_used=21167 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=27
+  case input_10: calldata_len=32 success reason=Return gas_used=21167 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=27
+  case input_11: calldata_len=32 success reason=Return gas_used=21167 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=27
+  case input_255: calldata_len=32 success reason=Return gas_used=21167 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=27
+  case input_256: calldata_len=32 success reason=Return gas_used=21167 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=27
+  case input_115792089237316195423570985008687907853269984665640564039457584007913129639935: calldata_len=32 success reason=Return gas_used=21539 gas_refunded=0 logs=0 output=call len=32 tx_gas=21512 runtime_gas=27
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    PUSH1 0xa (10)  // v3.i256 = lt v1 v2;
+    SWAP1
+    LT
+    PUSH0  // evm_mstore v0 v3;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
+    PUSH0
+    RETURN
