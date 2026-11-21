@@ -1268,36 +1268,94 @@ fn modular_entry(
 }
 
 /// `addmod(a, b, n)`: the sum of `a` and `b` modulo `n`, computed without
-/// overflow, and zero if `n` is zero. The operands are reduced with `udivrem`.
-/// The sum is then one addition and one conditional subtraction.
+/// overflow, and zero if `n` is zero. With both operands below `n`, as
+/// reduced operands are, the sum is one addition and one conditional
+/// subtraction; any other sum is divided by `n`, with its carry as a fifth
+/// limb.
 pub(super) fn build_addmod(
     wmod: &waffle::Module<'static>,
     sig: waffle::Signature,
-    udivrem: waffle::Func,
 ) -> waffle::FunctionBody {
+    use waffle::{BlockTarget, Terminator};
+    let target = |block| BlockTarget {
+        block,
+        args: vec![],
+    };
+
     let (mut body, [a, b, n], work) = modular_entry(wmod, sig);
-    let [a, b] = [a, b].map(|operand| {
-        let args: Vec<V> = operand.into_iter().chain(n).collect();
-        let carriers = [WType::I64; 2 * LIMBS];
-        let out = super::translate::emit_call(&mut body, work, udivrem, &args, &carriers);
-        limbs_at(&out, LIMBS)
-    });
+    let [reduced, divide] = [(); 2].map(|_| body.add_block());
+    let mut e = Emit {
+        body: &mut body,
+        block: work,
+    };
+    let a_below = e.wide_compare(Cmp::Lt, false, a, n);
+    let b_below = e.wide_compare(Cmp::Lt, false, b, n);
+    let both = e.op(Operator::I32And, &[a_below, b_below], WType::I32);
+    body.set_terminator(
+        work,
+        Terminator::CondBr {
+            cond: both,
+            if_true: target(reduced),
+            if_false: target(divide),
+        },
+    );
     let sum = add_below_modulus(
         &mut Emit {
             body: &mut body,
-            block: work,
+            block: reduced,
         },
         a,
         b,
         n,
     );
     body.set_terminator(
-        work,
-        waffle::Terminator::Return {
+        reduced,
+        Terminator::Return {
             values: sum.to_vec(),
         },
     );
+    let mut e = Emit {
+        body: &mut body,
+        block: divide,
+    };
+    let (sum, carry) = e.wide_add(a, b);
+    let carry = e.zero_extend(carry);
+    let dividend: Vec<V> = sum.into_iter().chain([carry]).collect();
+    remainder_by(&mut body, divide, &dividend, n);
     body
+}
+
+/// End `block` by returning the remainder of `dividend` by `n`, which is not
+/// zero: by [`divide_long`], by the low limb of `n` if its other limbs are
+/// zero.
+fn remainder_by(body: &mut waffle::FunctionBody, block: waffle::Block, dividend: &[V], n: Limbs) {
+    use waffle::{BlockTarget, Terminator};
+    let target = |block| BlockTarget {
+        block,
+        args: vec![],
+    };
+    let mut e = Emit { body, block };
+    let modulus_high = e.op(Operator::I64Or, &[n[1], n[2]], WType::I64);
+    let modulus_high = e.op(Operator::I64Or, &[modulus_high, n[3]], WType::I64);
+    let one_limb = e.op(Operator::I64Eqz, &[modulus_high], WType::I32);
+    let [short, long] = [(); 2].map(|_| body.add_block());
+    body.set_terminator(
+        block,
+        Terminator::CondBr {
+            cond: one_limb,
+            if_true: target(short),
+            if_false: target(long),
+        },
+    );
+    for (block, modulus) in [(short, &n[..1]), (long, &n[..])] {
+        let (done, _, remainder) = divide_long(body, block, dividend, modulus);
+        body.set_terminator(
+            done,
+            Terminator::Return {
+                values: remainder.to_vec(),
+            },
+        );
+    }
 }
 
 /// `mulmod(a, b, n)`: the product of `a` and `b` modulo `n`, computed without
@@ -1337,26 +1395,28 @@ pub(super) fn build_mulmod(
         product[i + LIMBS] = carry;
     }
     let product = product.map(|limb| limb.expect("every column has a product"));
-    let modulus_high = e.op(Operator::I64Or, &[n[1], n[2]], WType::I64);
-    let modulus_high = e.op(Operator::I64Or, &[modulus_high, n[3]], WType::I64);
-    let one_limb = e.op(Operator::I64Eqz, &[modulus_high], WType::I32);
-    let [short, long] = [(); 2].map(|_| body.add_block());
+    // A product below the modulus, as when an operand is zero, is its own
+    // remainder.
+    let low = limbs_at(&product, 0);
+    let high = limbs_at(&product, LIMBS);
+    let high_zero = e.wide_is_zero(high);
+    let low_below = e.wide_compare(Cmp::Lt, false, low, n);
+    let below = e.op(Operator::I32And, &[high_zero, low_below], WType::I32);
+    let [own, divide] = [(); 2].map(|_| body.add_block());
     body.set_terminator(
         work,
         Terminator::CondBr {
-            cond: one_limb,
-            if_true: target(short),
-            if_false: target(long),
+            cond: below,
+            if_true: target(own),
+            if_false: target(divide),
         },
     );
-    for (block, modulus) in [(short, &n[..1]), (long, &n[..])] {
-        let (done, _, remainder) = divide_long(&mut body, block, &product, modulus);
-        body.set_terminator(
-            done,
-            Terminator::Return {
-                values: remainder.to_vec(),
-            },
-        );
-    }
+    body.set_terminator(
+        own,
+        Terminator::Return {
+            values: low.to_vec(),
+        },
+    );
+    remainder_by(&mut body, divide, &product, n);
     body
 }

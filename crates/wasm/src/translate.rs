@@ -336,10 +336,7 @@ fn scan_module(module: &Module) -> Scan {
                     }
                     // Modular arithmetic of every width runs at 256 bits.
                     match &kind {
-                        NativeInstKind::EvmAddMod(_) => {
-                            helpers.udivrem = true;
-                            helpers.addmod = true;
-                        }
+                        NativeInstKind::EvmAddMod(_) => helpers.addmod = true,
                         NativeInstKind::EvmMulMod(_) => helpers.mulmod = true,
                         _ => {}
                     }
@@ -802,12 +799,7 @@ pub(super) fn translate_module(
             HelperKind::DivRem => wide::build_udivrem(&wmod, sig),
             HelperKind::Shift { left } => wide::build_shift(&wmod, sig, left),
             HelperKind::Modular { product: true } => wide::build_mulmod(&wmod, sig),
-            HelperKind::Modular { product: false } => {
-                let udivrem = helpers
-                    .udivrem
-                    .expect("modular addition is declared with the division helper");
-                wide::build_addmod(&wmod, sig, udivrem)
-            }
+            HelperKind::Modular { product: false } => wide::build_addmod(&wmod, sig),
         };
         wmod.funcs[func] = FuncDecl::Body(sig, name, body);
     }
