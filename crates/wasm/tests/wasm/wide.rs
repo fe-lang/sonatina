@@ -1177,6 +1177,21 @@ fn division_matches_the_reference_at_the_boundaries_of_its_paths() {
 }
 
 #[test]
+fn division_by_every_power_of_two_matches_the_reference() {
+    // A power of two above 64 bits takes the shift instead of long division.
+    let mut rng = Lcg(0x5eed_2bad);
+    for mut divider in dividers() {
+        for bits in 0..256 {
+            let divisor = U256::one() << bits;
+            for dividend in [operand(&mut rng), patterned(&mut rng), U256::MAX, divisor] {
+                divider.division(dividend, divisor);
+                divider.division(negate(dividend), divisor);
+            }
+        }
+    }
+}
+
+#[test]
 fn division_matches_the_reference_for_operands_of_mixed_lengths() {
     let mut rng = Lcg(0x5eed_d1f1);
     for mut divider in dividers() {
