@@ -28,9 +28,10 @@ fn compile_wasm(module: Module) -> Vec<u8> {
 Compiling the same module twice produces identical bytes.
 
 The module uses the multi-value, sign-extension and bulk-memory
-(`memory.copy`, `memory.fill`) extensions of WebAssembly and, when a recursive
-cycle makes a call in tail position, the tail-call extension. Every current
-engine enables them.
+(`memory.copy`, `memory.fill`) extensions of WebAssembly, fixed-width SIMD
+(`v128`) when it swaps the bytes of a 128- or 256-bit integer, and, when a
+recursive cycle makes a call in tail position, the tail-call extension. Every
+current engine enables them.
 
 ## Target and layout
 
@@ -48,9 +49,17 @@ different variants share bytes.
 | `i1`, `i8`, `i16`, `i32` | `i32` |
 | `i64` | `i64` |
 | `*T`, `objref<T>`, `constref<T>` | `i32`, an offset into linear memory |
-| struct, array, enum | `i32`, the address of the value in memory |
+| struct, array, enum of at most five integer and pointer parts | one value for each part |
+| any other struct, array, enum | `i32`, the address of the value in memory |
 | `i128` | two `i64` values, least significant limb first |
 | `i256` | four `i64` values, least significant limb first |
+
+A struct, array or enum whose scalar fields are at most five integers of at
+most 64 bits and pointers, of which only one enum variant has any, is held in
+parts, as native code holds it in registers: one value for each scalar field
+(an enum's tag first), in the order of their offsets. Functions pass, return
+and phis carry such a value as its parts, and memory holds it only when it is
+stored. Every other aggregate lives in linear memory.
 
 `unit` and function types cannot be parameters, results, phi values or
 operands. A module that uses one is rejected with an error naming the type.
@@ -78,7 +87,8 @@ are canonical: an `i8` holding -1 is returned as 255.
   whose field name is its symbol. The module name is `env` unless
   `WasmBackend::with_import_module` selects another. Imports take the same
   kinds of parameters as exports.
-- Functions may return several values (WebAssembly multi-value).
+- Functions may return several values (WebAssembly multi-value), among them
+  values held in parts.
 - The module has a name section with the names of its functions, so an engine
   names them in the stack of a trap. The function behind an export `f` of a
   module with frames is `f$body`.
@@ -113,9 +123,10 @@ Every function of such a module takes the address of the first free byte of the
 stack as a hidden first parameter. It places its frame there: one slot, with
 the alignment of its type, for each `alloca`, each `obj.alloc` (an object lives until
 its function returns, as the front end promises), each struct, array or enum
-that an instruction builds (results of `agg.make`, `insert_value`, `enum.make`, `obj.load`,
-`mload` of an aggregate, a call that returns an aggregate, an aggregate `undef`),
-and each aggregate phi. It passes the end of
+held in memory that an instruction builds (results of `agg.make`, `insert_value`,
+`enum.make`, `obj.load`, `mload` of an aggregate, a call that returns an
+aggregate, an aggregate `undef`), and each phi of such an aggregate. Values
+held in parts take no slot. It passes the end of
 its frame to the functions it calls. Frames are 16-byte aligned. A call whose
 frame does not fit below the end of the stack traps. Slots are static: an
 instruction in a loop uses the same slot on each iteration, as `alloca` does on
@@ -142,15 +153,27 @@ the module.
 A private function in a recursive cycle makes tail calls, as on the native
 target: a call whose results the function returns at once is a `return_call`,
 so a deep tail recursion runs in constant stack. The callee starts its frame
-where the caller's started. That needs the caller's frame to be dead: no
-`alloca`, no reference to an `obj.alloc` that outlives a call, every struct,
-array or enum argument one that the caller itself received, and no aggregate
-result. A call in tail position that passes an aggregate built in the caller's
-frame is still a `return_call`, with a frame above the caller's, so only the
-stack of the module grows.
+where the caller's started, so the module's stack does not grow either. That
+needs the caller's frame to be dead: no `alloca`, no reference to an
+`obj.alloc` that outlives a call, every argument held in memory one that the
+caller itself received, and no result returned through a buffer. A value held
+in parts passes as its parts, so an interpreter whose handlers pass a small
+cursor from one to the next runs in constant stack in both. A call in tail
+position that passes an aggregate held in memory built in the caller's frame
+is an ordinary call.
+
+At `Os`, a `br_table` each of whose destinations, the default included,
+begins with a tail call taking the same arguments, as an interpreter's
+dispatch does, is one `return_call_indirect` through a table of the callees,
+a range of the module's one function table with an entry for each value the
+scrutinee can take. Switches with the same callees share a range. Other
+levels keep the `br_table` and direct calls: an engine calls through a table
+more slowly (V8 12 four times more slowly), but switches make fevm's module
+at `Os` 60% smaller.
 
 WAFFLE 0.3.3 has no `return_call`. The backend emits the call followed by a
-return of its results and rewrites that sequence in the encoded module.
+return of its results and rewrites that sequence in the encoded module, and
+the same for a `call_indirect` through the function table.
 
 ### The heap
 
@@ -242,26 +265,32 @@ the same mark twice in a row does nothing the second time.
 The semantics follow the host-native backend, whose legalization of enum tags,
 aggregate combination and object returns the backend runs first.
 
-- A struct, array or enum value is the address of an immutable snapshot.
-  `agg.make`, `insert_value`, `enum.make` and `obj.load` make a new snapshot;
-  `extract_value` and `enum.extract` of an aggregate and `const.load` view the
-  source in place.
+- A struct, array or enum value held in memory is the address of an immutable
+  snapshot. `agg.make`, `insert_value`, `enum.make` and `obj.load` make a new
+  snapshot; `extract_value` and `enum.extract` of an aggregate and
+  `const.load` view the source in place. On a value held in parts these
+  instructions take and replace parts, and a load or store moves each part at
+  its offset.
+- Padding and the payloads of other enum variants are not part of a value, as
+  on the native target: copies move them, and the instructions that build a
+  value leave them as they were.
 - `insert_value` makes its snapshot in place when it is the only user of an
-  insert in the same block. An `undef` aggregate is zero, so the snapshot of an
-  insert into `undef` is filled with zero first, and that of another insert is
-  a copy of its source, unless the inserts that continue in its storage write
-  every byte.
-- `agg.make` stores each operand at its field. Its snapshot is filled with zero
-  first unless the fields it stores cover every byte: an `undef` operand, like
-  padding, reads as zero.
+  insert in the same block. The snapshot of an insert into a `zero` aggregate
+  has zero in the fields that the inserts continuing in its storage do not
+  write, and that of another insert is a copy of its source unless those
+  inserts write every field.
+- `agg.make` stores each operand at its field, and zero for a `zero` operand.
+- Zero is written with stores up to the size copied with loads and stores
+  (one store at `Os`), and with `memory.fill` beyond it.
 - An aggregate of at most 64 bytes is copied with loads and stores, and a
   larger one with `memory.copy`. At `Os` every copy is a `memory.copy`, which
   is smaller than even one load and store.
-- A function receives aggregates by address and returns a single aggregate through
+- A function receives aggregates held in memory by address and returns a single one through
   a buffer in the caller's frame, which is a hidden parameter after the stack
   top. A `constref` result is the address of the constant, as is `sym_addr`
-  of a global. A function cannot return an aggregate together with other
-  values.
+  of a global. A function cannot return an aggregate held in memory together
+  with other values; it returns a value held in parts as its parts, with any
+  others.
 - `obj.alloc`, `obj.proj`, `obj.index`, `obj.load`, `obj.store`,
   `obj.from_ptr`, `const.ref`, `const.proj`, `const.index` and `const.load` are
   address arithmetic and loads and stores. `obj.from_ptr`
@@ -271,7 +300,7 @@ aggregate combination and object returns the backend runs first.
   and `enum.set_tag` write through an object reference; `enum.proj` and
   `enum.assert_variant_ref` are addresses; `enum.assert_variant` emits nothing.
   Writing a variant leaves the bytes of the other variants' payloads as they
-  were.
+  were. `enum.make` writes only the tag and the variant's fields.
 - `gep` adds the scaled index at each array or pointer step and the field offset
   at each struct step. Indices are signed and sign-extended (`true` of type `i1`
   is -1); an index of 64 or 256 bits that does not fit in 32 bits traps. The
@@ -308,13 +337,23 @@ Calls, returns, phis and memory carry only its two limbs.
 
 `evm_add_mod` and `evm_mul_mod` compute at 256 bits for every width: narrower
 operands are zero-extended, as on the native target, so the sum or product
-does not wrap.
+does not wrap. As natively, a sum of operands below the modulus is one
+addition and one conditional subtraction, a product below the modulus is its
+own remainder, and any other sum or product is divided by the modulus once.
+
+`bswap` of a 128- or 256-bit integer reverses the bytes of each 16-byte half
+with an `i8x16.shuffle` and exchanges the halves. A value loaded from memory to
+be swapped is loaded as `v128` halves, and a swapped value is stored as them,
+so a big-endian word moves between memory and limbs in two loads, two shuffles
+and two stores.
 
 Multiplication, division and shifts by a count that is not a constant are
 functions of the module, emitted only when used. A shift by a constant, `sar`
 included, is built in place, and so is a product with at most three limb products that are not
 zero: any 128-bit product, and a 256-bit product of values extended from 64
-bits. Limbs that are constants, such as the zero high limbs of a value
+bits. A longer product calls a function that computes only its low 256 bits;
+only the checked and saturating 256-bit products compute whether there are
+more. Limbs that are constants, such as the zero high limbs of a value
 extended from 64 or 128 bits, are folded out of additions, subtractions,
 comparisons and bitwise operations. A limb that no use reads is not computed:
 before encoding, the backend removes every operator without effects whose
@@ -322,7 +361,8 @@ value nothing uses, as WAFFLE's encoder writes each value to a local whether
 or not it is read.
 
 Division traps on a zero divisor. It is one 64-bit division when both operands
-fit in 64 bits, and no step when the dividend is below the divisor. Otherwise
+fit in 64 bits, a shift and a mask for a larger power of two, and no step when
+the dividend is below the divisor. Otherwise
 it is long division on 64-bit digits: one step per limb of the dividend for a
 divisor of one limb, and at most three steps for a longer divisor. A step
 multiplies by the reciprocal of the divisor's top limb, which takes two 64-bit

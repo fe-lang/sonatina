@@ -13,10 +13,11 @@
 //! # Values
 //!
 //! An integer of at most 64 bits is one WebAssembly value. A pointer, an
-//! `objref`, a `constref` and a value of struct or array type are one `i32`:
-//! the address of the value in linear memory (aggregates live in memory, as
-//! on the native target). A 256-bit integer is four `i64` values and a 128-bit
-//! integer two.
+//! `objref` and a `constref` are one `i32`. A struct, array or enum of a few
+//! integer and pointer fields is one value for each of them, as native code
+//! holds it in registers (`translate/parts.rs`); any other is one `i32`, the
+//! address of the value in linear memory. A 256-bit integer is four `i64`
+//! values and a 128-bit integer two.
 //!
 //! # Frames
 //!
@@ -26,7 +27,7 @@
 //! mutable stack pointer exists, so a trap leaves nothing to repair. An exported
 //! function is a thin wrapper that starts the stack at the `stack_top` global.
 
-use std::collections::hash_map::Entry;
+use std::collections::{HashSet, hash_map::Entry};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use waffle::{
@@ -36,7 +37,8 @@ use waffle::{
 
 use sonatina_codegen::{
     OptLevel,
-    analysis::tail_position::{tail_callers, tail_position_calls},
+    analysis::tail_position::{TailSwitch, tail_callers, tail_position_calls, tail_switches},
+    isa::native::{Part, register_parts},
 };
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Inst, InstId, Linkage, Module, Type, Value,
@@ -62,9 +64,11 @@ use super::{
     wide::{self, LIMBS, Limbs, Wide},
 };
 mod aggregate;
+mod parts;
+mod vectors;
 mod wide_ops;
 
-use wide_ops::{WideHelpers, WideOp, constant_shift};
+use wide_ops::{NeededHelpers, WideHelpers, WideOp, constant_shift};
 
 type V = waffle::Value;
 
@@ -93,7 +97,12 @@ enum Repr {
     Wide(Wide),
     /// A pointer, `objref` or `constref`: an `i32` address.
     Pointer,
-    /// A struct or array: an `i32` address of the value in memory.
+    /// A struct, array or enum of a few integer and pointer fields
+    /// ([`register_parts`]): one value for each part, as native code holds
+    /// it in registers.
+    Parts,
+    /// Any other struct, array or enum: an `i32` address of the value in
+    /// memory.
     Aggregate,
 }
 
@@ -109,33 +118,44 @@ fn repr(ctx: &ModuleCtx, ty: Type) -> Option<Repr> {
             Some(Repr::Pointer)
         }
         CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_) => {
-            Some(Repr::Aggregate)
+            Some(match register_parts(ctx, ty) {
+                Some(_) => Repr::Parts,
+                None => Repr::Aggregate,
+            })
         }
         CompoundType::Func { .. } => None,
     }
 }
 
-impl Repr {
-    fn push_carriers(self, out: &mut Vec<WType>) {
-        match self {
-            Self::Int(int) => out.push(int.carrier()),
-            Self::Wide(wide) => out.extend(std::iter::repeat_n(WType::I64, wide.limbs())),
-            Self::Pointer | Self::Aggregate => out.push(WType::I32),
-        }
+/// The WebAssembly value that carries a part of a value held in parts.
+fn part_carrier(part: &Part) -> WType {
+    Int::from_type(part.ty).map_or(WType::I32, Int::carrier)
+}
+
+/// Push the WebAssembly values that carry a `ty` value, which `repr` holds.
+fn push_carriers(ctx: &ModuleCtx, ty: Type, repr: Repr, out: &mut Vec<WType>) {
+    match repr {
+        Repr::Int(int) => out.push(int.carrier()),
+        Repr::Wide(wide) => out.extend(std::iter::repeat_n(WType::I64, wide.limbs())),
+        Repr::Pointer | Repr::Aggregate => out.push(WType::I32),
+        Repr::Parts => out.extend(
+            register_parts(ctx, ty)
+                .expect("a value held in parts has parts")
+                .iter()
+                .map(part_carrier),
+        ),
     }
 }
 
 /// The type of storage that a function returns through its hidden buffer, if
-/// it does: a single struct, array or enum result. A `constref` result is the
-/// address of its constant, which no call overwrites.
+/// it does: a single struct, array or enum result held in memory. A
+/// `constref` result is the address of its constant, which no call
+/// overwrites, and a value held in parts is returned as its parts.
 fn indirect_return_storage(ctx: &ModuleCtx, rets: &[Type]) -> Option<Type> {
     let [ty] = rets else {
         return None;
     };
-    match ty.resolve_compound(ctx)? {
-        CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_) => Some(*ty),
-        _ => None,
-    }
+    (repr(ctx, *ty) == Some(Repr::Aggregate)).then_some(*ty)
 }
 
 fn type_name(ctx: &ModuleCtx, ty: Type) -> String {
@@ -207,9 +227,8 @@ struct Scan {
     /// The module declares the external C routine `free`, so it needs a `free`
     /// function.
     free: bool,
-    /// Which 256-bit helper functions are used: multiplication, division, left
-    /// and right shifts.
-    helpers: (bool, bool, bool, bool, bool, bool),
+    /// Which 256-bit helper functions are used.
+    helpers: NeededHelpers,
     /// The module uses `sha256_compress`.
     sha256: bool,
 }
@@ -261,7 +280,7 @@ fn scan_module(module: &Module) -> Scan {
     let mut runtime = module.ctx.with_gv_store(|store| !store.is_empty());
     let mut arena = false;
     let mut free = false;
-    let mut helpers = (false, false, false, false, false, false);
+    let mut helpers = NeededHelpers::default();
     let mut sha256 = false;
     let mut called = FxHashSet::default();
     let inst_set = native_inst_set();
@@ -269,7 +288,7 @@ fn scan_module(module: &Module) -> Scan {
         let is_aggregate = |ty: Type| {
             matches!(
                 repr(&module.ctx, ty),
-                Some(Repr::Aggregate) | None if ty != Type::Unit && !ty.is_enum_tag()
+                Some(Repr::Aggregate | Repr::Parts) | None if ty != Type::Unit && !ty.is_enum_tag()
             ) || matches!(
                 ty.resolve_compound(&module.ctx),
                 Some(CompoundType::ObjRef(_) | CompoundType::ConstRef(_))
@@ -313,19 +332,12 @@ fn scan_module(module: &Module) -> Scan {
                             && constant_shift(function, rhs).is_some())
                         && !(op == WideOp::Mul && wide == Wide::I128)
                     {
-                        let (mulo, divrem, shl, shr) = op.needs();
-                        helpers.0 |= mulo;
-                        helpers.1 |= divrem;
-                        helpers.2 |= shl;
-                        helpers.3 |= shr;
+                        op.mark_needed(wide, &mut helpers);
                     }
                     // Modular arithmetic of every width runs at 256 bits.
                     match &kind {
-                        NativeInstKind::EvmAddMod(_) => {
-                            helpers.1 = true;
-                            helpers.4 = true;
-                        }
-                        NativeInstKind::EvmMulMod(_) => helpers.5 = true,
+                        NativeInstKind::EvmAddMod(_) => helpers.addmod = true,
+                        NativeInstKind::EvmMulMod(_) => helpers.mulmod = true,
                         _ => {}
                     }
                 }
@@ -607,8 +619,17 @@ pub(super) fn translate_module(
         helper_bodies.push((func, sig, name.to_string(), kind));
         func
     };
-    let (needs_mulo, needs_divrem, needs_shl, needs_shr, needs_addmod, needs_mulmod) = scan.helpers;
-    if needs_mulo {
+    let needed = scan.helpers;
+    if needed.mul {
+        helpers.mul = Some(declare(
+            &mut wmod,
+            "i256.mul",
+            2,
+            wide_results(LIMBS),
+            HelperKind::Mul,
+        ));
+    }
+    if needed.mulo {
         let mut results = wide_results(LIMBS);
         results.push(WType::I32);
         helpers.mulo = Some(declare(
@@ -619,7 +640,7 @@ pub(super) fn translate_module(
             HelperKind::Mulo,
         ));
     }
-    if needs_divrem {
+    if needed.udivrem {
         helpers.udivrem = Some(declare(
             &mut wmod,
             "i256.udivrem",
@@ -628,7 +649,7 @@ pub(super) fn translate_module(
             HelperKind::DivRem,
         ));
     }
-    if needs_shl {
+    if needed.shl {
         helpers.shl = Some(declare(
             &mut wmod,
             "i256.shl",
@@ -637,7 +658,7 @@ pub(super) fn translate_module(
             HelperKind::Shift { left: true },
         ));
     }
-    if needs_shr {
+    if needed.shr {
         helpers.shr = Some(declare(
             &mut wmod,
             "i256.shr",
@@ -646,7 +667,7 @@ pub(super) fn translate_module(
             HelperKind::Shift { left: false },
         ));
     }
-    if needs_addmod {
+    if needed.addmod {
         helpers.addmod = Some(declare(
             &mut wmod,
             "i256.addmod",
@@ -655,7 +676,7 @@ pub(super) fn translate_module(
             HelperKind::Modular { product: false },
         ));
     }
-    if needs_mulmod {
+    if needed.mulmod {
         helpers.mulmod = Some(declare(
             &mut wmod,
             "i256.mulmod",
@@ -665,20 +686,73 @@ pub(super) fn translate_module(
         ));
     }
 
+    // The tail calls of each function, and its tail switches: each gets the
+    // range of the dispatch table that holds its callees, shared by switches
+    // with the same callees.
     let tail_callers: FxHashSet<FuncRef> = tail_callers(module).into_iter().collect();
     let mut tail_calls = TailCallSites::default();
+    let mut plans: FxHashMap<FuncRef, TailPlan> = FxHashMap::default();
+    let mut table_elements: Vec<Func> = Vec::new();
+    let mut table_ranges: FxHashMap<Vec<Func>, u32> = FxHashMap::default();
+    for &(func_ref, func, ..) in &pending {
+        if !tail_callers.contains(&func_ref) {
+            continue;
+        }
+        let tail_plan = module.func_store.view(func_ref, |function| {
+            let sites = tail_call_sites(module, func_ref, function, &callees);
+            let site_set: HashSet<InstId> = sites.keys().copied().collect();
+            // An engine calls through a table more slowly than it takes a
+            // `br_table` to direct calls (V8 12 by four times), so only `Os`
+            // makes tail switches, which are much smaller.
+            let switches = if opt_level == OptLevel::Os {
+                tail_switches(function, &site_set)
+            } else {
+                Default::default()
+            };
+            let switches = switches
+                .into_iter()
+                .filter_map(|(br_table, switch)| {
+                    let entries = switch_entries(&wmod, &callees, &switch)?;
+                    let base = *table_ranges.entry(entries.clone()).or_insert_with(|| {
+                        let base = table_elements.len() as u32;
+                        table_elements.extend(entries.iter().copied());
+                        base
+                    });
+                    let sig = wmod.funcs[entries[0]].sig();
+                    Some((
+                        br_table,
+                        TableSwitch {
+                            base,
+                            call: switch.call,
+                            sig,
+                        },
+                    ))
+                })
+                .collect();
+            TailPlan { sites, switches }
+        });
+        if !tail_plan.sites.is_empty() {
+            tail_calls.calls.insert(
+                func.index() as u32,
+                tail_plan.sites.values().copied().collect(),
+            );
+        }
+        plans.insert(func_ref, tail_plan);
+    }
+    let dispatch_table = (!table_elements.is_empty()).then(|| {
+        wmod.tables.push(waffle::TableData {
+            ty: WType::FuncRef,
+            initial: table_elements.len() as u64,
+            max: Some(table_elements.len() as u64),
+            func_elements: Some(table_elements),
+        })
+    });
+    tail_calls.table = dispatch_table.map(|table| table.index() as u32);
     for (func_ref, func, wsig, name, canonicalize_params) in pending {
+        let tail_plan = plans.remove(&func_ref).unwrap_or_default();
         let body = module
             .func_store
             .try_view(func_ref, |function| {
-                let sites = if tail_callers.contains(&func_ref) {
-                    tail_call_sites(module, func_ref, function, &callees)
-                } else {
-                    FxHashMap::default()
-                };
-                if !sites.is_empty() {
-                    tail_calls.insert(func.index() as u32, sites.values().copied().collect());
-                }
                 FunctionTranslator::new(
                     module,
                     function,
@@ -694,7 +768,11 @@ pub(super) fn translate_module(
                     free_func.map(|(func, _)| func),
                     sha256_func.map(|(func, _)| func),
                     helpers,
-                    sites.into_keys().collect(),
+                    (
+                        tail_plan.sites.into_keys().collect(),
+                        tail_plan.switches,
+                        dispatch_table,
+                    ),
                     opt_level,
                 )
                 .translate(canonicalize_params)
@@ -715,16 +793,12 @@ pub(super) fn translate_module(
 
     for (func, sig, name, kind) in helper_bodies {
         let body = match kind {
+            HelperKind::Mul => wide::build_mul(&wmod, sig),
             HelperKind::Mulo => wide::build_mulo(&wmod, sig),
             HelperKind::DivRem => wide::build_udivrem(&wmod, sig),
             HelperKind::Shift { left } => wide::build_shift(&wmod, sig, left),
             HelperKind::Modular { product: true } => wide::build_mulmod(&wmod, sig),
-            HelperKind::Modular { product: false } => {
-                let udivrem = helpers
-                    .udivrem
-                    .expect("modular addition is declared with the division helper");
-                wide::build_addmod(&wmod, sig, udivrem)
-            }
+            HelperKind::Modular { product: false } => wide::build_addmod(&wmod, sig),
         };
         wmod.funcs[func] = FuncDecl::Body(sig, name, body);
     }
@@ -865,9 +939,53 @@ fn tail_call_sites(
         .collect()
 }
 
+/// The tail calls of a function: the calls, with the WebAssembly index of
+/// each callee, and the tail switches, by their `br_table`s.
+#[derive(Default)]
+struct TailPlan {
+    sites: FxHashMap<InstId, u32>,
+    switches: FxHashMap<InstId, TableSwitch>,
+}
+
+/// A tail switch: a `br_table` each of whose destinations tail-calls with the
+/// same arguments ([`TailSwitch`]), made one `call_indirect` through the
+/// dispatch table, which the encoded module makes a `return_call_indirect`.
+struct TableSwitch {
+    /// The index in the dispatch table of the callee for key 0.
+    base: u32,
+    /// One of the calls, whose arguments every callee takes.
+    call: InstId,
+    /// The signature of every callee.
+    sig: Signature,
+}
+
+/// The callees of `switch` by key, for each of the `2^bits` values its
+/// scrutinee can take, if every callee is a function of the module with one
+/// signature.
+fn switch_entries(
+    wmod: &WaffleModule<'static>,
+    callees: &FxHashMap<FuncRef, Callee>,
+    switch: &TailSwitch,
+) -> Option<Vec<Func>> {
+    let func = |callee: FuncRef| match callees.get(&callee)?.target {
+        CallTarget::Func(func) => Some(func),
+        _ => None,
+    };
+    let mut entries = vec![func(switch.default)?; 1 << switch.bits];
+    for &(key, callee) in &switch.keys {
+        entries[key as usize] = func(callee)?;
+    }
+    let sig = wmod.funcs[entries[0]].sig();
+    entries
+        .iter()
+        .all(|&entry| wmod.funcs[entry].sig() == sig)
+        .then_some(entries)
+}
+
 /// Which 256-bit helper function a declaration is for.
 #[derive(Clone, Copy)]
 enum HelperKind {
+    Mul,
     Mulo,
     DivRem,
     Shift { left: bool },
@@ -977,7 +1095,11 @@ fn declared_signature(
                     type_name(&module.ctx, ty)
                 )));
             };
-            if external && matches!(representation, Repr::Wide(_) | Repr::Aggregate)
+            if external
+                && matches!(
+                    representation,
+                    Repr::Wide(_) | Repr::Parts | Repr::Aggregate
+                )
                 || external && is_reference(&module.ctx, ty)
             {
                 return Err(unsupported(format!(
@@ -998,12 +1120,13 @@ fn declared_signature(
             params.push(WType::I32);
         }
         for (index, ty) in sig.args().iter().enumerate() {
-            carrier(*ty, format!("parameter {index}"))?.push_carriers(&mut params);
+            let representation = carrier(*ty, format!("parameter {index}"))?;
+            push_carriers(&module.ctx, *ty, representation, &mut params);
         }
         for (index, ty) in sig.ret_tys().iter().enumerate() {
             let representation = carrier(*ty, format!("result {index}"))?;
             if sret.is_none() || external {
-                representation.push_carriers(&mut returns);
+                push_carriers(&module.ctx, *ty, representation, &mut returns);
             }
         }
         Ok(DeclaredSignature {
@@ -1099,6 +1222,17 @@ pub(super) fn emit_call(
     let call = Operator::Call {
         function_index: func,
     };
+    emit_operator(body, block, call, args, carriers)
+}
+
+/// Emit an operator with any number of results and return them in order.
+fn emit_operator(
+    body: &mut FunctionBody,
+    block: waffle::Block,
+    call: Operator,
+    args: &[V],
+    carriers: &[WType],
+) -> Vec<V> {
     if carriers.is_empty() {
         body.add_op(block, call, args, &[]);
         return Vec::new();
@@ -1156,9 +1290,15 @@ struct FunctionTranslator<'a> {
     wide_helpers: WideHelpers,
     return_tys: Vec<Type>,
     /// Sonatina values defined so far, in canonical WAFFLE form. Not 128- or
-    /// 256-bit values, which are in `wide`, zero-extended to four limbs.
+    /// 256-bit values, which are in `wide`, zero-extended to four limbs, nor
+    /// values held in parts, which are in `parts`, one canonical value for
+    /// each part.
     values: FxHashMap<ValueId, V>,
     wide: FxHashMap<ValueId, Limbs>,
+    parts: FxHashMap<ValueId, Vec<V>>,
+    /// The `v128` halves of 128- and 256-bit values, low first, where a
+    /// load or a byte swap made them (`translate/vectors.rs`).
+    vectors: FxHashMap<ValueId, Vec<V>>,
     blocks: FxHashMap<BlockId, waffle::Block>,
     /// The stack top received from the caller, which is the base of the frame.
     sp: Option<V>,
@@ -1181,9 +1321,25 @@ struct FunctionTranslator<'a> {
     zero_slots: FxHashMap<ValueId, u32>,
     /// The calls that end their block as tail calls.
     tail_calls: FxHashSet<InstId>,
+    /// The tail switches, by their `br_table`s, and the table they call
+    /// through.
+    switches: FxHashMap<InstId, TableSwitch>,
+    dispatch_table: Option<waffle::Table>,
     /// The size of the largest copy made with loads and stores.
     inline_copy_bytes: u32,
+    /// Addresses made by adding a constant to another value, by the base and
+    /// the constant.
+    address_offsets: FxHashMap<V, (V, u32)>,
 }
+
+/// The constant offsets of addresses below this fold into the memory
+/// accesses that use them. A larger one is a negative offset in the wrapping
+/// arithmetic of addresses, which an access's offset cannot be: the
+/// effective address of an access does not wrap, and past the memory it
+/// traps. An offset below it wraps only for an address that is not in the
+/// memory, as 2^31 bytes exceed the reserved low kilobyte of every module
+/// and no object starts above 2^32 - 2^31 - 1 KiB.
+const FOLDED_OFFSETS: u32 = 1 << 31;
 
 impl<'a> FunctionTranslator<'a> {
     #[allow(clippy::too_many_arguments)]
@@ -1202,7 +1358,11 @@ impl<'a> FunctionTranslator<'a> {
         free: Option<Func>,
         sha256: Option<Func>,
         wide_helpers: WideHelpers,
-        tail_calls: FxHashSet<InstId>,
+        (tail_calls, switches, dispatch_table): (
+            FxHashSet<InstId>,
+            FxHashMap<InstId, TableSwitch>,
+            Option<waffle::Table>,
+        ),
         opt_level: OptLevel,
     ) -> Self {
         Self {
@@ -1221,6 +1381,8 @@ impl<'a> FunctionTranslator<'a> {
             return_tys: callees[&func_ref].rets.clone(),
             values: FxHashMap::default(),
             wide: FxHashMap::default(),
+            parts: FxHashMap::default(),
+            vectors: FxHashMap::default(),
             blocks: FxHashMap::default(),
             sp: None,
             top: None,
@@ -1233,7 +1395,10 @@ impl<'a> FunctionTranslator<'a> {
             edge_slots: FxHashMap::default(),
             zero_slots: FxHashMap::default(),
             tail_calls,
+            switches,
+            dispatch_table,
             inline_copy_bytes: aggregate::inline_copy_bytes(opt_level),
+            address_offsets: FxHashMap::default(),
         }
     }
 
@@ -1322,10 +1487,12 @@ impl<'a> FunctionTranslator<'a> {
                     self.values.insert(arg, params[next]);
                     next += 1;
                 }
+                Repr::Parts => {
+                    let count = self.parts_of(ty).len();
+                    self.parts.insert(arg, params[next..next + count].to_vec());
+                    next += count;
+                }
             }
-        }
-        if needs_prologue {
-            // The terminator of the prologue is set once the frame is known.
         }
 
         for &block in &order {
@@ -1367,6 +1534,14 @@ impl<'a> FunctionTranslator<'a> {
                     Repr::Pointer => {
                         let param = self.body.add_blockparam(wb, WType::I32);
                         self.values.insert(result, param);
+                    }
+                    Repr::Parts => {
+                        let params = self
+                            .parts_of(ty)
+                            .iter()
+                            .map(|part| self.body.add_blockparam(wb, part_carrier(part)))
+                            .collect();
+                        self.parts.insert(result, params);
                     }
                     Repr::Aggregate => {
                         // The block parameter is the address of the incoming
@@ -1500,6 +1675,12 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(value);
         }
         let function = self.function;
+        if repr(&self.module.ctx, function.dfg.value_ty(id)) == Some(Repr::Parts) {
+            return Err(invalid(format!(
+                "function `{}`: value v{} is held in parts and has no single value",
+                self.name, id.0
+            )));
+        }
         match function.dfg.value(id) {
             Value::Immediate { imm, .. } => {
                 let mut emit = self.emit(wb);
@@ -1520,7 +1701,7 @@ impl<'a> FunctionTranslator<'a> {
                 Some(Repr::Int(int)) => Ok(self.emit(wb).zero(int)),
                 Some(Repr::Pointer) => Ok(self.emit(wb).c32(0)),
                 Some(Repr::Aggregate) => self.zero_aggregate(wb, id, *ty),
-                _ => Err(self.unsupported_type("an undefined value", *ty)),
+                _ => Err(self.unsupported_type("a zero value", *ty)),
             },
             Value::Global { gv, .. } => {
                 let address = self.plan.globals.get(gv).ok_or_else(|| {
@@ -1536,6 +1717,24 @@ impl<'a> FunctionTranslator<'a> {
                 self.name, id.0
             ))),
         }
+    }
+
+    /// Push the WebAssembly values that carry the operand `id`: its limbs,
+    /// its parts or its one value.
+    fn push_carried(
+        &mut self,
+        wb: waffle::Block,
+        id: ValueId,
+        out: &mut Vec<V>,
+    ) -> Result<(), WasmError> {
+        if let Some(wide) = self.wide_ty(id) {
+            out.extend_from_slice(&self.wide_operand(wb, id)?[..wide.limbs()]);
+        } else if repr(&self.module.ctx, self.function.dfg.value_ty(id)) == Some(Repr::Parts) {
+            out.extend(self.parts_operand(wb, id)?);
+        } else {
+            out.push(self.operand(wb, id)?);
+        }
+        Ok(())
     }
 
     /// The limbs of a 128- or 256-bit operand, zero-extended to 256 bits.
@@ -1587,11 +1786,14 @@ impl<'a> FunctionTranslator<'a> {
         inst_id: InstId,
         arg: ValueId,
     ) -> Result<(), WasmError> {
+        let ty = self.function.dfg.value_ty(arg);
         if let Some(wide) = self.wide_ty(arg) {
             let limbs = self.wide_operand(wb, arg)?;
             self.define_wide(wb, inst_id, 0, wide, limbs)
+        } else if repr(&self.module.ctx, ty) == Some(Repr::Parts) {
+            let values = self.parts_operand(wb, arg)?;
+            self.define_parts(inst_id, 0, values, ty)
         } else {
-            let ty = self.function.dfg.value_ty(arg);
             let value = self.operand(wb, arg)?;
             self.define(inst_id, 0, value, ty)
         }
@@ -1996,11 +2198,38 @@ impl<'a> FunctionTranslator<'a> {
         *wb = next;
     }
 
-    fn memarg(&self, access: Access, offset: u32) -> MemoryArg {
-        MemoryArg {
+    /// The memory argument of an access at `addr + offset`, and the address
+    /// operand it takes. A constant offset of `addr` from another value
+    /// ([`Self::address_offsets`]) folds into the argument, so that the
+    /// engine need not keep `addr` itself in a register.
+    fn memarg(&self, access: Access, addr: V, offset: u32) -> (MemoryArg, V) {
+        let (addr, offset) = match self.address_offsets.get(&addr) {
+            Some(&(base, constant)) => match constant.checked_add(offset) {
+                Some(total) if total < FOLDED_OFFSETS => (base, total),
+                _ => (addr, offset),
+            },
+            None => (addr, offset),
+        };
+        let memarg = MemoryArg {
             align: access.align(),
             offset,
             memory: self.memory,
+        };
+        (memarg, addr)
+    }
+
+    /// Record that `address` is `base + offset`, if the offset can fold into
+    /// the accesses that use it.
+    fn record_offset(&mut self, address: V, base: V, offset: u32) {
+        let (base, offset) = match self.address_offsets.get(&base) {
+            Some(&(root, constant)) => match constant.checked_add(offset) {
+                Some(total) => (root, total),
+                None => return,
+            },
+            None => (base, offset),
+        };
+        if offset < FOLDED_OFFSETS {
+            self.address_offsets.insert(address, (base, offset));
         }
     }
 
@@ -2085,6 +2314,7 @@ impl<'a> FunctionTranslator<'a> {
                     }
                     args.push(address);
                 }
+                Some(Repr::Parts) => args.extend(self.parts_operand(wb, input)?),
                 _ => args.push(self.operand(wb, input)?),
             }
         }
@@ -2218,13 +2448,10 @@ impl<'a> FunctionTranslator<'a> {
                 if function.dfg.value_ty(*i.arg()) == Type::I1 {
                     return Err(self.unsupported_type("`bswap`", Type::I1));
                 }
-                self.unary_any(
-                    *wb,
-                    inst_id,
-                    *i.arg(),
-                    |e, wide, v| e.wide_bswap(wide, v),
-                    |e, int, v| e.bswap(int, v),
-                )?
+                match self.wide_ty(*i.arg()) {
+                    Some(wide) => self.wide_bswap(*wb, inst_id, *i.arg(), wide)?,
+                    None => self.unary(*wb, inst_id, *i.arg(), |e, int, v| e.bswap(int, v))?,
+                }
             }
             NativeInstKind::And(i) => self.binary_any(
                 *wb,
@@ -2524,6 +2751,9 @@ impl<'a> FunctionTranslator<'a> {
                 };
                 self.body.set_terminator(*wb, terminator);
             }
+            NativeInstKind::BrTable(table) if self.switches.contains_key(&inst_id) => {
+                self.tail_switch(*wb, inst_id, *table.scrutinee())?
+            }
             NativeInstKind::BrTable(table) => {
                 let scrutinee_ty = function.dfg.value_ty(*table.scrutinee());
                 let scrutinee = if Wide::from_type(scrutinee_ty).is_some() {
@@ -2817,19 +3047,15 @@ impl<'a> FunctionTranslator<'a> {
             None => None,
         };
         for &arg in call_args {
-            if let Some(wide) = self.wide_ty(arg) {
-                args.extend_from_slice(&self.wide_operand(wb, arg)?[..wide.limbs()]);
-            } else {
-                args.push(self.operand(wb, arg)?);
-            }
+            self.push_carried(wb, arg, &mut args)?;
         }
 
         let mut carriers = Vec::new();
         if sret_address.is_none() {
-            for ty in &callee.rets {
-                repr(&self.module.ctx, *ty)
-                    .expect("signature types were checked")
-                    .push_carriers(&mut carriers);
+            for &ty in &callee.rets {
+                let representation =
+                    repr(&self.module.ctx, ty).expect("signature types were checked");
+                push_carriers(&self.module.ctx, ty, representation, &mut carriers);
             }
         }
         let values = emit_call(&mut self.body, wb, func, &args, &carriers);
@@ -2874,8 +3100,78 @@ impl<'a> FunctionTranslator<'a> {
                     self.define(inst_id, index, values[next], *ty)?;
                     next += 1;
                 }
+                Repr::Parts => {
+                    let count = self.parts_of(*ty).len();
+                    let carried = values[next..next + count].to_vec();
+                    next += count;
+                    self.define_parts(inst_id, index, carried, *ty)?;
+                }
             }
         }
+        Ok(())
+    }
+
+    /// End `wb` with the tail switch of the `br_table` `inst_id`: the callee
+    /// for the scrutinee's value is the dispatch table's entry at that value
+    /// past the switch's base, called with the arguments of the switch's
+    /// call, as [`Self::call`] makes a tail call. Its known bits keep the
+    /// scrutinee below the size of the switch's range.
+    fn tail_switch(
+        &mut self,
+        wb: waffle::Block,
+        inst_id: InstId,
+        scrutinee: ValueId,
+    ) -> Result<(), WasmError> {
+        let switch = &self.switches[&inst_id];
+        let (base, call, sig) = (switch.base, switch.call, switch.sig);
+        let table = self
+            .dispatch_table
+            .expect("a module with tail switches has a dispatch table");
+        let call = self.function.dfg.downcast::<&Call>(call).ok_or_else(|| {
+            invalid(format!(
+                "function `{}`: a tail switch's call is not a call",
+                self.name
+            ))
+        })?;
+        let mut args = Vec::new();
+        if self.plan.runtime {
+            // The frame of the callee replaces this one.
+            args.push(self.sp.expect("a module with a runtime passes the stack"));
+        }
+        for &arg in call.args() {
+            self.push_carried(wb, arg, &mut args)?;
+        }
+        let scrutinee_ty = self.function.dfg.value_ty(scrutinee);
+        let int = self.int_ty("br_table", scrutinee_ty)?;
+        let value = self.operand(wb, scrutinee)?;
+        let index = self.emit(wb).resize(int, Int::I32, false, value);
+        let index = if base == 0 {
+            index
+        } else {
+            let base = self.emit(wb).c32(base);
+            self.emit(wb)
+                .op(Operator::I32Add, &[index, base], WType::I32)
+        };
+        args.push(index);
+        // A tail call's callee returns what its caller does.
+        let mut carriers = Vec::new();
+        for &ty in &self.return_tys {
+            let representation = repr(&self.module.ctx, ty).expect("signature types were checked");
+            push_carriers(&self.module.ctx, ty, representation, &mut carriers);
+        }
+        let values = emit_operator(
+            &mut self.body,
+            wb,
+            Operator::CallIndirect {
+                sig_index: sig,
+                table_index: table,
+            },
+            &args,
+            &carriers,
+        );
+        // `tail::rewrite` makes the call and this return a
+        // `return_call_indirect`.
+        self.body.set_terminator(wb, Terminator::Return { values });
         Ok(())
     }
 
@@ -2906,11 +3202,7 @@ impl<'a> FunctionTranslator<'a> {
         }
         let mut values = Vec::with_capacity(args.len());
         for &arg in args {
-            if let Some(wide) = self.wide_ty(arg) {
-                values.extend_from_slice(&self.wide_operand(wb, arg)?[..wide.limbs()]);
-            } else {
-                values.push(self.operand(wb, arg)?);
-            }
+            self.push_carried(wb, arg, &mut values)?;
         }
         self.body.set_terminator(wb, Terminator::Return { values });
         Ok(())

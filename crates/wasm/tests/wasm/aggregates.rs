@@ -566,64 +566,71 @@ fn memory_fills(bytes: &[u8]) -> usize {
 }
 
 #[test]
-fn inserts_that_write_every_byte_need_no_zero_fill() {
-    // Built field by field from `undef`, `%full` writes every byte of its
-    // storage, which then needs no filling first. `%partial` leaves the
-    // second field undef, which reads as zero although `%full` left a value
-    // in the frame both use.
-    let source = "type @Pair = { i64, i64 };
-func public %full(v0.i64, v1.i64, v2.*@Pair) {
+fn undef_fields_are_stored_as_zero() {
+    // Six words are too many to hold in parts, so the struct is built in the
+    // frame. `%full` writes every field. `%partial` leaves every other field
+    // undef, which reads as zero although `%full` left a value in the frame
+    // both use: three stores of zero, which are faster than `memory.fill`.
+    let source = "type @Six = { i64, i64, i64, i64, i64, i64 };
+func public %full(v0.i64, v1.i64, v2.*@Six) {
     block0:
-        v4.@Pair = agg.make @Pair v0 v1;
-        mstore v2 v4 @Pair;
+        v4.@Six = agg.make @Six v0 v1 v0 v1 v0 v1;
+        mstore v2 v4 @Six;
         return;
 }
-func public %partial(v0.i64, v1.*@Pair) {
+func public %partial(v0.i64, v1.*@Six) {
     block0:
-        v2.@Pair = agg.make @Pair v0 undef.i64;
-        mstore v1 v2 @Pair;
+        v2.@Six = agg.make @Six v0 undef.i64 v0 undef.i64 v0 undef.i64;
+        mstore v1 v2 @Six;
         return;
 }";
     let bytes = WasmBackend::new()
         .compile_module(&parse(source), &BackendOptions::default())
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .into_bytes();
-    assert_eq!(memory_fills(&bytes), 1, "only `%partial` fills");
+    assert_eq!(memory_fills(&bytes), 0);
     let mut machine = Machine::new(&bytes);
     let base = machine.memory_size();
     machine.grow_memory(1);
     let words = |machine: &mut Machine| -> Vec<i64> {
         machine
-            .read(base, 16)
+            .read(base, 48)
             .chunks(8)
             .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()))
             .collect()
     };
     let full = machine.func("full");
     machine.call(&full, &[Val::I64(7), Val::I64(9), Val::I32(base as i32)]);
-    assert_eq!(words(&mut machine), [7, 9]);
+    assert_eq!(words(&mut machine), [7, 9, 7, 9, 7, 9]);
     let partial = machine.func("partial");
     machine.call(&partial, &[Val::I64(5), Val::I32(base as i32)]);
-    assert_eq!(words(&mut machine), [5, 0]);
+    assert_eq!(words(&mut machine), [5, 0, 5, 0, 5, 0]);
 }
 
 #[test]
 fn inserts_cover_an_aggregate_in_any_order_but_not_its_padding() {
-    // `%reversed` writes the fields last to first and needs no fill. The
-    // fields of `@Gap` leave seven bytes of padding unwritten, and `%huge`
-    // writes one byte of a 1 GiB array, so both keep their fills; the check
-    // takes memory for the inserts, not for the bytes of the aggregate.
-    let source = "type @Pair = { i64, i64 };
-type @Gap = { i8, i64 };
-func public %reversed(v0.i64, v1.i64, v2.*@Pair) {
+    // Six fields are too many to hold in parts, so these aggregates are
+    // built in the frame. `%reversed` writes the fields last to first and
+    // needs no fill. The fields of `@Gap` leave seven bytes of padding, which
+    // is not part of the value, so `%padded` needs no fill either. `%huge`
+    // writes one byte of a 1 GiB array and fills the rest; the check takes
+    // memory for the inserts, not for the bytes of the aggregate.
+    let source = "type @Six = { i64, i64, i64, i64, i64, i64 };
+type @Gap = { i8, i64, i64, i64, i64, i64 };
+func public %reversed(v0.i64, v1.i64, v2.*@Six) {
     block0:
-        v4.@Pair = agg.make @Pair v0 v1;
-        mstore v2 v4 @Pair;
+        v3.@Six = insert_value undef.@Six 5.i32 v1;
+        v4.@Six = insert_value v3 4.i32 v0;
+        v5.@Six = insert_value v4 3.i32 v1;
+        v6.@Six = insert_value v5 2.i32 v0;
+        v7.@Six = insert_value v6 1.i32 v1;
+        v8.@Six = insert_value v7 0.i32 v0;
+        mstore v2 v8 @Six;
         return;
 }
 func public %padded(v0.i8, v1.i64, v2.*@Gap) {
     block0:
-        v4.@Gap = agg.make @Gap v0 v1;
+        v4.@Gap = agg.make @Gap v0 v1 v1 v1 v1 v1;
         mstore v2 v4 @Gap;
         return;
 }
@@ -637,7 +644,7 @@ func public %huge(v0.i8, v1.*[i8; 1073741824]) {
         .compile_module(&parse(source), &BackendOptions::default())
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .into_bytes();
-    assert_eq!(memory_fills(&bytes), 2, "`%padded` and `%huge` fill");
+    assert_eq!(memory_fills(&bytes), 1, "only `%huge` fills");
     let mut machine = Machine::new(&bytes);
     let base = machine.memory_size();
     machine.grow_memory(1);
@@ -647,11 +654,11 @@ func public %huge(v0.i8, v1.*[i8; 1073741824]) {
         &[Val::I64(7), Val::I64(9), Val::I32(base as i32)],
     );
     let words: Vec<i64> = machine
-        .read(base, 16)
+        .read(base, 48)
         .chunks(8)
         .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
-    assert_eq!(words, [7, 9]);
+    assert_eq!(words, [7, 9, 7, 9, 7, 9]);
 }
 
 #[test]
@@ -659,11 +666,12 @@ fn a_small_copy_is_a_memory_copy_only_at_os() {
     // Loads and stores copy a small aggregate faster, and a `memory.copy` is
     // smaller, so `Os` makes every copy one. The IR goes to the backend as
     // it is, without the pipeline, which could take the copy apart.
-    let source = "type @Pair = { i64, i64 };
-func public %copy(v0.*@Pair, v1.*@Pair) {
+    // Six words are too many to hold in parts, so the load is a copy.
+    let source = "type @Six = { i64, i64, i64, i64, i64, i64 };
+func public %copy(v0.*@Six, v1.*@Six) {
     block0:
-        v2.@Pair = mload v0 @Pair;
-        mstore v1 v2 @Pair;
+        v2.@Six = mload v0 @Six;
+        mstore v1 v2 @Six;
         return;
 }";
     for (opt_level, copies) in [(OptLevel::O2, false), (OptLevel::Os, true)] {
@@ -675,11 +683,11 @@ func public %copy(v0.*@Pair, v1.*@Pair) {
         let mut machine = Machine::new(&bytes);
         let base = machine.memory_size();
         machine.grow_memory(1);
-        let pair: Vec<u8> = (1..=16).collect();
-        machine.write(base, &pair);
+        let six: Vec<u8> = (1..=48).collect();
+        machine.write(base, &six);
         let copy = machine.func("copy");
-        machine.call(&copy, &[Val::I32(base as i32), Val::I32(base as i32 + 16)]);
-        assert_eq!(machine.read(base + 16, 16), pair, "{opt_level:?}");
+        machine.call(&copy, &[Val::I32(base as i32), Val::I32(base as i32 + 48)]);
+        assert_eq!(machine.read(base + 48, 48), six, "{opt_level:?}");
     }
 }
 
@@ -846,10 +854,12 @@ func public %field() -> i64 {
 }
 
 #[test]
-fn agg_make_stores_each_field_and_zeroes_only_what_none_covers() {
-    // `%outer` builds nested values, and `@Gap`'s padding needs a fill;
-    // `%pair` covers every byte and needs none. `%partial` leaves fields
-    // `undef`, which read as zero, as an insert chain on undef does.
+fn agg_make_stores_each_field_and_zeroes_its_zero_fields() {
+    // `@Pair`, `[i64; 3]` and `@Gap` are held in parts and `@Outer`, of
+    // seven, in the frame. `%outer` stores every field of `@Outer`: the
+    // padding of `@Gap` is not part of the value. `%pair` stores its parts.
+    // `%partial` leaves fields `undef`, which read as zero, as an insert
+    // chain on undef does: one range of 40 bytes, zeroed with stores.
     let source = "type @Pair = { i64, i64 };
 type @Gap = { i8, i64 };
 type @Outer = { @Pair, [i64; 3], @Gap };
@@ -880,9 +890,7 @@ func public %partial(v0.i64, v1.i64, v2.*@Outer) {
         .compile_module(&parse(source), &BackendOptions::default())
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .into_bytes();
-    // `%outer`'s `@Gap`, whose padding stays in the copy to `@Outer`, and
-    // `%partial`'s `@Pair` and `@Outer`.
-    assert_eq!(memory_fills(&direct), 3);
+    assert_eq!(memory_fills(&direct), 0);
     let words = |machine: &mut Machine, base: usize, count: usize| -> Vec<i64> {
         machine
             .read(base, 8 * count)
@@ -916,5 +924,99 @@ func public %partial(v0.i64, v1.i64, v2.*@Outer) {
             machine.call(&partial, &[Val::I64(a), Val::I64(b), address]);
             assert_eq!(words(&mut machine, base, 1), [a]);
         }
+    }
+}
+
+#[test]
+fn constant_offsets_fold_into_accesses_and_negative_ones_wrap() {
+    // `%sum` loads three fields at constant offsets from one pointer in a
+    // loop: the offsets are the accesses' own, so no address is added up in
+    // the function, and an engine keeps only the pointer. `%back` reads the
+    // word below a pointer: the offset -8 wraps as an address, which an
+    // access's offset cannot do, so it stays an addition.
+    let source = "type @Three = { i64, i64, i64 };
+func public %sum(v0.*@Three, v1.i32) -> i64 {
+    block0:
+        jump block1;
+    block1:
+        v2.i32 = phi (0.i32 block0) (v10 block2);
+        v3.i64 = phi (0.i64 block0) (v9 block2);
+        v4.i1 = lt v2 v1;
+        br v4 block2 block3;
+    block2:
+        v5.*i64 = gep v0 0.i32 0.i32;
+        v6.*i64 = gep v0 0.i32 1.i32;
+        v7.*i64 = gep v0 0.i32 2.i32;
+        v11.i64 = mload v5 i64;
+        v12.i64 = mload v6 i64;
+        v13.i64 = mload v7 i64;
+        v14.i64 = add v11 v12;
+        v15.i64 = add v14 v13;
+        v9.i64 = add v3 v15;
+        v10.i32 = add v2 1.i32;
+        jump block1;
+    block3:
+        return v3;
+}
+func public %back(v0.*i64) -> i64 {
+    block0:
+        v1.*i64 = gep v0 -1.i32;
+        v2.i64 = mload v1 i64;
+        return v2;
+}";
+    for level in LEVELS {
+        let bytes = build(source, level);
+        let adds = |name: &str| {
+            let mut index = None;
+            let mut names = Vec::new();
+            for payload in wasmparser::Parser::new(0).parse_all(&bytes) {
+                match payload.unwrap() {
+                    wasmparser::Payload::ExportSection(exports) => {
+                        for export in exports {
+                            let export = export.unwrap();
+                            names.push((export.name.to_string(), export.index));
+                        }
+                    }
+                    wasmparser::Payload::CodeSectionStart { .. } => {
+                        index = names.iter().find(|(n, _)| n == name).map(|&(_, i)| i);
+                    }
+                    _ => {}
+                }
+            }
+            let index = index.expect("the export exists");
+            let mut count = 0;
+            let mut function = 0;
+            for payload in wasmparser::Parser::new(0).parse_all(&bytes) {
+                if let wasmparser::Payload::CodeSectionEntry(body) = payload.unwrap() {
+                    if function == index {
+                        count = body
+                            .get_operators_reader()
+                            .unwrap()
+                            .into_iter()
+                            .filter(|op| matches!(op, Ok(wasmparser::Operator::I32Add)))
+                            .count();
+                    }
+                    function += 1;
+                }
+            }
+            count
+        };
+        // The loop counter's increment is the only addition of `%sum`.
+        assert_eq!(adds("sum"), 1, "{level:?}");
+        assert_eq!(adds("back"), 1, "{level:?}");
+        let mut machine = Machine::new(&bytes);
+        let base = machine.memory_size();
+        machine.grow_memory(1);
+        let words: Vec<u8> = [5i64, 7, 9, 11]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        machine.write(base, &words);
+        let sum = machine.func("sum");
+        let got = machine.call(&sum, &[Val::I32(base as i32 + 8), Val::I32(3)]);
+        assert_eq!(got[0].unwrap_i64(), 3 * (7 + 9 + 11), "{level:?}");
+        let back = machine.func("back");
+        let got = machine.call(&back, &[Val::I32(base as i32 + 8)]);
+        assert_eq!(got[0].unwrap_i64(), 5, "{level:?}");
     }
 }

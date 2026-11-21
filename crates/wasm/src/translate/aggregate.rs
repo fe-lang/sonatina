@@ -43,6 +43,7 @@ pub(super) fn inline_copy_bytes(opt_level: OptLevel) -> u32 {
 enum Loaded {
     One(V),
     Wide(Wide, Limbs),
+    Parts(Vec<V>),
 }
 
 impl FunctionTranslator<'_> {
@@ -105,10 +106,12 @@ impl FunctionTranslator<'_> {
         if offset == 0 {
             return Ok(sp);
         }
-        let offset = self.emit(wb).c32(offset);
-        Ok(self
+        let constant = self.emit(wb).c32(offset);
+        let address = self
             .emit(wb)
-            .op(Operator::I32Add, &[sp, offset], WType::I32))
+            .op(Operator::I32Add, &[sp, constant], WType::I32);
+        self.record_offset(address, sp, offset);
+        Ok(address)
     }
 
     /// The end of the frame, which callees receive as their stack top.
@@ -126,9 +129,12 @@ impl FunctionTranslator<'_> {
         if offset == 0 {
             return base;
         }
-        let offset = self.emit(wb).c32(offset);
-        self.emit(wb)
-            .op(Operator::I32Add, &[base, offset], WType::I32)
+        let constant = self.emit(wb).c32(offset);
+        let address = self
+            .emit(wb)
+            .op(Operator::I32Add, &[base, constant], WType::I32);
+        self.record_offset(address, base, offset);
+        address
     }
 
     fn chunks(size: u32) -> impl Iterator<Item = (u32, Access)> {
@@ -156,12 +162,14 @@ impl FunctionTranslator<'_> {
             // Read everything before writing anything.
             let mut loaded = Vec::new();
             for (offset, access) in Self::chunks(size) {
-                let (op, ty) = access.load_u(self.memarg(access, offset));
+                let (memarg, src) = self.memarg(access, src, offset);
+                let (op, ty) = access.load_u(memarg);
                 let value = self.body.add_op(wb, op, &[src], &[ty]);
                 loaded.push((offset, access, value));
             }
             for (offset, access, value) in loaded {
-                let op = access.store(self.memarg(access, offset));
+                let (memarg, dst) = self.memarg(access, dst, offset);
+                let op = access.store(memarg);
                 self.body.add_op(wb, op, &[dst, value], &[]);
             }
             return;
@@ -178,8 +186,25 @@ impl FunctionTranslator<'_> {
         );
     }
 
+    /// Write zero to `size` bytes: with stores up to the size copied with
+    /// loads and stores, which an engine runs faster than `memory.fill`, and
+    /// at `Os` up to one store, which is smaller.
     fn fill_zero(&mut self, wb: waffle::Block, dst: V, size: u32) {
         if size == 0 {
+            return;
+        }
+        if size <= self.inline_copy_bytes.max(8) {
+            let zero32 = self.emit(wb).c32(0);
+            let zero64 = self.emit(wb).c64(0);
+            for (offset, access) in Self::chunks(size) {
+                let zero = match access {
+                    Access::Double => zero64,
+                    _ => zero32,
+                };
+                let (memarg, dst) = self.memarg(access, dst, offset);
+                let op = access.store(memarg);
+                self.body.add_op(wb, op, &[dst, zero], &[]);
+            }
             return;
         }
         let zero = self.emit(wb).c32(0);
@@ -229,7 +254,8 @@ impl FunctionTranslator<'_> {
         }
     }
 
-    /// Read a scalar, a pointer or a 128- or 256-bit integer at `addr + offset`.
+    /// Read a scalar, a pointer, a 128- or 256-bit integer or a value held
+    /// in parts at `addr + offset`.
     fn load_value(
         &mut self,
         wb: waffle::Block,
@@ -238,10 +264,24 @@ impl FunctionTranslator<'_> {
         addr: V,
         offset: u32,
     ) -> Result<Loaded, WasmError> {
+        if repr(&self.module.ctx, ty) == Some(Repr::Parts) {
+            let values = self
+                .parts_of(ty)
+                .iter()
+                .map(
+                    |part| match self.load_value(wb, op, part.ty, addr, offset + part.offset)? {
+                        Loaded::One(value) => Ok(value),
+                        _ => unreachable!("a part is a scalar or a pointer"),
+                    },
+                )
+                .collect::<Result<_, WasmError>>()?;
+            return Ok(Loaded::Parts(values));
+        }
         if let Some(wide) = Wide::from_type(ty) {
             let carried: Vec<V> = (0..wide.limbs())
                 .map(|index| {
-                    let memarg = self.memarg(Access::Double, offset + 8 * index as u32);
+                    let (memarg, addr) =
+                        self.memarg(Access::Double, addr, offset + 8 * index as u32);
                     self.body.add_op(
                         wb,
                         Operator::I64Load { memory: memarg },
@@ -254,7 +294,8 @@ impl FunctionTranslator<'_> {
             return Ok(Loaded::Wide(wide, limbs));
         }
         let access = self.scalar_access(op, ty)?;
-        let (load, carrier) = access.load_u(self.memarg(access, offset));
+        let (memarg, addr) = self.memarg(access, addr, offset);
+        let (load, carrier) = access.load_u(memarg);
         let mut value = self.body.add_op(wb, load, &[addr], &[carrier]);
         if ty == Type::I1 {
             // Only the low bit of a stored byte is the value.
@@ -264,7 +305,7 @@ impl FunctionTranslator<'_> {
     }
 
     /// Write the value `id` of type `ty` at `addr + offset`.
-    fn store_value(
+    pub(super) fn store_value(
         &mut self,
         wb: waffle::Block,
         op: &str,
@@ -281,15 +322,30 @@ impl FunctionTranslator<'_> {
         }
         match repr(&self.module.ctx, ty) {
             Some(Repr::Aggregate) => {
-                let source = self.operand(wb, id)?;
                 let (size, _) = self.layout_of(ty)?;
                 let dest = self.offset_address(wb, addr, offset);
-                self.copy_bytes(wb, dest, source, size);
+                if matches!(self.function.dfg.value(id), Value::Zero { .. }) {
+                    self.fill_zero(wb, dest, size);
+                } else {
+                    let source = self.operand(wb, id)?;
+                    self.copy_bytes(wb, dest, source, size);
+                }
             }
+            Some(Repr::Parts) => {
+                let values = self.parts_operand(wb, id)?;
+                for (part, value) in self.parts_of(ty).iter().zip(values) {
+                    let access = self.scalar_access(op, part.ty)?;
+                    let (memarg, addr) = self.memarg(access, addr, offset + part.offset);
+                    let store = access.store(memarg);
+                    self.body.add_op(wb, store, &[addr, value], &[]);
+                }
+            }
+            Some(Repr::Wide(_)) if self.store_halves(wb, id, (addr, offset)) => {}
             Some(Repr::Wide(wide)) => {
                 let limbs = self.wide_operand(wb, id)?;
                 for (index, &limb) in limbs[..wide.limbs()].iter().enumerate() {
-                    let memarg = self.memarg(Access::Double, offset + 8 * index as u32);
+                    let (memarg, addr) =
+                        self.memarg(Access::Double, addr, offset + 8 * index as u32);
                     self.body.add_op(
                         wb,
                         Operator::I64Store { memory: memarg },
@@ -301,7 +357,8 @@ impl FunctionTranslator<'_> {
             _ => {
                 let access = self.scalar_access(op, ty)?;
                 let value = self.operand(wb, id)?;
-                let store = access.store(self.memarg(access, offset));
+                let (memarg, addr) = self.memarg(access, addr, offset);
+                let store = access.store(memarg);
                 self.body.add_op(wb, store, &[addr, value], &[]);
             }
         }
@@ -320,6 +377,7 @@ impl FunctionTranslator<'_> {
         match loaded {
             Loaded::One(value) => self.define(inst_id, index, value, ty),
             Loaded::Wide(wide, limbs) => self.define_wide(wb, inst_id, index, wide, limbs),
+            Loaded::Parts(values) => self.define_parts(inst_id, index, values, ty),
         }
     }
 
@@ -495,6 +553,11 @@ impl FunctionTranslator<'_> {
         let addr = self.address_operand(wb, op, addr)?;
         if repr(&self.module.ctx, ty) == Some(Repr::Aggregate) {
             return self.snapshot(*wb, inst_id, ty, addr, 0);
+        }
+        if let Some(wide) = Wide::from_type(ty)
+            && self.feeds_bswap(inst_id)
+        {
+            return self.load_halves(*wb, inst_id, wide, (addr, 0));
         }
         let loaded = self.load_value(*wb, op, ty, addr, 0)?;
         self.define_loaded(*wb, inst_id, 0, ty, loaded)
@@ -828,13 +891,18 @@ impl FunctionTranslator<'_> {
                 self.name
             ))
         })?;
-        let state = self.operand(wb, state)?;
-        let block = self.operand(wb, block)?;
+        let op = "sha256_compress";
+        let state = self.aggregate_address(wb, op, state)?;
+        let block = self.aggregate_address(wb, op, block)?;
         let ty = self.result_ty(inst_id)?;
         let (size, align) = self.layout_of(ty)?;
         let slot = self.slot(size, align)?;
         let dst = self.slot_address(wb, slot)?;
         emit_call(&mut self.body, wb, func, &[state, block, dst], &[]);
+        if repr(&self.module.ctx, ty) == Some(Repr::Parts) {
+            let loaded = self.load_value(wb, op, ty, dst, 0)?;
+            return self.define_loaded(wb, inst_id, 0, ty, loaded);
+        }
         self.define(inst_id, 0, dst, ty)
     }
 
@@ -849,6 +917,14 @@ impl FunctionTranslator<'_> {
     ) -> Result<(), WasmError> {
         let function = self.function;
         let result_ty = self.result_ty(inst_id)?;
+        if repr(&self.module.ctx, result_ty) == Some(Repr::Parts) {
+            let idx = self.constant_index("insert_value", index)?;
+            let field = self.element_offset(result_ty, idx)?;
+            let parts = self.parts_of(result_ty);
+            let mut values = self.parts_operand(wb, dest)?;
+            self.insert_field(wb, "insert_value", (&parts, &mut values), field, value)?;
+            return self.define_parts(inst_id, 0, values, result_ty);
+        }
         let (size, align) = self.layout_of(result_ty)?;
         // An insert result owns its storage. Its sole consumer can continue
         // construction in that storage without changing an observable SSA
@@ -864,11 +940,12 @@ impl FunctionTranslator<'_> {
         } else {
             let slot = self.slot(size, align)?;
             let address = self.slot_address(wb, slot)?;
-            // If the inserts that continue in this storage write every byte,
-            // what it held before does not matter.
+            // The fields that the inserts continuing in this storage leave
+            // come from the source: zero for a `zero`, which needs no copy.
+            let left = self.fields_left(block, inst_id, result_ty, size)?;
             match function.dfg.value(dest) {
-                _ if self.inserts_write_every_byte(block, inst_id, result_ty, size)? => {}
-                Value::Zero { .. } => self.fill_zero(wb, address, size),
+                _ if left.is_empty() => {}
+                Value::Zero { .. } => self.zero_ranges(wb, address, left),
                 _ => {
                     let source = self.operand(wb, dest)?;
                     self.copy_bytes(wb, address, source, size);
@@ -910,15 +987,16 @@ impl FunctionTranslator<'_> {
             && dfg.users(result).copied().eq([next])
     }
 
-    /// Whether the `insert_value` `first` and the inserts that continue in its
-    /// storage write every byte of the aggregate.
-    fn inserts_write_every_byte(
+    /// The byte ranges of the fields of `ty`, of `size` bytes, that neither
+    /// the `insert_value` `first` nor the inserts that continue in its storage
+    /// write. Padding is not part of a value, so it is in none of them.
+    fn fields_left(
         &self,
         block: BlockId,
         first: InstId,
         ty: Type,
         size: u32,
-    ) -> Result<bool, WasmError> {
+    ) -> Result<Vec<(u32, u32)>, WasmError> {
         let dfg = &self.function.dfg;
         let mut written = Vec::new();
         let mut inst = Some(first);
@@ -937,12 +1015,32 @@ impl FunctionTranslator<'_> {
                 .and_then(|result| dfg.users(result).copied().next())
                 .filter(|&next| self.continues_in_place(block, current, next));
         }
-        Ok(covers(written, size))
+        let fields = match ty.resolve_compound(&self.module.ctx) {
+            Some(CompoundType::Struct(data)) => (0..data.fields.len())
+                .map(|idx| {
+                    let (offset, elem_ty) = self.element_offset(ty, idx)?;
+                    let (elem_size, _) = self.layout_of(elem_ty)?;
+                    Ok((offset, offset + elem_size))
+                })
+                .collect::<Result<_, WasmError>>()?,
+            // The elements of an array cover it.
+            _ => vec![(0, size)],
+        };
+        Ok(subtract(fields, written))
+    }
+
+    /// Write zero to the byte ranges `ranges` of the aggregate at `address`,
+    /// merging the ranges that touch.
+    fn zero_ranges(&mut self, wb: waffle::Block, address: V, ranges: Vec<(u32, u32)>) {
+        for (start, end) in merge(ranges) {
+            let dest = self.offset_address(wb, address, start);
+            self.fill_zero(wb, dest, end - start);
+        }
     }
 
     /// `agg.make`: a new aggregate in a slot of the frame, with each field
-    /// stored from its operand. The bytes no stored field covers are zero:
-    /// padding, and `zero` fields.
+    /// stored from its operand and the `zero` fields zero. Padding is not part
+    /// of the value, so it keeps what the slot held.
     pub(super) fn agg_make(
         &mut self,
         wb: waffle::Block,
@@ -950,27 +1048,34 @@ impl FunctionTranslator<'_> {
         values: &[ValueId],
     ) -> Result<(), WasmError> {
         let ty = self.result_ty(inst_id)?;
+        if repr(&self.module.ctx, ty) == Some(Repr::Parts) {
+            let parts = self.parts_of(ty);
+            let mut made = self.zero_parts(wb, &parts);
+            for (idx, &value) in values.iter().enumerate() {
+                let field = self.element_offset(ty, idx)?;
+                self.insert_field(wb, "agg.make", (&parts, &mut made), field, value)?;
+            }
+            return self.define_parts(inst_id, 0, made, ty);
+        }
         let (size, align) = self.layout_of(ty)?;
         let slot = self.slot(size, align)?;
         let address = self.slot_address(wb, slot)?;
+        // The `zero` fields are zeroed together, in the fewest ranges.
+        let mut zeros = Vec::new();
         let mut fields = Vec::new();
         for (idx, &value) in values.iter().enumerate() {
-            // A `zero` field is left to the fill below.
-            if matches!(self.function.dfg.value(value), Value::Zero { .. }) {
-                continue;
-            }
             let (offset, elem_ty) = self.element_offset(ty, idx)?;
-            let (elem_size, _) = self.layout_of(elem_ty)?;
-            fields.push((offset, elem_size, elem_ty, value));
+            if matches!(self.function.dfg.value(value), Value::Zero { .. })
+                && self.function.dfg.value_ty(value) == elem_ty
+            {
+                let (elem_size, _) = self.layout_of(elem_ty)?;
+                zeros.push((offset, offset + elem_size));
+            } else {
+                fields.push((offset, elem_ty, value));
+            }
         }
-        let written = fields
-            .iter()
-            .map(|&(offset, elem_size, ..)| (offset, offset + elem_size))
-            .collect();
-        if !covers(written, size) {
-            self.fill_zero(wb, address, size);
-        }
-        for (offset, _, elem_ty, value) in fields {
+        self.zero_ranges(wb, address, zeros);
+        for (offset, elem_ty, value) in fields {
             self.store_value(wb, "agg.make", elem_ty, address, offset, value)?;
         }
         self.define(inst_id, 0, address, ty)
@@ -983,7 +1088,6 @@ impl FunctionTranslator<'_> {
         dest: ValueId,
         index: ValueId,
     ) -> Result<(), WasmError> {
-        let base = self.operand(wb, dest)?;
         let idx = self.constant_index("extract_value", index)?;
         let dest_ty = self.function.dfg.value_ty(dest);
         let (offset, elem_ty) = self.element_offset(dest_ty, idx)?;
@@ -994,6 +1098,12 @@ impl FunctionTranslator<'_> {
                 self.name
             )));
         }
+        if repr(&self.module.ctx, dest_ty) == Some(Repr::Parts) {
+            let parts = self.parts_of(dest_ty);
+            let values = self.parts_operand(wb, dest)?;
+            return self.define_field(wb, inst_id, (&parts, &values), (offset, elem_ty));
+        }
+        let base = self.operand(wb, dest)?;
         if repr(&self.module.ctx, result_ty) == Some(Repr::Aggregate) {
             let view = self.offset_address(wb, base, offset);
             return self.define(inst_id, 0, view, result_ty);
@@ -1042,13 +1152,25 @@ impl FunctionTranslator<'_> {
     ) -> Result<(), WasmError> {
         let tag_ty = self.tag_ty(op, variant)?;
         let access = self.scalar_access(op, tag_ty)?;
-        let tag = match access {
-            Access::Double => self.emit(wb).c64(u64::from(variant.index())),
-            _ => self.emit(wb).c32(variant.index()),
-        };
-        let store = access.store(self.memarg(access, 0));
+        let tag = self.tag_value(wb, op, variant)?;
+        let (memarg, addr) = self.memarg(access, addr, 0);
+        let store = access.store(memarg);
         self.body.add_op(wb, store, &[addr, tag], &[]);
         Ok(())
+    }
+
+    /// `variant`'s tag, as a value of its enum's tag type.
+    fn tag_value(
+        &mut self,
+        wb: waffle::Block,
+        op: &str,
+        variant: EnumVariantRef,
+    ) -> Result<V, WasmError> {
+        let tag_ty = self.tag_ty(op, variant)?;
+        Ok(match self.scalar_access(op, tag_ty)? {
+            Access::Double => self.emit(wb).c64(u64::from(variant.index())),
+            _ => self.emit(wb).c32(variant.index()),
+        })
     }
 
     /// Write `variant`'s fields `values` and then its tag to the enum at `addr`.
@@ -1068,8 +1190,8 @@ impl FunctionTranslator<'_> {
     }
 
     /// `enum.make`: a new enum value in a slot of the frame. As on the native
-    /// target, the bytes outside the variant are zero, not what an earlier
-    /// frame left in the slot.
+    /// target, padding and the payloads of other variants are not part of the
+    /// value, so they keep what the slot held.
     pub(super) fn enum_make(
         &mut self,
         wb: waffle::Block,
@@ -1078,10 +1200,21 @@ impl FunctionTranslator<'_> {
         values: &[ValueId],
     ) -> Result<(), WasmError> {
         let ty = self.result_ty(inst_id)?;
+        if repr(&self.module.ctx, ty) == Some(Repr::Parts) {
+            // The tag first; fields of other variants are zero.
+            let op = "enum.make";
+            let parts = self.parts_of(ty);
+            let mut made = self.zero_parts(wb, &parts);
+            made[0] = self.tag_value(wb, op, variant)?;
+            for (field, &value) in values.iter().enumerate() {
+                let field = self.variant_field(op, variant, field)?;
+                self.insert_field(wb, op, (&parts, &mut made), field, value)?;
+            }
+            return self.define_parts(inst_id, 0, made, ty);
+        }
         let (size, align) = self.layout_of(ty)?;
         let slot = self.slot(size, align)?;
         let address = self.slot_address(wb, slot)?;
-        self.fill_zero(wb, address, size);
         self.store_variant(wb, "enum.make", address, variant, values)?;
         self.define(inst_id, 0, address, ty)
     }
@@ -1116,8 +1249,12 @@ impl FunctionTranslator<'_> {
         op: &str,
         source: ValueId,
     ) -> Result<(), WasmError> {
-        let address = self.operand(wb, source)?;
         let ty = self.result_ty(inst_id)?;
+        if repr(&self.module.ctx, self.function.dfg.value_ty(source)) == Some(Repr::Parts) {
+            let tag = self.parts_operand(wb, source)?[0];
+            return self.define(inst_id, 0, tag, ty);
+        }
+        let address = self.operand(wb, source)?;
         let loaded = self.load_value(wb, op, ty, address, 0)?;
         self.define_loaded(wb, inst_id, 0, ty, loaded)
     }
@@ -1130,11 +1267,17 @@ impl FunctionTranslator<'_> {
         variant: EnumVariantRef,
     ) -> Result<(), WasmError> {
         let op = "enum.is_variant";
-        let address = self.operand(wb, value)?;
         let tag_ty = self.tag_ty(op, variant)?;
         let access = self.scalar_access(op, tag_ty)?;
-        let Loaded::One(tag) = self.load_value(wb, op, tag_ty, address, 0)? else {
-            unreachable!("a tag is a scalar")
+        let tag = if repr(&self.module.ctx, self.function.dfg.value_ty(value)) == Some(Repr::Parts)
+        {
+            self.parts_operand(wb, value)?[0]
+        } else {
+            let address = self.operand(wb, value)?;
+            let Loaded::One(tag) = self.load_value(wb, op, tag_ty, address, 0)? else {
+                unreachable!("a tag is a scalar")
+            };
+            tag
         };
         let mut emit = self.emit(wb);
         let is_variant = match access {
@@ -1161,7 +1304,6 @@ impl FunctionTranslator<'_> {
         field: ValueId,
     ) -> Result<(), WasmError> {
         let op = "enum.extract";
-        let base = self.operand(wb, value)?;
         let field = self.constant_index(op, field)?;
         let (offset, ty) = self.variant_field(op, variant, field)?;
         if self.result_ty(inst_id)? != ty {
@@ -1170,6 +1312,13 @@ impl FunctionTranslator<'_> {
                 self.name
             )));
         }
+        let value_ty = self.function.dfg.value_ty(value);
+        if repr(&self.module.ctx, value_ty) == Some(Repr::Parts) {
+            let parts = self.parts_of(value_ty);
+            let values = self.parts_operand(wb, value)?;
+            return self.define_field(wb, inst_id, (&parts, &values), (offset, ty));
+        }
+        let base = self.operand(wb, value)?;
         if repr(&self.module.ctx, ty) == Some(Repr::Aggregate) {
             let view = self.offset_address(wb, base, offset);
             return self.define(inst_id, 0, view, ty);
@@ -1320,12 +1469,36 @@ fn immediate_value(imm: Immediate, signed: bool) -> Option<i128> {
     })
 }
 
-/// Whether the byte ranges `written` cover `0..size`: in order of their
-/// starts, each begins within those before it.
-fn covers(mut written: Vec<(u32, u32)>, size: u32) -> bool {
-    written.sort_unstable();
-    let end = written.into_iter().try_fold(0, |end, (start, stop)| {
-        (start <= end).then_some(end.max(stop))
-    });
-    end == Some(size)
+/// The byte ranges `ranges` sorted, with those that overlap or touch joined.
+fn merge(mut ranges: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+    ranges.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
+}
+
+/// The parts of the byte ranges `ranges` outside every range of `removed`.
+fn subtract(ranges: Vec<(u32, u32)>, removed: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+    let removed = merge(removed);
+    let mut left = Vec::new();
+    for (mut start, end) in ranges {
+        for &(cut_start, cut_end) in &removed {
+            if cut_end <= start || cut_start >= end {
+                continue;
+            }
+            if cut_start > start {
+                left.push((start, cut_start));
+            }
+            start = start.max(cut_end);
+        }
+        if start < end {
+            left.push((start, end));
+        }
+    }
+    left
 }

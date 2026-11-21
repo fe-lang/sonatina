@@ -832,11 +832,12 @@ func public %g(v0.i32) -> @P {
         reference.contains("must not expose object references"),
         "{reference}"
     );
+    // A struct held in memory cannot be one of several results.
     let mixed = compile_error(
-        "type @P = { i32, i32 };
+        "type @P = { i32, i128 };
 func private %m(v0.i32) -> (i32, @P) {
     block0:
-        v1.@P = agg.make @P v0 undef.i32;
+        v1.@P = agg.make @P v0 undef.i128;
         return (v0, v1);
 }
 func public %k(v0.i32) -> i32 {

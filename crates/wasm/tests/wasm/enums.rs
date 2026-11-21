@@ -141,9 +141,11 @@ block4:
 }
 
 #[test]
-fn enum_values_zero_bytes_outside_their_variant() {
+fn enum_values_write_their_tag_and_fields() {
     // `dirty` and `clean` place their frames at the same address, so unless
-    // they are inlined, `clean`'s slots still hold `dirty`'s values.
+    // they are inlined, `clean`'s slots still hold `dirty`'s values. Bytes
+    // outside the variant's tag and fields are not part of the value, as on
+    // the native target, so `enum.make` leaves them as they were.
     let source = r#"
 type @Choice = enum { #None, #Some(i256), #Pair(i8, i64) };
 func private %dirty(v10.*i8, v11.*i8) {
@@ -187,12 +189,16 @@ block0:
                 Val::I64(0x1122_3344_5566_7788),
             ],
         );
-        assert_eq!(machine.read(none, 48), [0; 48], "{level:?}");
-        let mut expected = [0; 48];
-        expected[0] = 2;
-        expected[16] = 3;
-        expected[24..32].copy_from_slice(&0x1122_3344_5566_7788i64.to_le_bytes());
-        assert_eq!(machine.read(pair, 48), expected, "{level:?}");
+        // The tag is an `i8` at offset 0, and `Pair`'s fields are at 16 and 24.
+        assert_eq!(machine.read(none, 1), [0], "{level:?}");
+        let pair_bytes = machine.read(pair, 48);
+        assert_eq!(pair_bytes[0], 2, "{level:?}");
+        assert_eq!(pair_bytes[16], 3, "{level:?}");
+        assert_eq!(
+            pair_bytes[24..32],
+            0x1122_3344_5566_7788i64.to_le_bytes(),
+            "{level:?}"
+        );
     }
 }
 
@@ -334,5 +340,92 @@ block0:
             5,
             "{level:?}"
         );
+    }
+}
+
+#[test]
+fn values_held_in_parts_cross_calls_phis_and_memory() {
+    // `@Opt` (a tag and one variant's two fields), `@Pair` and `@Empty` are
+    // held in parts. `%pick` returns an enum with another value, a phi joins
+    // two enums, `%keep` stores one and loads it back, `%empty` extracts a
+    // field without parts and `%cast` reads a pair as an `i64` through memory.
+    let source = r#"
+type @Empty = {};
+type @Pair = { i32, @Empty, i32 };
+type @Opt = enum { #None, #Some(i64, i32) };
+func private %pick(v0.i64, v1.i32) -> (i32, @Opt) {
+block0:
+    v2.i1 = eq v1 0.i32;
+    br v2 block1 block2;
+block1:
+    v3.@Opt = enum.make @Opt #None ();
+    jump block3;
+block2:
+    v4.@Opt = enum.make @Opt #Some (v0, v1);
+    jump block3;
+block3:
+    v5.@Opt = phi (v3 block1) (v4 block2);
+    v6.i32 = add v1 100.i32;
+    return (v6, v5);
+}
+func public %keep(v10.*i8, v0.i64, v1.i32) -> i64 {
+block0:
+    v11.*@Opt = bitcast v10 *@Opt;
+    (v2.i32, v3.@Opt) = call %pick v0 v1;
+    mstore v11 v3 @Opt;
+    v4.@Opt = mload v11 @Opt;
+    v5.i1 = enum.is_variant v4 #Some;
+    br v5 block1 block2;
+block1:
+    enum.assert_variant v4 #Some;
+    v6.i64 = enum.extract v4 #Some 0.i8;
+    v7.i32 = enum.extract v4 #Some 1.i8;
+    v8.i64 = zext v7 i64;
+    v9.i64 = add v6 v8;
+    v12.i64 = zext v2 i64;
+    v13.i64 = add v9 v12;
+    return v13;
+block2:
+    v14.enumtag(@Opt) = enum.tag v4;
+    v15.i64 = zext v2 i64;
+    return v15;
+}
+func public %empty(v0.i32, v1.i32) -> i32 {
+block0:
+    v2.@Pair = agg.make @Pair v0 zero.@Empty v1;
+    v3.@Empty = extract_value v2 1.i32;
+    v4.@Pair = insert_value v2 1.i32 v3;
+    v5.i32 = extract_value v4 2.i32;
+    v6.i32 = extract_value v4 0.i32;
+    v7.i32 = sub v5 v6;
+    return v7;
+}
+func public %cast(v0.i32, v1.i32) -> i64 {
+block0:
+    v2.@Pair = agg.make @Pair v0 zero.@Empty v1;
+    v3.i64 = bitcast v2 i64;
+    return v3;
+}
+"#;
+    for level in LEVELS {
+        let mut machine = Machine::new(&build_at(source, level));
+        let buffer = host_buffer(&mut machine);
+        let keep = machine.func("keep");
+        let got = machine.call(
+            &keep,
+            &[Val::I32(buffer as i32), Val::I64(1 << 40), Val::I32(5)],
+        );
+        assert_eq!(got[0].unwrap_i64(), (1 << 40) + 5 + 105, "{level:?}");
+        // The tag is at offset 0 and the fields from offset 8.
+        assert_eq!(machine.read(buffer, 1), [1], "{level:?}");
+        let got = machine.call(&keep, &[Val::I32(buffer as i32), Val::I64(7), Val::I32(0)]);
+        assert_eq!(got[0].unwrap_i64(), 100, "{level:?}");
+        assert_eq!(machine.read(buffer, 1), [0], "{level:?}");
+        let empty = machine.func("empty");
+        let got = machine.call(&empty, &[Val::I32(3), Val::I32(10)]);
+        assert_eq!(got[0].unwrap_i32(), 7, "{level:?}");
+        let cast = machine.func("cast");
+        let got = machine.call(&cast, &[Val::I32(1), Val::I32(2)]);
+        assert_eq!(got[0].unwrap_i64(), (2 << 32) | 1, "{level:?}");
     }
 }
