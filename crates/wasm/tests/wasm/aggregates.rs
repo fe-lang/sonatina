@@ -926,3 +926,97 @@ func public %partial(v0.i64, v1.i64, v2.*@Outer) {
         }
     }
 }
+
+#[test]
+fn constant_offsets_fold_into_accesses_and_negative_ones_wrap() {
+    // `%sum` loads three fields at constant offsets from one pointer in a
+    // loop: the offsets are the accesses' own, so no address is added up in
+    // the function, and an engine keeps only the pointer. `%back` reads the
+    // word below a pointer: the offset -8 wraps as an address, which an
+    // access's offset cannot do, so it stays an addition.
+    let source = "type @Three = { i64, i64, i64 };
+func public %sum(v0.*@Three, v1.i32) -> i64 {
+    block0:
+        jump block1;
+    block1:
+        v2.i32 = phi (0.i32 block0) (v10 block2);
+        v3.i64 = phi (0.i64 block0) (v9 block2);
+        v4.i1 = lt v2 v1;
+        br v4 block2 block3;
+    block2:
+        v5.*i64 = gep v0 0.i32 0.i32;
+        v6.*i64 = gep v0 0.i32 1.i32;
+        v7.*i64 = gep v0 0.i32 2.i32;
+        v11.i64 = mload v5 i64;
+        v12.i64 = mload v6 i64;
+        v13.i64 = mload v7 i64;
+        v14.i64 = add v11 v12;
+        v15.i64 = add v14 v13;
+        v9.i64 = add v3 v15;
+        v10.i32 = add v2 1.i32;
+        jump block1;
+    block3:
+        return v3;
+}
+func public %back(v0.*i64) -> i64 {
+    block0:
+        v1.*i64 = gep v0 -1.i32;
+        v2.i64 = mload v1 i64;
+        return v2;
+}";
+    for level in LEVELS {
+        let bytes = build(source, level);
+        let adds = |name: &str| {
+            let mut index = None;
+            let mut names = Vec::new();
+            for payload in wasmparser::Parser::new(0).parse_all(&bytes) {
+                match payload.unwrap() {
+                    wasmparser::Payload::ExportSection(exports) => {
+                        for export in exports {
+                            let export = export.unwrap();
+                            names.push((export.name.to_string(), export.index));
+                        }
+                    }
+                    wasmparser::Payload::CodeSectionStart { .. } => {
+                        index = names.iter().find(|(n, _)| n == name).map(|&(_, i)| i);
+                    }
+                    _ => {}
+                }
+            }
+            let index = index.expect("the export exists");
+            let mut count = 0;
+            let mut function = 0;
+            for payload in wasmparser::Parser::new(0).parse_all(&bytes) {
+                if let wasmparser::Payload::CodeSectionEntry(body) = payload.unwrap() {
+                    if function == index {
+                        count = body
+                            .get_operators_reader()
+                            .unwrap()
+                            .into_iter()
+                            .filter(|op| matches!(op, Ok(wasmparser::Operator::I32Add)))
+                            .count();
+                    }
+                    function += 1;
+                }
+            }
+            count
+        };
+        // The loop counter's increment is the only addition of `%sum`.
+        assert_eq!(adds("sum"), 1, "{level:?}");
+        assert_eq!(adds("back"), 1, "{level:?}");
+        let mut machine = Machine::new(&bytes);
+        let base = machine.memory_size();
+        machine.grow_memory(1);
+        let words: Vec<u8> = [5i64, 7, 9, 11]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        machine.write(base, &words);
+        let sum = machine.func("sum");
+        let got = machine.call(&sum, &[Val::I32(base as i32 + 8), Val::I32(3)]);
+        assert_eq!(got[0].unwrap_i64(), 3 * (7 + 9 + 11), "{level:?}");
+        let back = machine.func("back");
+        let got = machine.call(&back, &[Val::I32(base as i32 + 8)]);
+        assert_eq!(got[0].unwrap_i64(), 5, "{level:?}");
+    }
+}

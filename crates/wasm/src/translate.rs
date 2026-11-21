@@ -1331,7 +1331,19 @@ struct FunctionTranslator<'a> {
     dispatch_table: Option<waffle::Table>,
     /// The size of the largest copy made with loads and stores.
     inline_copy_bytes: u32,
+    /// Addresses made by adding a constant to another value, by the base and
+    /// the constant.
+    address_offsets: FxHashMap<V, (V, u32)>,
 }
+
+/// The constant offsets of addresses below this fold into the memory
+/// accesses that use them. A larger one is a negative offset in the wrapping
+/// arithmetic of addresses, which an access's offset cannot be: the
+/// effective address of an access does not wrap, and past the memory it
+/// traps. An offset below it wraps only for an address that is not in the
+/// memory, as 2^31 bytes exceed the reserved low kilobyte of every module
+/// and no object starts above 2^32 - 2^31 - 1 KiB.
+const FOLDED_OFFSETS: u32 = 1 << 31;
 
 impl<'a> FunctionTranslator<'a> {
     #[allow(clippy::too_many_arguments)]
@@ -1389,6 +1401,7 @@ impl<'a> FunctionTranslator<'a> {
             switches,
             dispatch_table,
             inline_copy_bytes: aggregate::inline_copy_bytes(opt_level),
+            address_offsets: FxHashMap::default(),
         }
     }
 
@@ -2188,11 +2201,38 @@ impl<'a> FunctionTranslator<'a> {
         *wb = next;
     }
 
-    fn memarg(&self, access: Access, offset: u32) -> MemoryArg {
-        MemoryArg {
+    /// The memory argument of an access at `addr + offset`, and the address
+    /// operand it takes. A constant offset of `addr` from another value
+    /// ([`Self::address_offsets`]) folds into the argument, so that the
+    /// engine need not keep `addr` itself in a register.
+    fn memarg(&self, access: Access, addr: V, offset: u32) -> (MemoryArg, V) {
+        let (addr, offset) = match self.address_offsets.get(&addr) {
+            Some(&(base, constant)) => match constant.checked_add(offset) {
+                Some(total) if total < FOLDED_OFFSETS => (base, total),
+                _ => (addr, offset),
+            },
+            None => (addr, offset),
+        };
+        let memarg = MemoryArg {
             align: access.align(),
             offset,
             memory: self.memory,
+        };
+        (memarg, addr)
+    }
+
+    /// Record that `address` is `base + offset`, if the offset can fold into
+    /// the accesses that use it.
+    fn record_offset(&mut self, address: V, base: V, offset: u32) {
+        let (base, offset) = match self.address_offsets.get(&base) {
+            Some(&(root, constant)) => match constant.checked_add(offset) {
+                Some(total) => (root, total),
+                None => return,
+            },
+            None => (base, offset),
+        };
+        if offset < FOLDED_OFFSETS {
+            self.address_offsets.insert(address, (base, offset));
         }
     }
 
