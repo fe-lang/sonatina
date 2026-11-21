@@ -1,0 +1,74 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/narrow_aggregate_reads_bool_agg_make.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @B = {i1, i256};
+
+func public %entry() {
+    block0:
+        v1.i256 = evm_calldata_load 32.i32;
+        mstore 4096.i32 v1 i256;
+        mstore 4160.i32 v1 i256;
+        v0.i256 = evm_calldata_load 0.i32;
+        call %store v0;
+        call %store_undef;
+        call %array v0;
+        v2.i256 = call %read 4096.i32;
+        v3.i256 = call %read 4160.i32;
+        v4.i256 = call %read_element;
+        mstore 0.i32 v2 i256;
+        mstore 32.i32 v3 i256;
+        mstore 64.i32 v4 i256;
+        evm_return 0.i32 96.i32;
+}
+
+func inline(never) private %store(v0.i256) {
+    block0:
+        v1.i1 = eq v0 1.i256;
+        v2.@B = agg.make @B v1 7.i256;
+        mstore 4096.i32 v2 @B;
+        return;
+}
+
+func inline(never) private %store_undef() {
+    block0:
+        v0.@B = agg.make @B undef.i1 9.i256;
+        mstore 4160.i32 v0 @B;
+        return;
+}
+
+func inline(never) private %array(v0.i256) {
+    block0:
+        v1.i1 = eq v0 1.i256;
+        v2.i1 = is_zero v0;
+        v3.[i1; 2] = agg.make [i1; 2] v2 v1;
+        mstore 4224.i32 v3 [i1; 2];
+        return;
+}
+
+func inline(never) private %read(v0.i32) -> i256 {
+    block0:
+        v1.@B = mload v0 @B;
+        v2.i1 = extract_value v1 0.i8;
+        v3.i1 = freeze v2;
+        v4.i256 = zext v3 i256;
+        return v4;
+}
+
+func inline(never) private %read_element() -> i256 {
+    block0:
+        v0.[i1; 2] = mload 4224.i32 [i1; 2];
+        v1.i1 = extract_value v0 1.i8;
+        v2.i256 = zext v1 i256;
+        return v2;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

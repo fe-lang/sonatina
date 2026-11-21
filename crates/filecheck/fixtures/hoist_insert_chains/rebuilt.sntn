@@ -8,6 +8,7 @@ type @kind = enum {
 };
 type @change = {i64, @kind};
 type @point = {i64, i64};
+type @twice = {@point, @point};
 type @pair = enum {
     #Both(@point, @point),
     #Neither,
@@ -22,6 +23,41 @@ block0:
 
 func private %undo_pair(v0.@pair) {
 block0:
+    return;
+}
+
+func private %undo_twice(v0.@twice) {
+block0:
+    return;
+}
+
+# One construction in two fields of an `agg.make` is built once for each
+# copy, and goes once.
+# sameln: func private %push_twice(v0.objref<@twice>, v1.i64, v2.i64) {
+# nextln: block0:
+# nextln: v5.i1 = call %grow;
+# nextln: br v5 block1 block2;
+# check: block1:
+# nextln: v6.@point = agg.make @point v1 v2;
+# nextln: v7.@twice = agg.make @twice v6 v6;
+# nextln: obj.store v0 v7;
+# check: block2:
+# nextln: v8.@point = agg.make @point v1 v2;
+# nextln: v9.@twice = agg.make @twice v8 v8;
+# nextln: call %undo_twice v9;
+func private %push_twice(v0.objref<@twice>, v1.i64, v2.i64) {
+block0:
+    v3.@point = agg.make @point v1 v2;
+    v4.@twice = agg.make @twice v3 v3;
+    v5.i1 = call %grow;
+    br v5 block1 block2;
+
+block1:
+    obj.store v0 v4;
+    return;
+
+block2:
+    call %undo_twice v4;
     return;
 }
 

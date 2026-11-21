@@ -437,6 +437,26 @@ pub(super) fn store_value(
     Ok(())
 }
 
+/// Stores `value`, a field of type `ty`, at `dst + offset`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn store_field(
+    function: &Function,
+    value: ValueId,
+    dst: clif::Value,
+    offset: i32,
+    ty: Type,
+    value_map: &ValueMap,
+    config: TargetFrontendConfig,
+    builder: &mut FunctionBuilder,
+) -> Result<(), String> {
+    if uses_indirect_value_representation(function.ctx(), ty) {
+        let field_dst = builder.ins().iadd_imm_s(dst, i64::from(offset));
+        store_indirect(function, value, field_dst, ty, value_map, config, builder)
+    } else {
+        store_value(function, value, dst, offset, value_map, builder)
+    }
+}
+
 /// Writes `value`, stored as a `ty`, to `dst`. Native undef values are zero,
 /// so an undef value zeroes `dst` without a zeroed temporary.
 pub(super) fn store_indirect(

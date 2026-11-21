@@ -11,7 +11,7 @@ use sonatina_ir::{
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
-    optim::call_purity::is_nonmutating_returning_call,
+    optim::{call_purity::is_nonmutating_returning_call, inst_size},
 };
 
 use super::{CallChanges, InlineStats, InlinerConfig};
@@ -329,9 +329,8 @@ fn collect_splice_body(
     body_insts: &[InstId],
 ) -> Option<CollectedSpliceBody> {
     let is_single_use = callee_call_count == 1;
-    if !is_single_use
-        && body_insts.len().saturating_sub(reconstruction_insts) > config.splice_max_insts
-    {
+    let body_size: usize = body_insts.iter().map(|&inst| inst_size(callee, inst)).sum();
+    if !is_single_use && body_size.saturating_sub(reconstruction_insts) > config.splice_max_insts {
         stats.skipped_too_large += 1;
         return None;
     }

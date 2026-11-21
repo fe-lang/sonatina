@@ -223,8 +223,11 @@ impl ObjectReachability {
             if raw_pointer(*insert.value()) {
                 changed |= self.expose(&self.references[*insert.value()].clone());
             }
-        } else if let Some(make) = downcast::<&data::EnumMake>(is, data) {
-            for &value in make.values().iter().filter(|&&value| raw_pointer(value)) {
+        } else if let Some(values) = downcast::<&data::EnumMake>(is, data)
+            .map(|make| make.values().as_slice())
+            .or_else(|| downcast::<&data::AggMake>(is, data).map(|make| make.values().as_slice()))
+        {
+            for &value in values.iter().filter(|&&value| raw_pointer(value)) {
                 changed |= self.expose(&self.references[value].clone());
             }
         } else if let Some(mat) = downcast::<&data::ObjMaterializeStack>(is, data) {
@@ -377,6 +380,7 @@ impl ObjectReachability {
                 || downcast::<&data::Gep>(is, data).is_some()
                 || downcast::<&cast::Bitcast>(is, data).is_some()
                 || downcast::<&control_flow::Phi>(is, data).is_some()
+                || downcast::<&data::AggMake>(is, data).is_some()
                 || downcast::<&data::InsertValue>(is, data).is_some()
                 || downcast::<&data::ExtractValue>(is, data).is_some()
                 || downcast::<&data::EnumMake>(is, data).is_some()
@@ -384,7 +388,8 @@ impl ObjectReachability {
                 || downcast::<&data::EnumAssertVariant>(is, data).is_some()
             {
                 // An aggregate does not carry a raw pointer it received.
-                let aggregate = downcast::<&data::InsertValue>(is, data).is_some()
+                let aggregate = downcast::<&data::AggMake>(is, data).is_some()
+                    || downcast::<&data::InsertValue>(is, data).is_some()
                     || downcast::<&data::EnumMake>(is, data).is_some();
                 for value in data.collect_values() {
                     if !(aggregate && raw_pointer(value)) {

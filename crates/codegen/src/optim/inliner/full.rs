@@ -5,7 +5,10 @@ use sonatina_ir::{
     module::FuncRef, visitor::Visitor,
 };
 
-use crate::cfg_edit::{CfgEditor, CleanupMode};
+use crate::{
+    cfg_edit::{CfgEditor, CleanupMode},
+    optim::inst_size,
+};
 
 use super::{CallChanges, cost::SummaryKey, rewrite::OperandRewriter};
 
@@ -157,6 +160,8 @@ pub(super) fn try_inline_callsite_full(
     let mut phi_fixups = Vec::new();
     let mut returns = Vec::new();
     let mut inserted_insts = 0usize;
+    // The inserted instructions by `inst_size`, for the growth budgets.
+    let mut growth = 0usize;
     let mut call_changes = CallChanges::default();
     call_changes.removed.push(callee_ref);
 
@@ -197,6 +202,7 @@ pub(super) fn try_inline_callsite_full(
                 .func_mut()
                 .import_inst_attribution_from(callee, old_inst, new_inst);
             inserted_insts += 1;
+            growth += inst_size(callee, old_inst);
 
             assert_eq!(
                 old_results.len(),
@@ -238,6 +244,7 @@ pub(super) fn try_inline_callsite_full(
                 .func_mut()
                 .import_inst_attribution_from(callee, term_id, new_jump);
             inserted_insts += 1;
+            growth += 1;
 
             returns.push(ReturnSite {
                 from_block: new_block,
@@ -257,6 +264,7 @@ pub(super) fn try_inline_callsite_full(
                 .func_mut()
                 .import_inst_attribution_from(callee, term_id, new_term);
             inserted_insts += 1;
+            growth += 1;
         }
     }
 
@@ -317,6 +325,7 @@ pub(super) fn try_inline_callsite_full(
                     func.dfg.attach_result(phi_inst, phi_value);
                     func.dfg.change_to_alias(call_result, phi_value);
                     inserted_insts += 1;
+                    growth += 1;
                 }
             }
         }
@@ -363,7 +372,7 @@ pub(super) fn try_inline_callsite_full(
         insts_cloned: inserted_insts,
         phi_fixups: phi_fixups.len(),
         // split_block_at added a jump and we removed the original call.
-        net_growth: inserted_insts,
+        net_growth: growth,
         cont_block,
         cont_reachable,
         call_changes,

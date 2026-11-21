@@ -1,0 +1,203 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/agg_make_noopt.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 192 bytes
+  total: 192 bytes
+
+functions:
+  mem: global_dyn_base=0x100 arena_base=0x0 scratch_peak_words=8 stable_chain_peak_words=0
+  entry: ir_blocks=1 ir_insts=12 vcode_ops=52 fixups=8 imm_bytes=6
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
+  stored: ir_blocks=1 ir_insts=6 vcode_ops=12 fixups=0 imm_bytes=2
+    mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=2
+  indexed: ir_blocks=1 ir_insts=7 vcode_ops=17 fixups=0 imm_bytes=3
+    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=3
+  nested: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=5
+    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=3
+  rotate: ir_blocks=4 ir_insts=19 vcode_ops=50 fixups=2 imm_bytes=16
+    mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=8
+
+evm:
+  case ok: calldata_len=96 success reason=Return gas_used=21959 gas_refunded=0 logs=0 output=call len=128 tx_gas=21420 runtime_gas=539
+  case twice: calldata_len=96 success reason=Return gas_used=22053 gas_refunded=0 logs=0 output=call len=128 tx_gas=21420 runtime_gas=633
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    PUSH1 0x20 (32)  // v3.i256 = evm_calldata_load v2;
+    CALLDATALOAD
+    PUSH1 0x40 (64)  // v5.i256 = evm_calldata_load v4;
+    CALLDATALOAD
+    DUP3  // v6.i256 = call %stored v1 v3;
+    DUP3
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    DUP4  // v7.i256 = call %indexed v1 v3 v5;
+    DUP3
+    DUP5
+    PUSH1 `pc + (4)`
+    SWAP3
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    DUP5  // v8.i256 = call %nested v1 v3;
+    DUP5
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(3)
+    JUMP
+    JUMPDEST
+    SWAP3  // v9.i256 = call %rotate v1 v3 v5;
+    SWAP1
+    SWAP5
+    SWAP2
+    SWAP4
+    PUSH1 `pc + (4)`
+    SWAP3
+    PUSH1 FuncRef(4)
+    JUMP
+    JUMPDEST
+    SWAP2  // evm_mstore v0 v6;
+    PUSH0
+    MSTORE
+    SWAP2  // evm_mstore v2 v7;
+    PUSH1 0x20 (32)
+    MSTORE
+    SWAP1  // evm_mstore v4 v8;
+    PUSH1 0x40 (64)
+    MSTORE
+    PUSH1 0x60 (96)  // evm_mstore 96.i256 v9;
+    MSTORE
+    PUSH1 0x80 (128)  // evm_return v0 128.i256;
+    PUSH0
+    RETURN
+
+// func private %stored(v0.i256, v1.i256) -> i256
+stored:
+  block0:
+    JUMPDEST
+    PUSH0  // evm_mstore v2 v0;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_mstore v3 v1;
+    MSTORE
+    PUSH0  // v5.i256 = evm_mload v2;
+    MLOAD
+    PUSH1 0x20 (32)  // v7.i256 = evm_mload v3;
+    MLOAD
+    ADD  // v8.i256 = add v5 v7;
+    SWAP1  // return v8;
+    JUMP
+
+// func private %indexed(v0.i256, v1.i256, v2.i256) -> i256
+indexed:
+  block0:
+    JUMPDEST
+    DUP2  // v4.i256 = add v0 v1;
+    DUP2
+    ADD
+    SWAP1  // evm_mstore v3 v0;
+    PUSH0
+    MSTORE
+    SWAP1  // evm_mstore v5 v1;
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x40 (64)  // evm_mstore 64.i256 v4;
+    MSTORE
+    PUSH1 0x5 (5)  // v9.i256 = shl 5.i256 v2;
+    SHL
+    MLOAD  // v11.i256 = evm_mload v9;
+    SWAP1  // return v11;
+    JUMP
+
+// func private %nested(v0.i256, v1.i256) -> i256
+nested:
+  block0:
+    JUMPDEST
+    PUSH1 0x1 (1)  // v3.i256 = add v0 v2;
+    DUP2
+    ADD
+    SWAP1  // evm_mstore v4 v0;
+    PUSH0
+    MSTORE
+    SWAP1  // evm_mstore v5 v1;
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x40 (64)  // evm_mstore v7 v3;
+    MSTORE
+    PUSH1 0x20 (32)  // v10.i256 = evm_mload v5;
+    MLOAD
+    PUSH1 0x40 (64)  // v12.i256 = evm_mload v7;
+    MLOAD
+    ADD  // v13.i256 = add v10 v12;
+    SWAP1  // return v13;
+    JUMP
+
+// func private %rotate(v0.i256, v1.i256, v2.i256) -> i256
+rotate:
+  block0:
+    JUMPDEST
+    DUP1  // evm_mstore v7 v0;
+    PUSH1 0xc0 (192)
+    MSTORE
+    DUP2  // evm_mstore 224.i256 v1;
+    PUSH1 0xe0 (224)
+    MSTORE
+    SWAP1  // evm_mstore v6 v1;
+    PUSH1 0x80 (128)
+    MSTORE
+    PUSH1 0xa0 (160)  // evm_mstore 160.i256 v0;
+    MSTORE
+  block1:
+    JUMPDEST
+    DUP1  // v35.i256 = is_zero v3;
+    ISZERO
+    PUSH1 block3  // br v35 block3 block2;
+    JUMPI
+  block2:
+    PUSH1 0x40 (64)  // evm_mcopy v5 v6 v5;
+    PUSH1 0x80 (128)
+    DUP2
+    MCOPY
+    PUSH1 0x1 (1)  // v17.i256 = sub v3 v16;
+    SWAP1
+    SUB
+    PUSH1 0x40 (64)  // evm_mcopy v6 v7 v5;
+    PUSH1 0xc0 (192)
+    PUSH1 0x80 (128)
+    MCOPY
+    PUSH1 0x40 (64)  // evm_mcopy v7 v5 v5;
+    DUP1
+    PUSH1 0xc0 (192)
+    MCOPY
+    PUSH1 block1  // jump block1;
+    JUMP
+  block3:
+    JUMPDEST
+    POP  // evm_mcopy v4 v6 v5;
+    PUSH1 0x40 (64)
+    PUSH1 0x80 (128)
+    PUSH0
+    MCOPY
+    PUSH0  // v30.i256 = evm_mload v4;
+    MLOAD
+    PUSH1 0xc0 (192)  // v31.i256 = evm_mload v7;
+    MLOAD
+    SWAP1  // v33.i256 = mul v30 100.i256;
+    PUSH1 0x64 (100)
+    MUL
+    ADD  // v34.i256 = add v33 v31;
+    SWAP1  // return v34;
+    JUMP

@@ -17,8 +17,9 @@ value.
 - A phi gives the input of the edge taken. `select c a b` gives the arm `c`
   chooses, and the unspecified value when `c` is unspecified.
 - Aggregates and enums are field-wise: every part of an unspecified aggregate
-  is unspecified, `insert_value` leaves the other fields as they were, and
-  `extract_value` of an unspecified field is unspecified.
+  is unspecified, `agg.make` gives each field its operand, `insert_value`
+  leaves the other fields as they were, and `extract_value` of an unspecified
+  field is unspecified.
 - Call arguments, call results, returned values and the value operand of a
   store carry it unchanged.
 - `freeze x` is `x` when `x` is specified, and otherwise some concrete value,

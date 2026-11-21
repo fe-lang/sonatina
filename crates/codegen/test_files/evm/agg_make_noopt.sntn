@@ -1,0 +1,101 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false, opt: 0 }
+#! evm.case: ok
+#!   calldata: u256(3) u256(9) u256(1)
+#!   expect: return u256(12) u256(9) u256(13) u256(309)
+#! evm.case: twice
+#!   calldata: u256(3) u256(9) u256(2)
+#!   expect: return u256(12) u256(12) u256(13) u256(903)
+
+target = "evm-ethereum-osaka"
+
+type @slice = { i256, i256 };
+type @empty = {};
+type @outer = { @slice, i256, @empty };
+type @wrap = { @slice };
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i256 = evm_calldata_load 64.i32;
+        v3.i256 = call %stored v0 v1;
+        v4.i256 = call %indexed v0 v1 v2;
+        v5.i256 = call %nested v0 v1;
+        v6.i256 = call %rotate v0 v1 v2;
+        mstore 0.i32 v3 i256;
+        mstore 32.i32 v4 i256;
+        mstore 64.i32 v5 i256;
+        mstore 96.i32 v6 i256;
+        evm_return 0.i8 128.i8;
+}
+
+func private %stored(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.@slice = agg.make @slice v0 v1;
+        v3.*@slice = alloca @slice;
+        mstore v3 v2 @slice;
+        v4.@slice = mload v3 @slice;
+        v5.i256 = extract_value v4 0.i8;
+        v6.i256 = extract_value v4 1.i8;
+        v7.i256 = add v5 v6;
+        return v7;
+}
+
+func private %indexed(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v4.[i256; 3] = agg.make [i256; 3] v0 v1 v3;
+        v5.i256 = extract_value v4 v2;
+        return v5;
+}
+
+func private %nested(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.@slice = agg.make @slice v0 v1;
+        v3.i256 = add v0 1.i256;
+        v4.@empty = agg.make @empty;
+        v5.@outer = agg.make @outer v2 v3 v4;
+        v6.*@outer = alloca @outer;
+        mstore v6 v5 @outer;
+        v7.@outer = mload v6 @outer;
+        v8.@slice = extract_value v7 0.i8;
+        v9.i256 = extract_value v8 1.i8;
+        v10.i256 = extract_value v7 1.i8;
+        v11.i256 = add v9 v10;
+        return v11;
+}
+
+func private %rotate(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.@slice = agg.make @slice v0 v1;
+        v4.@slice = agg.make @slice v1 v0;
+        v5.@wrap = agg.make @wrap v4;
+        jump block1;
+
+    block1:
+        v6.@slice = phi (v3 block0) (v10 block2);
+        v7.@wrap = phi (v5 block0) (v9 block2);
+        v8.i256 = phi (v2 block0) (v11 block2);
+        v12.i1 = eq v8 0.i256;
+        br v12 block3 block2;
+
+    block2:
+        v9.@wrap = agg.make @wrap v6;
+        v10.@slice = extract_value v7 0.i8;
+        v11.i256 = sub v8 1.i256;
+        jump block1;
+
+    block3:
+        v13.@slice = extract_value v7 0.i8;
+        v14.i256 = extract_value v13 0.i8;
+        v15.i256 = extract_value v6 0.i8;
+        v16.i256 = mul v14 100.i256;
+        v17.i256 = add v16 v15;
+        return v17;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

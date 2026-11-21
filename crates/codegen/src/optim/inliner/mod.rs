@@ -16,6 +16,7 @@ use crate::{
 use super::{
     aggregate::{collect_local_object_arg_info_with_effects, compute_object_effect_summaries},
     dead_func::{collect_object_roots, non_call_func_ref},
+    inst_size,
 };
 
 mod cost;
@@ -513,8 +514,8 @@ impl Inliner {
                             caller_insts: if callee_removable {
                                 module.func_store.view(caller_ref, |func| {
                                     func.layout
-                                        .iter_block()
-                                        .map(|block| func.layout.iter_inst(block).count())
+                                        .iter_all_insts()
+                                        .map(|inst| inst_size(func, inst))
                                         .sum()
                                 })
                             } else {

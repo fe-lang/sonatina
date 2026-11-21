@@ -11,9 +11,7 @@ use sonatina_ir::{Function, Type, ValueId, module::ModuleCtx, types::EnumVariant
 use super::{
     abi::sonatina_scalar_type_to_clif_or_err,
     field_part_values,
-    memory::{
-        INLINE_MEMORY_BYTES, Piece, store_indirect, store_value, value_pieces, value_storage_size,
-    },
+    memory::{INLINE_MEMORY_BYTES, Piece, store_field, value_pieces, value_storage_size},
     uses_indirect_value_representation,
     values::ValueMap,
 };
@@ -94,11 +92,8 @@ pub(super) fn store_variant(
         {
             let wide = builder.ins().uextend(piece_ty, scalar);
             builder.ins().store(MemFlagsData::new(), wide, dst, offset);
-        } else if indirect {
-            let field_dst = builder.ins().iadd_imm_s(dst, i64::from(offset));
-            store_indirect(function, value, field_dst, ty, value_map, config, builder)?;
         } else {
-            store_value(function, value, dst, offset, value_map, builder)?;
+            store_field(function, value, dst, offset, ty, value_map, config, builder)?;
         }
     }
     store_tag(ctx, variant, dst, builder)

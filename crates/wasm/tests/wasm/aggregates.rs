@@ -863,3 +863,77 @@ func public %field() -> i64 {
         assert_eq!(machine.call(&field, &[])[0].unwrap_i64(), 30, "{level:?}");
     }
 }
+
+#[test]
+fn agg_make_stores_each_field_and_zeroes_only_what_none_covers() {
+    // `%outer` builds nested values, and `@Gap`'s padding needs a fill;
+    // `%pair` covers every byte and needs none. `%partial` leaves fields
+    // `undef`, which read as zero, as an insert chain on undef does.
+    let source = "type @Pair = { i64, i64 };
+type @Gap = { i8, i64 };
+type @Outer = { @Pair, [i64; 3], @Gap };
+func public %pair(v0.i64, v1.i64, v2.*@Pair) {
+    block0:
+        v3.@Pair = agg.make @Pair v1 v0;
+        mstore v2 v3 @Pair;
+        return;
+}
+func public %outer(v0.i64, v1.i64, v2.*@Outer) {
+    block0:
+        v3.@Pair = agg.make @Pair v0 v1;
+        v4.[i64; 3] = agg.make [i64; 3] v1 7.i64 v0;
+        v5.i8 = trunc v0 i8;
+        v6.@Gap = agg.make @Gap v5 v1;
+        v7.@Outer = agg.make @Outer v3 v4 v6;
+        mstore v2 v7 @Outer;
+        return;
+}
+func public %partial(v0.i64, v1.i64, v2.*@Outer) {
+    block0:
+        v3.@Pair = agg.make @Pair v0 undef.i64;
+        v4.@Outer = agg.make @Outer v3 undef.[i64; 3] undef.@Gap;
+        mstore v2 v4 @Outer;
+        return;
+}";
+    let direct = WasmBackend::new()
+        .compile_module(&parse(source), &BackendOptions::default())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .into_bytes();
+    // `%outer`'s `@Gap`, whose padding stays in the copy to `@Outer`, and
+    // `%partial`'s `@Pair` and `@Outer`.
+    assert_eq!(memory_fills(&direct), 3);
+    let words = |machine: &mut Machine, base: usize, count: usize| -> Vec<i64> {
+        machine
+            .read(base, 8 * count)
+            .chunks(8)
+            .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect()
+    };
+    for bytes in [direct]
+        .into_iter()
+        .chain(LEVELS.map(|level| build(source, level)))
+    {
+        let mut machine = Machine::new(&bytes);
+        let base = machine.memory_size();
+        machine.grow_memory(1);
+        let address = Val::I32(base as i32);
+        let (pair, outer, partial) = (
+            machine.func("pair"),
+            machine.func("outer"),
+            machine.func("partial"),
+        );
+        for (a, b) in [(11, 22), (-1, i64::MIN), (0x1234, i64::MAX)] {
+            machine.call(&pair, &[Val::I64(a), Val::I64(b), address]);
+            assert_eq!(words(&mut machine, base, 2), [b, a]);
+
+            machine.call(&outer, &[Val::I64(a), Val::I64(b), address]);
+            let stored = words(&mut machine, base, 7);
+            assert_eq!(&stored[..5], &[a, b, b, 7, a]);
+            assert_eq!(stored[5] & 0xff, a & 0xff);
+            assert_eq!(stored[6], b);
+
+            machine.call(&partial, &[Val::I64(a), Val::I64(b), address]);
+            assert_eq!(words(&mut machine, base, 1), [a]);
+        }
+    }
+}

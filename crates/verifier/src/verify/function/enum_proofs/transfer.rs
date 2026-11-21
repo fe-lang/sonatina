@@ -293,6 +293,19 @@ pub(super) fn instruction(
         }
         value.assert_variant(ctx, assertion.variant().index());
         state.values.insert(*assertion.value(), value);
+    } else if let Some(make) = downcast::<&data::AggMake>(is, inst) {
+        // As an insert chain on undef that writes every field.
+        let mut value = ValueState::new(*make.ty(), true);
+        for (index, &field) in make.values().iter().enumerate() {
+            let field = state.value(verifier, field);
+            value.update(
+                ctx,
+                &[Step::Index(Index::Constant(index))],
+                true,
+                &|target| *target = field.clone(),
+            );
+        }
+        state.bind(verifier, result.unwrap(), value, None);
     } else if let Some(insert) = downcast::<&data::InsertValue>(is, inst) {
         let mut value = state.value(verifier, *insert.dest());
         let field = state.value(verifier, *insert.value());

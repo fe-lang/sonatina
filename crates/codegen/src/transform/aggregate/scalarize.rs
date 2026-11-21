@@ -1090,7 +1090,8 @@ impl AggregateScalarize {
                 Value::Inst { inst, .. } => {
                     if func.dfg.call_info(*inst).is_some() {
                         false
-                    } else if func.dfg.downcast::<&data::InsertValue>(*inst).is_some()
+                    } else if func.dfg.downcast::<&data::AggMake>(*inst).is_some()
+                        || func.dfg.downcast::<&data::InsertValue>(*inst).is_some()
                         || func.dfg.downcast::<&data::ExtractValue>(*inst).is_some()
                         || func.dfg.downcast::<&data::EnumMake>(*inst).is_some()
                         || func.dfg.downcast::<&data::EnumExtract>(*inst).is_some()
@@ -1181,7 +1182,19 @@ impl AggregateScalarize {
             Value::Undef { .. } => true,
             Value::Arg { .. } | Value::Immediate { .. } | Value::Global { .. } => false,
             Value::Inst { inst, .. } => {
-                if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(*inst) {
+                if let Some(make) = func.dfg.downcast::<&data::AggMake>(*inst) {
+                    let agg_ty = func.dfg.value_ty(value);
+                    agg_ty == *make.ty()
+                        && (0..).zip(make.values()).all(|(idx, &field)| {
+                            shape::aggregate_slice_for_index(module, agg_ty, idx).is_some_and(
+                                |slice| {
+                                    func.dfg.value_ty(field) == slice.ty
+                                        && (!shape::is_supported_scalar_shape_ty(module, slice.ty)
+                                            || scalarizable[field])
+                                },
+                            )
+                        })
+                } else if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(*inst) {
                     let agg_ty = func.dfg.value_ty(value);
                     let Some(idx) = shape::const_u32(&func.dfg, *insert.idx()) else {
                         return false;
@@ -1335,6 +1348,18 @@ impl AggregateScalarize {
 
             if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(user)
                 && (*insert.dest() == value || *insert.value() == value)
+            {
+                let Some(res) = func.dfg.inst_result(user) else {
+                    return false;
+                };
+                if !scalarizable[res] {
+                    return false;
+                }
+                continue;
+            }
+
+            if let Some(make) = func.dfg.downcast::<&data::AggMake>(user)
+                && make.values().contains(&value)
             {
                 let Some(res) = func.dfg.inst_result(user) else {
                     return false;
@@ -1927,6 +1952,33 @@ impl AggregateScalarize {
         scalarizable: &SecondaryMap<ValueId, bool>,
         scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
     ) {
+        if let Some(make) = func.dfg.downcast::<&data::AggMake>(inst).cloned() {
+            let Some(result) = func.dfg.inst_result(inst) else {
+                return;
+            };
+            if !scalarizable[result] {
+                return;
+            }
+            let agg_ty = func.dfg.value_ty(result);
+            let mut leaves = LeafValues::new();
+            for (idx, &field) in (0..).zip(make.values()) {
+                let Some(slice) = shape::aggregate_slice_for_index(module, agg_ty, idx) else {
+                    return;
+                };
+                let Some(field_leaves) =
+                    self.scalarized_leaves_of_value(func, module, field, slice.ty, scalarized_agg)
+                else {
+                    return;
+                };
+                if field_leaves.len() != slice.leaf_count || slice.first_leaf != leaves.len() {
+                    return;
+                }
+                leaves.extend(field_leaves);
+            }
+            scalarized_agg[result] = Some(leaves);
+            return;
+        }
+
         if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst).cloned() {
             let Some(result) = func.dfg.inst_result(inst) else {
                 return;

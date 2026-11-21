@@ -1,0 +1,40 @@
+#! `agg.make` is a pure value: equal operands and type give one value.
+
+target = "evm-ethereum-london"
+
+type @pair = { i256, i256 };
+type @other = { i256, i256 };
+
+# sameln: func public %same_operands(v0.i256, v1.i256) -> i256 {
+# nextln:     block0:
+# nextln:         v2.@pair = agg.make @pair v0 v1;
+# nextln:         v4.i256 = extract_value v2 0.i32;
+# nextln:         v6.i256 = add v4 v4;
+# nextln:         return v6;
+func public %same_operands(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.@pair = agg.make @pair v0 v1;
+        v3.@pair = agg.make @pair v0 v1;
+        v4.i256 = extract_value v2 0.i32;
+        v5.i256 = extract_value v3 0.i32;
+        v6.i256 = add v4 v5;
+        return v6;
+}
+
+# sameln: func public %different_types(v0.i256) -> i256 {
+# nextln:     block0:
+# nextln:         v1.@pair = agg.make @pair v0 v0;
+# nextln:         v2.@other = agg.make @other v0 v0;
+# nextln:         v3.i256 = extract_value v1 0.i32;
+# nextln:         v4.i256 = extract_value v2 0.i32;
+# nextln:         v5.i256 = add v3 v4;
+# nextln:         return v5;
+func public %different_types(v0.i256) -> i256 {
+    block0:
+        v1.@pair = agg.make @pair v0 v0;
+        v2.@other = agg.make @other v0 v0;
+        v3.i256 = extract_value v1 0.i32;
+        v4.i256 = extract_value v2 0.i32;
+        v5.i256 = add v3 v4;
+        return v5;
+}

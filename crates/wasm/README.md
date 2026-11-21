@@ -113,7 +113,7 @@ Every function of such a module takes the address of the first free byte of the
 stack as a hidden first parameter. It places its frame there: one slot, with
 the alignment of its type, for each `alloca`, each `obj.alloc` (an object lives until
 its function returns, as the front end promises), each struct, array or enum
-that an instruction builds (results of `insert_value`, `enum.make`, `obj.load`,
+that an instruction builds (results of `agg.make`, `insert_value`, `enum.make`, `obj.load`,
 `mload` of an aggregate, a call that returns an aggregate, an aggregate `undef`),
 and each aggregate phi. It passes the end of
 its frame to the functions it calls. Frames are 16-byte aligned. A call whose
@@ -243,7 +243,7 @@ The semantics follow the host-native backend, whose legalization of enum tags,
 aggregate combination and object returns the backend runs first.
 
 - A struct, array or enum value is the address of an immutable snapshot.
-  `insert_value`, `enum.make` and `obj.load` make a new snapshot;
+  `agg.make`, `insert_value`, `enum.make` and `obj.load` make a new snapshot;
   `extract_value` and `enum.extract` of an aggregate and `const.load` view the
   source in place.
 - `insert_value` makes its snapshot in place when it is the only user of an
@@ -251,6 +251,9 @@ aggregate combination and object returns the backend runs first.
   insert into `undef` is filled with zero first, and that of another insert is
   a copy of its source, unless the inserts that continue in its storage write
   every byte.
+- `agg.make` stores each operand at its field. Its snapshot is filled with zero
+  first unless the fields it stores cover every byte: an `undef` operand, like
+  padding, reads as zero.
 - An aggregate of at most 64 bytes is copied with loads and stores, and a
   larger one with `memory.copy`. At `Os` every copy is a `memory.copy`, which
   is smaller than even one load and store.

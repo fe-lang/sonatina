@@ -228,6 +228,7 @@ fn kind_needs_runtime(kind: &NativeInstKind<'_>) -> bool {
             | NativeInstKind::ObjLoad(_)
             | NativeInstKind::ObjStore(_)
             | NativeInstKind::ObjMaterializeStack(_)
+            | NativeInstKind::AggMake(_)
             | NativeInstKind::InsertValue(_)
             | NativeInstKind::ExtractValue(_)
             | NativeInstKind::EnumMake(_)
@@ -2481,6 +2482,7 @@ impl<'a> FunctionTranslator<'a> {
             NativeInstKind::SymAddr(i) if let SymbolRef::Global(gv) = i.sym() => {
                 self.global_address(*wb, inst_id, op, *gv)?
             }
+            NativeInstKind::AggMake(i) => self.agg_make(*wb, inst_id, i.values())?,
             NativeInstKind::InsertValue(i) => {
                 self.insert_value(block, *wb, inst_id, *i.dest(), *i.idx(), *i.value())?
             }

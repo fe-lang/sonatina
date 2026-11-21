@@ -37,6 +37,7 @@ super::impl_inst_build_common! {EnumProj, build_enum_proj}
 super::impl_inst_build! {ObjMaterializeStack, (object: ValueId)}
 super::impl_inst_build! {ObjFromPtr, (ptr: ValueId)}
 super::impl_inst_build! {MemAllocDynamic, (size: ValueId)}
+super::impl_inst_build_common! {AggMake, build_agg_make}
 super::impl_inst_build! {InsertValue, (dest: ValueId, idx: ValueId, value: ValueId)}
 super::impl_inst_build! {ExtractValue, (dest: ValueId, idx: ValueId)}
 
@@ -235,8 +236,19 @@ fn build_enum_make(
     let enum_ty = ctx.type_(&fb.module_builder, (&args[0]).try_into()?);
     let variant_name: &ast::VariantName = (&args[1]).try_into()?;
     let variant = ctx.enum_variant(&fb.module_builder, enum_ty, variant_name, args[1].span);
-    let values = build_enum_payload_values(ctx, fb, &args[2..])?;
+    let values = build_value_list(ctx, fb, &args[2..])?;
     Ok(EnumMake::new(has_inst, enum_ty, variant, values))
+}
+
+fn build_agg_make(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &[ast::InstArg],
+    has_inst: &dyn HasInst<AggMake>,
+) -> Result<AggMake, Box<Error>> {
+    let ty = ctx.type_(&fb.module_builder, (&args[0]).try_into()?);
+    let values = build_value_list(ctx, fb, &args[1..])?;
+    Ok(AggMake::new(has_inst, ty, values))
 }
 
 fn build_enum_is_variant(
@@ -342,7 +354,7 @@ fn build_enum_write_variant(
         })
         .unwrap_or(ir::Type::Unit);
     let variant = ctx.enum_variant(&fb.module_builder, enum_ty, variant_name, args[1].span);
-    let values = build_enum_payload_values(ctx, fb, &args[2..])?;
+    let values = build_value_list(ctx, fb, &args[2..])?;
     Ok(EnumWriteVariant::new(has_inst, object, variant, values))
 }
 
@@ -369,11 +381,12 @@ fn build_enum_proj(
     Ok(EnumProj::new(has_inst, object, variant, field))
 }
 
-fn build_enum_payload_values(
+/// The values of `args`: each a value, or one parenthesized list of them.
+fn build_value_list<C: FromIterator<ValueId>>(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-) -> Result<SmallVec<[ValueId; 2]>, Box<Error>> {
+) -> Result<C, Box<Error>> {
     if let [arg] = args
         && let ast::InstArgKind::MultiValue(values) = &arg.kind
     {

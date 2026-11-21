@@ -625,6 +625,19 @@ impl Walk<'_> {
             }
             return ControlFlow::Continue(());
         }
+        if let Some(make) = function.dfg.downcast::<&data::AggMake>(self.user)
+            && make.values().contains(&value)
+        {
+            on_special(SpecialObjectUse::Carry)?;
+            for field in positions(make.values(), value) {
+                self.follow(
+                    prepend(Step::Field(Some(field)), path),
+                    worklist,
+                    on_special,
+                )?;
+            }
+            return ControlFlow::Continue(());
+        }
         if let Some(make) = function.dfg.downcast::<&data::EnumMake>(self.user)
             && make.values().contains(&value)
         {

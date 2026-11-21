@@ -50,15 +50,17 @@ use sonatina_ir::{
     inst::control_flow::{Br, Jump},
 };
 
-use super::simplify_expr::{
-    ConstantFacts, ExprFactProvider, SimplifiedResult, simplify_inst_with_facts,
+use super::{
+    inst_size,
+    simplify_expr::{ConstantFacts, ExprFactProvider, SimplifiedResult, simplify_inst_with_facts},
 };
 use crate::cfg_edit::{clone_inst_before, iter_phis_in_block};
 
 /// The most iterations unrolled.
 const MAX_TRIPS: usize = 16;
 
-/// The most instructions all the copies of a body take together.
+/// The most instructions all the copies of a body take together, by
+/// `inst_size`.
 const MAX_UNROLLED_INSTS: usize = 384;
 
 /// The most blocks in a loop's chain.
@@ -202,7 +204,9 @@ fn plan(func: &Function, cfg: &ControlFlowGraph, header: BlockId, small: bool) -
                     SimplifiedResult::Copy(value) => facts.known_imm(value),
                     SimplifiedResult::NoChange => None,
                 };
-                kept += usize::from(simplified.is_no_change());
+                if simplified.is_no_change() {
+                    kept += inst_size(func, inst);
+                }
                 match imm {
                     Some(imm) => facts.known.insert(result, imm),
                     None => facts.known.remove(&result),
@@ -235,7 +239,11 @@ fn plan(func: &Function, cfg: &ControlFlowGraph, header: BlockId, small: bool) -
         }
         None
     })??;
-    let insts: usize = bodies.iter().map(Vec::len).sum();
+    let insts: usize = bodies
+        .iter()
+        .flatten()
+        .map(|&inst| inst_size(func, inst))
+        .sum();
     let fits = if small {
         kept <= insts + phis.len() + chain.len()
     } else {

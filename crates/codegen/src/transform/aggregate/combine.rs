@@ -332,6 +332,8 @@ impl AggregateCombine {
             self.try_rewrite_extract(func, inst)
         } else if func.dfg.downcast::<&data::InsertValue>(inst).is_some() {
             self.try_rewrite_insert(func, inst, facts)
+        } else if func.dfg.downcast::<&data::AggMake>(inst).is_some() {
+            self.try_rewrite_agg_make(func, inst)
         } else if func.dfg.downcast::<&control_flow::Phi>(inst).is_some() {
             self.try_rewrite_phi(func, inst)
         } else {
@@ -577,6 +579,19 @@ impl AggregateCombine {
             return true;
         }
 
+        // AC3 into an `agg.make`: the field takes the inserted value.
+        if let Some(prev_inst) = func.dfg.value_inst(*insert.dest())
+            && let Some(make) = func.dfg.downcast::<&data::AggMake>(prev_inst)
+            && let Some(idx) = inst_const_index(func, *insert.idx())
+            && (idx as usize) < make.values().len()
+        {
+            let mut values = make.values().clone();
+            values[idx as usize] = *insert.value();
+            let rewritten = data::AggMake::new_unchecked(func.inst_set(), *make.ty(), values);
+            func.dfg.replace_inst(inst, Box::new(rewritten));
+            return true;
+        }
+
         // AC6: full reconstruction reuse.
         if let Some(mut source) = facts.reconstructed[result] {
             while let Some(&replacement) = self.replacements.get(&source) {
@@ -594,8 +609,75 @@ impl AggregateCombine {
         false
     }
 
+    /// AC6 for an `agg.make`: one that rebuilds an aggregate from its fields
+    /// is that aggregate.
+    fn try_rewrite_agg_make(&mut self, func: &mut Function, inst: InstId) -> bool {
+        let Some(result) = func.dfg.inst_result(inst) else {
+            return false;
+        };
+        let Some(source) = rebuilt_aggregate(func, result) else {
+            return false;
+        };
+        self.replace_with_alias(func, inst, result, source);
+        true
+    }
+
     fn try_rewrite_phi(&mut self, func: &mut Function, inst: InstId) -> bool {
-        self.try_rewrite_phi_of_extracts(func, inst) || self.try_rewrite_phi_of_inserts(func, inst)
+        self.try_rewrite_phi_of_extracts(func, inst)
+            || self.try_rewrite_phi_of_inserts(func, inst)
+            || self.try_rewrite_phi_of_agg_makes(func, inst)
+    }
+
+    /// A phi of `agg.make`s of one type is the `agg.make` of a phi per field.
+    fn try_rewrite_phi_of_agg_makes(&mut self, func: &mut Function, inst: InstId) -> bool {
+        let Some(phi) = func.dfg.downcast::<&control_flow::Phi>(inst).cloned() else {
+            return false;
+        };
+        let Some(result) = func.dfg.inst_result(inst) else {
+            return false;
+        };
+        let result_ty = func.dfg.value_ty(result);
+        let mut incoming = SmallVec::<[_; 4]>::new();
+        for &(value, pred) in phi.args() {
+            let Some(make) = func
+                .dfg
+                .value_inst(value)
+                .and_then(|make| func.dfg.downcast::<&data::AggMake>(make))
+            else {
+                return false;
+            };
+            if *make.ty() != result_ty {
+                return false;
+            }
+            incoming.push((make.values().clone(), pred));
+        }
+        let Some((first, _)) = incoming.first() else {
+            return false;
+        };
+        let field_tys: SmallVec<[Type; 4]> = first
+            .iter()
+            .map(|&value| func.dfg.value_ty(value))
+            .collect();
+        let block = func.layout.inst_block(inst);
+        let fields: SmallVec<[ValueId; 4]> = field_tys
+            .into_iter()
+            .enumerate()
+            .map(|(idx, ty)| {
+                let args = incoming
+                    .iter()
+                    .map(|(values, pred)| (values[idx], *pred))
+                    .collect();
+                insert_phi_before(func, inst, ty, args)
+            })
+            .collect();
+        let make = append_non_phi_after_phi_region(
+            func,
+            block,
+            data::AggMake::new_unchecked(func.inst_set(), result_ty, fields),
+            result_ty,
+        );
+        self.replace_with_alias(func, inst, result, make);
+        true
     }
 
     fn try_rewrite_phi_of_extracts(&mut self, func: &mut Function, inst: InstId) -> bool {
@@ -1415,6 +1497,29 @@ fn enum_make_of_value(func: &Function, value: ValueId) -> Option<data::EnumMake>
     func.dfg.downcast::<&data::EnumMake>(inst).cloned()
 }
 
+/// The aggregate the `agg.make` `value` rebuilds: `s`, when each operand
+/// `i` is field `i` of `s`, read with `extract_value` or rebuilt the same way.
+fn rebuilt_aggregate(func: &Function, value: ValueId) -> Option<ValueId> {
+    let make = func
+        .dfg
+        .downcast::<&data::AggMake>(func.dfg.value_inst(value)?)?;
+    let mut source = None;
+    for (idx, &field) in (0..).zip(make.values()) {
+        let field = rebuilt_aggregate(func, field).unwrap_or(field);
+        let extract = func
+            .dfg
+            .downcast::<&data::ExtractValue>(func.dfg.value_inst(field)?)?;
+        if inst_const_index(func, *extract.idx()) != Some(idx)
+            || *source.get_or_insert(*extract.dest()) != *extract.dest()
+        {
+            return None;
+        }
+    }
+    source.filter(|&source| {
+        !is_explicit_undef(func, source) && func.dfg.value_ty(source) == func.dfg.value_ty(value)
+    })
+}
+
 fn inst_const_index(func: &Function, v: ValueId) -> Option<u32> {
     shape::const_u32(&func.dfg, v)
 }
@@ -1468,6 +1573,14 @@ fn walk_insert_chain_for_field(
     let Some(def_inst) = func.dfg.value_inst(aggregate) else {
         return AggregateFieldLookup::BaseNeedsExtract(aggregate);
     };
+    if let Some(make) = func.dfg.downcast::<&data::AggMake>(def_inst) {
+        return make
+            .values()
+            .get(target_idx as usize)
+            .map_or(AggregateFieldLookup::Unknown, |&field| {
+                AggregateFieldLookup::Found(field)
+            });
+    }
     let Some(insert) = func.dfg.downcast::<&data::InsertValue>(def_inst) else {
         return AggregateFieldLookup::BaseNeedsExtract(aggregate);
     };

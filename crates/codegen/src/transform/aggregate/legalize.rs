@@ -400,6 +400,10 @@ impl AggregateLowerToMemoryLegalize {
         if func.dfg.downcast::<&cast::Bitcast>(inst).is_some() {
             return self.rewrite_bitcast(func, module, inst);
         }
+        if func.dfg.downcast::<&data::AggMake>(inst).is_some() {
+            self.rewrite_agg_make(func, module, inst);
+            return true;
+        }
         if func.dfg.downcast::<&data::InsertValue>(inst).is_some() {
             self.rewrite_insert_value(func, module, inst);
             return true;
@@ -569,6 +573,21 @@ impl AggregateLowerToMemoryLegalize {
         };
         self.alias_and_remove(func, inst, result, replacement);
         true
+    }
+
+    /// Stores each operand's leaves once into the result's slot. Uses that
+    /// copy the result store the operands again instead of reading the slot,
+    /// which then goes if nothing else reads it.
+    fn rewrite_agg_make(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
+        let result = func
+            .dfg
+            .inst_result(inst)
+            .expect("agg.make must have result");
+        let ty = func.dfg.value_ty(result);
+        let dst_ptr = self.materialized_ptr(func, result, module);
+        let mut builder = BeforeCursor::new_before_inst(func, inst);
+        self.emit_copy_aggregate_value_to_ptr(func, module, &mut builder, result, dst_ptr, ty);
+        self.remove_if_results_dead(func, inst);
     }
 
     fn rewrite_insert_value(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
@@ -856,8 +875,9 @@ impl AggregateLowerToMemoryLegalize {
     /// Copies each incoming value of a block's aggregate phis into the phi's
     /// slot before the predecessor's terminator. The copies on one edge happen
     /// at once: an incoming value may read another phi's slot, directly or
-    /// through an `insert_value` chain, so a slot is written only after every
-    /// copy reading it, and a cycle saves one slot to a temporary first.
+    /// through `insert_value` and `agg.make` operands, so a slot is written
+    /// only after every copy reading it, and a cycle saves one slot to a
+    /// temporary first.
     fn rewrite_aggregate_phis(
         &mut self,
         func: &mut Function,
@@ -896,10 +916,12 @@ impl AggregateLowerToMemoryLegalize {
                             if read != idx && !reads.contains(&read) {
                                 reads.push(read);
                             }
-                        } else if let Some(def) = func.dfg.value_inst(value)
-                            && let Some(insert) = func.dfg.downcast::<&data::InsertValue>(def)
-                        {
-                            stack.extend([*insert.dest(), *insert.value()]);
+                        } else if let Some(def) = func.dfg.value_inst(value) {
+                            if let Some(insert) = func.dfg.downcast::<&data::InsertValue>(def) {
+                                stack.extend([*insert.dest(), *insert.value()]);
+                            } else if let Some(make) = func.dfg.downcast::<&data::AggMake>(def) {
+                                stack.extend(make.values().iter().copied());
+                            }
                         }
                     }
                     (idx, incoming, reads)
@@ -1522,9 +1544,27 @@ impl AggregateLowerToMemoryLegalize {
             return;
         }
 
-        if let Some(def_inst) = func.dfg.value_inst(value)
+        let def_inst = func
+            .dfg
+            .value_inst(value)
+            .filter(|_| func.dfg.value_ty(value) == agg_ty);
+        if let Some(def_inst) = def_inst
+            && let Some(make) = func.dfg.downcast::<&data::AggMake>(def_inst).cloned()
+        {
+            // Nothing is stored for an `undef` field: the slot already holds
+            // some value of it.
+            for (idx, &field) in (0..).zip(make.values()) {
+                let slice = shape::aggregate_slice_for_index(module, agg_ty, idx)
+                    .unwrap_or_else(|| panic!("agg.make operand out of bounds"));
+                if !is_explicit_undef(func, field) {
+                    self.emit_copy_field_to_leaves(func, module, builder, field, slice, dst);
+                }
+            }
+            return;
+        }
+
+        if let Some(def_inst) = def_inst
             && let Some(insert) = func.dfg.downcast::<&data::InsertValue>(def_inst).cloned()
-            && func.dfg.value_ty(value) == agg_ty
             && let Some(idx) = shape::const_u32(&func.dfg, *insert.idx())
             && let Some(slice) = shape::aggregate_slice_for_index(module, agg_ty, idx)
         {
@@ -1536,33 +1576,7 @@ impl AggregateLowerToMemoryLegalize {
                 agg_ty,
                 dst,
             );
-
-            let slice_end = slice
-                .first_leaf
-                .checked_add(slice.leaf_count)
-                .unwrap_or_else(|| panic!("aggregate slice leaf range overflow"));
-            let Some(dst_slice_leaves) = dst.leaves.get(slice.first_leaf..slice_end) else {
-                panic!("aggregate slice leaf range out of bounds");
-            };
-
-            if shape::is_supported_aggregate_ty(module, slice.ty) {
-                self.emit_copy_aggregate_value_to_leaves(
-                    func,
-                    module,
-                    builder,
-                    *insert.value(),
-                    slice.ty,
-                    AggregateLeafCopyDst {
-                        ptr: dst.ptr,
-                        leaves: dst_slice_leaves,
-                    },
-                );
-            } else {
-                let [leaf] = dst_slice_leaves else {
-                    panic!("scalar insert_value slice should contain one leaf");
-                };
-                self.emit_store_scalar_leaf_to_path(func, builder, dst.ptr, leaf, *insert.value());
-            }
+            self.emit_copy_field_to_leaves(func, module, builder, *insert.value(), slice, dst);
             return;
         }
 
@@ -1576,6 +1590,45 @@ impl AggregateLowerToMemoryLegalize {
             dst.ptr,
             dst.leaves,
         );
+    }
+
+    /// Copies `field`, the value of `slice` of the aggregate whose leaves
+    /// `dst` holds, to its leaves there.
+    fn emit_copy_field_to_leaves(
+        &mut self,
+        func: &mut Function,
+        module: &ModuleCtx,
+        builder: &mut BeforeCursor,
+        field: ValueId,
+        slice: shape::AggregateSlice,
+        dst: AggregateLeafCopyDst<'_>,
+    ) {
+        let slice_end = slice
+            .first_leaf
+            .checked_add(slice.leaf_count)
+            .unwrap_or_else(|| panic!("aggregate slice leaf range overflow"));
+        let Some(dst_slice_leaves) = dst.leaves.get(slice.first_leaf..slice_end) else {
+            panic!("aggregate slice leaf range out of bounds");
+        };
+
+        if shape::is_supported_aggregate_ty(module, slice.ty) {
+            self.emit_copy_aggregate_value_to_leaves(
+                func,
+                module,
+                builder,
+                field,
+                slice.ty,
+                AggregateLeafCopyDst {
+                    ptr: dst.ptr,
+                    leaves: dst_slice_leaves,
+                },
+            );
+        } else {
+            let [leaf] = dst_slice_leaves else {
+                panic!("scalar field slice should contain one leaf");
+            };
+            self.emit_store_scalar_leaf_to_path(func, builder, dst.ptr, leaf, field);
+        }
     }
 
     fn emit_copy_aggregate_ptr_to_ptr(
@@ -2074,7 +2127,9 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                 continue;
             }
 
-            if func.dfg.downcast::<&data::InsertValue>(inst).is_some() {
+            if func.dfg.downcast::<&data::InsertValue>(inst).is_some()
+                || func.dfg.downcast::<&data::AggMake>(inst).is_some()
+            {
                 if func.dfg.inst_result(inst).is_some_and(|value| {
                     shape::is_supported_aggregate_ty(module, func.dfg.value_ty(value))
                 }) {
@@ -2197,6 +2252,12 @@ pub fn assert_aggregate_legalized(function: &Function, module: &ModuleCtx) {
                         inst.as_u32()
                     );
                 }
+            }
+            if function.dfg.downcast::<&data::AggMake>(inst).is_some() {
+                panic!(
+                    "aggregate legalization invariant violated: agg.make remains (inst {})",
+                    inst.as_u32()
+                );
             }
             if function.dfg.downcast::<&data::InsertValue>(inst).is_some() {
                 panic!(
@@ -3163,5 +3224,102 @@ object @Contract {{
                 "{v10_incoming} incoming"
             );
         }
+    }
+
+    #[test]
+    fn late_legalizer_stores_agg_make_operands_once() {
+        // Each defined field is stored once to the destination: no slot for
+        // the `agg.make`, no store for the `undef` field, none for the
+        // zero-sized one.
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @empty = {};
+type @inner = { i256, i256 };
+type @outer = { @inner, i256, @empty, unit };
+
+func private %f(v0.i256, v1.i256) {
+    block0:
+        v2.@inner = agg.make @inner v0 undef.i256;
+        v3.@empty = agg.make @empty;
+        v4.@outer = agg.make @outer v2 v1 v3 undef.unit;
+        mstore 0.i32 v4 @outer;
+        return;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        let dumped = dump_func_by_name(&module, "f");
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            assert_eq!(count_aggregate_allocas(func, &ctx), 0, "{dumped}");
+            assert_no_mloads(func, &dumped);
+            let stored: Vec<_> = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .filter_map(|inst| func.dfg.downcast::<&data::Mstore>(inst))
+                .map(|mstore| *mstore.value())
+                .collect();
+            assert_eq!(stored, func.arg_values.to_vec(), "{dumped}");
+        });
+    }
+
+    #[test]
+    fn late_legalizer_orders_aggregate_phi_copies_through_agg_make() {
+        // On the back edge `v11` takes `v10` wrapped by `agg.make` and `v10`
+        // takes `v11`'s field, so `v11`'s copy must read `v10` before `v10`
+        // is written. `@big` has too many leaves to scalarize.
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @big = {i256, i256, [i256; 18]};
+type @wrap = {@big};
+
+func public %entry() {
+    block0:
+        v0.@big = agg.make @big 3.i256 9.i256 undef.[i256; 18];
+        v1.@big = agg.make @big 9.i256 3.i256 undef.[i256; 18];
+        v2.@wrap = agg.make @wrap v1;
+        jump block1;
+
+    block1:
+        v10.@big = phi (v0 block0) (v14 block2);
+        v11.@wrap = phi (v2 block0) (v13 block2);
+        v12.i256 = phi (0.i256 block0) (v15 block2);
+        v16.i1 = lt v12 1.i256;
+        br v16 block2 block3;
+
+    block2:
+        v13.@wrap = agg.make @wrap v10;
+        v14.@big = extract_value v11 0.i8;
+        v15.i256 = add v12 1.i256;
+        jump block1;
+
+    block3:
+        v20.@big = extract_value v11 0.i8;
+        v21.i256 = extract_value v20 0.i8;
+        v22.i256 = extract_value v10 0.i8;
+        v23.i256 = mul v21 100.i256;
+        v24.i256 = add v23 v22;
+        mstore 0.i32 v24 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+        assert_eq!(run_contract(&module), U256::from(309));
     }
 }

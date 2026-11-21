@@ -1,0 +1,49 @@
+#! `agg.make` values scalarize like insert chains: each operand gives its
+#! field's leaves, and no aggregate is left.
+
+target = "evm-ethereum-london"
+
+type @slice = { i256, i256 };
+type @nested = { @slice, i256 };
+type @empty = {};
+type @with_empty = { i256, @empty };
+
+# sameln: func public %scalarize_diamond(v0.i1, v1.i256, v2.i256, v3.i256) -> i256 {
+# check:     block3:
+# not: agg.make
+# not: extract_value
+# check:         return
+func public %scalarize_diamond(v0.i1, v1.i256, v2.i256, v3.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v4.@slice = agg.make @slice v1 v2;
+        v5.@nested = agg.make @nested v4 v3;
+        jump block3;
+
+    block2:
+        v6.@slice = agg.make @slice v3 v1;
+        v7.@nested = agg.make @nested v6 undef.i256;
+        jump block3;
+
+    block3:
+        v8.@nested = phi (v5 block1) (v7 block2);
+        v9.@slice = extract_value v8 0.i8;
+        v10.i256 = extract_value v9 1.i8;
+        v11.i256 = extract_value v8 1.i8;
+        v12.i256 = add v10 v11;
+        return v12;
+}
+
+# sameln: func public %scalarize_zero_sized_field(v0.i256) -> i256 {
+# check:     block0:
+# not: agg.make
+# check:         return v0;
+func public %scalarize_zero_sized_field(v0.i256) -> i256 {
+    block0:
+        v1.@empty = agg.make @empty;
+        v2.@with_empty = agg.make @with_empty v0 v1;
+        v3.i256 = extract_value v2 0.i8;
+        return v3;
+}

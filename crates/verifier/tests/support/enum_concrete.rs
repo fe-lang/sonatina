@@ -587,6 +587,12 @@ fn execute_block(
             node.overwrite_other_payloads(selected);
             world.close_exposure();
             None
+        } else if let Some(make) = downcast::<&data::AggMake>(is, data) {
+            let mut node = Node::uninitialized(func.ctx(), *make.ty());
+            for (index, &field) in make.values().iter().enumerate() {
+                *node.child_mut(&Step::Field(index)) = value(field);
+            }
+            Some(node)
         } else if let Some(insert) = downcast::<&data::InsertValue>(is, data) {
             let mut dest = value(*insert.dest());
             *dest.child_mut(&Step::Field(value(*insert.idx()).integer() as usize)) =

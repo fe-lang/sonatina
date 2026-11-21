@@ -1019,6 +1019,11 @@ pub(crate) fn compute_provenance(
                     EvmInstKind::PtrToInt(p2i) => {
                         let _ = next.union_with(&info.value[*p2i.from()]);
                     }
+                    EvmInstKind::AggMake(make) => {
+                        for &value in make.values() {
+                            let _ = next.union_with(&info.value[value]);
+                        }
+                    }
                     EvmInstKind::InsertValue(iv) => {
                         let _ = next.union_with(&info.value[*iv.dest()]);
                         let _ = next.union_with(&info.value[*iv.value()]);

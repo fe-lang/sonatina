@@ -2978,3 +2978,79 @@ fn assert_reconstruction_cleanup(module: &mut Module) {
         });
     }
 }
+
+/// `%read` loads the three fields of a `@triple` and returns `build`'s `v9`,
+/// for seven callers.
+fn triple_reader_module(build: &str) -> String {
+    let mut source = format!(
+        r#"
+target = "evm-ethereum-london"
+
+type @triple = {{ i256, i256, i256 }};
+
+func private %read(v0.objref<@triple>) -> @triple {{
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        v3.objref<i256> = obj.proj v0 1.i8;
+        v4.i256 = obj.load v3;
+        v5.objref<i256> = obj.proj v0 2.i8;
+        v6.i256 = obj.load v5;
+        {build}
+        return v9;
+}}
+"#
+    );
+    for index in 0..7 {
+        source.push_str(&format!(
+            r#"
+func private %caller{index}(v0.objref<@triple>, v1.i256) -> i256 {{
+    block0:
+        v2.@triple = call %read v0;
+        v3.objref<i256> = obj.proj v0 0.i8;
+        obj.store v3 v1;
+        v4.i256 = extract_value v2 0.i8;
+        return v4;
+}}
+"#
+        ));
+    }
+    source
+}
+
+#[test]
+fn agg_make_splices_like_its_insert_chain() {
+    // Each pair builds the same value; the splicer weighs an `agg.make` as
+    // the chain it replaces, one per operand.
+    for (chain, make, spliced) in [
+        (
+            "v7.@triple = insert_value undef.@triple 0.i256 v2;\n        \
+             v8.@triple = insert_value v7 1.i256 v4;\n        \
+             v9.@triple = insert_value v8 2.i256 v6;",
+            "v9.@triple = agg.make @triple v2 v4 v6;",
+            7,
+        ),
+        (
+            "v7.@triple = insert_value undef.@triple 0.i256 v2;\n        \
+             v8.@triple = insert_value v7 1.i256 v4;\n        \
+             v9.@triple = insert_value v8 0.i256 v6;",
+            "v9.@triple = agg.make @triple v6 v4 undef.i256;",
+            0,
+        ),
+        (
+            "v7.@triple = insert_value undef.@triple 0.i256 v2;\n        \
+             v8.@triple = insert_value v7 1.i256 v4;\n        \
+             v10.@triple = insert_value v8 2.i256 v6;\n        \
+             v9.@triple = insert_value v10 2.i256 v6;",
+            "v10.@triple = agg.make @triple v2 v4 v6;\n        \
+             v9.@triple = insert_value v10 2.i256 v6;",
+            0,
+        ),
+    ] {
+        for build in [chain, make] {
+            let mut parsed = sonatina_parser::parse_module(&triple_reader_module(build)).unwrap();
+            let stats = Inliner::new(InlinerConfig::default()).run(&mut parsed.module);
+            assert_eq!(stats.calls_spliced, spliced, "{build}");
+        }
+    }
+}
