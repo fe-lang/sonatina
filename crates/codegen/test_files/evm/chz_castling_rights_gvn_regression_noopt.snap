@@ -7,14 +7,14 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression_noopt.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 3736 bytes
-  total: 3736 bytes
+  section runtime: 3682 bytes
+  total: 3682 bytes
 
 functions:
   mem: global_dyn_base=0xac0 arena_base=0xa0 scratch_peak_words=7 stable_chain_peak_words=74
   abs_diff: ir_blocks=9 ir_insts=33 vcode_ops=69 fixups=4 imm_bytes=21
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=76 abs_words_end=2
-  apply_rook: ir_blocks=18 ir_insts=129 vcode_ops=334 fixups=31 imm_bytes=87
+  apply_rook: ir_blocks=18 ir_insts=126 vcode_ops=325 fixups=31 imm_bytes=84
     mem: scratch_words=7 stable_words=11 stable_mode=StableAbs(base=0x8c0) entry_abs_words=65 abs_words_end=76
   clear_piece: ir_blocks=1 ir_insts=7 vcode_ops=22 fixups=2 imm_bytes=5
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=76 abs_words_end=2
@@ -66,7 +66,7 @@ functions:
     mem: scratch_words=0 stable_words=5 stable_mode=StableAbs(base=0x180) entry_abs_words=7 abs_words_end=12
   meta_castling_rights: ir_blocks=1 ir_insts=6 vcode_ops=16 fixups=2 imm_bytes=4
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=65 abs_words_end=1
-  validate_rook_capture: ir_blocks=74 ir_insts=271 vcode_ops=1064 fixups=110 imm_bytes=197
+  validate_rook_capture: ir_blocks=74 ir_insts=263 vcode_ops=1040 fixups=110 imm_bytes=189
     mem: scratch_words=7 stable_words=53 stable_mode=StableAbs(base=0x220) entry_abs_words=12 abs_words_end=65
   meta_custom: ir_blocks=1 ir_insts=43 vcode_ops=110 fixups=14 imm_bytes=35
     mem: scratch_words=1 stable_words=13 stable_mode=StableAbs(base=0x8c0) entry_abs_words=65 abs_words_end=78
@@ -212,9 +212,6 @@ apply_rook:
     PUSH1 block2  // br v129 block2 block1;
     JUMPI
   block1:
-    PUSH0  // evm_mstore v10 v27;
-    PUSH1 0xa0 (160)
-    MSTORE
     PUSH1 0x3 (3)  // evm_mstore v10 v30;
     PUSH1 0xa0 (160)
     MSTORE
@@ -289,13 +286,10 @@ apply_rook:
     PUSH1 block4  // br v55 block4 block3;
     JUMPI
   block3:
-    POP  // evm_mstore v11 v27;
+    POP  // evm_mstore v11 v30;
     POP
     POP
-    PUSH0
-    PUSH2 0x8c0 (2240)
-    MSTORE
-    PUSH1 0x3 (3)  // evm_mstore v11 v30;
+    PUSH1 0x3 (3)
     PUSH2 0x8c0 (2240)
     MSTORE
     PUSH2 0x8c0 (2240)  // v82.i256 = evm_mload v11;
@@ -324,9 +318,6 @@ apply_rook:
     PUSH1 block6
     JUMPI
   block5:
-    PUSH0  // evm_mstore v12 v27;
-    PUSH2 0x8e0 (2272)
-    MSTORE
     PUSH1 0x4 (4)  // evm_mstore v12 v63;
     PUSH2 0x8e0 (2272)
     MSTORE
@@ -1482,9 +1473,6 @@ validate_rook_capture:
     PUSH0
     PUSH2 0x220 (544)
     MSTORE
-    PUSH0  // evm_mstore v6 v55;
-    PUSH2 0x220 (544)
-    MSTORE
     PUSH2 0x220 (544)  // v151.i256 = evm_mload v6;
     MLOAD
     PUSH0  // return (v55, v151, v55);
@@ -1507,17 +1495,14 @@ validate_rook_capture:
     PUSH1 block74  // br v153 block74 block8;
     JUMPI
   block8:
-    POP  // evm_mstore v7 v55;
+    POP  // evm_mstore v7 v77;
     POP
     POP
     POP
     POP
     POP
     POP
-    PUSH0
-    PUSH2 0x240 (576)
-    MSTORE
-    PUSH1 0x1 (1)  // evm_mstore v7 v77;
+    PUSH1 0x1 (1)
     PUSH2 0x240 (576)
     MSTORE
     PUSH2 0x240 (576)  // v155.i256 = evm_mload v7;
@@ -1548,17 +1533,14 @@ validate_rook_capture:
     PUSH1 block75  // br v157 block75 block9;
     JUMPI
   block9:
-    POP  // evm_mstore v16 v55;
+    POP  // evm_mstore v16 v77;
     POP
     POP
     POP
     POP
     POP
     POP
-    PUSH0
-    PUSH2 0x3e0 (992)
-    MSTORE
-    PUSH1 0x1 (1)  // evm_mstore v16 v77;
+    PUSH1 0x1 (1)
     PUSH2 0x3e0 (992)
     MSTORE
     PUSH2 0x3e0 (992)  // v159.i256 = evm_mload v16;
@@ -1607,7 +1589,7 @@ validate_rook_capture:
     PUSH1 block18
     JUMPI
   block19:
-    POP  // evm_mstore v8 v55;
+    POP  // evm_mstore v8 v166;
     POP
     POP
     POP
@@ -1615,10 +1597,7 @@ validate_rook_capture:
     POP
     POP
     POP
-    PUSH0
-    PUSH2 0x260 (608)
-    MSTORE
-    PUSH1 0x2 (2)  // evm_mstore v8 v166;
+    PUSH1 0x2 (2)
     PUSH2 0x260 (608)
     MSTORE
     PUSH2 0x260 (608)  // v167.i256 = evm_mload v8;
@@ -1639,7 +1618,7 @@ validate_rook_capture:
     PUSH1 block18
     JUMPI
   block20:
-    POP  // evm_mstore v15 v55;
+    POP  // evm_mstore v15 v166;
     POP
     POP
     POP
@@ -1647,10 +1626,7 @@ validate_rook_capture:
     POP
     POP
     POP
-    PUSH0
-    PUSH2 0x3c0 (960)
-    MSTORE
-    PUSH1 0x2 (2)  // evm_mstore v15 v166;
+    PUSH1 0x2 (2)
     PUSH2 0x3c0 (960)
     MSTORE
     PUSH2 0x3c0 (960)  // v170.i256 = evm_mload v15;
@@ -1673,7 +1649,7 @@ validate_rook_capture:
     PUSH1 block13
     JUMPI
   block21:
-    POP  // evm_mstore v9 v55;
+    POP  // evm_mstore v9 v73;
     POP
     POP
     POP
@@ -1681,10 +1657,7 @@ validate_rook_capture:
     POP
     POP
     POP
-    PUSH0
-    PUSH2 0x280 (640)
-    MSTORE
-    PUSH1 0x3 (3)  // evm_mstore v9 v73;
+    PUSH1 0x3 (3)
     PUSH2 0x280 (640)
     MSTORE
     PUSH2 0x280 (640)  // v174.i256 = evm_mload v9;
@@ -1757,9 +1730,6 @@ validate_rook_capture:
     MSTORE
     PUSH1 0xff (255)  // v207.i256 = and v179 v140;
     AND
-    PUSH0  // evm_mstore v14 v55;
-    PUSH2 0x3a0 (928)
-    MSTORE
     PUSH2 0x3a0 (928)  // evm_mstore v14 v207;
     MSTORE
     PUSH2 0x3a0 (928)  // v209.i256 = evm_mload v14;
@@ -1927,9 +1897,6 @@ validate_rook_capture:
     MLOAD
     PUSH1 0xff (255)  // v349.i256 = and v227 v140;
     AND
-    PUSH0  // evm_mstore v13 v55;
-    PUSH2 0x380 (896)
-    MSTORE
     PUSH2 0x380 (896)  // evm_mstore v13 v349;
     MSTORE
     PUSH2 0x380 (896)  // v230.i256 = evm_mload v13;

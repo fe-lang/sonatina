@@ -564,6 +564,195 @@ pub(crate) fn legalize_evm_section(module: &Module, funcs: &[FuncRef]) {
     }
 }
 
+/// How an instruction uses an operand, for normalizing narrow values on EVM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperandUse {
+    /// Sets what an effect does: a length, size, gas, value, call target, salt, or an offset into
+    /// calldata, code or return data. A narrow word that holds the unspecified value may be wider
+    /// than its type, so it is made a value of its type here, as `freeze` makes one.
+    Effect,
+    /// Needs no mask: strict data, data passed on or written out as bits, or a use that is
+    /// undefined when the value is unspecified (an address, object, index, condition or
+    /// variant assumption).
+    Plain,
+}
+
+/// The use of each operand of an instruction, in operand order, or `None` when every operand is
+/// `Plain`. The match has no catch-all arm, so an instruction added to the EVM instruction set
+/// does not compile until it is classified here, and legalization checks that each slice has
+/// one entry per operand.
+fn operand_uses(kind: EvmInstKind<'_>) -> Option<&'static [OperandUse]> {
+    use OperandUse::{Effect as E, Plain as P};
+    match kind {
+        EvmInstKind::Neg(_)
+        | EvmInstKind::Add(_)
+        | EvmInstKind::Uaddo(_)
+        | EvmInstKind::Uaddsat(_)
+        | EvmInstKind::Saddo(_)
+        | EvmInstKind::Saddsat(_)
+        | EvmInstKind::Mul(_)
+        | EvmInstKind::Sub(_)
+        | EvmInstKind::Usubo(_)
+        | EvmInstKind::Usubsat(_)
+        | EvmInstKind::Ssubo(_)
+        | EvmInstKind::Ssubsat(_)
+        | EvmInstKind::Umulo(_)
+        | EvmInstKind::Umulsat(_)
+        | EvmInstKind::Smulo(_)
+        | EvmInstKind::Smulsat(_)
+        | EvmInstKind::Snego(_)
+        | EvmInstKind::Sdiv(_)
+        | EvmInstKind::Udiv(_)
+        | EvmInstKind::Umod(_)
+        | EvmInstKind::Smod(_)
+        | EvmInstKind::Shl(_)
+        | EvmInstKind::Shr(_)
+        | EvmInstKind::Sar(_)
+        | EvmInstKind::Sext(_)
+        | EvmInstKind::Zext(_)
+        | EvmInstKind::Trunc(_)
+        | EvmInstKind::Bitcast(_)
+        | EvmInstKind::IntToPtr(_)
+        | EvmInstKind::PtrToInt(_)
+        | EvmInstKind::Lt(_)
+        | EvmInstKind::Gt(_)
+        | EvmInstKind::Slt(_)
+        | EvmInstKind::Sgt(_)
+        | EvmInstKind::Le(_)
+        | EvmInstKind::Ge(_)
+        | EvmInstKind::Sle(_)
+        | EvmInstKind::Sge(_)
+        | EvmInstKind::Eq(_)
+        | EvmInstKind::Ne(_)
+        | EvmInstKind::IsZero(_)
+        | EvmInstKind::Not(_)
+        | EvmInstKind::And(_)
+        | EvmInstKind::Or(_)
+        | EvmInstKind::Xor(_)
+        | EvmInstKind::Select(_)
+        | EvmInstKind::Bswap(_)
+        | EvmInstKind::Clz(_)
+        | EvmInstKind::Ctz(_)
+        | EvmInstKind::EvmSdiv(_)
+        | EvmInstKind::EvmUdiv(_)
+        | EvmInstKind::EvmSdivo(_)
+        | EvmInstKind::EvmUdivo(_)
+        | EvmInstKind::EvmUmod(_)
+        | EvmInstKind::EvmSmod(_)
+        | EvmInstKind::EvmUmodo(_)
+        | EvmInstKind::EvmSmodo(_)
+        | EvmInstKind::EvmUaddsat(_)
+        | EvmInstKind::EvmSaddsat(_)
+        | EvmInstKind::EvmUsubsat(_)
+        | EvmInstKind::EvmSsubsat(_)
+        | EvmInstKind::EvmUmulsat(_)
+        | EvmInstKind::EvmSmulsat(_)
+        | EvmInstKind::EvmAddMod(_)
+        | EvmInstKind::EvmMulMod(_)
+        | EvmInstKind::EvmExp(_)
+        | EvmInstKind::EvmSignExtend(_)
+        | EvmInstKind::EvmByte(_)
+        | EvmInstKind::EvmKeccak256Words(_)
+        | EvmInstKind::EvmBalance(_)
+        | EvmInstKind::EvmExtCodeSize(_)
+        | EvmInstKind::EvmExtCodeHash(_)
+        | EvmInstKind::EvmBlockHash(_)
+        | EvmInstKind::EvmBlobHash(_) => None,
+        EvmInstKind::Jump(_)
+        | EvmInstKind::Br(_)
+        | EvmInstKind::Phi(_)
+        | EvmInstKind::BrTable(_)
+        | EvmInstKind::Call(_)
+        | EvmInstKind::Return(_)
+        | EvmInstKind::Unreachable(_)
+        | EvmInstKind::Freeze(_)
+        | EvmInstKind::BlackBox(_)
+        | EvmInstKind::Gep(_)
+        | EvmInstKind::GetFunctionPtr(_)
+        | EvmInstKind::SymAddr(_)
+        | EvmInstKind::SymSize(_)
+        | EvmInstKind::Alloca(_)
+        | EvmInstKind::ObjAlloc(_)
+        | EvmInstKind::ConstRef(_)
+        | EvmInstKind::ConstProj(_)
+        | EvmInstKind::ConstIndex(_)
+        | EvmInstKind::ConstLoad(_)
+        | EvmInstKind::ObjProj(_)
+        | EvmInstKind::ObjIndex(_)
+        | EvmInstKind::ObjLoad(_)
+        | EvmInstKind::ObjStore(_)
+        | EvmInstKind::EnumMake(_)
+        | EvmInstKind::EnumTag(_)
+        | EvmInstKind::EnumIsVariant(_)
+        | EvmInstKind::EnumAssertVariant(_)
+        | EvmInstKind::EnumAssertVariantRef(_)
+        | EvmInstKind::EnumExtract(_)
+        | EvmInstKind::EnumSetTag(_)
+        | EvmInstKind::EnumWriteVariant(_)
+        | EvmInstKind::EnumGetTag(_)
+        | EvmInstKind::EnumProj(_)
+        | EvmInstKind::ObjMaterializeStack(_)
+        | EvmInstKind::ObjFromPtr(_)
+        | EvmInstKind::InsertValue(_)
+        | EvmInstKind::ExtractValue(_)
+        | EvmInstKind::EvmStop(_)
+        | EvmInstKind::EvmInvalid(_)
+        | EvmInstKind::EvmAddress(_)
+        | EvmInstKind::EvmOrigin(_)
+        | EvmInstKind::EvmCaller(_)
+        | EvmInstKind::EvmCallValue(_)
+        | EvmInstKind::EvmCalldataSize(_)
+        | EvmInstKind::EvmCodeSize(_)
+        | EvmInstKind::EvmGasPrice(_)
+        | EvmInstKind::EvmReturnDataSize(_)
+        | EvmInstKind::EvmCoinBase(_)
+        | EvmInstKind::EvmTimestamp(_)
+        | EvmInstKind::EvmNumber(_)
+        | EvmInstKind::EvmPrevRandao(_)
+        | EvmInstKind::EvmGasLimit(_)
+        | EvmInstKind::EvmChainId(_)
+        | EvmInstKind::EvmSelfBalance(_)
+        | EvmInstKind::EvmBaseFee(_)
+        | EvmInstKind::EvmBlobBaseFee(_)
+        | EvmInstKind::EvmMsize(_)
+        | EvmInstKind::EvmGas(_) => None,
+        EvmInstKind::Mload(_)
+        | EvmInstKind::EvmMload(_)
+        | EvmInstKind::EvmSload(_)
+        | EvmInstKind::EvmTload(_) => Some(&[P]),
+        EvmInstKind::Mstore(_)
+        | EvmInstKind::EvmMstore(_)
+        | EvmInstKind::EvmMstore8(_)
+        | EvmInstKind::EvmSstore(_)
+        | EvmInstKind::EvmTstore(_) => Some(&[P, P]),
+        EvmInstKind::Memzero(_)
+        | EvmInstKind::EvmKeccak256(_)
+        | EvmInstKind::EvmLog0(_)
+        | EvmInstKind::EvmReturn(_)
+        | EvmInstKind::EvmRevert(_) => Some(&[P, E]),
+        EvmInstKind::Memcopy(_) | EvmInstKind::EvmMcopy(_) => Some(&[P, P, E]),
+        EvmInstKind::MemAllocDynamic(_)
+        | EvmInstKind::EvmMalloc(_)
+        | EvmInstKind::EvmCalldataLoad(_)
+        | EvmInstKind::EvmCodeLoad(_)
+        | EvmInstKind::EvmSelfDestruct(_) => Some(&[E]),
+        EvmInstKind::EvmCalldataCopy(_)
+        | EvmInstKind::EvmCodeCopy(_)
+        | EvmInstKind::EvmReturnDataCopy(_) => Some(&[P, E, E]),
+        EvmInstKind::EvmExtCodeCopy(_) => Some(&[E, P, E, E]),
+        EvmInstKind::EvmLog1(_) => Some(&[P, E, P]),
+        EvmInstKind::EvmLog2(_) => Some(&[P, E, P, P]),
+        EvmInstKind::EvmLog3(_) => Some(&[P, E, P, P, P]),
+        EvmInstKind::EvmLog4(_) => Some(&[P, E, P, P, P, P]),
+        EvmInstKind::EvmCreate(_) => Some(&[E, P, E]),
+        EvmInstKind::EvmCreate2(_) => Some(&[E, P, E, E]),
+        EvmInstKind::EvmCall(_) | EvmInstKind::EvmCallCode(_) => Some(&[E, E, E, P, E, P, E]),
+        EvmInstKind::EvmDelegateCall(_) | EvmInstKind::EvmStaticCall(_) => {
+            Some(&[E, E, P, E, P, E])
+        }
+    }
+}
+
 struct FunctionLegalizer<'a> {
     ctx: &'a ModuleCtx,
     func: &'a mut Function,
@@ -661,6 +850,7 @@ impl<'a> FunctionLegalizer<'a> {
     }
 
     fn legalize_inst(&mut self, inst: InstId) {
+        self.normalize_effect_operands(inst);
         if self.bool_member_reads.contains(&inst) {
             self.rewrite_bool_member_read(inst);
             return;
@@ -1075,6 +1265,51 @@ impl<'a> FunctionLegalizer<'a> {
 
     fn one_i256(&mut self) -> ValueId {
         self.imm_i256(U256::one())
+    }
+
+    /// Makes each narrow operand that sets what an effect does a value of its type. An `i1`
+    /// needs no mask: every `i1` is a compare, a constant or a word bitcast to `i1`.
+    fn normalize_effect_operands(&mut self, inst: InstId) {
+        let is = self.evm_inst_set();
+        let Some(uses) = operand_uses(is.resolve_inst(self.func.dfg.inst(inst))) else {
+            return;
+        };
+        let operands = self.func.dfg.inst(inst).collect_values();
+        assert_eq!(
+            uses.len(),
+            operands.len(),
+            "the operand uses of `{}` do not match its operands",
+            self.func.dfg.inst(inst).as_text()
+        );
+        let mut masked = SmallVec::<[(usize, ValueId); 2]>::new();
+        for (pos, (&operand, &usage)) in operands.iter().zip(uses).enumerate() {
+            if usage == OperandUse::Effect
+                && self.func.dfg.value_imm(operand).is_none()
+                && let Some(ScalarWidth::Narrow(bits)) = self.width_of(operand)
+            {
+                let mask = self.mask_value(bits);
+                let value = self.insert_before_one(
+                    inst,
+                    And::new(is, operand, mask),
+                    Type::I256,
+                    Some(ScalarWidth::Narrow(bits)),
+                );
+                masked.push((pos, value));
+            }
+        }
+        if masked.is_empty() {
+            return;
+        }
+        let mut pos = 0;
+        self.func
+            .dfg
+            .inst_mut(inst)
+            .for_each_value_mut(&mut |value| {
+                if let Some(&(_, masked)) = masked.iter().find(|&&(at, _)| at == pos) {
+                    *value = masked;
+                }
+                pos += 1;
+            });
     }
 
     fn mask_value(&mut self, bits: u16) -> ValueId {
@@ -3052,10 +3287,30 @@ impl<'a> FunctionLegalizer<'a> {
         )
     }
 
-    /// Lowers `freeze undef`. The zero that replaces it may be an immediate no value had
-    /// before; it takes the freeze's width.
+    /// Masks the word a narrow integer freeze makes concrete, and lowers `freeze undef`. The zero
+    /// that replaces `freeze undef` may be an immediate no value had before; it takes the freeze's
+    /// width.
     fn rewrite_freeze(&mut self, inst: InstId) {
         let width = self.single_result_width(inst);
+        let arg = *downcast::<&Freeze>(self.evm_inst_set(), self.func.dfg.inst(inst))
+            .expect("a freeze")
+            .arg();
+        // A narrow word is a value of its type or holds the unspecified value, and `freeze` makes
+        // it a value of its type. The mask is on a word-typed freeze, so it is not skipped on the
+        // width the argument is tagged with; known bits may drop it later.
+        if let Some(width @ ScalarWidth::Narrow(_)) = width
+            && !matches!(self.func.dfg.value(arg), Value::Undef { .. })
+        {
+            let frozen = self.insert_before_one(
+                inst,
+                Freeze::new(self.evm_inst_set(), arg),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let result = self.normalize_and_retag_width(inst, frozen, width);
+            self.replace_with_aliases(inst, &[result]);
+            return;
+        }
         if let Some(lowered) = lower_frozen_undef(self.func, inst)
             && self.width_of(lowered).is_none()
         {
@@ -3163,8 +3418,13 @@ enum SignedCmpKind {
 
 #[cfg(test)]
 mod tests {
-    use super::legalize_evm_section;
-    use sonatina_ir::{Function, ir_writer::FuncWriter, module::FuncRef};
+    use super::{legalize_evm_section, operand_uses};
+    use sonatina_ir::{
+        Function, InstSetExt,
+        ir_writer::FuncWriter,
+        isa::{Isa, evm::Evm},
+        module::FuncRef,
+    };
     use sonatina_parser::{ParsedModule, parse_module};
 
     fn parse(src: &str) -> ParsedModule {
@@ -3522,5 +3782,85 @@ block0:
             );
             assert!(dumped.contains("0.i1"), "{dumped}");
         }
+    }
+
+    /// Every instruction with an operand that sets what an effect does, one of each.
+    const EFFECT_OPERANDS: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %accesses(v0.i256, v1.*i256) {
+    block0:
+        v2.i256 = mload v1 i256;
+        mstore v1 v0 i256;
+        memzero v1 v0;
+        memcopy v1 v1 v0;
+        v3.*i8 = mem.alloc_dynamic v0;
+        v4.i256 = evm_mload v0;
+        evm_mstore v0 v0;
+        evm_mstore8 v0 v0;
+        v5.i256 = evm_sload v0;
+        evm_sstore v0 v0;
+        v6.i256 = evm_tload v0;
+        evm_tstore v0 v0;
+        v7.i256 = evm_keccak256 v0 v0;
+        evm_log0 v0 v0;
+        evm_log1 v0 v0 v0;
+        evm_log2 v0 v0 v0 v0;
+        evm_log3 v0 v0 v0 v0 v0;
+        evm_log4 v0 v0 v0 v0 v0 v0;
+        evm_mcopy v0 v0 v0;
+        v8.*i8 = evm_malloc v0;
+        v9.i256 = evm_calldata_load v0;
+        v10.i256 = evm_code_load v0;
+        evm_calldata_copy v0 v0 v0;
+        evm_code_copy v0 v0 v0;
+        evm_return_data_copy v0 v0 v0;
+        evm_ext_code_copy v0 v0 v0 v0;
+        v11.i256 = evm_create v0 v0 v0;
+        v12.i256 = evm_create2 v0 v0 v0 v0;
+        v13.i256 = evm_call v0 v0 v0 v0 v0 v0 v0;
+        v14.i256 = evm_call_code v0 v0 v0 v0 v0 v0 v0;
+        v15.i256 = evm_delegate_call v0 v0 v0 v0 v0 v0;
+        v16.i256 = evm_static_call v0 v0 v0 v0 v0 v0;
+        evm_return v0 v0;
+}
+
+func public %reverts(v0.i256) {
+    block0:
+        evm_revert v0 v0;
+}
+
+func public %self_destructs(v0.i256) {
+    block0:
+        evm_self_destruct v0;
+}
+"#;
+
+    #[test]
+    fn operand_uses_match_operands() {
+        let parsed = parse(EFFECT_OPERANDS);
+        let is = Evm::new(parsed.module.ctx.triple).inst_set();
+        let mut classified = 0;
+        for func_ref in parsed.module.funcs() {
+            parsed.module.func_store.view(func_ref, |function| {
+                for block in function.layout.iter_block() {
+                    for inst in function.layout.iter_inst(block) {
+                        let data = function.dfg.inst(inst);
+                        let Some(uses) = operand_uses(is.resolve_inst(data)) else {
+                            continue;
+                        };
+                        assert_eq!(
+                            uses.len(),
+                            data.collect_values().len(),
+                            "operand uses of `{}`",
+                            data.as_text()
+                        );
+                        classified += 1;
+                    }
+                }
+            });
+        }
+        // Every kind `operand_uses` gives a list for occurs above.
+        assert_eq!(classified, 35);
     }
 }
