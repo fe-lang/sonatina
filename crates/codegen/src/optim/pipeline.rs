@@ -661,12 +661,15 @@ impl Pipeline {
     /// switches from comparison trees, fusing comparisons with the
     /// subtractions they guard and converting branches whose paths meet at
     /// once to selects, then hoisting aggregate construction to its inputs.
-    /// Os is the size pipeline.
+    /// Os runs the size pipeline, whose inliner and loop unrolling do not
+    /// grow code, and ends the same way: a switch is smaller than the tree
+    /// of comparisons it replaces, and it takes one jump where the tree
+    /// takes a comparison per case.
     pub fn native(level: OptLevel) -> Self {
         let mut pipeline = match level {
             OptLevel::O0 => return Self::none(),
             OptLevel::O1 => Self::optimized(native_inliner_config(), Loops::Unroll, false),
-            OptLevel::Os => return Self::size(),
+            OptLevel::Os => Self::size(),
             OptLevel::O2 => Self::optimized(native_inliner_config(), Loops::Unroll, true),
         };
         pipeline.add_step(Step::FuncPasses(vec![
@@ -2941,8 +2944,10 @@ func private %entry(v0.i32, v1.i32) -> i32 {
         );
         let mut o1 = steps(&Pipeline::native(OptLevel::O1));
         let mut o2 = steps(&Pipeline::native(OptLevel::O2));
+        let mut os = steps(&Pipeline::native(OptLevel::Os));
         assert_eq!(o1.pop(), Some(switches.clone()));
-        assert_eq!(o2.pop(), Some(switches));
+        assert_eq!(o2.pop(), Some(switches.clone()));
+        assert_eq!(os.pop(), Some(switches));
         // Native code unrolls loops after rotating them.
         assert!(
             o2.iter()
@@ -2959,10 +2964,7 @@ func private %entry(v0.i32, v1.i32) -> i32 {
         assert_eq!((inline_rounds(&o1), inline_rounds(&o2)), (2, 4));
         assert_eq!(o1.last().map(String::as_str), Some("DeadFuncElim"));
         assert!(Pipeline::native(OptLevel::O0).steps.is_empty());
-        assert_eq!(
-            steps(&Pipeline::native(OptLevel::Os)),
-            steps(&Pipeline::size())
-        );
+        assert_eq!(os, steps(&Pipeline::size()));
     }
 
     #[test]
