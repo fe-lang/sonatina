@@ -926,3 +926,94 @@ func public %partial(v0.i64, v1.i64, v2.*@Outer) {
         }
     }
 }
+
+#[test]
+fn field_offsets_fold_into_accesses_and_pointer_offsets_wrap() {
+    // `%sum` loads three fields of an object in a loop: their offsets are the
+    // accesses' own, so the loop counter's increment is the only addition,
+    // and an engine keeps only the pointer. A pointer's arithmetic wraps,
+    // which an access's offset cannot do, so `gep` offsets stay additions:
+    // `%back` reads the word below a pointer, and `%next` the word after one,
+    // which after the last word of the address space is the first.
+    let fields = "type @Three = { i64, i64, i64 };
+func public %sum(v0.*@Three, v1.i32) -> i64 {
+    block0:
+        v20.objref<@Three> = obj.from_ptr v0;
+        jump block1;
+    block1:
+        v2.i32 = phi (0.i32 block0) (v10 block2);
+        v3.i64 = phi (0.i64 block0) (v9 block2);
+        v4.i1 = lt v2 v1;
+        br v4 block2 block3;
+    block2:
+        v5.objref<i64> = obj.proj v20 0.i32;
+        v6.objref<i64> = obj.proj v20 1.i32;
+        v7.objref<i64> = obj.proj v20 2.i32;
+        v11.i64 = obj.load v5;
+        v12.i64 = obj.load v6;
+        v13.i64 = obj.load v7;
+        v14.i64 = add v11 v12;
+        v15.i64 = add v14 v13;
+        v9.i64 = add v3 v15;
+        v10.i32 = add v2 1.i32;
+        jump block1;
+    block3:
+        return v3;
+}";
+    let pointers = "func public %back(v0.*i64) -> i64 {
+    block0:
+        v1.*i64 = gep v0 -1.i32;
+        v2.i64 = mload v1 i64;
+        return v2;
+}
+func public %next(v0.*i64) -> i64 {
+    block0:
+        v1.*i64 = gep v0 1.i32;
+        v2.i64 = mload v1 i64;
+        return v2;
+}";
+    let adds = |bytes: &[u8]| {
+        wasmparser::Parser::new(0)
+            .parse_all(bytes)
+            .map(|payload| {
+                let Ok(wasmparser::Payload::CodeSectionEntry(body)) = payload else {
+                    return 0;
+                };
+                body.get_operators_reader()
+                    .expect("the body has operators")
+                    .into_iter()
+                    .filter(|op| matches!(op, Ok(wasmparser::Operator::I32Add)))
+                    .count()
+            })
+            .sum::<usize>()
+    };
+    let words: Vec<u8> = [5i64, 7, 9, 11]
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .collect();
+    for level in LEVELS {
+        let bytes = build(fields, level);
+        assert_eq!(adds(&bytes), 1, "{level:?}");
+        let mut machine = Machine::new(&bytes);
+        let base = machine.memory_size();
+        machine.grow_memory(1);
+        machine.write(base, &words);
+        let sum = machine.func("sum");
+        let got = machine.call(&sum, &[Val::I32(base as i32 + 8), Val::I32(3)]);
+        assert_eq!(got[0].unwrap_i64(), 3 * (7 + 9 + 11), "{level:?}");
+
+        let bytes = build(pointers, level);
+        assert_eq!(adds(&bytes), 2, "{level:?}");
+        let mut machine = Machine::new(&bytes);
+        let base = machine.memory_size();
+        machine.grow_memory(1);
+        machine.write(base, &words);
+        let back = machine.func("back");
+        let got = machine.call(&back, &[Val::I32(base as i32 + 8)]);
+        assert_eq!(got[0].unwrap_i64(), 5, "{level:?}");
+        machine.write(0, &13i64.to_le_bytes());
+        let next = machine.func("next");
+        let got = machine.call(&next, &[Val::I32(-8)]);
+        assert_eq!(got[0].unwrap_i64(), 13, "{level:?}");
+    }
+}

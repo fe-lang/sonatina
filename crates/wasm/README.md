@@ -294,6 +294,9 @@ aggregate combination and object returns the backend runs first.
   `obj.from_ptr`, `const.ref`, `const.proj`, `const.index` and `const.load` are
   address arithmetic and loads and stores. `obj.from_ptr`
   is the pointer itself: an object reference is the address of its storage.
+  The fields and elements of an object or a constant lie above its address,
+  without wrapping, as the bytes of a value that an access reads or writes do:
+  one past 2^32 is outside the memory, and an access to it traps.
 - The enum instructions read and write the tag and the variant fields at their
   offsets. `enum.make` writes a new snapshot in the frame; `enum.write_variant`
   and `enum.set_tag` write through an object reference; `enum.proj` and
@@ -302,7 +305,7 @@ aggregate combination and object returns the backend runs first.
   were. `enum.make` writes only the tag and the variant's fields.
 - `gep` adds the scaled index at each array or pointer step and the field offset
   at each struct step. Indices are signed and sign-extended (`true` of type `i1`
-  is -1); an index of 64 or 256 bits that does not fit in 32 bits traps. The
+  is -1); an index of 64 or 256 bits that does not fit in 32 bits traps. Its
   address arithmetic wraps modulo 2^32, and an access outside the memory traps.
   `obj.index` and `const.index` do not check the index against the length; a
   program that needs the check compares first, as Fe does.

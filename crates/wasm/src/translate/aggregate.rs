@@ -103,13 +103,7 @@ impl FunctionTranslator<'_> {
                 self.name
             ))
         })?;
-        if offset == 0 {
-            return Ok(sp);
-        }
-        let offset = self.emit(wb).c32(offset);
-        Ok(self
-            .emit(wb)
-            .op(Operator::I32Add, &[sp, offset], WType::I32))
+        Ok(self.offset_address(wb, sp, offset))
     }
 
     /// The end of the frame, which callees receive as their stack top.
@@ -123,13 +117,26 @@ impl FunctionTranslator<'_> {
     }
 
     /// `address + offset`, in the wrapping arithmetic of 32-bit addresses.
-    fn offset_address(&mut self, wb: waffle::Block, base: V, offset: u32) -> V {
+    fn wrapping_address(&mut self, wb: waffle::Block, base: V, offset: u32) -> V {
         if offset == 0 {
             return base;
         }
-        let offset = self.emit(wb).c32(offset);
+        let constant = self.emit(wb).c32(offset);
         self.emit(wb)
-            .op(Operator::I32Add, &[base, offset], WType::I32)
+            .op(Operator::I32Add, &[base, constant], WType::I32)
+    }
+
+    /// The address of the part at `offset` in the storage at `base`: a slot of
+    /// the frame, a field or element of an object or a constant, or a part of
+    /// a value in memory. The part lies above `base` without wrapping, so
+    /// accesses through it take the offset as their own
+    /// ([`FunctionTranslator::memarg`]).
+    fn offset_address(&mut self, wb: waffle::Block, base: V, offset: u32) -> V {
+        let address = self.wrapping_address(wb, base, offset);
+        if offset != 0 {
+            self.record_offset(address, base, offset);
+        }
+        address
     }
 
     fn chunks(size: u32) -> impl Iterator<Item = (u32, Access)> {
@@ -157,12 +164,14 @@ impl FunctionTranslator<'_> {
             // Read everything before writing anything.
             let mut loaded = Vec::new();
             for (offset, access) in Self::chunks(size) {
-                let (op, ty) = access.load_u(self.memarg(access, offset));
+                let (memarg, src) = self.memarg(access, src, offset);
+                let (op, ty) = access.load_u(memarg);
                 let value = self.body.add_op(wb, op, &[src], &[ty]);
                 loaded.push((offset, access, value));
             }
             for (offset, access, value) in loaded {
-                let op = access.store(self.memarg(access, offset));
+                let (memarg, dst) = self.memarg(access, dst, offset);
+                let op = access.store(memarg);
                 self.body.add_op(wb, op, &[dst, value], &[]);
             }
             return;
@@ -194,7 +203,8 @@ impl FunctionTranslator<'_> {
                     Access::Double => zero64,
                     _ => zero32,
                 };
-                let op = access.store(self.memarg(access, offset));
+                let (memarg, dst) = self.memarg(access, dst, offset);
+                let op = access.store(memarg);
                 self.body.add_op(wb, op, &[dst, zero], &[]);
             }
             return;
@@ -272,7 +282,8 @@ impl FunctionTranslator<'_> {
         if let Some(wide) = Wide::from_type(ty) {
             let carried: Vec<V> = (0..wide.limbs())
                 .map(|index| {
-                    let memarg = self.memarg(Access::Double, offset + 8 * index as u32);
+                    let (memarg, addr) =
+                        self.memarg(Access::Double, addr, offset + 8 * index as u32);
                     self.body.add_op(
                         wb,
                         Operator::I64Load { memory: memarg },
@@ -285,7 +296,8 @@ impl FunctionTranslator<'_> {
             return Ok(Loaded::Wide(wide, limbs));
         }
         let access = self.scalar_access(op, ty)?;
-        let (load, carrier) = access.load_u(self.memarg(access, offset));
+        let (memarg, addr) = self.memarg(access, addr, offset);
+        let (load, carrier) = access.load_u(memarg);
         let mut value = self.body.add_op(wb, load, &[addr], &[carrier]);
         if ty == Type::I1 {
             // Only the low bit of a stored byte is the value.
@@ -325,14 +337,16 @@ impl FunctionTranslator<'_> {
                 let values = self.parts_operand(wb, id)?;
                 for (part, value) in self.parts_of(ty).iter().zip(values) {
                     let access = self.scalar_access(op, part.ty)?;
-                    let store = access.store(self.memarg(access, offset + part.offset));
+                    let (memarg, addr) = self.memarg(access, addr, offset + part.offset);
+                    let store = access.store(memarg);
                     self.body.add_op(wb, store, &[addr, value], &[]);
                 }
             }
             Some(Repr::Wide(wide)) => {
                 let limbs = self.wide_operand(wb, id)?;
                 for (index, &limb) in limbs[..wide.limbs()].iter().enumerate() {
-                    let memarg = self.memarg(Access::Double, offset + 8 * index as u32);
+                    let (memarg, addr) =
+                        self.memarg(Access::Double, addr, offset + 8 * index as u32);
                     self.body.add_op(
                         wb,
                         Operator::I64Store { memory: memarg },
@@ -344,7 +358,8 @@ impl FunctionTranslator<'_> {
             _ => {
                 let access = self.scalar_access(op, ty)?;
                 let value = self.operand(wb, id)?;
-                let store = access.store(self.memarg(access, offset));
+                let (memarg, addr) = self.memarg(access, addr, offset);
+                let store = access.store(memarg);
                 self.body.add_op(wb, store, &[addr, value], &[]);
             }
         }
@@ -670,7 +685,9 @@ impl FunctionTranslator<'_> {
                 }
             }
         }
-        let address = self.offset_address(*wb, address, constant);
+        // A pointer's arithmetic wraps, which the offset of an access does
+        // not, so the constant stays an addition.
+        let address = self.wrapping_address(*wb, address, constant);
         let ty = self.result_ty(inst_id)?;
         self.define(inst_id, 0, address, ty)
     }
@@ -1134,7 +1151,8 @@ impl FunctionTranslator<'_> {
         let tag_ty = self.tag_ty(op, variant)?;
         let access = self.scalar_access(op, tag_ty)?;
         let tag = self.tag_value(wb, op, variant)?;
-        let store = access.store(self.memarg(access, 0));
+        let (memarg, addr) = self.memarg(access, addr, 0);
+        let store = access.store(memarg);
         self.body.add_op(wb, store, &[addr, tag], &[]);
         Ok(())
     }
