@@ -65,6 +65,7 @@ use super::{
 };
 mod aggregate;
 mod parts;
+mod vectors;
 mod wide_ops;
 
 use wide_ops::{NeededHelpers, WideHelpers, WideOp, constant_shift};
@@ -1304,6 +1305,9 @@ struct FunctionTranslator<'a> {
     values: FxHashMap<ValueId, V>,
     wide: FxHashMap<ValueId, Limbs>,
     parts: FxHashMap<ValueId, Vec<V>>,
+    /// The `v128` halves of 128- and 256-bit values, low first, where a
+    /// load or a byte swap made them (`translate/vectors.rs`).
+    vectors: FxHashMap<ValueId, Vec<V>>,
     blocks: FxHashMap<BlockId, waffle::Block>,
     /// The stack top received from the caller, which is the base of the frame.
     sp: Option<V>,
@@ -1384,6 +1388,7 @@ impl<'a> FunctionTranslator<'a> {
             values: FxHashMap::default(),
             wide: FxHashMap::default(),
             parts: FxHashMap::default(),
+            vectors: FxHashMap::default(),
             blocks: FxHashMap::default(),
             sp: None,
             top: None,
@@ -2449,13 +2454,10 @@ impl<'a> FunctionTranslator<'a> {
                 if function.dfg.value_ty(*i.arg()) == Type::I1 {
                     return Err(self.unsupported_type("`bswap`", Type::I1));
                 }
-                self.unary_any(
-                    *wb,
-                    inst_id,
-                    *i.arg(),
-                    |e, wide, v| e.wide_bswap(wide, v),
-                    |e, int, v| e.bswap(int, v),
-                )?
+                match self.wide_ty(*i.arg()) {
+                    Some(wide) => self.wide_bswap(*wb, inst_id, *i.arg(), wide)?,
+                    None => self.unary(*wb, inst_id, *i.arg(), |e, int, v| e.bswap(int, v))?,
+                }
             }
             NativeInstKind::And(i) => self.binary_any(
                 *wb,

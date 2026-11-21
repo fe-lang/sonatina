@@ -1287,3 +1287,84 @@ fn the_unused_limbs_of_a_result_are_not_computed() {
         assert_eq!(got[0].unwrap_i64(), a.wrapping_add(b), "{a} + {b}");
     }
 }
+
+#[test]
+fn big_endian_words_move_as_vectors() {
+    // `%copy` reads a big-endian word and writes its value, as EVM code moves
+    // words from its memory to its stack: two 16-byte loads, a shuffle of
+    // each and two 16-byte stores, with no 64-bit limb in between. `%add_one`
+    // swaps a word it loaded and one its arithmetic computed.
+    let source = "func public %copy(v0.*i256, v1.*i256) {
+    block0:
+        v2.i256 = mload v0 i256;
+        v3.i256 = bswap v2;
+        mstore v1 v3 i256;
+        return;
+}
+func public %add_one(v0.*i256, v1.*i256) {
+    block0:
+        v2.i256 = mload v0 i256;
+        v3.i256 = bswap v2;
+        v4.i256 = add v3 1.i256;
+        v5.i256 = bswap v4;
+        mstore v1 v5 i256;
+        return;
+}
+func public %narrow(v0.*i128, v1.*i128) {
+    block0:
+        v2.i128 = mload v0 i128;
+        v3.i128 = bswap v2;
+        mstore v1 v3 i128;
+        return;
+}";
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let bytes = build_at(source, level);
+        let count = |pick: fn(&wasmparser::Operator) -> bool| {
+            wasmparser::Parser::new(0)
+                .parse_all(&bytes)
+                .filter_map(|payload| match payload.unwrap() {
+                    wasmparser::Payload::CodeSectionEntry(body) => Some(
+                        body.get_operators_reader()
+                            .unwrap()
+                            .into_iter()
+                            .filter(|op| pick(op.as_ref().unwrap()))
+                            .count(),
+                    ),
+                    _ => None,
+                })
+                .sum::<usize>()
+        };
+        assert_eq!(
+            count(|op| matches!(op, wasmparser::Operator::I64Load { .. })),
+            0,
+            "{level:?}"
+        );
+        assert_eq!(
+            count(|op| matches!(op, wasmparser::Operator::I8x16Shuffle { .. })),
+            7,
+            "{level:?}"
+        );
+        let mut machine = Machine::new(&bytes);
+        let base = machine.memory_size();
+        machine.grow_memory(1);
+        let word: Vec<u8> = (1..=32).collect();
+        machine.write(base, &word);
+        let (copy, add_one, narrow) = (
+            machine.func("copy"),
+            machine.func("add_one"),
+            machine.func("narrow"),
+        );
+        let (from, to) = (Val::I32(base as i32), Val::I32(base as i32 + 64));
+        machine.call(&copy, &[from, to]);
+        let reversed: Vec<u8> = word.iter().rev().copied().collect();
+        assert_eq!(machine.read(base + 64, 32), reversed, "{level:?}");
+        machine.call(&add_one, &[from, to]);
+        let mut plus_one = word.clone();
+        plus_one[31] += 1;
+        assert_eq!(machine.read(base + 64, 32), plus_one, "{level:?}");
+        machine.write(base + 64, &[0; 32]);
+        machine.call(&narrow, &[from, to]);
+        let reversed: Vec<u8> = word[..16].iter().rev().copied().collect();
+        assert_eq!(machine.read(base + 64, 16), reversed, "{level:?}");
+    }
+}

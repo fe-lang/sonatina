@@ -342,6 +342,7 @@ impl FunctionTranslator<'_> {
                     self.body.add_op(wb, store, &[addr, value], &[]);
                 }
             }
+            Some(Repr::Wide(_)) if self.store_halves(wb, id, (addr, offset)) => {}
             Some(Repr::Wide(wide)) => {
                 let limbs = self.wide_operand(wb, id)?;
                 for (index, &limb) in limbs[..wide.limbs()].iter().enumerate() {
@@ -554,6 +555,11 @@ impl FunctionTranslator<'_> {
         let addr = self.address_operand(wb, op, addr)?;
         if repr(&self.module.ctx, ty) == Some(Repr::Aggregate) {
             return self.snapshot(*wb, inst_id, ty, addr, 0);
+        }
+        if let Some(wide) = Wide::from_type(ty)
+            && self.feeds_bswap(inst_id)
+        {
+            return self.load_halves(*wb, inst_id, wide, (addr, 0));
         }
         let loaded = self.load_value(*wb, op, ty, addr, 0)?;
         self.define_loaded(*wb, inst_id, 0, ty, loaded)

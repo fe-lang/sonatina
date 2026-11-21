@@ -28,9 +28,10 @@ fn compile_wasm(module: Module) -> Vec<u8> {
 Compiling the same module twice produces identical bytes.
 
 The module uses the multi-value, sign-extension and bulk-memory
-(`memory.copy`, `memory.fill`) extensions of WebAssembly and, when a recursive
-cycle makes a call in tail position, the tail-call extension. Every current
-engine enables them.
+(`memory.copy`, `memory.fill`) extensions of WebAssembly, fixed-width SIMD
+(`v128`) when it swaps the bytes of a 128- or 256-bit integer, and, when a
+recursive cycle makes a call in tail position, the tail-call extension. Every
+current engine enables them.
 
 ## Target and layout
 
@@ -340,6 +341,12 @@ Calls, returns, phis and memory carry only its two limbs.
 `evm_add_mod` and `evm_mul_mod` compute at 256 bits for every width: narrower
 operands are zero-extended, as on the native target, so the sum or product
 does not wrap.
+
+`bswap` of a 128- or 256-bit integer reverses the bytes of each 16-byte half
+with an `i8x16.shuffle` and exchanges the halves. A value loaded from memory to
+be swapped is loaded as `v128` halves, and a swapped value is stored as them,
+so a big-endian word moves between memory and limbs in two loads, two shuffles
+and two stores.
 
 Multiplication, division and shifts by a count that is not a constant are
 functions of the module, emitted only when used. A shift by a constant, `sar`
