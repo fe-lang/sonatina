@@ -179,8 +179,24 @@ impl FunctionTranslator<'_> {
         );
     }
 
+    /// Write zero to `size` bytes: with stores up to the size copied with
+    /// loads and stores, which an engine runs faster than `memory.fill`, and
+    /// at `Os` up to one store, which is smaller.
     fn fill_zero(&mut self, wb: waffle::Block, dst: V, size: u32) {
         if size == 0 {
+            return;
+        }
+        if size <= self.inline_copy_bytes.max(8) {
+            let zero32 = self.emit(wb).c32(0);
+            let zero64 = self.emit(wb).c64(0);
+            for (offset, access) in Self::chunks(size) {
+                let zero = match access {
+                    Access::Double => zero64,
+                    _ => zero32,
+                };
+                let op = access.store(self.memarg(access, offset));
+                self.body.add_op(wb, op, &[dst, zero], &[]);
+            }
             return;
         }
         let zero = self.emit(wb).c32(0);
@@ -296,10 +312,14 @@ impl FunctionTranslator<'_> {
         }
         match repr(&self.module.ctx, ty) {
             Some(Repr::Aggregate) => {
-                let source = self.operand(wb, id)?;
                 let (size, _) = self.layout_of(ty)?;
                 let dest = self.offset_address(wb, addr, offset);
-                self.copy_bytes(wb, dest, source, size);
+                if matches!(self.function.dfg.value(id), Value::Zero { .. }) {
+                    self.fill_zero(wb, dest, size);
+                } else {
+                    let source = self.operand(wb, id)?;
+                    self.copy_bytes(wb, dest, source, size);
+                }
             }
             Some(Repr::Parts) => {
                 let values = self.parts_operand(wb, id)?;
@@ -901,11 +921,12 @@ impl FunctionTranslator<'_> {
         } else {
             let slot = self.slot(size, align)?;
             let address = self.slot_address(wb, slot)?;
-            // If the inserts that continue in this storage write every byte,
-            // what it held before does not matter.
+            // The fields that the inserts continuing in this storage leave
+            // come from the source: zero for a `zero`, which needs no copy.
+            let left = self.fields_left(block, inst_id, result_ty, size)?;
             match function.dfg.value(dest) {
-                _ if self.inserts_write_every_byte(block, inst_id, result_ty, size)? => {}
-                Value::Zero { .. } => self.fill_zero(wb, address, size),
+                _ if left.is_empty() => {}
+                Value::Zero { .. } => self.zero_ranges(wb, address, left),
                 _ => {
                     let source = self.operand(wb, dest)?;
                     self.copy_bytes(wb, address, source, size);
@@ -947,15 +968,16 @@ impl FunctionTranslator<'_> {
             && dfg.users(result).copied().eq([next])
     }
 
-    /// Whether the `insert_value` `first` and the inserts that continue in its
-    /// storage write every byte of the aggregate.
-    fn inserts_write_every_byte(
+    /// The byte ranges of the fields of `ty`, of `size` bytes, that neither
+    /// the `insert_value` `first` nor the inserts that continue in its storage
+    /// write. Padding is not part of a value, so it is in none of them.
+    fn fields_left(
         &self,
         block: BlockId,
         first: InstId,
         ty: Type,
         size: u32,
-    ) -> Result<bool, WasmError> {
+    ) -> Result<Vec<(u32, u32)>, WasmError> {
         let dfg = &self.function.dfg;
         let mut written = Vec::new();
         let mut inst = Some(first);
@@ -974,12 +996,32 @@ impl FunctionTranslator<'_> {
                 .and_then(|result| dfg.users(result).copied().next())
                 .filter(|&next| self.continues_in_place(block, current, next));
         }
-        Ok(covers(written, size))
+        let fields = match ty.resolve_compound(&self.module.ctx) {
+            Some(CompoundType::Struct(data)) => (0..data.fields.len())
+                .map(|idx| {
+                    let (offset, elem_ty) = self.element_offset(ty, idx)?;
+                    let (elem_size, _) = self.layout_of(elem_ty)?;
+                    Ok((offset, offset + elem_size))
+                })
+                .collect::<Result<_, WasmError>>()?,
+            // The elements of an array cover it.
+            _ => vec![(0, size)],
+        };
+        Ok(subtract(fields, written))
+    }
+
+    /// Write zero to the byte ranges `ranges` of the aggregate at `address`,
+    /// merging the ranges that touch.
+    fn zero_ranges(&mut self, wb: waffle::Block, address: V, ranges: Vec<(u32, u32)>) {
+        for (start, end) in merge(ranges) {
+            let dest = self.offset_address(wb, address, start);
+            self.fill_zero(wb, dest, end - start);
+        }
     }
 
     /// `agg.make`: a new aggregate in a slot of the frame, with each field
-    /// stored from its operand. The bytes no stored field covers are zero:
-    /// padding, and `zero` fields.
+    /// stored from its operand and the `zero` fields zero. Padding is not part
+    /// of the value, so it keeps what the slot held.
     pub(super) fn agg_make(
         &mut self,
         wb: waffle::Block,
@@ -999,24 +1041,22 @@ impl FunctionTranslator<'_> {
         let (size, align) = self.layout_of(ty)?;
         let slot = self.slot(size, align)?;
         let address = self.slot_address(wb, slot)?;
+        // The `zero` fields are zeroed together, in the fewest ranges.
+        let mut zeros = Vec::new();
         let mut fields = Vec::new();
         for (idx, &value) in values.iter().enumerate() {
-            // A `zero` field is left to the fill below.
-            if matches!(self.function.dfg.value(value), Value::Zero { .. }) {
-                continue;
-            }
             let (offset, elem_ty) = self.element_offset(ty, idx)?;
-            let (elem_size, _) = self.layout_of(elem_ty)?;
-            fields.push((offset, elem_size, elem_ty, value));
+            if matches!(self.function.dfg.value(value), Value::Zero { .. })
+                && self.function.dfg.value_ty(value) == elem_ty
+            {
+                let (elem_size, _) = self.layout_of(elem_ty)?;
+                zeros.push((offset, offset + elem_size));
+            } else {
+                fields.push((offset, elem_ty, value));
+            }
         }
-        let written = fields
-            .iter()
-            .map(|&(offset, elem_size, ..)| (offset, offset + elem_size))
-            .collect();
-        if !covers(written, size) {
-            self.fill_zero(wb, address, size);
-        }
-        for (offset, _, elem_ty, value) in fields {
+        self.zero_ranges(wb, address, zeros);
+        for (offset, elem_ty, value) in fields {
             self.store_value(wb, "agg.make", elem_ty, address, offset, value)?;
         }
         self.define(inst_id, 0, address, ty)
@@ -1130,8 +1170,8 @@ impl FunctionTranslator<'_> {
     }
 
     /// `enum.make`: a new enum value in a slot of the frame. As on the native
-    /// target, the bytes outside the variant are zero, not what an earlier
-    /// frame left in the slot.
+    /// target, padding and the payloads of other variants are not part of the
+    /// value, so they keep what the slot held.
     pub(super) fn enum_make(
         &mut self,
         wb: waffle::Block,
@@ -1155,7 +1195,6 @@ impl FunctionTranslator<'_> {
         let (size, align) = self.layout_of(ty)?;
         let slot = self.slot(size, align)?;
         let address = self.slot_address(wb, slot)?;
-        self.fill_zero(wb, address, size);
         self.store_variant(wb, "enum.make", address, variant, values)?;
         self.define(inst_id, 0, address, ty)
     }
@@ -1410,12 +1449,36 @@ fn immediate_value(imm: Immediate, signed: bool) -> Option<i128> {
     })
 }
 
-/// Whether the byte ranges `written` cover `0..size`: in order of their
-/// starts, each begins within those before it.
-fn covers(mut written: Vec<(u32, u32)>, size: u32) -> bool {
-    written.sort_unstable();
-    let end = written.into_iter().try_fold(0, |end, (start, stop)| {
-        (start <= end).then_some(end.max(stop))
-    });
-    end == Some(size)
+/// The byte ranges `ranges` sorted, with those that overlap or touch joined.
+fn merge(mut ranges: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+    ranges.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
+}
+
+/// The parts of the byte ranges `ranges` outside every range of `removed`.
+fn subtract(ranges: Vec<(u32, u32)>, removed: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+    let removed = merge(removed);
+    let mut left = Vec::new();
+    for (mut start, end) in ranges {
+        for &(cut_start, cut_end) in &removed {
+            if cut_end <= start || cut_start >= end {
+                continue;
+            }
+            if cut_start > start {
+                left.push((start, cut_start));
+            }
+            start = start.max(cut_end);
+        }
+        if start < end {
+            left.push((start, end));
+        }
+    }
+    left
 }

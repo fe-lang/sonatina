@@ -270,14 +270,17 @@ aggregate combination and object returns the backend runs first.
   `const.load` view the source in place. On a value held in parts these
   instructions take and replace parts, and a load or store moves each part at
   its offset.
+- Padding and the payloads of other enum variants are not part of a value, as
+  on the native target: copies move them, and the instructions that build a
+  value leave them as they were.
 - `insert_value` makes its snapshot in place when it is the only user of an
-  insert in the same block. An `undef` aggregate is zero, so the snapshot of an
-  insert into `undef` is filled with zero first, and that of another insert is
-  a copy of its source, unless the inserts that continue in its storage write
-  every byte.
-- `agg.make` stores each operand at its field. Its snapshot is filled with zero
-  first unless the fields it stores cover every byte: an `undef` operand, like
-  padding, reads as zero.
+  insert in the same block. The snapshot of an insert into a `zero` aggregate
+  has zero in the fields that the inserts continuing in its storage do not
+  write, and that of another insert is a copy of its source unless those
+  inserts write every field.
+- `agg.make` stores each operand at its field, and zero for a `zero` operand.
+- Zero is written with stores up to the size copied with loads and stores
+  (one store at `Os`), and with `memory.fill` beyond it.
 - An aggregate of at most 64 bytes is copied with loads and stores, and a
   larger one with `memory.copy`. At `Os` every copy is a `memory.copy`, which
   is smaller than even one load and store.
@@ -296,7 +299,7 @@ aggregate combination and object returns the backend runs first.
   and `enum.set_tag` write through an object reference; `enum.proj` and
   `enum.assert_variant_ref` are addresses; `enum.assert_variant` emits nothing.
   Writing a variant leaves the bytes of the other variants' payloads as they
-  were.
+  were. `enum.make` writes only the tag and the variant's fields.
 - `gep` adds the scaled index at each array or pointer step and the field offset
   at each struct step. Indices are signed and sign-extended (`true` of type `i1`
   is -1); an index of 64 or 256 bits that does not fit in 32 bits traps. The
