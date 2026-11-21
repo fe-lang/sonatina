@@ -349,7 +349,8 @@ value nothing uses, as WAFFLE's encoder writes each value to a local whether
 or not it is read.
 
 Division traps on a zero divisor. It is one 64-bit division when both operands
-fit in 64 bits, and no step when the dividend is below the divisor. Otherwise
+fit in 64 bits, a shift and a mask for a larger power of two, and no step when
+the dividend is below the divisor. Otherwise
 it is long division on 64-bit digits: one step per limb of the dividend for a
 divisor of one limb, and at most three steps for a longer divisor. A step
 multiplies by the reciprocal of the divisor's top limb, which takes two 64-bit

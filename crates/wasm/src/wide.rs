@@ -1071,7 +1071,17 @@ pub(super) fn build_udivrem(
 
     let trap = body.add_block();
     body.set_terminator(trap, Terminator::Unreachable);
-    let [checked, fast, wide, short, compare, below, long] = [(); 7].map(|_| body.add_block());
+    let [
+        checked,
+        fast,
+        wide,
+        shifted,
+        divide,
+        short,
+        compare,
+        below,
+        long,
+    ] = [(); 9].map(|_| body.add_block());
 
     let divisor_zero = Emit {
         body: &mut body,
@@ -1121,13 +1131,47 @@ pub(super) fn build_udivrem(
         },
     );
 
-    let one_limb = Emit {
+    // A power-of-two divisor, as EVM code divides by to shift, shifts the
+    // dividend right by its trailing zeros, and `divisor - 1` masks the
+    // remainder.
+    let mut e = Emit {
         body: &mut body,
         block: wide,
+    };
+    let one = e.c64(1);
+    let zero = e.c64(0);
+    let (mask, _) = e.wide_sub(b, [one, zero, zero, zero]);
+    let overlap = e.wide_bitwise(Operator::I64And, b, mask);
+    let power = e.wide_is_zero(overlap);
+    body.set_terminator(
+        wide,
+        Terminator::CondBr {
+            cond: power,
+            if_true: target(shifted, vec![]),
+            if_false: target(divide, vec![]),
+        },
+    );
+    let mut e = Emit {
+        body: &mut body,
+        block: shifted,
+    };
+    let count = e.wide_ctz(Wide::I256, b)[0];
+    let quotient = e.wide_shift_in_range(false, a, count);
+    let remainder = e.wide_bitwise(Operator::I64And, a, mask);
+    body.set_terminator(
+        shifted,
+        Terminator::Return {
+            values: quotient.into_iter().chain(remainder).collect(),
+        },
+    );
+
+    let one_limb = Emit {
+        body: &mut body,
+        block: divide,
     }
     .op(Operator::I64Eqz, &[divisor_high], WType::I32);
     body.set_terminator(
-        wide,
+        divide,
         Terminator::CondBr {
             cond: one_limb,
             if_true: target(short, vec![]),
