@@ -286,16 +286,19 @@ impl Emit<'_> {
             }
             Int::I32 => self.bswap32(value),
             Int::I64 => {
+                // Swap adjacent bytes, then adjacent pairs, then the halves.
+                let mut swapped = value;
+                for (bits, mask) in [(8, 0x00ff_00ff_00ff_00ff), (16, 0x0000_ffff_0000_ffff)] {
+                    let bits = self.c64(bits);
+                    let mask = self.c64(mask);
+                    let low = self.op(Operator::I64And, &[swapped, mask], WType::I64);
+                    let low = self.op(Operator::I64Shl, &[low, bits], WType::I64);
+                    let high = self.op(Operator::I64ShrU, &[swapped, bits], WType::I64);
+                    let high = self.op(Operator::I64And, &[high, mask], WType::I64);
+                    swapped = self.op(Operator::I64Or, &[low, high], WType::I64);
+                }
                 let thirty_two = self.c64(32);
-                let high_word = self.op(Operator::I64ShrU, &[value, thirty_two], WType::I64);
-                let high = self.op(Operator::I32WrapI64, &[high_word], WType::I32);
-                let low = self.op(Operator::I32WrapI64, &[value], WType::I32);
-                let new_high = self.bswap32(low);
-                let new_low = self.bswap32(high);
-                let new_high = self.op(Operator::I64ExtendI32U, &[new_high], WType::I64);
-                let new_low = self.op(Operator::I64ExtendI32U, &[new_low], WType::I64);
-                let shifted = self.op(Operator::I64Shl, &[new_high, thirty_two], WType::I64);
-                self.op(Operator::I64Or, &[shifted, new_low], WType::I64)
+                self.op(Operator::I64Rotl, &[swapped, thirty_two], WType::I64)
             }
         }
     }
