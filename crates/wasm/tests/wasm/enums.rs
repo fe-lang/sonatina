@@ -141,9 +141,11 @@ block4:
 }
 
 #[test]
-fn enum_values_zero_bytes_outside_their_variant() {
+fn enum_values_write_their_tag_and_fields() {
     // `dirty` and `clean` place their frames at the same address, so unless
-    // they are inlined, `clean`'s slots still hold `dirty`'s values.
+    // they are inlined, `clean`'s slots still hold `dirty`'s values. Bytes
+    // outside the variant's tag and fields are not part of the value, as on
+    // the native target, so `enum.make` leaves them as they were.
     let source = r#"
 type @Choice = enum { #None, #Some(i256), #Pair(i8, i64) };
 func private %dirty(v10.*i8, v11.*i8) {
@@ -187,12 +189,16 @@ block0:
                 Val::I64(0x1122_3344_5566_7788),
             ],
         );
-        assert_eq!(machine.read(none, 48), [0; 48], "{level:?}");
-        let mut expected = [0; 48];
-        expected[0] = 2;
-        expected[16] = 3;
-        expected[24..32].copy_from_slice(&0x1122_3344_5566_7788i64.to_le_bytes());
-        assert_eq!(machine.read(pair, 48), expected, "{level:?}");
+        // The tag is an `i8` at offset 0, and `Pair`'s fields are at 16 and 24.
+        assert_eq!(machine.read(none, 1), [0], "{level:?}");
+        let pair_bytes = machine.read(pair, 48);
+        assert_eq!(pair_bytes[0], 2, "{level:?}");
+        assert_eq!(pair_bytes[16], 3, "{level:?}");
+        assert_eq!(
+            pair_bytes[24..32],
+            0x1122_3344_5566_7788i64.to_le_bytes(),
+            "{level:?}"
+        );
     }
 }
 

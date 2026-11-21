@@ -566,12 +566,11 @@ fn memory_fills(bytes: &[u8]) -> usize {
 }
 
 #[test]
-fn inserts_that_write_every_byte_need_no_zero_fill() {
+fn undef_fields_are_stored_as_zero() {
     // Six words are too many to hold in parts, so the struct is built in the
-    // frame. Built field by field from `undef`, `%full` writes every byte of
-    // its storage, which then needs no filling first. `%partial` leaves every
-    // other field undef, which reads as zero although `%full` left a value in
-    // the frame both use.
+    // frame. `%full` writes every field. `%partial` leaves every other field
+    // undef, which reads as zero although `%full` left a value in the frame
+    // both use: three stores of zero, which are faster than `memory.fill`.
     let source = "type @Six = { i64, i64, i64, i64, i64, i64 };
 func public %full(v0.i64, v1.i64, v2.*@Six) {
     block0:
@@ -589,7 +588,7 @@ func public %partial(v0.i64, v1.*@Six) {
         .compile_module(&parse(source), &BackendOptions::default())
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .into_bytes();
-    assert_eq!(memory_fills(&bytes), 1, "only `%partial` fills");
+    assert_eq!(memory_fills(&bytes), 0);
     let mut machine = Machine::new(&bytes);
     let base = machine.memory_size();
     machine.grow_memory(1);
@@ -612,10 +611,10 @@ func public %partial(v0.i64, v1.*@Six) {
 fn inserts_cover_an_aggregate_in_any_order_but_not_its_padding() {
     // Six fields are too many to hold in parts, so these aggregates are
     // built in the frame. `%reversed` writes the fields last to first and
-    // needs no fill. The fields of `@Gap` leave seven bytes of padding
-    // unwritten, and `%huge` writes one byte of a 1 GiB array, so both keep
-    // their fills; the check takes memory for the inserts, not for the bytes
-    // of the aggregate.
+    // needs no fill. The fields of `@Gap` leave seven bytes of padding, which
+    // is not part of the value, so `%padded` needs no fill either. `%huge`
+    // writes one byte of a 1 GiB array and fills the rest; the check takes
+    // memory for the inserts, not for the bytes of the aggregate.
     let source = "type @Six = { i64, i64, i64, i64, i64, i64 };
 type @Gap = { i8, i64, i64, i64, i64, i64 };
 func public %reversed(v0.i64, v1.i64, v2.*@Six) {
@@ -645,7 +644,7 @@ func public %huge(v0.i8, v1.*[i8; 1073741824]) {
         .compile_module(&parse(source), &BackendOptions::default())
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .into_bytes();
-    assert_eq!(memory_fills(&bytes), 2, "`%padded` and `%huge` fill");
+    assert_eq!(memory_fills(&bytes), 1, "only `%huge` fills");
     let mut machine = Machine::new(&bytes);
     let base = machine.memory_size();
     machine.grow_memory(1);
@@ -855,12 +854,12 @@ func public %field() -> i64 {
 }
 
 #[test]
-fn agg_make_stores_each_field_and_zeroes_only_what_none_covers() {
+fn agg_make_stores_each_field_and_zeroes_its_zero_fields() {
     // `@Pair`, `[i64; 3]` and `@Gap` are held in parts and `@Outer`, of
-    // seven, in the frame. `%outer` stores every field of `@Outer` and needs
-    // no fill: the padding of `@Gap` is not part of the value. `%pair`
-    // stores its parts. `%partial` leaves fields `undef`, which read as zero,
-    // as an insert chain on undef does.
+    // seven, in the frame. `%outer` stores every field of `@Outer`: the
+    // padding of `@Gap` is not part of the value. `%pair` stores its parts.
+    // `%partial` leaves fields `undef`, which read as zero, as an insert
+    // chain on undef does: one range of 40 bytes, zeroed with stores.
     let source = "type @Pair = { i64, i64 };
 type @Gap = { i8, i64 };
 type @Outer = { @Pair, [i64; 3], @Gap };
@@ -891,8 +890,7 @@ func public %partial(v0.i64, v1.i64, v2.*@Outer) {
         .compile_module(&parse(source), &BackendOptions::default())
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .into_bytes();
-    // `%partial`'s `@Outer`.
-    assert_eq!(memory_fills(&direct), 1);
+    assert_eq!(memory_fills(&direct), 0);
     let words = |machine: &mut Machine, base: usize, count: usize| -> Vec<i64> {
         machine
             .read(base, 8 * count)
