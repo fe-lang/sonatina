@@ -1121,7 +1121,10 @@ fn run_pass(
                         .into_iter()
                         .map(|(call, _)| call)
                         .collect();
-                    tail_switches(func, &sites).into_keys().collect()
+                    tail_switches(func, &sites)
+                        .into_iter()
+                        .map(|(br_table, _)| br_table)
+                        .collect()
                 }
                 None => Vec::new(),
             };

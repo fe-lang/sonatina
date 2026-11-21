@@ -27,7 +27,7 @@
 //! mutable stack pointer exists, so a trap leaves nothing to repair. An exported
 //! function is a thin wrapper that starts the stack at the `stack_top` global.
 
-use std::collections::hash_map::Entry;
+use std::collections::{HashSet, hash_map::Entry};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use waffle::{
@@ -37,7 +37,7 @@ use waffle::{
 
 use sonatina_codegen::{
     OptLevel,
-    analysis::tail_position::{tail_callers, tail_position_calls},
+    analysis::tail_position::{TailSwitch, tail_callers, tail_position_calls, tail_switches},
     isa::native::{Part, register_parts},
 };
 use sonatina_ir::{
@@ -688,20 +688,74 @@ pub(super) fn translate_module(
         ));
     }
 
+    // The tail calls of each function, and its tail switches: each gets the
+    // range of the dispatch table that holds its callees, shared by switches
+    // with the same callees. Ranges go in function and layout order, so the
+    // table is the same on every compilation.
     let tail_callers: FxHashSet<FuncRef> = tail_callers(module).into_iter().collect();
     let mut tail_calls = TailCallSites::default();
+    let mut plans: FxHashMap<FuncRef, TailPlan> = FxHashMap::default();
+    let mut table_elements: Vec<Func> = Vec::new();
+    let mut table_ranges: FxHashMap<Vec<Func>, u32> = FxHashMap::default();
+    for &(func_ref, func, ..) in &pending {
+        if !tail_callers.contains(&func_ref) {
+            continue;
+        }
+        let tail_plan = module.func_store.view(func_ref, |function| {
+            let sites = tail_call_sites(module, func_ref, function, &callees);
+            let site_set: HashSet<InstId> = sites.keys().copied().collect();
+            // An engine calls through a table more slowly than it takes a
+            // `br_table` to direct calls (V8 12 by four times), so only `Os`
+            // makes tail switches, which are much smaller.
+            let switches = if opt_level == OptLevel::Os {
+                tail_switches(function, &site_set)
+            } else {
+                Default::default()
+            };
+            let switches = switches
+                .into_iter()
+                .filter_map(|(br_table, switch)| {
+                    let entries = switch_entries(&wmod, &callees, &switch)?;
+                    let base = *table_ranges.entry(entries.clone()).or_insert_with(|| {
+                        let base = table_elements.len() as u32;
+                        table_elements.extend(entries.iter().copied());
+                        base
+                    });
+                    let sig = wmod.funcs[entries[0]].sig();
+                    Some((
+                        br_table,
+                        TableSwitch {
+                            base,
+                            call: switch.call,
+                            sig,
+                        },
+                    ))
+                })
+                .collect();
+            TailPlan { sites, switches }
+        });
+        if !tail_plan.sites.is_empty() {
+            tail_calls.calls.insert(
+                func.index() as u32,
+                tail_plan.sites.values().copied().collect(),
+            );
+        }
+        plans.insert(func_ref, tail_plan);
+    }
+    let dispatch_table = (!table_elements.is_empty()).then(|| {
+        wmod.tables.push(waffle::TableData {
+            ty: WType::FuncRef,
+            initial: table_elements.len() as u64,
+            max: Some(table_elements.len() as u64),
+            func_elements: Some(table_elements),
+        })
+    });
+    tail_calls.table = dispatch_table.map(|table| table.index() as u32);
     for (func_ref, func, wsig, name, canonicalize_params) in pending {
+        let tail_plan = plans.remove(&func_ref).unwrap_or_default();
         let body = module
             .func_store
             .try_view(func_ref, |function| {
-                let sites = if tail_callers.contains(&func_ref) {
-                    tail_call_sites(module, func_ref, function, &callees)
-                } else {
-                    FxHashMap::default()
-                };
-                if !sites.is_empty() {
-                    tail_calls.insert(func.index() as u32, sites.values().copied().collect());
-                }
                 FunctionTranslator::new(
                     module,
                     function,
@@ -717,7 +771,11 @@ pub(super) fn translate_module(
                     free_func.map(|(func, _)| func),
                     sha256_func.map(|(func, _)| func),
                     helpers,
-                    sites.into_keys().collect(),
+                    (
+                        tail_plan.sites.into_keys().collect(),
+                        tail_plan.switches,
+                        dispatch_table,
+                    ),
                     opt_level,
                 )
                 .translate(canonicalize_params)
@@ -887,6 +945,49 @@ fn tail_call_sites(
                 .then_some((inst, func.index() as u32))
         })
         .collect()
+}
+
+/// The tail calls of a function: the calls, with the WebAssembly index of
+/// each callee, and the tail switches, by their `br_table`s.
+#[derive(Default)]
+struct TailPlan {
+    sites: FxHashMap<InstId, u32>,
+    switches: FxHashMap<InstId, TableSwitch>,
+}
+
+/// A tail switch: a `br_table` each of whose destinations tail-calls with the
+/// same arguments ([`TailSwitch`]), made one `call_indirect` through the
+/// dispatch table, which the encoded module makes a `return_call_indirect`.
+struct TableSwitch {
+    /// The index in the dispatch table of the callee for key 0.
+    base: u32,
+    /// One of the calls, whose arguments every callee takes.
+    call: InstId,
+    /// The signature of every callee.
+    sig: Signature,
+}
+
+/// The callees of `switch` by key, for each of the `2^bits` values its
+/// scrutinee can take, if every callee is a function of the module with one
+/// signature.
+fn switch_entries(
+    wmod: &WaffleModule<'static>,
+    callees: &FxHashMap<FuncRef, Callee>,
+    switch: &TailSwitch,
+) -> Option<Vec<Func>> {
+    let func = |callee: FuncRef| match callees.get(&callee)?.target {
+        CallTarget::Func(func) => Some(func),
+        _ => None,
+    };
+    let mut entries = vec![func(switch.default)?; 1 << switch.bits];
+    for &(key, callee) in &switch.keys {
+        entries[key as usize] = func(callee)?;
+    }
+    let sig = wmod.funcs[entries[0]].sig();
+    entries
+        .iter()
+        .all(|&entry| wmod.funcs[entry].sig() == sig)
+        .then_some(entries)
 }
 
 /// Which 256-bit helper function a declaration is for.
@@ -1129,6 +1230,17 @@ pub(super) fn emit_call(
     let call = Operator::Call {
         function_index: func,
     };
+    emit_operator(body, block, call, args, carriers)
+}
+
+/// Emit an operator with any number of results and return them in order.
+fn emit_operator(
+    body: &mut FunctionBody,
+    block: waffle::Block,
+    call: Operator,
+    args: &[V],
+    carriers: &[WType],
+) -> Vec<V> {
     if carriers.is_empty() {
         body.add_op(block, call, args, &[]);
         return Vec::new();
@@ -1214,6 +1326,10 @@ struct FunctionTranslator<'a> {
     zero_slots: FxHashMap<ValueId, u32>,
     /// The calls that end their block as tail calls.
     tail_calls: FxHashSet<InstId>,
+    /// The tail switches, by their `br_table`s, and the table they call
+    /// through.
+    switches: FxHashMap<InstId, TableSwitch>,
+    dispatch_table: Option<waffle::Table>,
     /// The size of the largest copy made with loads and stores.
     inline_copy_bytes: u32,
 }
@@ -1235,7 +1351,11 @@ impl<'a> FunctionTranslator<'a> {
         free: Option<Func>,
         sha256: Option<Func>,
         wide_helpers: WideHelpers,
-        tail_calls: FxHashSet<InstId>,
+        (tail_calls, switches, dispatch_table): (
+            FxHashSet<InstId>,
+            FxHashMap<InstId, TableSwitch>,
+            Option<waffle::Table>,
+        ),
         opt_level: OptLevel,
     ) -> Self {
         Self {
@@ -1267,6 +1387,8 @@ impl<'a> FunctionTranslator<'a> {
             edge_slots: FxHashMap::default(),
             zero_slots: FxHashMap::default(),
             tail_calls,
+            switches,
+            dispatch_table,
             inline_copy_bytes: aggregate::inline_copy_bytes(opt_level),
         }
     }
@@ -2596,6 +2718,9 @@ impl<'a> FunctionTranslator<'a> {
                 };
                 self.body.set_terminator(*wb, terminator);
             }
+            NativeInstKind::BrTable(table) if self.switches.contains_key(&inst_id) => {
+                self.tail_switch(*wb, inst_id, *table.scrutinee())?
+            }
             NativeInstKind::BrTable(table) => {
                 let scrutinee_ty = function.dfg.value_ty(*table.scrutinee());
                 let scrutinee = if Wide::from_type(scrutinee_ty).is_some() {
@@ -2950,6 +3075,70 @@ impl<'a> FunctionTranslator<'a> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// End `wb` with the tail switch of the `br_table` `inst_id`: the callee
+    /// for the scrutinee's value is the dispatch table's entry at that value
+    /// past the switch's base, called with the arguments of the switch's
+    /// call, as [`Self::call`] makes a tail call. Its known bits keep the
+    /// scrutinee below the size of the switch's range.
+    fn tail_switch(
+        &mut self,
+        wb: waffle::Block,
+        inst_id: InstId,
+        scrutinee: ValueId,
+    ) -> Result<(), WasmError> {
+        let switch = &self.switches[&inst_id];
+        let (base, call, sig) = (switch.base, switch.call, switch.sig);
+        let table = self
+            .dispatch_table
+            .expect("a module with tail switches has a dispatch table");
+        let call = self.function.dfg.downcast::<&Call>(call).ok_or_else(|| {
+            invalid(format!(
+                "function `{}`: a tail switch's call is not a call",
+                self.name
+            ))
+        })?;
+        let mut args = Vec::new();
+        if self.plan.runtime {
+            // The frame of the callee replaces this one.
+            args.push(self.sp.expect("a module with a runtime passes the stack"));
+        }
+        for &arg in call.args() {
+            self.push_carried(wb, arg, &mut args)?;
+        }
+        let scrutinee_ty = self.function.dfg.value_ty(scrutinee);
+        let int = self.int_ty("br_table", scrutinee_ty)?;
+        let value = self.operand(wb, scrutinee)?;
+        let index = self.emit(wb).resize(int, Int::I32, false, value);
+        let index = if base == 0 {
+            index
+        } else {
+            let base = self.emit(wb).c32(base);
+            self.emit(wb)
+                .op(Operator::I32Add, &[index, base], WType::I32)
+        };
+        args.push(index);
+        // A tail call's callee returns what its caller does.
+        let mut carriers = Vec::new();
+        for &ty in &self.return_tys {
+            let representation = repr(&self.module.ctx, ty).expect("signature types were checked");
+            push_carriers(&self.module.ctx, ty, representation, &mut carriers);
+        }
+        let values = emit_operator(
+            &mut self.body,
+            wb,
+            Operator::CallIndirect {
+                sig_index: sig,
+                table_index: table,
+            },
+            &args,
+            &carriers,
+        );
+        // `tail::rewrite` makes the call and this return a
+        // `return_call_indirect`.
+        self.body.set_terminator(wb, Terminator::Return { values });
         Ok(())
     }
 
