@@ -217,15 +217,6 @@ impl Emit<'_> {
 
     /// Byte reversal: the limbs that hold the value in the opposite order,
     /// each reversed.
-    pub(super) fn wide_bswap(&mut self, wide: Wide, value: Limbs) -> Limbs {
-        let count = wide.limbs();
-        let mut result = value;
-        for index in 0..count {
-            result[index] = self.bswap(Int::I64, value[count - 1 - index]);
-        }
-        result
-    }
-
     /// Leading zero bits of a value of `wide`. The count is at most 256, so it
     /// is held in the lowest limb.
     pub(super) fn wide_clz(&mut self, wide: Wide, value: Limbs) -> Limbs {
