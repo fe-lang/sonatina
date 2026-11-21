@@ -48,9 +48,17 @@ different variants share bytes.
 | `i1`, `i8`, `i16`, `i32` | `i32` |
 | `i64` | `i64` |
 | `*T`, `objref<T>`, `constref<T>` | `i32`, an offset into linear memory |
-| struct, array, enum | `i32`, the address of the value in memory |
+| struct, array, enum of at most five integer and pointer parts | one value for each part |
+| any other struct, array, enum | `i32`, the address of the value in memory |
 | `i128` | two `i64` values, least significant limb first |
 | `i256` | four `i64` values, least significant limb first |
+
+A struct, array or enum whose scalar fields are at most five integers of at
+most 64 bits and pointers, of which only one enum variant has any, is held in
+parts, as native code holds it in registers: one value for each scalar field
+(an enum's tag first), in the order of their offsets. Functions pass, return
+and phis carry such a value as its parts, and memory holds it only when it is
+stored. Every other aggregate lives in linear memory.
 
 `unit` and function types cannot be parameters, results, phi values or
 operands. A module that uses one is rejected with an error naming the type.
@@ -78,7 +86,8 @@ are canonical: an `i8` holding -1 is returned as 255.
   whose field name is its symbol. The module name is `env` unless
   `WasmBackend::with_import_module` selects another. Imports take the same
   kinds of parameters as exports.
-- Functions may return several values (WebAssembly multi-value).
+- Functions may return several values (WebAssembly multi-value), among them
+  values held in parts.
 - The module has a name section with the names of its functions, so an engine
   names them in the stack of a trap. The function behind an export `f` of a
   module with frames is `f$body`.
@@ -113,9 +122,10 @@ Every function of such a module takes the address of the first free byte of the
 stack as a hidden first parameter. It places its frame there: one slot, with
 the alignment of its type, for each `alloca`, each `obj.alloc` (an object lives until
 its function returns, as the front end promises), each struct, array or enum
-that an instruction builds (results of `agg.make`, `insert_value`, `enum.make`, `obj.load`,
-`mload` of an aggregate, a call that returns an aggregate, an aggregate `undef`),
-and each aggregate phi. It passes the end of
+held in memory that an instruction builds (results of `agg.make`, `insert_value`,
+`enum.make`, `obj.load`, `mload` of an aggregate, a call that returns an
+aggregate, an aggregate `undef`), and each phi of such an aggregate. Values
+held in parts take no slot. It passes the end of
 its frame to the functions it calls. Frames are 16-byte aligned. A call whose
 frame does not fit below the end of the stack traps. Slots are static: an
 instruction in a loop uses the same slot on each iteration, as `alloca` does on
@@ -142,12 +152,14 @@ the module.
 A private function in a recursive cycle makes tail calls, as on the native
 target: a call whose results the function returns at once is a `return_call`,
 so a deep tail recursion runs in constant stack. The callee starts its frame
-where the caller's started. That needs the caller's frame to be dead: no
-`alloca`, no reference to an `obj.alloc` that outlives a call, every struct,
-array or enum argument one that the caller itself received, and no aggregate
-result. A call in tail position that passes an aggregate built in the caller's
-frame is still a `return_call`, with a frame above the caller's, so only the
-stack of the module grows.
+where the caller's started, so the module's stack does not grow either. That
+needs the caller's frame to be dead: no `alloca`, no reference to an
+`obj.alloc` that outlives a call, every argument held in memory one that the
+caller itself received, and no result returned through a buffer. A value held
+in parts passes as its parts, so an interpreter whose handlers pass a small
+cursor from one to the next runs in constant stack in both. A call in tail
+position that passes an aggregate held in memory built in the caller's frame
+is an ordinary call.
 
 WAFFLE 0.3.3 has no `return_call`. The backend emits the call followed by a
 return of its results and rewrites that sequence in the encoded module.
@@ -242,10 +254,12 @@ the same mark twice in a row does nothing the second time.
 The semantics follow the host-native backend, whose legalization of enum tags,
 aggregate combination and object returns the backend runs first.
 
-- A struct, array or enum value is the address of an immutable snapshot.
-  `agg.make`, `insert_value`, `enum.make` and `obj.load` make a new snapshot;
-  `extract_value` and `enum.extract` of an aggregate and `const.load` view the
-  source in place.
+- A struct, array or enum value held in memory is the address of an immutable
+  snapshot. `agg.make`, `insert_value`, `enum.make` and `obj.load` make a new
+  snapshot; `extract_value` and `enum.extract` of an aggregate and
+  `const.load` view the source in place. On a value held in parts these
+  instructions take and replace parts, and a load or store moves each part at
+  its offset.
 - `insert_value` makes its snapshot in place when it is the only user of an
   insert in the same block. An `undef` aggregate is zero, so the snapshot of an
   insert into `undef` is filled with zero first, and that of another insert is
@@ -257,11 +271,12 @@ aggregate combination and object returns the backend runs first.
 - An aggregate of at most 64 bytes is copied with loads and stores, and a
   larger one with `memory.copy`. At `Os` every copy is a `memory.copy`, which
   is smaller than even one load and store.
-- A function receives aggregates by address and returns a single aggregate through
+- A function receives aggregates held in memory by address and returns a single one through
   a buffer in the caller's frame, which is a hidden parameter after the stack
   top. A `constref` result is the address of the constant, as is `sym_addr`
-  of a global. A function cannot return an aggregate together with other
-  values.
+  of a global. A function cannot return an aggregate held in memory together
+  with other values; it returns a value held in parts as its parts, with any
+  others.
 - `obj.alloc`, `obj.proj`, `obj.index`, `obj.load`, `obj.store`,
   `obj.from_ptr`, `const.ref`, `const.proj`, `const.index` and `const.load` are
   address arithmetic and loads and stores. `obj.from_ptr`

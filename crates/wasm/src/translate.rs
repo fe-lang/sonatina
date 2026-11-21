@@ -13,10 +13,11 @@
 //! # Values
 //!
 //! An integer of at most 64 bits is one WebAssembly value. A pointer, an
-//! `objref`, a `constref` and a value of struct or array type are one `i32`:
-//! the address of the value in linear memory (aggregates live in memory, as
-//! on the native target). A 256-bit integer is four `i64` values and a 128-bit
-//! integer two.
+//! `objref` and a `constref` are one `i32`. A struct, array or enum of a few
+//! integer and pointer fields is one value for each of them, as native code
+//! holds it in registers (`translate/parts.rs`); any other is one `i32`, the
+//! address of the value in linear memory. A 256-bit integer is four `i64`
+//! values and a 128-bit integer two.
 //!
 //! # Frames
 //!
@@ -37,6 +38,7 @@ use waffle::{
 use sonatina_codegen::{
     OptLevel,
     analysis::tail_position::{tail_callers, tail_position_calls},
+    isa::native::{Part, register_parts},
 };
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Inst, InstId, Linkage, Module, Type, Value,
@@ -62,6 +64,7 @@ use super::{
     wide::{self, LIMBS, Limbs, Wide},
 };
 mod aggregate;
+mod parts;
 mod wide_ops;
 
 use wide_ops::{WideHelpers, WideOp, constant_shift};
@@ -93,7 +96,12 @@ enum Repr {
     Wide(Wide),
     /// A pointer, `objref` or `constref`: an `i32` address.
     Pointer,
-    /// A struct or array: an `i32` address of the value in memory.
+    /// A struct, array or enum of a few integer and pointer fields
+    /// ([`register_parts`]): one value for each part, as native code holds
+    /// it in registers.
+    Parts,
+    /// Any other struct, array or enum: an `i32` address of the value in
+    /// memory.
     Aggregate,
 }
 
@@ -109,33 +117,44 @@ fn repr(ctx: &ModuleCtx, ty: Type) -> Option<Repr> {
             Some(Repr::Pointer)
         }
         CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_) => {
-            Some(Repr::Aggregate)
+            Some(match register_parts(ctx, ty) {
+                Some(_) => Repr::Parts,
+                None => Repr::Aggregate,
+            })
         }
         CompoundType::Func { .. } => None,
     }
 }
 
-impl Repr {
-    fn push_carriers(self, out: &mut Vec<WType>) {
-        match self {
-            Self::Int(int) => out.push(int.carrier()),
-            Self::Wide(wide) => out.extend(std::iter::repeat_n(WType::I64, wide.limbs())),
-            Self::Pointer | Self::Aggregate => out.push(WType::I32),
-        }
+/// The WebAssembly value that carries a part of a value held in parts.
+fn part_carrier(part: &Part) -> WType {
+    Int::from_type(part.ty).map_or(WType::I32, Int::carrier)
+}
+
+/// Push the WebAssembly values that carry a `ty` value, which `repr` holds.
+fn push_carriers(ctx: &ModuleCtx, ty: Type, repr: Repr, out: &mut Vec<WType>) {
+    match repr {
+        Repr::Int(int) => out.push(int.carrier()),
+        Repr::Wide(wide) => out.extend(std::iter::repeat_n(WType::I64, wide.limbs())),
+        Repr::Pointer | Repr::Aggregate => out.push(WType::I32),
+        Repr::Parts => out.extend(
+            register_parts(ctx, ty)
+                .expect("a value held in parts has parts")
+                .iter()
+                .map(part_carrier),
+        ),
     }
 }
 
 /// The type of storage that a function returns through its hidden buffer, if
-/// it does: a single struct, array or enum result. A `constref` result is the
-/// address of its constant, which no call overwrites.
+/// it does: a single struct, array or enum result held in memory. A
+/// `constref` result is the address of its constant, which no call
+/// overwrites, and a value held in parts is returned as its parts.
 fn indirect_return_storage(ctx: &ModuleCtx, rets: &[Type]) -> Option<Type> {
     let [ty] = rets else {
         return None;
     };
-    match ty.resolve_compound(ctx)? {
-        CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_) => Some(*ty),
-        _ => None,
-    }
+    (repr(ctx, *ty) == Some(Repr::Aggregate)).then_some(*ty)
 }
 
 fn type_name(ctx: &ModuleCtx, ty: Type) -> String {
@@ -269,7 +288,7 @@ fn scan_module(module: &Module) -> Scan {
         let is_aggregate = |ty: Type| {
             matches!(
                 repr(&module.ctx, ty),
-                Some(Repr::Aggregate) | None if ty != Type::Unit && !ty.is_enum_tag()
+                Some(Repr::Aggregate | Repr::Parts) | None if ty != Type::Unit && !ty.is_enum_tag()
             ) || matches!(
                 ty.resolve_compound(&module.ctx),
                 Some(CompoundType::ObjRef(_) | CompoundType::ConstRef(_))
@@ -977,7 +996,11 @@ fn declared_signature(
                     type_name(&module.ctx, ty)
                 )));
             };
-            if external && matches!(representation, Repr::Wide(_) | Repr::Aggregate)
+            if external
+                && matches!(
+                    representation,
+                    Repr::Wide(_) | Repr::Parts | Repr::Aggregate
+                )
                 || external && is_reference(&module.ctx, ty)
             {
                 return Err(unsupported(format!(
@@ -998,12 +1021,13 @@ fn declared_signature(
             params.push(WType::I32);
         }
         for (index, ty) in sig.args().iter().enumerate() {
-            carrier(*ty, format!("parameter {index}"))?.push_carriers(&mut params);
+            let representation = carrier(*ty, format!("parameter {index}"))?;
+            push_carriers(&module.ctx, *ty, representation, &mut params);
         }
         for (index, ty) in sig.ret_tys().iter().enumerate() {
             let representation = carrier(*ty, format!("result {index}"))?;
             if sret.is_none() || external {
-                representation.push_carriers(&mut returns);
+                push_carriers(&module.ctx, *ty, representation, &mut returns);
             }
         }
         Ok(DeclaredSignature {
@@ -1156,9 +1180,12 @@ struct FunctionTranslator<'a> {
     wide_helpers: WideHelpers,
     return_tys: Vec<Type>,
     /// Sonatina values defined so far, in canonical WAFFLE form. Not 128- or
-    /// 256-bit values, which are in `wide`, zero-extended to four limbs.
+    /// 256-bit values, which are in `wide`, zero-extended to four limbs, nor
+    /// values held in parts, which are in `parts`, one canonical value for
+    /// each part.
     values: FxHashMap<ValueId, V>,
     wide: FxHashMap<ValueId, Limbs>,
+    parts: FxHashMap<ValueId, Vec<V>>,
     blocks: FxHashMap<BlockId, waffle::Block>,
     /// The stack top received from the caller, which is the base of the frame.
     sp: Option<V>,
@@ -1221,6 +1248,7 @@ impl<'a> FunctionTranslator<'a> {
             return_tys: callees[&func_ref].rets.clone(),
             values: FxHashMap::default(),
             wide: FxHashMap::default(),
+            parts: FxHashMap::default(),
             blocks: FxHashMap::default(),
             sp: None,
             top: None,
@@ -1322,10 +1350,12 @@ impl<'a> FunctionTranslator<'a> {
                     self.values.insert(arg, params[next]);
                     next += 1;
                 }
+                Repr::Parts => {
+                    let count = self.parts_of(ty).len();
+                    self.parts.insert(arg, params[next..next + count].to_vec());
+                    next += count;
+                }
             }
-        }
-        if needs_prologue {
-            // The terminator of the prologue is set once the frame is known.
         }
 
         for &block in &order {
@@ -1367,6 +1397,14 @@ impl<'a> FunctionTranslator<'a> {
                     Repr::Pointer => {
                         let param = self.body.add_blockparam(wb, WType::I32);
                         self.values.insert(result, param);
+                    }
+                    Repr::Parts => {
+                        let params = self
+                            .parts_of(ty)
+                            .iter()
+                            .map(|part| self.body.add_blockparam(wb, part_carrier(part)))
+                            .collect();
+                        self.parts.insert(result, params);
                     }
                     Repr::Aggregate => {
                         // The block parameter is the address of the incoming
@@ -1500,6 +1538,12 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(value);
         }
         let function = self.function;
+        if repr(&self.module.ctx, function.dfg.value_ty(id)) == Some(Repr::Parts) {
+            return Err(invalid(format!(
+                "function `{}`: value v{} is held in parts and has no single value",
+                self.name, id.0
+            )));
+        }
         match function.dfg.value(id) {
             Value::Immediate { imm, .. } => {
                 let mut emit = self.emit(wb);
@@ -1520,7 +1564,7 @@ impl<'a> FunctionTranslator<'a> {
                 Some(Repr::Int(int)) => Ok(self.emit(wb).zero(int)),
                 Some(Repr::Pointer) => Ok(self.emit(wb).c32(0)),
                 Some(Repr::Aggregate) => self.zero_aggregate(wb, id, *ty),
-                _ => Err(self.unsupported_type("an undefined value", *ty)),
+                _ => Err(self.unsupported_type("a zero value", *ty)),
             },
             Value::Global { gv, .. } => {
                 let address = self.plan.globals.get(gv).ok_or_else(|| {
@@ -1536,6 +1580,24 @@ impl<'a> FunctionTranslator<'a> {
                 self.name, id.0
             ))),
         }
+    }
+
+    /// Push the WebAssembly values that carry the operand `id`: its limbs,
+    /// its parts or its one value.
+    fn push_carried(
+        &mut self,
+        wb: waffle::Block,
+        id: ValueId,
+        out: &mut Vec<V>,
+    ) -> Result<(), WasmError> {
+        if let Some(wide) = self.wide_ty(id) {
+            out.extend_from_slice(&self.wide_operand(wb, id)?[..wide.limbs()]);
+        } else if repr(&self.module.ctx, self.function.dfg.value_ty(id)) == Some(Repr::Parts) {
+            out.extend(self.parts_operand(wb, id)?);
+        } else {
+            out.push(self.operand(wb, id)?);
+        }
+        Ok(())
     }
 
     /// The limbs of a 128- or 256-bit operand, zero-extended to 256 bits.
@@ -1587,11 +1649,14 @@ impl<'a> FunctionTranslator<'a> {
         inst_id: InstId,
         arg: ValueId,
     ) -> Result<(), WasmError> {
+        let ty = self.function.dfg.value_ty(arg);
         if let Some(wide) = self.wide_ty(arg) {
             let limbs = self.wide_operand(wb, arg)?;
             self.define_wide(wb, inst_id, 0, wide, limbs)
+        } else if repr(&self.module.ctx, ty) == Some(Repr::Parts) {
+            let values = self.parts_operand(wb, arg)?;
+            self.define_parts(inst_id, 0, values, ty)
         } else {
-            let ty = self.function.dfg.value_ty(arg);
             let value = self.operand(wb, arg)?;
             self.define(inst_id, 0, value, ty)
         }
@@ -2085,6 +2150,7 @@ impl<'a> FunctionTranslator<'a> {
                     }
                     args.push(address);
                 }
+                Some(Repr::Parts) => args.extend(self.parts_operand(wb, input)?),
                 _ => args.push(self.operand(wb, input)?),
             }
         }
@@ -2817,19 +2883,15 @@ impl<'a> FunctionTranslator<'a> {
             None => None,
         };
         for &arg in call_args {
-            if let Some(wide) = self.wide_ty(arg) {
-                args.extend_from_slice(&self.wide_operand(wb, arg)?[..wide.limbs()]);
-            } else {
-                args.push(self.operand(wb, arg)?);
-            }
+            self.push_carried(wb, arg, &mut args)?;
         }
 
         let mut carriers = Vec::new();
         if sret_address.is_none() {
-            for ty in &callee.rets {
-                repr(&self.module.ctx, *ty)
-                    .expect("signature types were checked")
-                    .push_carriers(&mut carriers);
+            for &ty in &callee.rets {
+                let representation =
+                    repr(&self.module.ctx, ty).expect("signature types were checked");
+                push_carriers(&self.module.ctx, ty, representation, &mut carriers);
             }
         }
         let values = emit_call(&mut self.body, wb, func, &args, &carriers);
@@ -2874,6 +2936,12 @@ impl<'a> FunctionTranslator<'a> {
                     self.define(inst_id, index, values[next], *ty)?;
                     next += 1;
                 }
+                Repr::Parts => {
+                    let count = self.parts_of(*ty).len();
+                    let carried = values[next..next + count].to_vec();
+                    next += count;
+                    self.define_parts(inst_id, index, carried, *ty)?;
+                }
             }
         }
         Ok(())
@@ -2906,11 +2974,7 @@ impl<'a> FunctionTranslator<'a> {
         }
         let mut values = Vec::with_capacity(args.len());
         for &arg in args {
-            if let Some(wide) = self.wide_ty(arg) {
-                values.extend_from_slice(&self.wide_operand(wb, arg)?[..wide.limbs()]);
-            } else {
-                values.push(self.operand(wb, arg)?);
-            }
+            self.push_carried(wb, arg, &mut values)?;
         }
         self.body.set_terminator(wb, Terminator::Return { values });
         Ok(())
