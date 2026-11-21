@@ -32,8 +32,7 @@ func public %entry() {
     block2:
         mstore 0.i32 v1 unit;
         v7.unit = mload 0.i32 unit;
-        v8.@with_unit = insert_value undef.@with_unit 0.i8 v7;
-        v9.@with_unit = insert_value v8 1.i8 v5;
+        v9.@with_unit = agg.make @with_unit v7 v5;
         v10.unit = extract_value v9 0.i8;
         (v11.unit, v12.i256) = call %pick v10 v5;
         mstore 0.i32 v12 i256;

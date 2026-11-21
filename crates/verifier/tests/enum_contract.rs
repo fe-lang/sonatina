@@ -447,8 +447,7 @@ func private %references() -> [objref<i256>; 2] {
 block0:
  v0.objref<i256> = obj.alloc i256;
  obj.store v0 31.i256;
- v1.[objref<i256>; 2] = insert_value undef.[objref<i256>; 2] 0.i8 v0;
- v2.[objref<i256>; 2] = insert_value v1 1.i8 v0;
+ v2.[objref<i256>; 2] = agg.make [objref<i256>; 2] v0 v0;
  return v2;
 }
 func private %entry"#,
@@ -664,7 +663,7 @@ fn local_carriers_preserve_initialized_and_invalid_read_outcomes() {
             "v2",
         ),
         (
-            "v2.@Holder = insert_value undef.@Holder 0.i8 v1;\n v3.objref<i256> = extract_value v2 0.i8;",
+            "v2.@Holder = agg.make @Holder v1;\n v3.objref<i256> = extract_value v2 0.i8;",
             "v3",
         ),
         (
@@ -885,7 +884,7 @@ block0:
  enum.write_variant v0 #Some (17.i256);
  v1.objref<i256> = enum.proj v0 #Some 0.i8;
  v2.objref<@Copy> = obj.alloc @Copy;
- v3.@Copy = insert_value undef.@Copy 0.i8 {field_value};
+ v3.@Copy = agg.make @Copy {field_value};
  obj.store v2 v3;
  v4.@Copy = obj.load v2;
  enum.set_tag v0 #None;

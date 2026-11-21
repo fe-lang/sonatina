@@ -5,9 +5,7 @@ type @s1 = {i32, i64, i1};
 #[(3.i32, 2.i64, 1.i1) -> 6.i64]
 func private %insert_value_basic(v0.i32, v1.i64, v2.i1) -> i64 {
     block0:
-        v3.@s1 = insert_value undef.@s1 0.i256 v0;
-        v4.@s1 = insert_value v3 1.i256 v1;
-        v5.@s1 = insert_value v4 2.i256 v2;
+        v5.@s1 = agg.make @s1 v0 v1 v2;
 
         v6.i32 = extract_value v5 0.i256;
         v7.i64 = extract_value v5 1.i256;

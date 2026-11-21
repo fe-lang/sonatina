@@ -120,10 +120,7 @@ block0:
     v2.i1 = eq v0 0.i64;
     br v2 block1 block2;
 block1:
-    v3.@Quad = insert_value undef.@Quad 0.i64 1.i8;
-    v4.@Quad = insert_value v3 1.i64 v1;
-    v5.@Quad = insert_value v4 2.i64 -3.i16;
-    v6.@Quad = insert_value v5 3.i64 77.i64;
+    v6.@Quad = agg.make @Quad 1.i8 v1 -3.i16 77.i64;
     v7.@Quad = insert_value v6 0.i64 9.i8;
     return (v6, v1, v7);
 block2:
@@ -138,8 +135,7 @@ block0:
     v2.i1 = eq v0 0.i64;
     br v2 block1 block2;
 block1:
-    v3.@Quad = insert_value undef.@Quad 0.i64 2.i8;
-    v4.@Quad = insert_value v3 1.i64 v1;
+    v4.@Quad = agg.make @Quad 2.i8 v1 undef.i16 undef.i64;
     return (v4, v1, v4);
 block2:
     v5.i64 = sub v0 1.i64;
@@ -349,7 +345,7 @@ fn tail_calls_pass_aggregate_arguments_on() {
     let source = r#"
 func inline(never) private %fill(v0.i64) -> [i64; 32] {
 block0:
-    v1.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v1.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     return v1;
 }
 
@@ -409,11 +405,11 @@ fn interpreter_handlers_tail_call_with_their_frame() {
     // opcode's handler through a table. Five fields are held in registers;
     // with a sixth, the frame passes in storage, which each handler writes
     // its new frame into. The code `[1, 2, 0]` counts to `DEPTH`.
-    for (extra_field, extra_init, extra_out) in [
-        ("", "v8.@Frame = insert_value v7 4.i64 0.i64;", ""),
+    for (extra_field, extra_value, extra_out) in [
+        ("", "", ""),
         (
             ", i64",
-            "v8.@Frame = insert_value v7 5.i64 77.i64;",
+            " 77.i64",
             "v8.i64 = extract_value v1 5.i64;
     v9.*i64 = gep v0 3.i64;
     mstore v9 v8 i64;",
@@ -495,12 +491,7 @@ block2:
 
 func public %run(v0.*i8, v1.*i8, v2.*i64) {{
 block0:
-    v3.@Frame = insert_value undef.@Frame 0.i64 v0;
-    v4.@Frame = insert_value v3 1.i64 0.i64;
-    v5.@Frame = insert_value v4 2.i64 0.i64;
-    v6.@Frame = insert_value v5 3.i64 v1;
-    v7.@Frame = insert_value v6 4.i64 0.i64;
-    {extra_init}
+    v8.@Frame = agg.make @Frame v0 0.i64 0.i64 v1 0.i64{extra_value};
     call %next v2 v8;
     return;
 }}
@@ -545,11 +536,7 @@ fn handlers_resume_through_a_dispatch_that_builds_their_frame() {
 type @Frame = {{*i8, i64, i64, *i8, i64}};
 func inline(never) private %start(v0.*i64, v1.*i8, v2.i64, v3.*i8, v4.i64) {{
 block0:
-    v5.@Frame = insert_value undef.@Frame 0.i64 v1;
-    v6.@Frame = insert_value v5 1.i64 0.i64;
-    v7.@Frame = insert_value v6 2.i64 v2;
-    v8.@Frame = insert_value v7 3.i64 v3;
-    v9.@Frame = insert_value v8 4.i64 v4;
+    v9.@Frame = agg.make @Frame v1 0.i64 v2 v3 v4;
     v10.i8 = mload v1 i8;
     br_table v10 block1 (1.i8 block2) (2.i8 block3);
 block1:

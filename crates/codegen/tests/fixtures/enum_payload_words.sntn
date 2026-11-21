@@ -49,8 +49,7 @@ func inline(never) private %choose_mixed(v0.i8) -> @Mixed {
 block0:
     br_table v0 block4 (0.i8 block1) (1.i8 block2) (2.i8 block3);
 block1:
-    v1.@Point = insert_value undef.@Point 0.i8 -1.i256;
-    v2.@Point = insert_value v1 1.i8 -43.i256;
+    v2.@Point = agg.make @Point -1.i256 -43.i256;
     v3.@Mixed = enum.make @Mixed #Pt (v2);
     jump block5;
 block2:
@@ -77,8 +76,7 @@ block0:
 func inline(never) public %point_object() -> i64 {
 block0:
     v0.objref<@Mixed> = obj.alloc @Mixed;
-    v1.@Point = insert_value undef.@Point 0.i8 100.i256;
-    v2.@Point = insert_value v1 1.i8 1.i256;
+    v2.@Point = agg.make @Point 100.i256 1.i256;
     enum.write_variant v0 #Pt (v2);
     v3.objref<@Point> = enum.proj v0 #Pt 0.i8;
     v4.objref<i256> = obj.proj v3 1.i8;
@@ -96,8 +94,7 @@ block0:
 func inline(never) public %narrow_overwrite() -> i64 {
 block0:
     v0.objref<@Mixed> = obj.alloc @Mixed;
-    v1.@Point = insert_value undef.@Point 0.i8 -1.i256;
-    v2.@Point = insert_value v1 1.i8 -1.i256;
+    v2.@Point = agg.make @Point -1.i256 -1.i256;
     enum.write_variant v0 #Pt (v2);
     enum.write_variant v0 #Narrow (100.i8, 3.i256);
     v3.objref<i8> = enum.proj v0 #Narrow 0.i8;
@@ -258,9 +255,7 @@ block0:
     enum.write_variant v0 #Pair (40.i256, 1.i1);
     v1.@Arr = obj.load v0;
     v2.i64 = call %arr_sum v1;
-    v3.[i64; 3] = insert_value undef.[i64; 3] 0.i8 1.i64;
-    v4.[i64; 3] = insert_value v3 1.i8 2.i64;
-    v5.[i64; 3] = insert_value v4 2.i8 3.i64;
+    v5.[i64; 3] = agg.make [i64; 3] 1.i64 2.i64 3.i64;
     enum.write_variant v0 #Arr (v5);
     v6.objref<[i64; 3]> = enum.proj v0 #Arr 0.i8;
     v7.i64 = call %index_two;
@@ -349,8 +344,7 @@ block2:
 
 func inline(never) public %big_by_value() -> i64 {
 block0:
-    v0.[i256; 6] = insert_value undef.[i256; 6] 0.i8 4.i256;
-    v1.[i256; 6] = insert_value v0 5.i8 2.i256;
+    v1.[i256; 6] = agg.make [i256; 6] 4.i256 undef.i256 undef.i256 undef.i256 undef.i256 2.i256;
     v2.@Big = enum.make @Big #Big (v1);
     v3.i64 = call %big_sum v2;
     v4.@Big = call %big_echo v2 1.i1;
@@ -573,15 +567,12 @@ block3:
 func inline(never) public %nested_nodes() -> i64 {
 block0:
     v0.objref<@Nest> = obj.alloc @Nest;
-    v1.@Point = insert_value undef.@Point 0.i8 -1.i256;
-    v2.@Point = insert_value v1 1.i8 30.i256;
-    v3.@Quad = insert_value undef.@Quad 0.i8 v2;
-    v4.@Quad = insert_value v3 1.i8 12.i256;
+    v2.@Point = agg.make @Point -1.i256 30.i256;
+    v4.@Quad = agg.make @Quad v2 12.i256;
     enum.write_variant v0 #Whole (v4);
     v5.@Nest = obj.load v0;
     v6.i64 = call %nest_sum v5;
-    v7.@Point = insert_value undef.@Point 0.i8 6.i256;
-    v8.@Point = insert_value v7 1.i8 7.i256;
+    v8.@Point = agg.make @Point 6.i256 7.i256;
     enum.write_variant v0 #Inner (v8);
     v9.objref<@Point> = enum.proj v0 #Inner 0.i8;
     v10.objref<i256> = obj.proj v9 1.i8;
@@ -630,16 +621,14 @@ block2:
 func inline(never) public %straddling_fields() -> i64 {
 block0:
     v0.objref<@Straddle> = obj.alloc @Straddle;
-    v1.@Left = insert_value undef.@Left 0.i8 20.i256;
-    v2.@Left = insert_value v1 1.i8 9.i8;
+    v2.@Left = agg.make @Left 20.i256 9.i8;
     enum.write_variant v0 #A (22.i256, v2);
     v3.objref<@Left> = enum.proj v0 #A 1.i8;
     v4.objref<i8> = obj.proj v3 1.i8;
     obj.store v4 4.i8;
     v5.@Straddle = obj.load v0;
     v6.i64 = call %straddle_sum v5;
-    v7.@Right = insert_value undef.@Right 0.i8 7.i8;
-    v8.@Right = insert_value v7 1.i8 -1.i256;
+    v8.@Right = agg.make @Right 7.i8 -1.i256;
     enum.write_variant v0 #B (v8, 3.i256);
     v9.objref<@Right> = enum.proj v0 #B 0.i8;
     v10.objref<i256> = obj.proj v9 1.i8;

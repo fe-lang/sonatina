@@ -1251,7 +1251,7 @@ block0:
 func public %entry() -> i256 {
 block0:
  v0.objref<i256> = obj.alloc i256;
- v1.@Wrapper = insert_value undef.@Wrapper 0.i8 v0;
+ v1.@Wrapper = agg.make @Wrapper v0;
  obj.store v0 11.i256;
  call %overwrite v1;
  v2.i256 = obj.load v0;
@@ -2087,7 +2087,7 @@ type @pair = { i256, i256 };
 func private %f(v0.i256) -> i256 {
     block0:
         v1.objref<@pair> = obj.alloc @pair;
-        v2.@pair = insert_value undef.@pair 0.i8 v0;
+        v2.@pair = agg.make @pair v0 undef.i256;
         obj.store v1 v2;
         v3.objref<i256> = obj.proj v1 1.i8;
         v4.i256 = obj.load v3;
@@ -2124,10 +2124,9 @@ type @nested = {{i256, @pair}};
 func private %f(v0.i256) -> i256 {{
     block0:
         v1.objref<@nested> = obj.alloc @nested;
-        v2.@pair = insert_value undef.@pair 0.i8 7.i256;
+        v2.@pair = agg.make @pair 7.i256 undef.i256;
         v3.@pair = insert_value v2 1.i8 {field};
-        v4.@nested = insert_value undef.@nested 1.i8 v3;
-        v5.@nested = insert_value v4 0.i8 v0;
+        v5.@nested = agg.make @nested v0 v3;
         obj.store v1 v5;
         v6.@nested = obj.load v1;
         v7.@pair = extract_value v6 1.i8;

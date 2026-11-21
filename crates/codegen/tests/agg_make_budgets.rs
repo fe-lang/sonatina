@@ -2,7 +2,10 @@
 //! `agg.make` weighs the same in the size budgets of loop rotation, loop
 //! unrolling, jump threading and insert chain placement: each pass applies to
 //! both spellings or to neither.
-use sonatina_codegen::optim::{Pass, Pipeline, Step};
+use sonatina_codegen::{
+    optim::{Pass, Pipeline, Step},
+    transform::aggregate::fold_fresh_aggregates,
+};
 use sonatina_ir::ir_writer::ModuleWriter;
 
 /// `vN.[i256; len] = ...` built from `elem` in every field.
@@ -28,14 +31,17 @@ fn build(result: &str, len: usize, elem: &str, make: bool) -> String {
     text
 }
 
-/// Whether `pass` changes `source`.
+/// Whether `pass` changes `source`, other than by spelling a chain as an
+/// `agg.make`, which hoist does first.
 fn applies(pass: Pass, source: &str) -> bool {
     let mut module = sonatina_parser::parse_module(source).unwrap().module;
-    let before = ModuleWriter::new(&module).dump_string();
+    let input = sonatina_parser::parse_module(source).unwrap().module;
+    fold_fresh_aggregates(&input);
     let mut pipeline = Pipeline::new();
     pipeline.add_step(Step::FuncPasses(vec![pass]));
     pipeline.run(&mut module);
-    ModuleWriter::new(&module).dump_string() != before
+    fold_fresh_aggregates(&module);
+    ModuleWriter::new(&module).dump_string() != ModuleWriter::new(&input).dump_string()
 }
 
 fn same_decision(pass: Pass, source: impl Fn(bool) -> String, expected: bool) {

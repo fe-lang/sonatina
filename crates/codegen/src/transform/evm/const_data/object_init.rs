@@ -107,20 +107,17 @@ pub(super) fn emit_const_value(
         }
         _ => panic!("unsupported const value type {ty:?}"),
     };
-    let mut value = func.dfg.make_undef_value(ty);
-    for (idx, (field_ty, item)) in fields.into_iter().zip(items).enumerate() {
-        let index = func
-            .dfg
-            .make_imm_value(Immediate::I64(i64::try_from(idx).expect("index overflow")));
-        let field = emit_const_value(func, before, field_ty, item);
-        value = insert_before_one(
-            func,
-            before,
-            data::InsertValue::new_unchecked(func.inst_set(), value, index, field),
-            ty,
-        );
-    }
-    value
+    let values = fields
+        .into_iter()
+        .zip(items)
+        .map(|(field_ty, item)| emit_const_value(func, before, field_ty, item))
+        .collect();
+    insert_before_one(
+        func,
+        before,
+        data::AggMake::new_unchecked(func.inst_set(), ty, values),
+        ty,
+    )
 }
 
 pub(super) fn emit_obj_zero_fill(func: &mut Function, before: InstId, object: ValueId, ty: Type) {

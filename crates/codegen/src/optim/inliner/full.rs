@@ -5,10 +5,7 @@ use sonatina_ir::{
     module::FuncRef, visitor::Visitor,
 };
 
-use crate::{
-    cfg_edit::{CfgEditor, CleanupMode},
-    optim::inst_size,
-};
+use crate::{cfg_edit::CfgEditor, optim::inst_size};
 
 use super::{CallChanges, cost::SummaryKey, rewrite::OperandRewriter};
 
@@ -124,7 +121,7 @@ pub(super) fn try_inline_callsite_full(
         validated_callees.insert(callee_key);
     }
 
-    let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
+    let mut editor = CfgEditor::new(caller);
     let (callsite_block, cont_block) = editor.split_block_at(call_inst);
 
     let mut block_map: FxHashMap<BlockId, BlockId> = FxHashMap::default();

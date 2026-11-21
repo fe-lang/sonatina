@@ -89,10 +89,10 @@ block0:
     v3.@pair = extract_value v0 0.i8;
     v4.i256 = extract_value v2 0.i8;
     v5.i256 = extract_value v3 1.i8;
-    v6.@pair = insert_value undef.@pair 0.i8 v4;
+    v6.@pair = agg.make @pair v4 undef.i256;
     v7.@pair = insert_value v6 1.i8 v5;
     v8.@pair = extract_value v0 1.i8;
-    v9.@outer = insert_value undef.@outer 0.i8 v7;
+    v9.@outer = agg.make @outer v7 undef.@pair;
     v10.@outer = insert_value v9 1.i8 v8;
     v11.@pair = insert_value v6 1.i8 undef.i256;
     v12.@outer = insert_value v9 1.i8 v11;

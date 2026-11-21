@@ -1049,8 +1049,10 @@ func private %entry() -> [i256; 2] {
         .view(entry, |func| FuncWriter::new(entry, func).dump_string());
     assert_eq!(dumped.matches("obj.alloc").count(), 1, "{dumped}");
     assert_eq!(dumped.matches("obj.store").count(), 2, "{dumped}");
-    assert!(dumped.contains("insert_value v"), "{dumped}");
-    assert!(dumped.contains("1.i64 22.i256"), "{dumped}");
+    assert!(
+        dumped.contains("agg.make [i256; 2] 11.i256 22.i256"),
+        "{dumped}"
+    );
     assert!(!dumped.contains("const."), "{dumped}");
 }
 

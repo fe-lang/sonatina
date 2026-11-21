@@ -7,13 +7,11 @@ func private %view(v0.i256, v1.i1) -> @pair {
         br v1 block1 block2;
 
     block1:
-        v2.@pair = insert_value undef.@pair 0.i8 v0;
-        v3.@pair = insert_value v2 1.i8 1.i256;
+        v3.@pair = agg.make @pair v0 1.i256;
         return v3;
 
     block2:
-        v4.@pair = insert_value undef.@pair 0.i8 v0;
-        v5.@pair = insert_value v4 1.i8 2.i256;
+        v5.@pair = agg.make @pair v0 2.i256;
         return v5;
 }
 

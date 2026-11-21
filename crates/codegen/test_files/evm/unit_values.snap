@@ -59,6 +59,6 @@ entry:
     JUMPDEST
     PUSH0  // evm_mstore v1 v7;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v1 v8;
+    PUSH1 0x20 (32)  // evm_return v1 v9;
     PUSH0
     RETURN

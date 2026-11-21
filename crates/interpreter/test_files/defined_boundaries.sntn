@@ -56,7 +56,7 @@ func private %pair_param(v0.@pair) -> i256 {
 #[() -> 7.i256]
 func public %undef_field_argument() -> i256 {
     block0:
-        v0.@pair = insert_value undef.@pair 0.i256 7.i256;
+        v0.@pair = agg.make @pair 7.i256 undef.i256;
         v1.i256 = call %pair_param v0;
         return v1;
 }
@@ -70,7 +70,7 @@ func public %undef_aggregate_argument() -> i256 {
 
 func private %nested_result() -> @nested {
     block0:
-        v0.@nested = insert_value undef.@nested 0.i256 7.i256;
+        v0.@nested = agg.make @nested 7.i256 undef.@pair;
         return v0;
 }
 

@@ -27,8 +27,8 @@ func private %entry(v100.*i256) -> i256 {{
 block0:
  v10.objref<@E> = obj.alloc @E;
  enum.write_variant v10 #Some (31.i256);
- v12.@Holder = insert_value undef.@Holder 0.i8 v10;
- v13.[objref<@E>; 1] = insert_value undef.[objref<@E>; 1] 0.i8 v10;
+ v12.@Holder = agg.make @Holder v10;
+ v13.[objref<@E>; 1] = agg.make [objref<@E>; 1] v10;
  v14.@Carrier = enum.make @Carrier #Wrap (v10);
  v11.*{ty} = alloca {ty};
  mstore v11 {value} {ty};

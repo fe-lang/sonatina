@@ -417,9 +417,7 @@ block0:
 func public %bump_local(v1.i64) -> i64 {
 block0:
     v0.objref<@Rec> = obj.alloc @Rec;
-    v2.@Rec = insert_value undef.@Rec 0.i8 0.i8;
-    v3.@Rec = insert_value v2 1.i8 0.i64;
-    v4.@Rec = insert_value v3 2.i8 0.i256;
+    v4.@Rec = agg.make @Rec 0.i8 0.i64 0.i256;
     obj.store v0 v4;
     call %bump v0 v1;
     v5.objref<i64> = obj.proj v0 1.i8;
@@ -725,9 +723,8 @@ block2:
 block3:
     v4.@OptionI64 = phi (v2 block1) (v3 block2);
     v5.@OptionI64 = enum.make @OptionI64 #None;
-    v6.[@OptionI64; 2] = insert_value undef.[@OptionI64; 2] 0.i64 v5;
-    v7.[@OptionI64; 2] = insert_value v6 1.i64 v4;
-    v8.@Options = insert_value undef.@Options 0.i64 v7;
+    v7.[@OptionI64; 2] = agg.make [@OptionI64; 2] v5 v4;
+    v8.@Options = agg.make @Options v7;
     v9.i64 = call %read v8;
     return v9;
 }
@@ -1779,15 +1776,14 @@ fn aggregate_memory_ops_copy_complete_values() {
         Type::I64,
     ));
 
-    let mut value = function_builder.make_undef_value(array_type);
-    for (index, element) in [11i64, 22, 33, 44, 55].into_iter().enumerate() {
-        let index = function_builder.make_imm_value(index as i64);
-        let element = function_builder.make_imm_value(element);
-        value = function_builder.insert_inst(
-            data::InsertValue::new(instructions, value, index, element),
-            array_type,
-        );
-    }
+    let elements = [11i64, 22, 33, 44, 55]
+        .into_iter()
+        .map(|element| function_builder.make_imm_value(element))
+        .collect();
+    let value = function_builder.insert_inst(
+        data::AggMake::new(instructions, array_type, elements),
+        array_type,
+    );
     function_builder.insert_inst_no_result(data::Mstore::new(
         instructions,
         target,
@@ -1843,18 +1839,15 @@ fn aggregate_returns_copy_the_complete_value() {
         let mut function_builder = builder.func_builder::<InstInserter>(make);
         let entry = function_builder.append_block();
         function_builder.switch_to_block(entry);
-        let mut value = function_builder.make_undef_value(aggregate_type);
-        let head_index = function_builder.make_imm_value(0i8);
         let head =
             function_builder.make_imm_value(Immediate::from_i256(I256::from(17u8), Type::I256));
-        value = function_builder.insert_inst(
-            data::InsertValue::new(instructions, value, head_index, head),
-            aggregate_type,
-        );
-        let tail_index = function_builder.make_imm_value(1i8);
         let tail = function_builder.make_imm_value(29i64);
-        value = function_builder.insert_inst(
-            data::InsertValue::new(instructions, value, tail_index, tail),
+        let value = function_builder.insert_inst(
+            data::AggMake::new(
+                instructions,
+                aggregate_type,
+                smallvec::smallvec![head, tail],
+            ),
             aggregate_type,
         );
         function_builder

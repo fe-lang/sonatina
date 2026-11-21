@@ -5,7 +5,7 @@ use rustc_hash::FxHashSet;
 use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId, inst::data::Alloca};
 
 use crate::{
-    cfg_edit::{CfgEditor, CleanupMode},
+    cfg_edit::CfgEditor,
     cfg_scc::{CfgSccAnalysis, SccId},
     optim::{call_purity::is_nonmutating_returning_call, cfg_cleanup::CfgCleanup},
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
@@ -52,7 +52,7 @@ impl AdceSolver {
         while self.run_dce(func) {
             changed = true;
         }
-        let cleaned_cfg = CfgCleanup::new(CleanupMode::Strict).run(func);
+        let cleaned_cfg = CfgCleanup::new().run(func);
         changed || cleaned_cfg
     }
 
@@ -177,7 +177,7 @@ impl AdceSolver {
 
         let mut changed = erased_dead_insts;
         {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut editor = CfgEditor::new(func);
             for block in blocks {
                 if editor.func().layout.is_block_inserted(block) && self.does_block_live(block) {
                     changed |= self.modify_branch(&mut editor, block);
@@ -681,8 +681,7 @@ type @pair = {i256, i256};
 
 func private %f(v0.i1) {
     block0:
-        v1.@pair = insert_value undef.@pair 0.i256 4.i256;
-        v2.@pair = insert_value v1 1.i256 4.i256;
+        v2.@pair = agg.make @pair 4.i256 4.i256;
         jump block1;
 
     block1:

@@ -37,6 +37,22 @@ fn the_object_alias_matrix_gives_the_results_the_other_backends_give() {
 }
 
 #[test]
+fn fresh_aggregate_routes_run_at_all_optimization_levels() {
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let bytes = compile_at(alias_execution::FRESH_SOURCE, level).expect("compiles");
+        let mut machine = Machine::new(&bytes);
+        for &(name, expected) in alias_execution::FRESH_CASES {
+            let entry = machine.func(name);
+            assert_eq!(
+                machine.call(&entry, &[])[0].unwrap_i64(),
+                expected,
+                "{level:?}: {name}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_returned_local_allocation_is_rejected_as_it_is_natively() {
     for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
         let error = compile_at(alias_execution::CAPTURE_SOURCE, level)
@@ -267,8 +283,7 @@ block0:
     v3.objref<@slot> = obj.alloc @slot;
     v4.objref<i64> = obj.proj v1 0.i64;
     obj.store v4 v0;
-    v5.@pair = insert_value undef.@pair 0.i64 7.i64;
-    v6.@pair = insert_value v5 1.i64 v4;
+    v6.@pair = agg.make @pair 7.i64 v4;
     obj.store v2 v6;
     v7.@slot = enum.make @slot #Full (v4);
     obj.store v3 v7;

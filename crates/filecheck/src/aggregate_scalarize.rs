@@ -1,11 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use sonatina_codegen::{
-    cfg_edit::CleanupMode,
-    optim::{
-        aggregate::{AggregateCombine, AggregateScalarize},
-        cfg_cleanup::CfgCleanup,
-    },
+use sonatina_codegen::optim::{
+    aggregate::{AggregateCombine, AggregateScalarize},
+    cfg_cleanup::CfgCleanup,
 };
 use sonatina_ir::Function;
 
@@ -16,10 +13,10 @@ pub struct AggregateScalarizeTransform;
 
 impl FuncTransform for AggregateScalarizeTransform {
     fn transform(&mut self, func: &mut Function) {
-        CfgCleanup::new(CleanupMode::Strict).run(func);
+        CfgCleanup::new().run(func);
         AggregateCombine::default().run(func);
         AggregateScalarize::default().run(func);
-        CfgCleanup::new(CleanupMode::Strict).run(func);
+        CfgCleanup::new().run(func);
     }
 
     fn test_root(&self) -> PathBuf {

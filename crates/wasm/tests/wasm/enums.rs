@@ -292,9 +292,7 @@ block0:
 func public %bump_local(v1.i64) -> i64 {
 block0:
     v0.objref<@Rec> = obj.alloc @Rec;
-    v2.@Rec = insert_value undef.@Rec 0.i8 0.i8;
-    v3.@Rec = insert_value v2 1.i8 0.i64;
-    v4.@Rec = insert_value v3 2.i8 0.i256;
+    v4.@Rec = agg.make @Rec 0.i8 0.i64 0.i256;
     obj.store v0 v4;
     call %bump v0 v1;
     v5.objref<i64> = obj.proj v0 1.i8;

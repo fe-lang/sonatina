@@ -33,7 +33,7 @@ use sonatina_codegen::{
         pipeline::Pipeline,
     },
     stackalloc::StackifySearchProfile,
-    transform::aggregate::ObjectArgPromotion,
+    transform::aggregate::{ObjectArgPromotion, fold_fresh_aggregates, is_fresh_insert},
 };
 use sonatina_ir::{
     BlockId, U256 as IrU256,
@@ -231,6 +231,29 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
                     "{level:?}: {name}"
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn fresh_aggregate_routes_run_and_fold_at_all_levels() {
+    assert_i64_cases(alias_execution::FRESH_SOURCE, alias_execution::FRESH_CASES);
+    // What the backend gets: the optimized module after the step on entry.
+    let source = format!(
+        "target = \"evm-ethereum-osaka\"\n{}",
+        alias_execution::FRESH_SOURCE
+    );
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let mut compiler =
+            Compile::new(parse_sona(&source).module, EvmCompiler::default()).with_opt_level(level);
+        let module = compiler.optimize();
+        fold_fresh_aggregates(module);
+        for func in module.funcs() {
+            module.func_store.view(func, |function| {
+                for inst in function.layout.iter_all_insts() {
+                    assert!(!is_fresh_insert(function, inst), "{level:?}: {inst:?}");
+                }
+            });
         }
     }
 }

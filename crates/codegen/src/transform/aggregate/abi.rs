@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, I256, Immediate, Type, Value, ValueId,
+    Function, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{control_flow, data},
     module::{FuncRef, Module, ModuleCtx},
@@ -9,7 +9,7 @@ use sonatina_ir::{
 
 use super::{
     private_abi::{self, PrivateAbiPlan},
-    reconstruct::AggregateValueReconstructor,
+    reconstruct::{AggregateValueReconstructor, insert_before_inst},
     shape,
 };
 
@@ -30,7 +30,6 @@ struct FuncPlan {
 
 #[derive(Clone, Copy)]
 pub(crate) struct AbiChildSlice {
-    idx: u32,
     ty: Type,
     first_leaf: usize,
     leaf_count: usize,
@@ -369,11 +368,11 @@ impl AggregateExpandAbi {
             return func.dfg.make_undef_value(agg_ty);
         }
 
-        let mut aggregate = func.dfg.make_undef_value(agg_ty);
+        let mut fields = SmallVec::new();
         for child in abi_child_slices(func.ctx(), agg_ty)
             .expect("aggregate reconstruction requires struct or array type")
         {
-            let child_value = if child.leaf_count == 0 {
+            fields.push(if child.leaf_count == 0 {
                 func.dfg.make_undef_value(child.ty)
             } else if shape::is_supported_aggregate_ty(func.ctx(), child.ty) {
                 self.rebuild_aggregate_from_leaves(
@@ -384,11 +383,10 @@ impl AggregateExpandAbi {
                 )
             } else {
                 scalar_leaves[child.first_leaf]
-            };
-            aggregate =
-                insert_value_before_inst(func, inst, aggregate, child.idx, child_value, agg_ty);
+            });
         }
-        aggregate
+        let make = data::AggMake::new_unchecked(func.inst_set(), agg_ty, fields);
+        insert_before_inst(func, inst, make, agg_ty)
     }
 }
 
@@ -470,11 +468,9 @@ pub(crate) fn abi_child_slices(
     let mut children = SmallVec::new();
     let mut next_leaf = 0usize;
     for idx in 0..child_count {
-        let idx = u32::try_from(idx).ok()?;
-        let ty = shape::aggregate_child_ty(module, agg_ty, idx)?;
+        let ty = shape::aggregate_child_ty(module, agg_ty, u32::try_from(idx).ok()?)?;
         let leaf_count = abi_leaf_count(module, ty)?;
         children.push(AbiChildSlice {
-            idx,
             ty,
             first_leaf: next_leaf,
             leaf_count,
@@ -482,36 +478,6 @@ pub(crate) fn abi_child_slices(
         next_leaf = next_leaf.checked_add(leaf_count)?;
     }
     Some(children)
-}
-
-fn insert_value_before_inst(
-    func: &mut Function,
-    inst: sonatina_ir::InstId,
-    dest: ValueId,
-    idx: u32,
-    value: ValueId,
-    ty: Type,
-) -> ValueId {
-    let idx_value = func
-        .dfg
-        .make_imm_value(Immediate::from_i256(I256::from(idx), Type::I256));
-    let loc = func.layout.prev_inst_of(inst).map_or(
-        CursorLocation::BlockTop(func.layout.inst_block(inst)),
-        CursorLocation::At,
-    );
-    let mut cursor = InstInserter::at_location(loc);
-    let insert_inst = cursor.insert_inst_data_from(
-        func,
-        inst,
-        data::InsertValue::new_unchecked(func.inst_set(), dest, idx_value, value),
-    );
-    let insert_value = func.dfg.make_value(Value::Inst {
-        inst: insert_inst,
-        result_idx: 0,
-        ty,
-    });
-    cursor.attach_result(func, insert_inst, insert_value);
-    insert_value
 }
 
 #[cfg(test)]
@@ -553,19 +519,15 @@ block0:
     v2.i256 = extract_value v1 0.i8;
     v3.i256 = extract_value v1 1.i8;
     v4.i256 = extract_value v0 1.i8;
-    v5.@inner = insert_value undef.@inner 0.i8 v3;
-    v6.@inner = insert_value v5 1.i8 v2;
-    v7.@pair = insert_value undef.@pair 0.i8 v6;
-    v8.@pair = insert_value v7 1.i8 v4;
+    v6.@inner = agg.make @inner v3 v2;
+    v8.@pair = agg.make @pair v6 v4;
     return v8;
 }
 
 func public %entry(v0.i256, v1.i256, v2.i256) -> i256 {
 block0:
-    v3.@inner = insert_value undef.@inner 0.i8 v0;
-    v4.@inner = insert_value v3 1.i8 v1;
-    v5.@pair = insert_value undef.@pair 0.i8 v4;
-    v6.@pair = insert_value v5 1.i8 v2;
+    v4.@inner = agg.make @inner v0 v1;
+    v6.@pair = agg.make @pair v4 v2;
     v7.@pair = call %twist v6;
     v8.@inner = extract_value v7 0.i8;
     v9.i256 = extract_value v8 0.i8;
@@ -620,15 +582,13 @@ func private %swap(v0.@pair) -> @pair {
 block0:
     v1.i256 = extract_value v0 0.i8;
     v2.i256 = extract_value v0 1.i8;
-    v3.@pair = insert_value undef.@pair 0.i8 v2;
-    v4.@pair = insert_value v3 1.i8 v1;
+    v4.@pair = agg.make @pair v2 v1;
     return v4;
 }
 
 func public %entry(v0.i256, v1.i256) -> i256 {
 block0:
-    v2.@pair = insert_value undef.@pair 0.i8 v0;
-    v3.@pair = insert_value v2 1.i8 v1;
+    v3.@pair = agg.make @pair v0 v1;
     v4.@pair = call %swap v3;
     v5.i256 = extract_value v4 0.i8;
     return v5;
@@ -696,8 +656,7 @@ block2:
 
 block3:
     v8.@option_i256 = phi (v6 block1) (v7 block2);
-    v9.@wrapper = insert_value undef.@wrapper 0.i8 v8;
-    v10.@wrapper = insert_value v9 1.i8 v2;
+    v10.@wrapper = agg.make @wrapper v8 v2;
     return v10;
 }
 
@@ -715,8 +674,7 @@ block2:
 
 block3:
     v4.@option_i256 = phi (v2 block1) (v3 block2);
-    v5.@wrapper = insert_value undef.@wrapper 0.i8 v4;
-    v6.@wrapper = insert_value v5 1.i8 5.i256;
+    v6.@wrapper = agg.make @wrapper v4 5.i256;
     v7.@wrapper = call %twist v6;
     v8.@option_i256 = extract_value v7 0.i8;
     v9.i1 = enum.is_variant v8 #Some;
@@ -781,8 +739,7 @@ func private %swap(v0.@pair) -> @pair {
 block0:
     v1.i256 = extract_value v0 0.i8;
     v2.i256 = extract_value v0 1.i8;
-    v3.@pair = insert_value undef.@pair 0.i8 v2;
-    v4.@pair = insert_value v3 1.i8 v1;
+    v4.@pair = agg.make @pair v2 v1;
     return v4;
 }
 
@@ -845,15 +802,14 @@ func private %swap(v0.@pair) -> @pair {
 block0:
     v1.i256 = extract_value v0 0.i8;
     v2.i256 = extract_value v0 1.i8;
-    v3.@pair = insert_value undef.@pair 0.i8 v2;
-    v4.@pair = insert_value v3 1.i8 v1;
+    v4.@pair = agg.make @pair v2 v1;
     return v4;
 }
 
 func private %register_swap() {
 block0:
     v0.*(@pair) -> @pair = get_function_ptr %swap;
-    v1.@swap_box = insert_value undef.@swap_box 0.i8 v0;
+    v1.@swap_box = agg.make @swap_box v0;
     call %consume_swap v1;
     return;
 }

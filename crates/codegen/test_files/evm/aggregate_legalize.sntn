@@ -20,8 +20,7 @@ func public %entry() {
 
 func private %agg(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.@slice = insert_value undef.@slice 0.i8 v0;
-        v3.@slice = insert_value v2 1.i8 v1;
+        v3.@slice = agg.make @slice v0 v1;
         v4.*@slice = alloca @slice;
         mstore v4 v3 @slice;
         v5.@slice = mload v4 @slice;
@@ -37,13 +36,11 @@ func private %agg_phi(v0.i256, v1.i256) -> i256 {
         br v2 block1 block2;
 
     block1:
-        v3.@slice = insert_value undef.@slice 0.i8 v0;
-        v4.@slice = insert_value v3 1.i8 v1;
+        v4.@slice = agg.make @slice v0 v1;
         jump block3;
 
     block2:
-        v5.@slice = insert_value undef.@slice 0.i8 v1;
-        v6.@slice = insert_value v5 1.i8 v0;
+        v6.@slice = agg.make @slice v1 v0;
         jump block3;
 
     block3:

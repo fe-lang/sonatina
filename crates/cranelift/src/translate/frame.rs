@@ -16,7 +16,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    INLINE_MEMORY_BYTES, aggregate_elem_offset, constant_value_index, is_undef,
+    INLINE_MEMORY_BYTES, aggregate_elem_offset, constant_value_index,
     uses_indirect_value_representation, value_storage_alignment, value_storage_size,
 };
 
@@ -47,17 +47,16 @@ use super::{
 /// the load's source. A store may overlap that source, so it consumes only
 /// a load small enough to copy inline, reading every word before writing.
 ///
-/// A class whose last value only fills a field of an `insert_value` chain
-/// with an undef source, or of an `agg.make`, lives in that chain's storage,
-/// at the field: the insert copies nothing. Nothing reads the field before the insert, and the
-/// chain's storage stays live while the class is. A phi does so only when it
-/// is its block's one aggregate phi, so its edge copies need no ordering.
+/// A class whose last value only fills a field of an `agg.make` lives in its
+/// storage, at the field: the `agg.make` copies nothing. Nothing reads the
+/// field before the `agg.make`, and its storage stays live while the class
+/// is. A phi does so only when it is its block's one aggregate phi, so its
+/// edge copies need no ordering.
 ///
-/// An `insert_value` chain with an undef source or an `agg.make` whose last
+/// An `agg.make`, with the inserts continuing in its storage, whose last
 /// value is only stored into an object is built at the store's destination
-/// instead, when
-/// nothing between the chain's start and the store touches memory and the
-/// destination's address is defined before the chain starts.
+/// instead, when nothing between its start and the store touches memory and
+/// the destination's address is defined before it starts.
 ///
 /// A returned class can live in the function's return buffer instead, so
 /// that its `return` copies nothing. The buffer is caller storage distinct
@@ -355,20 +354,6 @@ impl FrameSlots {
     /// source `source`.
     pub fn continues_source(&self, inst: InstId, source: ValueId) -> bool {
         self.continuation.get(&source) == Some(&inst)
-    }
-
-    /// The `insert_value` chain head `head` and the inserts continuing its
-    /// storage, in order.
-    pub fn insert_chain<'a>(
-        &'a self,
-        function: &'a Function,
-        head: InstId,
-    ) -> impl Iterator<Item = InstId> + 'a {
-        std::iter::successors(Some(head), move |&inst| {
-            self.continuation
-                .get(&function.dfg.inst_result(inst)?)
-                .copied()
-        })
     }
 }
 
@@ -721,7 +706,7 @@ impl Plan {
         Ok(plan)
     }
 
-    /// Builds each `insert_value` chain on undef whose last value is only
+    /// Builds each `agg.make` chain whose last value is only
     /// stored into an object at that object, with the classes embedded in
     /// it, when the object's address is defined before the first of them
     /// starts and nothing from there to the store may read or write the
@@ -773,16 +758,16 @@ impl Plan {
                 outer = parent;
             }
         }
-        // The `insert_value` chain of a class on undef, if it is one, or its
-        // `agg.make`.
+        // The `agg.make` of a class and the inserts continuing it, if it is
+        // one. A chain on undef was folded into an `agg.make`, but for a
+        // sparse one into a long array, which is built like an update.
         let chain_of = |class: usize| -> Option<Vec<InstId>> {
             let head = dfg.value_inst(*self.members[class].first()?)?;
-            let fresh = match native_inst_set().resolve_inst(dfg.inst(head)) {
-                NativeInstKind::AggMake(_) => true,
-                NativeInstKind::InsertValue(insert) => is_undef(function, *insert.dest()),
-                _ => false,
-            };
-            fresh.then(|| {
+            matches!(
+                native_inst_set().resolve_inst(dfg.inst(head)),
+                NativeInstKind::AggMake(_)
+            )
+            .then(|| {
                 std::iter::successors(Some(head), |&inst| {
                     self.continuation.get(&dfg.inst_result(inst)?).copied()
                 })
@@ -908,21 +893,16 @@ impl Plan {
         }
     }
 
-    /// Places each class whose last value only fills a field of an
-    /// `insert_value` chain with an undef source, or of an `agg.make`, in that
-    /// chain's storage. The chain zeroes only fields no insert of it writes,
-    /// and an `agg.make` writes each field once, so building the class there
-    /// before the chain starts loses nothing.
+    /// Places each class whose last value only fills a field of an `agg.make`
+    /// in that `agg.make`'s storage. An `agg.make` zeroes only its `undef`
+    /// fields and writes each field once, so building the class there before
+    /// it loses nothing.
     fn embed(
         &mut self,
         function: &Function,
         class_of: &FxHashMap<ValueId, usize>,
     ) -> Result<(), String> {
         let dfg = &function.dfg;
-        let insert_of = |inst: InstId| match native_inst_set().resolve_inst(dfg.inst(inst)) {
-            NativeInstKind::InsertValue(insert) => Some(insert),
-            _ => None,
-        };
         for child in 0..self.classes.len() {
             let Some(&root) = self.members[child].first() else {
                 continue;
@@ -966,44 +946,15 @@ impl Plan {
                 continue;
             }
             // The field `user` writes `tail` to, once.
-            let index = if let Some(insert) = insert_of(user) {
-                if *insert.value() != tail || *insert.dest() == tail {
-                    continue;
-                }
-                let Some(head) = dfg.value_inst(self.members[parent][0]) else {
-                    continue;
-                };
-                if !insert_of(head).is_some_and(|head| is_undef(function, *head.dest())) {
-                    continue;
-                }
-                let index = constant_value_index(function, *insert.idx(), "insert_value")?;
-                let chain = std::iter::successors(Some(head), |&inst| {
-                    self.continuation.get(&dfg.inst_result(inst)?).copied()
-                });
-                let mut writes = 0;
-                for inst in chain {
-                    let insert =
-                        insert_of(inst).ok_or("insert chain continues past insert_value")?;
-                    if constant_value_index(function, *insert.idx(), "insert_value")? == index {
-                        writes += 1;
-                    }
-                }
-                if writes != 1 {
-                    continue;
-                }
-                index
-            } else if let NativeInstKind::AggMake(make) =
-                native_inst_set().resolve_inst(dfg.inst(user))
-            {
-                let mut fields = (0..)
-                    .zip(make.values())
-                    .filter(|&(_, &value)| value == tail)
-                    .map(|(index, _)| index);
-                let (Some(index), None) = (fields.next(), fields.next()) else {
-                    continue;
-                };
-                index
-            } else {
+            let NativeInstKind::AggMake(make) = native_inst_set().resolve_inst(dfg.inst(user))
+            else {
+                continue;
+            };
+            let mut fields = (0..)
+                .zip(make.values())
+                .filter(|&(_, &value)| value == tail)
+                .map(|(index, _)| index);
+            let (Some(index), None) = (fields.next(), fields.next()) else {
                 continue;
             };
             let ty = dfg.value_ty(self.members[parent][0]);
@@ -1557,17 +1508,16 @@ block0:
 
     #[test]
     fn inserted_values_live_in_their_fields() {
-        // The call result and the inner chain only fill fields of the outer
-        // chain, so they are built in its storage.
+        // The call result and the inner `agg.make` only fill fields of the
+        // outer one, so they are built in its storage.
         let sizes = slot_sizes(
             r#"
 declare external %g() -> [i64; 32];
 func public %f(v0.*[[i64; 32]; 2]) {
 block0:
     v1.[i64; 32] = call %g;
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 5.i64;
-    v3.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 0.i64 v1;
-    v4.[[i64; 32]; 2] = insert_value v3 1.i64 v2;
+    v2.[i64; 32] = agg.make [i64; 32] 5.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v4.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v1 v2;
     mstore v0 v4 [[i64; 32]; 2];
     return;
 }
@@ -1597,7 +1547,9 @@ block0:
 
     #[test]
     fn values_for_rewritten_fields_keep_their_storage() {
-        // Field 0 is written twice, so `v1` and `v2` cannot both live there.
+        // Field 0 is written twice, so `v1` and `v2` cannot both live there:
+        // `v1`, which only the `agg.make` reads, is built in it, and `v2`,
+        // inserted over it afterwards, keeps its own slot.
         let sizes = slot_sizes(
             r#"
 declare external %g() -> [i64; 32];
@@ -1605,19 +1557,19 @@ func public %f(v0.*[[i64; 32]; 2]) {
 block0:
     v1.[i64; 32] = call %g;
     v2.[i64; 32] = call %g;
-    v3.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 0.i64 v1;
+    v3.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v1 undef.[i64; 32];
     v4.[[i64; 32]; 2] = insert_value v3 0.i64 v2;
     mstore v0 v4 [[i64; 32]; 2];
     return;
 }
 "#,
         );
-        assert_eq!(sizes, [256, 256, 512]);
+        assert_eq!(sizes, [512, 256]);
     }
 
     #[test]
     fn stored_chains_are_built_at_their_destination() {
-        // `v2`'s chain is only stored into `v1`; `v5`'s store into memory
+        // `v3` is only stored into `v1`; `v5`'s store into memory
         // follows a load of memory, which may read it, so it is built in a
         // slot and copied.
         let sizes = slot_sizes(
@@ -1625,11 +1577,10 @@ block0:
 func public %f(v0.i64, v4.*i64, v7.*[i64; 32]) {
 block0:
     v1.objref<[i64; 32]> = obj.alloc [i64; 32];
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
-    v3.[i64; 32] = insert_value v2 1.i64 v0;
+    v3.[i64; 32] = agg.make [i64; 32] v0 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     obj.store v1 v3;
     v8.objref<[i64; 32]> = obj.from_ptr v7;
-    v5.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v5.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     v6.i64 = mload v4 i64;
     obj.store v8 v5;
     mstore v4 v6 i64;
@@ -1643,7 +1594,7 @@ block0:
     #[test]
     fn chains_stored_into_local_objects_are_built_there_across_other_effects() {
         // Nothing but its own uses reaches `v1`, so neither the store to
-        // memory nor the call between `v2`'s chain and `v1`'s store sees `v1`
+        // memory nor the call between `v2` and `v1`'s store sees `v1`
         // written early.
         let sizes = slot_sizes(
             r#"
@@ -1651,12 +1602,11 @@ declare external %g(i64) -> i64;
 func public %f(v0.i64, v7.*i64) {
 block0:
     v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     mstore v7 v0 i64;
     v3.i64 = call %g v0;
-    v4.[i64; 32] = insert_value undef.[i64; 32] 5.i64 v3;
-    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
-    v6.[[i64; 32]; 2] = insert_value v5 0.i64 v4;
+    v4.[i64; 32] = agg.make [i64; 32] undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v3 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v6.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v4 v2;
     obj.store v1 v6;
     return;
 }
@@ -1677,10 +1627,10 @@ block0:
     v14.objref<[i64; 32]> = obj.index v1 1.i64;
     v3.objref<i64> = obj.index v14 2.i64;
     obj.store v3 v0;
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     v4.i64 = obj.load v3;
     mstore v10 v4 i64;
-    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
+    v5.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v2;
     obj.store v1 v5;
     return;
 }
@@ -1691,8 +1641,8 @@ block0:
 
     #[test]
     fn chains_stored_into_local_objects_keep_storage_when_they_insert_its_loads() {
-        // `v4` reads `v1`'s first field in place where `v6` inserts it,
-        // after `v5` would have written the second.
+        // `v4` reads `v1`'s first field in place where `v6` puts it, after
+        // `v3` would have written the second.
         let sizes = slot_sizes(
             r#"
 func public %f(v0.i64) {
@@ -1702,9 +1652,8 @@ block0:
     v7.objref<i64> = obj.index v2 3.i64;
     obj.store v7 v0;
     v4.[i64; 32] = obj.load v2;
-    v3.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
-    v5.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v3;
-    v6.[[i64; 32]; 2] = insert_value v5 0.i64 v4;
+    v3.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v6.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v4 v3;
     obj.store v1 v6;
     return;
 }
@@ -1715,18 +1664,16 @@ block0:
 
     #[test]
     fn stored_chains_build_their_embedded_chains_at_the_destination() {
-        // `v4`'s chain, built before its parent's starts, fills a field of
-        // the chain stored into `v1`, so both are built in `v1`.
+        // `v3` and `v5` fill fields of the `agg.make` stored into `v1`, so
+        // all three are built in `v1`.
         let sizes = slot_sizes(
             r#"
 func public %f(v0.i64) {
 block0:
     v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
-    v3.[i64; 32] = insert_value v2 1.i64 v0;
-    v4.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v3;
-    v5.[i64; 32] = insert_value undef.[i64; 32] 2.i64 v0;
-    v6.[[i64; 32]; 2] = insert_value v4 0.i64 v5;
+    v3.[i64; 32] = agg.make [i64; 32] v0 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v5.[i64; 32] = agg.make [i64; 32] undef.i64 undef.i64 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v6.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v5 v3;
     obj.store v1 v6;
     return;
 }
@@ -1751,8 +1698,7 @@ func public %f(v0.i64, v1.*@change) {
 block0:
     v2.objref<@change> = obj.from_ptr v1;
     v3.@kind = enum.make @kind #Storage (v0, v0, v0, 1.i1);
-    v4.@change = insert_value undef.@change 0.i64 v0;
-    v5.@change = insert_value v4 1.i64 v3;
+    v5.@change = agg.make @change v0 v3;
     obj.store v2 v5;
     return;
 }
@@ -1771,9 +1717,9 @@ block0:
 func public %f(v0.i64, v7.*i64, v8.*[[i64; 32]; 2]) {
 block0:
     v1.objref<[[i64; 32]; 2]> = obj.from_ptr v8;
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v0;
+    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     mstore v7 v0 i64;
-    v4.[[i64; 32]; 2] = insert_value undef.[[i64; 32]; 2] 1.i64 v2;
+    v4.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v2;
     obj.store v1 v4;
     return;
 }
@@ -1789,7 +1735,7 @@ block0:
             r#"
 func private %f(v0.objref<[i64; 32]>, v1.i64) {
 block0:
-    v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v1;
+    v2.[i64; 32] = agg.make [i64; 32] v1 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
     v3.objref<i64> = obj.index v0 0.i64;
     v4.i64 = obj.load v3;
     v5.[i64; 32] = insert_value v2 1.i64 v4;

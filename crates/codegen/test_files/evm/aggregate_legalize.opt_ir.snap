@@ -10,17 +10,17 @@ type @slice = {i256, i256};
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
-        v34.i1 = is_zero v0;
+        v25.i1 = is_zero v0;
         v1.i256 = evm_calldata_load 32.i32;
-        br v34 block5 block4;
+        br v25 block5 block4;
 
     block4:
         jump block5;
 
     block5:
-        v32.i256 = phi (v0 block0) (v1 block4);
-        v17.i256 = add v0 v1;
-        v4.i256 = add v17 v32;
+        v22.i256 = phi (v0 block0) (v1 block4);
+        v15.i256 = add v0 v1;
+        v4.i256 = add v15 v22;
         mstore 0.i32 v4 i256;
         evm_return 0.i8 32.i8;
 }

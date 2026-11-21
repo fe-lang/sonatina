@@ -44,7 +44,7 @@ func public %struct_payload(v0.i1, v1.i64) -> i64 {
     block0:
         br v0 block1 block2;
     block1:
-        v2.@pair = insert_value undef.@pair 1.i8 v1;
+        v2.@pair = agg.make @pair undef.i8 v1;
         v3.@either = enum.make @either #variant_0 v2;
         jump block3;
     block2:

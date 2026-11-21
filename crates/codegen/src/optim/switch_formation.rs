@@ -27,7 +27,7 @@ use sonatina_ir::{
 };
 
 use super::branch_canonicalize::{compare_value, remove_dead_single_result_inst};
-use crate::cfg_edit::{CfgEditor, CleanupMode, iter_phis_in_block};
+use crate::cfg_edit::{CfgEditor, iter_phis_in_block};
 
 /// The fewest comparisons worth a table.
 const MIN_TESTS: usize = 3;
@@ -45,7 +45,7 @@ impl SwitchFormation {
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         let mut blocks: Vec<_> = editor.cfg().post_order().collect();
         blocks.reverse();
         let mut changed = false;

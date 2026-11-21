@@ -1381,15 +1381,13 @@ func private %swap(v0.@pair) -> @pair {
     block0:
         v1.i256 = extract_value v0 0.i8;
         v2.i256 = extract_value v0 1.i8;
-        v3.@pair = insert_value undef.@pair 0.i8 v2;
-        v4.@pair = insert_value v3 1.i8 v1;
+        v4.@pair = agg.make @pair v2 v1;
         return v4;
 }
 
 func public %main(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.@pair = insert_value undef.@pair 0.i8 v0;
-        v3.@pair = insert_value v2 1.i8 v1;
+        v3.@pair = agg.make @pair v0 v1;
         v4.@pair = call %swap v3;
         v5.i256 = extract_value v4 0.i8;
         return v5;

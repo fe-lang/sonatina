@@ -1290,10 +1290,9 @@ type @nested = {{i256, @pair}};
 func public %f(v0.i256) -> i256 {{
 block0:
     v1.*@nested = alloca @nested;
-    v2.@pair = insert_value undef.@pair 0.i8 7.i256;
+    v2.@pair = agg.make @pair 7.i256 undef.i256;
     v3.@pair = insert_value v2 1.i8 {field};
-    v4.@nested = insert_value undef.@nested 1.i8 v3;
-    v5.@nested = insert_value v4 0.i8 v0;
+    v5.@nested = agg.make @nested v0 v3;
     mstore v1 v5 @nested;
     v6.@nested = mload v1 @nested;
     v7.@pair = extract_value v6 1.i8;

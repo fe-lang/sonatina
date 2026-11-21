@@ -11,8 +11,7 @@ func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
         v1.i1 = eq v0 0.i256;
-        v2.@pair = insert_value undef.@pair 0.i8 4.i256;
-        v3.@pair = insert_value v2 1.i8 4.i256;
+        v3.@pair = agg.make @pair 4.i256 4.i256;
         jump block1;
 
     block1:

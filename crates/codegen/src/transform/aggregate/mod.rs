@@ -8,6 +8,7 @@ mod cleanup;
 pub(crate) mod combine;
 pub(crate) mod enum_lowering;
 mod frame_lifetimes;
+pub(crate) mod fresh;
 pub(crate) mod legalize;
 pub(crate) mod object;
 pub(crate) mod object_abi;
@@ -37,6 +38,7 @@ pub use byval_object_abi::{
 };
 pub use enum_lowering::EnumTagLower;
 pub use frame_lifetimes::check_frame_lifetimes;
+pub use fresh::{MAX_UNWRITTEN_FIELDS, fold_fresh_aggregates, is_fresh_insert};
 pub use legalize::{
     AggregateLowerToMemoryLegalize, assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,
 };

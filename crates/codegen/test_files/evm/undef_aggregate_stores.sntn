@@ -14,8 +14,7 @@ func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
         v1.i256 = evm_calldata_load 32.i32;
-        v2.@pair = insert_value undef.@pair 0.i8 v0;
-        v3.@pair = insert_value v2 1.i8 v1;
+        v3.@pair = agg.make @pair v0 v1;
         mstore 64.i32 undef.@pair @pair;
         v4.i256 = extract_value v3 0.i8;
         v5.i256 = extract_value v3 1.i8;

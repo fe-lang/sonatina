@@ -117,8 +117,7 @@ func private %walk(v0.i64, v1.@Pair) -> i64 {
 }
 func public %run(v0.i64) -> i64 {
     block0:
-        v1.@Pair = insert_value undef.@Pair 0.i32 40.i64;
-        v2.@Pair = insert_value v1 1.i32 2.i64;
+        v2.@Pair = agg.make @Pair 40.i64 2.i64;
         v3.i64 = call %walk v0 v2;
         return v3;
 }";
@@ -159,8 +158,7 @@ func private %step(v0.i64, v1.@Pair) -> i64 {
 }
 func public %run(v0.i64) -> i64 {
     block0:
-        v1.@Pair = insert_value undef.@Pair 0.i32 0.i64;
-        v2.@Pair = insert_value v1 1.i32 0.i64;
+        v2.@Pair = agg.make @Pair 0.i64 0.i64;
         v3.i64 = call %step v0 v2;
         return v3;
 }";

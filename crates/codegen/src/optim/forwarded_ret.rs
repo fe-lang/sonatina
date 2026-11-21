@@ -347,7 +347,7 @@ func private %touch_opt(v0.@opt, v1.@opt) -> (@opt, @opt) {
 
 func public %entry(v0.i256) -> i256 {
     block0:
-        v1.@pair = insert_value undef.@pair 0.i8 v0;
+        v1.@pair = agg.make @pair v0 undef.i256;
         v2.@pair = call %touch_pair v1;
         v3.i256 = extract_value v2 1.i8;
         v4.@opt = enum.make @opt #Some (undef.i256);

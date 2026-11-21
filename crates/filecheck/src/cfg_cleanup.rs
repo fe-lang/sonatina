@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use sonatina_codegen::{cfg_edit::CleanupMode, optim::cfg_cleanup::CfgCleanup};
+use sonatina_codegen::optim::cfg_cleanup::CfgCleanup;
 use sonatina_ir::Function;
 
 use super::{FIXTURE_ROOT, FuncTransform};
@@ -10,7 +10,7 @@ pub struct CfgCleanupTransform {}
 
 impl FuncTransform for CfgCleanupTransform {
     fn transform(&mut self, func: &mut Function) {
-        let mut pass = CfgCleanup::new(CleanupMode::Strict);
+        let mut pass = CfgCleanup::new();
         pass.run(func);
     }
 

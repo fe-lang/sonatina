@@ -108,8 +108,7 @@ fn aggregates_pass_to_calls_and_return_through_a_buffer() {
 type @Line = { @Pair, @Pair };
 func private %make(v0.i32, v1.i64) -> @Pair {
     block0:
-        v2.@Pair = insert_value undef.@Pair 0.i32 v0;
-        v3.@Pair = insert_value v2 1.i32 v1;
+        v3.@Pair = agg.make @Pair v0 v1;
         return v3;
 }
 func private %swap(v0.@Pair) -> @Pair {
@@ -125,8 +124,7 @@ func public %f(v0.i32, v1.i64) -> i64 {
     block0:
         v2.@Pair = call %make v0 v1;
         v3.@Pair = call %swap v2;
-        v4.@Line = insert_value undef.@Line 0.i32 v2;
-        v5.@Line = insert_value v4 1.i32 v3;
+        v5.@Line = agg.make @Line v2 v3;
         v6.@Pair = extract_value v5 1.i32;
         v7.i32 = extract_value v6 0.i32;
         v8.i64 = extract_value v6 1.i32;
@@ -315,14 +313,12 @@ fn a_loop_consumer_of_a_preheader_aggregate_does_not_change_it() {
     let source = "type @P = { i32, i32 };
 func public %f(v0.i32, v1.i32) -> i32 {
     block0:
-        v2.@P = insert_value undef.@P 0.i32 v0;
-        v3.@P = insert_value v2 1.i32 7.i32;
         jump block1;
     block1:
         v4.i32 = phi (0.i32 block0) (v10 block1);
         v5.i32 = phi (0.i32 block0) (v11 block1);
         v6.i32 = add v0 v4;
-        v7.@P = insert_value v3 0.i32 v6;
+        v7.@P = agg.make @P v6 7.i32;
         v8.i32 = extract_value v7 1.i32;
         v9.i32 = extract_value v7 0.i32;
         v12.i32 = add v5 v8;
@@ -367,8 +363,7 @@ func private %mix(v0.i256, v1.@P, v2.i64, v3.i32) -> i256 {
 }
 func public %f(v0.i64, v1.i32) -> i64 {
     block0:
-        v2.@P = insert_value undef.@P 0.i32 v0;
-        v3.@P = insert_value v2 1.i32 v1;
+        v3.@P = agg.make @P v0 v1;
         v4.i256 = zext v0 i256;
         v5.i256 = call %mix v4 v3 5.i64 v1;
         v6.i256 = shr 64.i256 v5;
@@ -505,8 +500,7 @@ fn a_loop_can_carry_a_struct_and_update_one_field() {
     let source = "type @P = { i32, i32 };
 func public %f(v0.i32) -> i32 {
     block0:
-        v1.@P = insert_value undef.@P 0.i32 v0;
-        v2.@P = insert_value v1 1.i32 v0;
+        v2.@P = agg.make @P v0 v0;
         jump block1;
     block1:
         v3.i32 = phi (0.i32 block0) (v7 block2);
@@ -580,14 +574,13 @@ fn inserts_that_write_every_byte_need_no_zero_fill() {
     let source = "type @Pair = { i64, i64 };
 func public %full(v0.i64, v1.i64, v2.*@Pair) {
     block0:
-        v3.@Pair = insert_value undef.@Pair 0.i32 v0;
-        v4.@Pair = insert_value v3 1.i32 v1;
+        v4.@Pair = agg.make @Pair v0 v1;
         mstore v2 v4 @Pair;
         return;
 }
 func public %partial(v0.i64, v1.*@Pair) {
     block0:
-        v2.@Pair = insert_value undef.@Pair 0.i32 v0;
+        v2.@Pair = agg.make @Pair v0 undef.i64;
         mstore v1 v2 @Pair;
         return;
 }";
@@ -624,15 +617,13 @@ fn inserts_cover_an_aggregate_in_any_order_but_not_its_padding() {
 type @Gap = { i8, i64 };
 func public %reversed(v0.i64, v1.i64, v2.*@Pair) {
     block0:
-        v3.@Pair = insert_value undef.@Pair 1.i32 v1;
-        v4.@Pair = insert_value v3 0.i32 v0;
+        v4.@Pair = agg.make @Pair v0 v1;
         mstore v2 v4 @Pair;
         return;
 }
 func public %padded(v0.i8, v1.i64, v2.*@Gap) {
     block0:
-        v3.@Gap = insert_value undef.@Gap 0.i32 v0;
-        v4.@Gap = insert_value v3 1.i32 v1;
+        v4.@Gap = agg.make @Gap v0 v1;
         mstore v2 v4 @Gap;
         return;
 }
@@ -701,11 +692,8 @@ func private %make(v0.i64) -> @Big {
     block0:
         v1.i256 = zext v0 i256;
         v2.i256 = shl 200.i256 v1;
-        v3.@Big = insert_value undef.@Big 0.i32 v2;
-        v4.[i64; 6] = insert_value undef.[i64; 6] 0.i32 v0;
-        v5.[i64; 6] = insert_value v4 5.i32 9.i64;
-        v6.@Big = insert_value v3 1.i32 v5;
-        v7.@Big = insert_value v6 2.i32 -1.i8;
+        v5.[i64; 6] = agg.make [i64; 6] v0 undef.i64 undef.i64 undef.i64 undef.i64 9.i64;
+        v7.@Big = agg.make @Big v2 v5 -1.i8;
         return v7;
 }
 func private %bump(v0.@Big) -> @Big {
@@ -758,10 +746,8 @@ fn an_insert_into_an_extracted_view_leaves_the_parent_unchanged() {
 type @Outer = { @Pair, i64 };
 func public %snapshots(v0.i64, v1.i64, v2.*[i64; 6]) {
     block0:
-        v3.@Pair = insert_value undef.@Pair 0.i32 v0;
-        v4.@Pair = insert_value v3 1.i32 v1;
-        v5.@Outer = insert_value undef.@Outer 0.i32 v4;
-        v6.@Outer = insert_value v5 1.i32 7.i64;
+        v4.@Pair = agg.make @Pair v0 v1;
+        v6.@Outer = agg.make @Outer v4 7.i64;
         v7.@Pair = extract_value v6 0.i32;
         v8.@Pair = insert_value v7 0.i32 91.i64;
         v9.@Outer = insert_value v6 0.i32 v8;
@@ -774,12 +760,7 @@ func public %snapshots(v0.i64, v1.i64, v2.*[i64; 6]) {
         v16.i64 = extract_value v14 1.i32;
         v17.i64 = extract_value v6 1.i32;
         v18.i64 = extract_value v10 1.i32;
-        v19.[i64; 6] = insert_value undef.[i64; 6] 0.i32 v12;
-        v20.[i64; 6] = insert_value v19 1.i32 v13;
-        v21.[i64; 6] = insert_value v20 2.i32 v15;
-        v22.[i64; 6] = insert_value v21 3.i32 v16;
-        v23.[i64; 6] = insert_value v22 4.i32 v17;
-        v24.[i64; 6] = insert_value v23 5.i32 v18;
+        v24.[i64; 6] = agg.make [i64; 6] v12 v13 v15 v16 v17 v18;
         mstore v2 v24 [i64; 6];
         return;
 }";

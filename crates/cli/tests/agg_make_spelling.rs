@@ -5,7 +5,8 @@
 //! chains is respelled with `agg.make`, and one written with `agg.make` with
 //! chains, so the check keeps working while fixtures move from one spelling to
 //! the other. `i1` members are among what must match: each is stored and
-//! read as a word.
+//! read as a word. Every compile folds chains into `agg.make` on entry
+//! (`fold_fresh_aggregates`), so both spellings reach every pass alike.
 //!
 //! `AGG_MAKE_SPELLING_DIRS` adds directories of `.sntn` or `.sona` modules
 //! (such as Fe's `--emit ir` output), separated by `:`. With
@@ -34,81 +35,6 @@ use sonatina_wasm::WasmBackend;
 const MAX_FIELDS: usize = 64;
 
 const LEVELS: [OptLevel; 4] = [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os];
-
-/// Differences between the spellings, each explained: (fixture, backend,
-/// level).
-const EXPECTED: &[(&str, &str, &str)] = &[
-    // `%phi_of_made` joins `agg.make`s, one with an `undef` field. Respelled
-    // as chains that field is not inserted, so the chains end at different
-    // indices and the phi is not split; the phi of `agg.make`s is, and its
-    // fields become `select`s instead of duplicated returns.
-    (
-        "filecheck/fixtures/aggregate_combine/agg_make.sntn",
-        "Cranelift",
-        "O1",
-    ),
-    (
-        "filecheck/fixtures/aggregate_combine/agg_make.sntn",
-        "Cranelift",
-        "O2",
-    ),
-    (
-        "filecheck/fixtures/aggregate_combine/agg_make.sntn",
-        "Cranelift",
-        "Os",
-    ),
-    // `%after_phis` inserts field 1 before field 0; `agg.make` stores
-    // them in field order (same instructions).
-    (
-        "filecheck/fixtures/hoist_insert_chains/basic.sntn",
-        "Wasm",
-        "O0",
-    ),
-    // `%dynamic_read` joins two arrays, one with an `undef` element, and reads
-    // an element at a dynamic index. As `agg.make`s the phi is split into a
-    // scalar phi and the array rebuilt from values; respelled as chains the
-    // `undef` element is not inserted, so the chains end at different indices,
-    // the phi is not split, and the indexed array is built from a phi of
-    // chains (+12 bytes).
-    (
-        "codegen/test_files/evm/narrow_aggregate_reads_agg_make.sntn",
-        "Evm",
-        "O1",
-    ),
-    (
-        "codegen/test_files/evm/narrow_aggregate_reads_agg_make.sntn",
-        "Evm",
-        "O2",
-    ),
-    (
-        "codegen/test_files/evm/narrow_aggregate_reads_agg_make.sntn",
-        "Evm",
-        "Os",
-    ),
-    (
-        "codegen/test_files/evm/narrow_aggregate_reads_agg_make_noopt.sntn",
-        "Evm",
-        "O1",
-    ),
-    (
-        "codegen/test_files/evm/narrow_aggregate_reads_agg_make_noopt.sntn",
-        "Evm",
-        "O2",
-    ),
-    (
-        "codegen/test_files/evm/narrow_aggregate_reads_agg_make_noopt.sntn",
-        "Evm",
-        "Os",
-    ),
-    // Fe's FeProofs precompiles (`AGG_MAKE_SPELLING_DIRS`): in `r2__ga0f0`,
-    // `r2__g0068` and `r2__g276b` a loop phi joins a call result, rebuilt by
-    // ABI expansion as an insert chain, and a fresh value: as chains the phi
-    // is split field by field, with an `agg.make` it is left to scalarization,
-    // which orders the leaf phis otherwise (-40, -38 and +2 bytes).
-    ("Precompiles/precompiles.sona", "Evm", "O1"),
-    ("Precompiles/precompiles.sona", "Evm", "O2"),
-    ("Precompiles/precompiles.sona", "Evm", "Os"),
-];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Backend {
@@ -565,16 +491,11 @@ fn both_spellings_of_a_fresh_aggregate_compile_alike() {
         )
         .unwrap();
     }
-    let unexpected = differences.iter().any(|(name, backend, level, _)| {
-        !EXPECTED
-            .iter()
-            .any(|&(n, b, l)| Path::new(name).ends_with(n) && b == backend && l == level)
-    });
     for difference in &differences {
         writeln!(report, "differs: {difference:?}").unwrap();
     }
     eprintln!("{report}");
-    assert!(!unexpected, "{report}");
+    assert!(differences.is_empty(), "{report}");
     // These fixtures store and read back `i1` members through chains and
     // `agg.make`s, `undef` ones included: the same bytes for both spellings are
     // the same widenings to words.

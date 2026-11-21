@@ -10,7 +10,7 @@ use sonatina_ir::{
 };
 
 use crate::{
-    cfg_edit::{CfgEditor, CleanupMode},
+    cfg_edit::CfgEditor,
     optim::{call_purity::is_nonmutating_returning_call, inst_size},
 };
 
@@ -637,7 +637,7 @@ fn apply_splice_single_block_terminator(
         return false;
     }
 
-    let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
+    let mut editor = CfgEditor::new(caller);
     let call_block = editor.truncate_block_from_inst(call_inst_id);
     apply_splice_body(
         splice_plan.body,

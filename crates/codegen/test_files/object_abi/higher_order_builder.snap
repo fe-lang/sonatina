@@ -25,6 +25,6 @@ func private %build_via(v4.objref<@pair>, v0.*(objref<@pair>, i256, i256) -> uni
 func private %take_builder() {
     block0:
         v0.*(objref<@pair>, *(objref<@pair>, i256, i256) -> unit, i256, i256) -> unit = get_function_ptr %build_via;
-        v1.@builder_box = insert_value undef.@builder_box 0.i8 v0;
+        v1.@builder_box = agg.make @builder_box v0;
         return;
 }

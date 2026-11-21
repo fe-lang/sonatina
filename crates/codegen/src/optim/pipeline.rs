@@ -23,7 +23,6 @@ use crate::{
         func_behavior,
         tail_position::{recursive_tail_callees, tail_callers, tail_calls, tail_switches},
     },
-    cfg_edit::CleanupMode,
     compile::OptLevel,
     domtree::DomTree,
     loop_analysis::LoopTree,
@@ -138,8 +137,8 @@ pub enum Pass {
     /// Read a local object instead of a whole copy of it that nothing else
     /// writes, when nothing writes it after the copy (native pipelines only).
     CoalesceObjectCopies,
-    /// Move an `insert_value` chain building an aggregate from undef up to
-    /// its last input when its result fills a field of another chain or is
+    /// Move an `agg.make`, with the inserts updating it in place, up to its
+    /// last input when its result fills a field of another chain or is
     /// returned (native pipelines only).
     HoistInsertChains,
     /// Recompute `dfg.users` from layout-inserted instructions only.
@@ -980,7 +979,7 @@ fn run_pass(
         }
         Pass::CfgCleanup => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.cfg_cleanup").entered();
-            CfgCleanup::new(CleanupMode::Strict).run(func)
+            CfgCleanup::new().run(func)
         }
         Pass::AggregateCombine => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_combine").entered();
@@ -1172,7 +1171,7 @@ fn run_pass(
             };
             let cleaned = {
                 let _span = trace_span!("sonatina.optim.pipeline.sccp.cleanup").entered();
-                CfgCleanup::new(CleanupMode::Strict).run(func)
+                CfgCleanup::new().run(func)
             };
             changed || cleaned
         }
@@ -1210,7 +1209,7 @@ fn run_pass(
             };
             let cleaned = {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.cleanup").entered();
-                CfgCleanup::new(CleanupMode::Strict).run(func)
+                CfgCleanup::new().run(func)
             };
             changed || cleaned
         }
@@ -1522,8 +1521,7 @@ func private %entry(v0.objref<@Pair>, v1.i256) -> i256 {
 block0:
     v2.objref<i256> = obj.proj v0 0.i8;
     v3.i256 = obj.load v2;
-    v4.@Pair = insert_value undef.@Pair 0.i8 v3;
-    v5.@Pair = insert_value v4 1.i8 v1;
+    v5.@Pair = agg.make @Pair v3 v1;
     v6.objref<@Pair> = obj.alloc @Pair;
     obj.store v6 v5;
     v7.objref<i256> = obj.proj v6 0.i8;

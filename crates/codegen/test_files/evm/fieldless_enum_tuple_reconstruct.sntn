@@ -18,14 +18,12 @@ block0:
 
 block1:
     v1.@E = enum.make @E #A;
-    v2.@Pair = insert_value undef.@Pair 0.i8 0.i256;
-    v3.@Pair = insert_value v2 1.i8 v1;
+    v3.@Pair = agg.make @Pair 0.i256 v1;
     return v3;
 
 block2:
     v4.@E = enum.make @E #B;
-    v5.@Pair = insert_value undef.@Pair 0.i8 1.i256;
-    v6.@Pair = insert_value v5 1.i8 v4;
+    v6.@Pair = agg.make @Pair 1.i256 v4;
     return v6;
 }
 

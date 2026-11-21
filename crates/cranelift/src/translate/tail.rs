@@ -390,14 +390,14 @@ func private %pair(v0.[i64; 32], v1.[i64; 32], v2.i64) -> i64 {
 
 func private %widen(v0.[i64; 32], v1.i64) -> i64 {
     block0:
-        v2.[i64; 64] = insert_value undef.[i64; 64] 0.i64 v1;
+        v2.[i64; 64] = agg.make [i64; 64] v1 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
         v3.i64 = call %wide v2 v1;
         return v3;
 }
 
 func private %wide(v0.[i64; 64], v1.i64) -> i64 {
     block0:
-        v2.[i64; 32] = insert_value undef.[i64; 32] 0.i64 v1;
+        v2.[i64; 32] = agg.make [i64; 32] v1 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
         v3.i64 = call %widen v2 v1;
         return v3;
 }
@@ -424,8 +424,7 @@ type @wide = {*i8, i64, i64, *i8, i64, i64};
 
 func private %start(v0.*i8, v1.i64) {
     block0:
-        v2.@frame = insert_value undef.@frame 0.i64 v0;
-        v3.@frame = insert_value v2 2.i64 v1;
+        v3.@frame = agg.make @frame v0 undef.i64 v1 undef.*i8 undef.i64;
         v4.i8 = mload v0 i8;
         br_table v4 block1 (1.i8 block2);
     block1:
@@ -457,8 +456,7 @@ func private %pair(v0.@frame, v1.@frame) {
 
 func private %start_wide(v0.*i8, v1.i64) {
     block0:
-        v2.@wide = insert_value undef.@wide 0.i64 v0;
-        v3.@wide = insert_value v2 2.i64 v1;
+        v3.@wide = agg.make @wide v0 undef.i64 v1 undef.*i8 undef.i64 undef.i64;
         call %wide v3;
         return;
 }

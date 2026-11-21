@@ -13,7 +13,7 @@ use sonatina_ir::{
     inst::control_flow::{Jump, Return},
 };
 
-use crate::cfg_edit::{CfgEditor, CleanupMode};
+use crate::cfg_edit::CfgEditor;
 
 #[derive(Default)]
 pub struct ReturnThread;
@@ -21,7 +21,7 @@ pub struct ReturnThread;
 impl ReturnThread {
     pub fn run(&mut self, func: &mut Function) -> bool {
         let is = func.inst_set();
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         let mut changed = false;
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         for block in blocks {

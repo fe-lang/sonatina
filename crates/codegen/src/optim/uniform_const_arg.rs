@@ -393,7 +393,7 @@ block0:
 func private %register() -> @cb_box {
 block0:
     v0.*(i256, i256) -> i256 = get_function_ptr %helper;
-    v1.@cb_box = insert_value undef.@cb_box 0.i8 v0;
+    v1.@cb_box = agg.make @cb_box v0;
     return v1;
 }
 

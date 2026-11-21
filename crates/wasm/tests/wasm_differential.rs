@@ -34,8 +34,7 @@ impl Lcg {
 const PRELUDE: &str = "type @P = { i32, i64 };
 func private %mk(v0.i32, v1.i64) -> @P {
     block0:
-        v2.@P = insert_value undef.@P 0.i32 v0;
-        v3.@P = insert_value v2 1.i32 v1;
+        v3.@P = agg.make @P v0 v1;
         return v3;
 }
 func private %bump(v0.@P) -> @P {

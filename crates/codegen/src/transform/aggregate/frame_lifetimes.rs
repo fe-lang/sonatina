@@ -316,7 +316,7 @@ block0:
 func private %f(v0.objref<@pair>) {
 block0:
     v1.objref<i64> = obj.alloc i64;
-    v2.@pair = insert_value undef.@pair 1.i64 v1;
+    v2.@pair = agg.make @pair undef.i64 v1;
     obj.store v0 v2;
     return;
 }"#,
@@ -368,9 +368,7 @@ block2:
 func private %f(v0.objref<i64>) -> @pair {
 block0:
     v1.objref<i64> = obj.alloc i64;
-    v2.@pair = insert_value undef.@pair 1.i64 v1;
-    v3.@pair = insert_value v2 0.i64 7.i64;
-    v4.@pair = insert_value v3 1.i64 v0;
+    v4.@pair = agg.make @pair 7.i64 v0;
     return v4;
 }"#,
             // A later insert overwrites the field `agg.make` filled.
@@ -386,7 +384,7 @@ block0:
             r#"type @pair = { i64, objref<i64> };
 func private %f(v0.objref<i64>, v1.i64) -> @pair {
 block0:
-    v2.@pair = insert_value undef.@pair 1.i64 v0;
+    v2.@pair = agg.make @pair undef.i64 v0;
     jump block1;
 block1:
     v3.@pair = phi (v2 block0) (v5 block1);
@@ -451,8 +449,7 @@ block2:
 func private %f() -> @pair {
 block0:
     v0.objref<i64> = obj.alloc i64;
-    v1.@pair = insert_value undef.@pair 1.i64 v0;
-    v2.@pair = insert_value v1 0.i64 7.i64;
+    v2.@pair = agg.make @pair 7.i64 v0;
     return v2;
 }"#,
             r#"type @pair = { i64, objref<i64> };
@@ -483,8 +480,7 @@ block1:
     jump block2;
 block2:
     v4.@pair = phi (v1 block0) (v3 block1);
-    v5.@outer = insert_value undef.@outer 0.i64 v4;
-    v6.@outer = insert_value v5 1.i64 7.i64;
+    v6.@outer = agg.make @outer v4 7.i64;
     return v6;
 }"#,
             r#"type @choice = enum { #None, #Some(objref<i64>) };

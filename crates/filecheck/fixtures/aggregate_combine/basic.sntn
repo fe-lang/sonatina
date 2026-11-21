@@ -41,8 +41,7 @@ func public %ac_reconstruct(v0.@slice) -> i256 {
     block0:
         v1.i256 = extract_value v0 0.i8;
         v2.i256 = extract_value v0 1.i8;
-        v3.@slice = insert_value undef.@slice 0.i8 v1;
-        v4.@slice = insert_value v3 1.i8 v2;
+        v4.@slice = agg.make @slice v1 v2;
         v5.i256 = extract_value v4 1.i8;
         return v5;
 }
@@ -68,12 +67,11 @@ func public %ac_insert_identical_field(v0.@slice) -> @slice {
 
 # sameln: func public %ac_insert_identical_field_fully_initialized_insert_chain(v0.i256, v1.i256) -> @slice {
 # check:     block0:
-# check:         v3.@slice = insert_value v2 1.i8 v1;
+# check:         v3.@slice = agg.make @slice v0 v1;
 # check:         return v3;
 func public %ac_insert_identical_field_fully_initialized_insert_chain(v0.i256, v1.i256) -> @slice {
     block0:
-        v2.@slice = insert_value undef.@slice 0.i8 v0;
-        v3.@slice = insert_value v2 1.i8 v1;
+        v3.@slice = agg.make @slice v0 v1;
         v4.i256 = extract_value v3 1.i8;
         v5.@slice = insert_value v3 1.i8 v4;
         return v5;
@@ -88,7 +86,7 @@ func public %ac_insert_identical_field_fully_initialized_insert_chain(v0.i256, v
 # check:         return v4;
 func public %ac_insert_identical_field_maybe_undef(v0.i1, v1.@slice, v2.i256) -> @slice {
     block0:
-        v3.@slice = insert_value undef.@slice 0.i8 v2;
+        v3.@slice = agg.make @slice v2 undef.i256;
         br v0 block1 block2;
 
     block1:
@@ -109,8 +107,7 @@ func public %ac_insert_identical_field_maybe_undef(v0.i1, v1.@slice, v2.i256) ->
 # check:         return v4;
 func public %ac_loop_insert_identical_field_fully_initialized(v0.i1, v1.i256, v2.i256) -> @slice {
     block0:
-        v3.@slice = insert_value undef.@slice 0.i8 v1;
-        v4.@slice = insert_value v3 1.i8 v2;
+        v4.@slice = agg.make @slice v1 v2;
         jump block1;
 
     block1:
@@ -226,9 +223,7 @@ func public %ac_loop_phi_insert(v0.@slice, v1.@slice) -> i256 {
 # check:         return 2.i256;
 func public %ac_nested_chain() -> i256 {
     block0:
-        v0.@slice = insert_value undef.@slice 0.i8 1.i256;
-        v1.@slice = insert_value v0 1.i8 2.i256;
-        v2.@slice = insert_value v1 0.i8 3.i256;
+        v2.@slice = agg.make @slice 3.i256 2.i256;
         v3.i256 = extract_value v2 1.i8;
         return v3;
 }

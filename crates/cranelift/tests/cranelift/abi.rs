@@ -70,13 +70,10 @@ block1:
     v3.i64 = enum.extract v0 #Some 0.i8;
     v4.i32 = enum.extract v0 #Some 1.i8;
     v5.i16 = trunc v4 i16;
-    v6.@Quad = insert_value undef.@Quad 0.i64 1.i8;
-    v7.@Quad = insert_value v6 1.i64 v3;
-    v8.@Quad = insert_value v7 2.i64 v5;
-    v9.@Quad = insert_value v8 3.i64 v1;
+    v9.@Quad = agg.make @Quad 1.i8 v3 v5 v1;
     return v9;
 block2:
-    v10.@Quad = insert_value undef.@Quad 3.i64 v1;
+    v10.@Quad = agg.make @Quad undef.i8 undef.i64 undef.i16 v1;
     return v10;
 }
 func public %sum_quad(v0.@Quad) -> i64 {
@@ -295,8 +292,7 @@ block2:
 }
 func public %run(v0.i64, v1.*i8, v2.i32) -> i64 {
 block0:
-    v3.@Z = insert_value undef.@Z 0.i64 v0;
-    v4.@Z = insert_value v3 3.i64 5.i32;
+    v4.@Z = agg.make @Z v0 undef.@Empty undef.[i8; 0] 5.i32;
     v5.@Z = call %z v4 undef.@Empty;
     v6.*@Z = bitcast v1 *@Z;
     mstore v6 v5 @Z;
@@ -317,7 +313,7 @@ block0:
     v19.*[i8; 4] = bitcast v18 *[i8; 4];
     mstore v19 v17 [i8; 4];
     v20.@Inner = enum.make @Inner #None ();
-    v21.@S = insert_value undef.@S 1.i64 v20;
+    v21.@S = agg.make @S undef.i8 v20;
     v22.@S = call %s v21;
     v23.*i8 = gep v1 48.i64;
     v24.*@S = bitcast v23 *@S;
@@ -391,8 +387,7 @@ func public %run(v0.i64, v1.*i8, v2.i256) -> i64 {
 block0:
     v3.i8 = trunc v0 i8;
     v4.i1 = trunc v3 i1;
-    v5.@B = insert_value undef.@B 0.i64 v4;
-    v6.@B = insert_value v5 1.i64 v3;
+    v6.@B = agg.make @B v4 v3 undef.i1;
     v7.@B = call %flip v6;
     v8.*@B = bitcast v1 *@B;
     mstore v8 v7 @B;
@@ -411,7 +406,7 @@ block0:
     v20.*i8 = gep v1 8.i64;
     v21.*i256 = bitcast v20 *i256;
     mstore v21 v19 i256;
-    v22.@P = insert_value undef.@P 0.i64 1.i32;
+    v22.@P = agg.make @P 1.i32 undef.i32;
     v23.@P = insert_value v22 1.i64 515.i32;
     v24.@Q = bitcast v23 @Q;
     v25.*i8 = gep v1 40.i64;
@@ -489,8 +484,7 @@ func public %make(v0.i64) -> @Pair {
 block0:
     v1.i1 = ne v0 0.i64;
     v2.i8 = zext v1 i8;
-    v3.@Pair = insert_value undef.@Pair 0.i64 v2;
-    v4.@Pair = insert_value v3 1.i64 v0;
+    v4.@Pair = agg.make @Pair v2 v0;
     return v4;
 }
 func public %take(v0.@Pair) -> i64 {
@@ -524,8 +518,7 @@ block0:
 block1:
     enum.assert_variant v0 #Some;
     v2.i64 = enum.extract v0 #Some 0.i8;
-    v3.@Pair = insert_value undef.@Pair 0.i64 1.i8;
-    v4.@Pair = insert_value v3 1.i64 v2;
+    v4.@Pair = agg.make @Pair 1.i8 v2;
     return v4;
 block2:
     return undef.@Pair;

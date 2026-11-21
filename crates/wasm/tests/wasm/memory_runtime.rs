@@ -747,10 +747,8 @@ fn aggregate_phis_are_parallel_copies() {
     let source = "type @P = { i32, i32 };
 func public %swap(v0.i32, v1.i32, v2.i32) -> i32 {
     block0:
-        v3.@P = insert_value undef.@P 0.i32 v0;
-        v4.@P = insert_value v3 1.i32 100.i32;
-        v5.@P = insert_value undef.@P 0.i32 v1;
-        v6.@P = insert_value v5 1.i32 200.i32;
+        v4.@P = agg.make @P v0 100.i32;
+        v6.@P = agg.make @P v1 200.i32;
         jump block1;
     block1:
         v7.@P = phi (v4 block0) (v8 block2);
@@ -807,7 +805,7 @@ func public %f(v0.@P) -> i32 {
         "type @P = { i32, i32 };
 func public %g(v0.i32) -> @P {
     block0:
-        v1.@P = insert_value undef.@P 0.i32 v0;
+        v1.@P = agg.make @P v0 undef.i32;
         return v1;
 }",
     );
@@ -838,7 +836,7 @@ func public %g(v0.i32) -> @P {
         "type @P = { i32, i32 };
 func private %m(v0.i32) -> (i32, @P) {
     block0:
-        v1.@P = insert_value undef.@P 0.i32 v0;
+        v1.@P = agg.make @P v0 undef.i32;
         return (v0, v1);
 }
 func public %k(v0.i32) -> i32 {

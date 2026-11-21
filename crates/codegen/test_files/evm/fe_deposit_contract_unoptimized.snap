@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 2461
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_deposit_contract_unoptimized.sntn
 ---
@@ -1386,20 +1385,20 @@ core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7:
     PUSH1 block20
     JUMPI
   block3:
-    PUSH1 0x1 (1)  // v17.i256 = sub v12 v14;
+    PUSH1 0x1 (1)  // v20.i256 = sub v12 v14;
     DUP2
     SUB
-    PUSH1 0x5 (5)  // v20.i256 = shr v18 v17;
+    PUSH1 0x5 (5)  // v40.i256 = shr 5.i256 v20;
     SHR
-    PUSH1 0x1 (1)  // v15.i256 = add v20 v14;
+    PUSH1 0x1 (1)  // v15.i256 = add v40 v14;
     ADD
-    DUP1  // v16.i256 = shl v18 v15;
+    DUP1  // v16.i256 = shl 5.i256 v15;
     PUSH1 0x5 (5)
     SHL
-    SWAP1  // v40.i256 = shr 251.i256 v15;
+    SWAP1  // v18.i256 = shr 251.i256 v15;
     PUSH1 0xfb (251)
     SHR
-    ISZERO  // br v40 block4 block21;
+    ISZERO  // br v18 block4 block21;
     PUSH1 block7
     JUMPI
   block4:

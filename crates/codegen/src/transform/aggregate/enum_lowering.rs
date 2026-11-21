@@ -449,13 +449,14 @@ pub(super) fn lower_enum_inst<R: EnumWordRewrite>(
         let tag = func
             .dfg
             .make_imm_value(tag_imm(func.ctx(), *make.variant()));
-        let mut value = func.dfg.make_undef_value(layout.ty);
-        value = insert_value(func, inst, value, 0, tag);
+        // The parts the variant does not use stay `undef`.
+        let mut value = Part::Unset;
+        value.set(func.ctx(), layout.ty, &[(0, layout.tag_ty)], tag);
         for (field, &payload) in make.values().iter().enumerate() {
             let (word, ty) = layout.field(*make.variant(), field);
-            value = write_word_value(func, inst, &layout, value, word, ty, payload);
+            write_word_value(func, inst, &layout, &mut value, word, ty, payload);
         }
-        Some(value)
+        Some(value.build(func, inst, layout.ty))
     } else if let Some(tag) = func.dfg.downcast::<&data::EnumTag>(inst).cloned() {
         let tag_ty = func.dfg.value_ty(func.dfg.inst_result(inst).unwrap());
         Some(extract_value(func, inst, *tag.value(), 0, tag_ty))
@@ -546,36 +547,88 @@ fn field_index(func: &Function, field: ValueId) -> usize {
         .expect("enum field index must be a non-negative immediate")
 }
 
-/// Inserts `value`, of type `ty` at payload `word`, into enum value `dest`.
+/// An enum value under construction: a node is unset, a value, or the
+/// fields of an aggregate, built at the end with `agg.make`.
+#[derive(Clone)]
+enum Part {
+    Unset,
+    Value(ValueId),
+    Fields(Vec<Part>),
+}
+
+impl Part {
+    /// Sets the node at `path` below this one, of type `ty`, to `value`.
+    fn set(&mut self, ctx: &ModuleCtx, ty: Type, path: &[(u32, Type)], value: ValueId) {
+        let Some((&(index, child_ty), rest)) = path.split_first() else {
+            *self = Self::Value(value);
+            return;
+        };
+        if !matches!(self, Self::Fields(_)) {
+            assert!(
+                matches!(self, Self::Unset),
+                "an enum payload word is written twice"
+            );
+            *self = Self::Fields(vec![Self::Unset; children(ctx, ty).unwrap().len()]);
+        }
+        let Self::Fields(fields) = self else {
+            unreachable!()
+        };
+        fields[index as usize].set(ctx, child_ty, rest, value);
+    }
+
+    /// The value of type `ty` this node holds, built before `before`.
+    fn build(self, func: &mut Function, before: InstId, ty: Type) -> ValueId {
+        match self {
+            Self::Unset => func.dfg.make_undef_value(ty),
+            Self::Value(value) => value,
+            Self::Fields(fields) => {
+                let tys = children(func.ctx(), ty).unwrap();
+                let values = fields
+                    .into_iter()
+                    .zip(tys)
+                    .map(|(field, ty)| field.build(func, before, ty))
+                    .collect();
+                let is = func.inst_set();
+                insert_before(
+                    func,
+                    before,
+                    data::AggMake::new_unchecked(is, ty, values),
+                    ty,
+                )
+            }
+        }
+    }
+}
+
+/// Writes `value`, of type `ty` at payload `word`, into the enum value
+/// `dest` under construction.
 fn write_word_value(
     func: &mut Function,
     before: InstId,
     layout: &LoweredEnum,
-    dest: ValueId,
+    dest: &mut Part,
     word: u32,
     ty: Type,
     value: ValueId,
-) -> ValueId {
+) {
     if words(func.ctx(), ty) == 0 {
-        return dest;
+        return;
     }
     let path = layout.path(func.ctx(), word, ty);
     let node_ty = path.last().unwrap().1;
     if node_ty == ty {
-        return insert_path(func, before, dest, &path, value);
+        return dest.set(func.ctx(), layout.ty, &path, value);
     }
     let Some(children) = children(func.ctx(), ty) else {
         let value = cast_word(func, before, value, node_ty);
-        return insert_path(func, before, dest, &path, value);
+        return dest.set(func.ctx(), layout.ty, &path, value);
     };
-    let mut dest = dest;
     let mut at = word;
     for (index, child) in children.into_iter().enumerate() {
         let child_value = extract_value(func, before, value, index as u32, child);
-        dest = write_word_value(func, before, layout, dest, at, child, child_value);
+        write_word_value(func, before, layout, dest, at, child, child_value);
         at += words(func.ctx(), child);
     }
-    dest
 }
 
 /// The value of type `ty` at payload `word` of enum value `src`.
@@ -599,14 +652,19 @@ fn read_word_value(
         let leaf = extract_path(func, before, src, &path);
         return cast_word(func, before, leaf, ty);
     };
-    let mut value = func.dfg.make_undef_value(ty);
+    let mut values = SmallVec::new();
     let mut at = word;
-    for (index, child) in children.into_iter().enumerate() {
-        let child_value = read_word_value(func, before, layout, src, at, child);
-        value = insert_value(func, before, value, index as u32, child_value);
+    for child in children {
+        values.push(read_word_value(func, before, layout, src, at, child));
         at += words(func.ctx(), child);
     }
-    value
+    let is = func.inst_set();
+    insert_before(
+        func,
+        before,
+        data::AggMake::new_unchecked(is, ty, values),
+        ty,
+    )
 }
 
 fn extract_path(
@@ -618,44 +676,6 @@ fn extract_path(
     path.iter().fold(src, |value, &(index, ty)| {
         extract_value(func, before, value, index, ty)
     })
-}
-
-fn insert_path(
-    func: &mut Function,
-    before: InstId,
-    dest: ValueId,
-    path: &[(u32, Type)],
-    value: ValueId,
-) -> ValueId {
-    let Some((&(index, ty), rest)) = path.split_first() else {
-        return value;
-    };
-    let value = if rest.is_empty() {
-        value
-    } else {
-        let child = inserted_part(func, dest, index)
-            .unwrap_or_else(|| extract_value(func, before, dest, index, ty));
-        insert_path(func, before, child, rest, value)
-    };
-    insert_value(func, before, dest, index, value)
-}
-
-/// Part `index` of `value` when `value` is undef or inserts its parts
-/// directly, as an enum value under construction does.
-fn inserted_part(func: &mut Function, value: ValueId, index: u32) -> Option<ValueId> {
-    if let Value::Undef { ty } = *func.dfg.value(value) {
-        let part_ty = children(func.ctx(), ty)?[index as usize];
-        return Some(func.dfg.make_undef_value(part_ty));
-    }
-    let insert = func
-        .dfg
-        .downcast::<&data::InsertValue>(func.dfg.value_inst(value)?)?
-        .clone();
-    if func.dfg.value_imm(*insert.idx())?.to_nonnegative_usize()? == index as usize {
-        Some(*insert.value())
-    } else {
-        inserted_part(func, *insert.dest(), index)
-    }
 }
 
 /// A pointer to the field of type `ty` at payload `word` of the enum at
@@ -765,24 +785,6 @@ fn bitcast_before(func: &mut Function, before: InstId, value: ValueId, to: Type)
         before,
         cast::Bitcast::new_unchecked(is, value, to),
         to,
-    )
-}
-
-fn insert_value(
-    func: &mut Function,
-    before: InstId,
-    dest: ValueId,
-    index: u32,
-    value: ValueId,
-) -> ValueId {
-    let ty = func.dfg.value_ty(dest);
-    let index = func.dfg.make_imm_value(i64::from(index));
-    let is = func.inst_set();
-    insert_before(
-        func,
-        before,
-        data::InsertValue::new_unchecked(is, dest, index, value),
-        ty,
     )
 }
 

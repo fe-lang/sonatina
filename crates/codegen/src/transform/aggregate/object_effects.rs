@@ -2350,8 +2350,7 @@ type @Slot = enum {{ #Empty, #Full(@Pair) }};
 declare external %sink(@Pair);
 func private %f(v0.objref<i256>, v1.i1, v2.objref<@Pair>) -> i256 {{
 block0:
-    v3.@Pair = insert_value undef.@Pair 0.i256 7.i256;
-    v4.@Pair = insert_value v3 1.i256 v0;
+    v4.@Pair = agg.make @Pair 7.i256 v0;
     {body}
 }}
 "#

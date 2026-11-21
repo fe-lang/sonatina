@@ -213,7 +213,7 @@ fn partial_aggregate_insert_keeps_undef_fields_zero() {
 type @Padded = {i8, i128};
 func public %write(v0.*@Padded) {
 block0:
-    v1.@Padded = insert_value undef.@Padded 0.i64 7.i8;
+    v1.@Padded = agg.make @Padded 7.i8 undef.i128;
     mstore v0 v1 @Padded;
     return;
 }

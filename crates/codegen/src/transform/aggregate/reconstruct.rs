@@ -281,11 +281,11 @@ fn rebuild_value_from_leaf_values_impl(
         }
         ValueRebuildKind::Aggregate => {
             let child_count = shape::aggregate_child_count(module, agg_ty)?;
-            let mut aggregate = func.dfg.make_undef_value(agg_ty);
+            let mut fields = SmallVec::new();
             for idx in 0..child_count {
                 let idx = u32::try_from(idx).ok()?;
                 let child = shape::aggregate_slice_for_index(module, agg_ty, idx)?;
-                let child_value = if child.leaf_count == 0 {
+                fields.push(if child.leaf_count == 0 {
                     func.dfg.make_undef_value(child.ty)
                 } else {
                     rebuild_value_from_leaf_values_impl(
@@ -295,11 +295,10 @@ fn rebuild_value_from_leaf_values_impl(
                         child.ty,
                         &scalar_leaves[child.first_leaf..child.first_leaf + child.leaf_count],
                     )?
-                };
-                aggregate =
-                    insert_value_before_inst(func, inst, aggregate, idx, child_value, agg_ty);
+                });
             }
-            Some(aggregate)
+            let make = data::AggMake::new_unchecked(func.inst_set(), agg_ty, fields);
+            Some(insert_before_inst(func, inst, make, agg_ty))
         }
     }
 }
@@ -336,8 +335,11 @@ fn rebuild_enum_from_leaf_values(
         };
         values.push(value);
     }
-    Some(insert_enum_make_before_inst(
-        func, inst, enum_ty, variant, values,
+    Some(insert_before_inst(
+        func,
+        inst,
+        data::EnumMake::new_unchecked(func.inst_set(), enum_ty, variant, values),
+        enum_ty,
     ))
 }
 
@@ -466,60 +468,26 @@ fn enum_tag_before_inst(func: &mut Function, inst: InstId, value: ValueId, ty: T
     enum_tag_value
 }
 
-fn insert_enum_make_before_inst(
+/// Inserts `data`, with one result of type `ty`, before `inst`.
+pub(crate) fn insert_before_inst<I: sonatina_ir::Inst>(
     func: &mut Function,
     inst: InstId,
+    data: I,
     ty: Type,
-    variant: EnumVariantRef,
-    values: SmallVec<[ValueId; 2]>,
 ) -> ValueId {
     let loc = func.layout.prev_inst_of(inst).map_or(
         CursorLocation::BlockTop(func.layout.inst_block(inst)),
         CursorLocation::At,
     );
     let mut cursor = InstInserter::at_location(loc);
-    let enum_make_inst = cursor.insert_inst_data_from(
-        func,
-        inst,
-        data::EnumMake::new_unchecked(func.inst_set(), ty, variant, values),
-    );
-    let enum_make_value = func.dfg.make_value(Value::Inst {
-        inst: enum_make_inst,
+    let new = cursor.insert_inst_data_from(func, inst, data);
+    let value = func.dfg.make_value(Value::Inst {
+        inst: new,
         result_idx: 0,
         ty,
     });
-    cursor.attach_result(func, enum_make_inst, enum_make_value);
-    enum_make_value
-}
-
-fn insert_value_before_inst(
-    func: &mut Function,
-    inst: InstId,
-    dest: ValueId,
-    idx: u32,
-    value: ValueId,
-    ty: Type,
-) -> ValueId {
-    let idx_value = func
-        .dfg
-        .make_imm_value(Immediate::from_i256(I256::from(idx), Type::I256));
-    let loc = func.layout.prev_inst_of(inst).map_or(
-        CursorLocation::BlockTop(func.layout.inst_block(inst)),
-        CursorLocation::At,
-    );
-    let mut cursor = InstInserter::at_location(loc);
-    let insert_inst = cursor.insert_inst_data_from(
-        func,
-        inst,
-        data::InsertValue::new_unchecked(func.inst_set(), dest, idx_value, value),
-    );
-    let insert_value = func.dfg.make_value(Value::Inst {
-        inst: insert_inst,
-        result_idx: 0,
-        ty,
-    });
-    cursor.attach_result(func, insert_inst, insert_value);
-    insert_value
+    cursor.attach_result(func, new, value);
+    value
 }
 
 #[cfg(test)]
@@ -792,12 +760,9 @@ block0:
                 rebuild_scalar_shape_from_leaf_values(func, ret, &module_ctx, pair, &leaves)
                     .unwrap();
             let rebuilt_inst = func.dfg.value_inst(rebuilt).unwrap();
-            let final_insert = func
-                .dfg
-                .downcast::<&data::InsertValue>(rebuilt_inst)
-                .unwrap();
-            assert_eq!(shape::const_u32(&func.dfg, *final_insert.idx()), Some(1));
-            let enum_child = *final_insert.value();
+            let make = func.dfg.downcast::<&data::AggMake>(rebuilt_inst).unwrap();
+            assert_eq!(make.values().len(), 2);
+            let enum_child = make.values()[1];
             assert_eq!(func.dfg.value_ty(enum_child), enum_ty);
 
             let enum_make_inst = func.dfg.value_inst(enum_child).unwrap();
@@ -861,12 +826,9 @@ block0:
                 rebuild_scalar_shape_from_leaf_values(func, ret, &module_ctx, pair, &leaves)
                     .unwrap();
             let rebuilt_inst = func.dfg.value_inst(rebuilt).unwrap();
-            let final_insert = func
-                .dfg
-                .downcast::<&data::InsertValue>(rebuilt_inst)
-                .unwrap();
-            assert_eq!(shape::const_u32(&func.dfg, *final_insert.idx()), Some(1));
-            let enum_child = *final_insert.value();
+            let make = func.dfg.downcast::<&data::AggMake>(rebuilt_inst).unwrap();
+            assert_eq!(make.values().len(), 2);
+            let enum_child = make.values()[1];
             assert_eq!(func.dfg.value_ty(enum_child), enum_ty);
 
             let enum_make_inst = func.dfg.value_inst(enum_child).unwrap();

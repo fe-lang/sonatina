@@ -30,7 +30,10 @@ use cranelift_module::{
     DataDescription, DataId, FuncId, Linkage, Module as ClifModule, ModuleReloc,
 };
 
-use sonatina_codegen::analysis::{arg_writes::ArgWrites, known_bits::KnownBitsQuery};
+use sonatina_codegen::{
+    analysis::{arg_writes::ArgWrites, known_bits::KnownBitsQuery},
+    transform::aggregate::is_fresh_insert,
+};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Type, U256,
     Value, ValueId,
@@ -2035,6 +2038,13 @@ fn translate_function(
                     value_map.insert_parts(result, values);
                 }
                 NativeInstKind::InsertValue(insert) => {
+                    // `legalize_module` folded every insert into `undef` or an
+                    // `agg.make` into an `agg.make`, but for sparse inserts
+                    // into long arrays, which copy their base like an update.
+                    debug_assert!(
+                        !is_fresh_insert(function, inst_id),
+                        "fresh insert {inst_id:?} reached translation"
+                    );
                     let Some(result) = function.dfg.inst_result(inst_id) else {
                         continue;
                     };
@@ -2048,48 +2058,15 @@ fn translate_function(
                     } else {
                         let address =
                             storage_address(&frame, function, result, &value_map, &mut builder)?;
-                        if is_undef(function, source_value) {
-                            // An undef source is zero, but only the bytes no
-                            // insert of the chain writes need zeroing.
-                            let written = frame
-                                .insert_chain(function, inst_id)
-                                .map(|inst| {
-                                    let NativeInstKind::InsertValue(insert) =
-                                        native_inst_set().resolve_inst(function.dfg.inst(inst))
-                                    else {
-                                        return Err(
-                                            "insert chain continues past insert_value".to_string()
-                                        );
-                                    };
-                                    let idx = constant_value_index(
-                                        function,
-                                        *insert.idx(),
-                                        "insert_value",
-                                    )?;
-                                    let (offset, elem_ty) =
-                                        aggregate_elem_offset(&module.ctx, result_ty, idx)?;
-                                    Ok((offset as u32, value_storage_size(elem_ty, &module.ctx)?))
-                                })
-                                .collect::<Result<_, String>>()?;
-                            zero_unwritten_fields(
-                                result_ty,
-                                address,
-                                written,
-                                &module.ctx,
-                                target_config,
-                                &mut builder,
-                            )?;
-                        } else {
-                            store_indirect(
-                                function,
-                                source_value,
-                                address,
-                                result_ty,
-                                &value_map,
-                                target_config,
-                                &mut builder,
-                            )?;
-                        }
+                        store_indirect(
+                            function,
+                            source_value,
+                            address,
+                            result_ty,
+                            &value_map,
+                            target_config,
+                            &mut builder,
+                        )?;
                         address
                     };
 
@@ -2460,9 +2437,9 @@ fn translate_function(
                         let result_ty = function.dfg.value_ty(result);
                         let addr =
                             storage_address(&frame, function, result, &value_map, &mut builder)?;
-                        // `undef` fields are zero, written first as for an
-                        // insert chain on undef. Padding is not part of the
-                        // value, so it keeps whatever it holds.
+                        // `undef` fields are zero, written first. Padding is
+                        // not part of the value, so it keeps whatever it
+                        // holds.
                         let mut written = Vec::new();
                         let mut stored = Vec::new();
                         for (idx, &field) in make.values().iter().enumerate() {

@@ -4,12 +4,13 @@ use sonatina_ir::{
     inst::control_flow::Unreachable,
 };
 
-use crate::cfg_edit::{CfgEditor, CleanupMode};
+use crate::cfg_edit::CfgEditor;
 
+#[derive(Default)]
 pub struct CfgCleanup;
 
 impl CfgCleanup {
-    pub fn new(CleanupMode::Strict: CleanupMode) -> Self {
+    pub fn new() -> Self {
         Self
     }
 
@@ -18,7 +19,7 @@ impl CfgCleanup {
             return false;
         }
 
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
 
         let mut changed = editor.trim_after_terminator();
         if changed {
@@ -319,7 +320,7 @@ func private %caller() {
         assert!(module.ctx.func_effects(exit_now).never_returns());
 
         module.func_store.modify(caller, |func| {
-            assert!(CfgCleanup::new(CleanupMode::Strict).run(func));
+            assert!(CfgCleanup::new().run(func));
 
             let block = func.layout.entry_block().expect("entry block");
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
@@ -372,7 +373,7 @@ block1:
 
         let test_run = find_func(&module, "test_run");
         module.func_store.modify(test_run, |func| {
-            assert!(CfgCleanup::new(CleanupMode::Strict).run(func));
+            assert!(CfgCleanup::new().run(func));
 
             let dumped = FuncWriter::new(test_run, func).dump_string();
             assert!(dumped.contains("unreachable;"));
@@ -416,7 +417,7 @@ func private %caller() {
 
         let caller = find_func(&module, "caller");
         module.func_store.modify(caller, |func| {
-            assert!(CfgCleanup::new(CleanupMode::Strict).run(func));
+            assert!(CfgCleanup::new().run(func));
 
             let block2 = func
                 .layout
@@ -485,7 +486,7 @@ block4:
 
         let dead_region = find_func(&module, "dead_region");
         module.func_store.modify(dead_region, |func| {
-            assert!(CfgCleanup::new(CleanupMode::Strict).run(func));
+            assert!(CfgCleanup::new().run(func));
 
             let dumped = FuncWriter::new(dead_region, func).dump_string();
             assert!(!dumped.contains("eq "));
