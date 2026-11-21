@@ -130,8 +130,13 @@ func public %run(v0.i64, v1.i64) -> i64 {
             .map(str::to_string)
             .unwrap_or_else(|| panic!("`halt` was inlined:\n{optimized}"))
     };
-    let native = halt_signature(Pipeline::native(OptLevel::O2));
-    assert!(native.contains("%halt(v0.i64, v1.i64)"), "{native}");
+    for level in [OptLevel::O2, OptLevel::Os] {
+        let native = halt_signature(Pipeline::native(level));
+        assert!(
+            native.contains("%halt(v0.i64, v1.i64)"),
+            "{level:?}: {native}"
+        );
+    }
     let speed = halt_signature(Pipeline::speed());
     assert!(!speed.contains("v1.i64"), "{speed}");
 }

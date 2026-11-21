@@ -177,7 +177,9 @@ fn function(index: usize, instruction: &str, returns: &str, tail: &str) -> Strin
 #[test]
 fn a_128_bit_product_needs_no_multiplication_function() {
     // The product is at most three limb products, built in place; only the
-    // checked product calls `i256.mulo`. The name section lists the functions.
+    // checked product calls a multiplication function, and as the product of
+    // two 128-bit values fits in 256 bits, the one for the low half of a
+    // product, `i256.mul`. The name section lists the functions.
     let module = |instruction: &str| {
         let source = format!(
             "{PRELUDE}func public %f(v0.i64, v1.i64, v2.i64, v3.i64) -> (i64, i64) {{
@@ -191,9 +193,11 @@ fn a_128_bit_product_needs_no_multiplication_function() {
         );
         build_at(&source, OptLevel::O2)
     };
-    let has_helper = |bytes: &[u8]| bytes.windows(9).any(|name| name == b"i256.mulo");
-    assert!(!has_helper(&module("v6.i128 = mul v4 v5;")));
-    assert!(has_helper(&module("(v6.i128, v7.i1) = umulo v4 v5;")));
+    let has = |bytes: &[u8], name: &[u8]| bytes.windows(name.len()).any(|window| window == name);
+    let plain = module("v6.i128 = mul v4 v5;");
+    assert!(!has(&plain, b"i256.mul"));
+    let checked = module("(v6.i128, v7.i1) = umulo v4 v5;");
+    assert!(has(&checked, b"i256.mul") && !has(&checked, b"i256.mulo"));
 }
 
 #[test]

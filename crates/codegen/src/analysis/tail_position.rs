@@ -1,7 +1,7 @@
 //! Calls in tail position: a call whose results its function returns right
 //! away, which a backend may make a tail call.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use sonatina_ir::{
     BlockId, Function, Module, Type, ValueId,
@@ -109,9 +109,9 @@ pub struct TailSwitch {
     pub bits: u16,
 }
 
-/// The tail switches of `function`, by their `br_table`s. `sites` are its
-/// [`tail_calls`].
-pub fn tail_switches(function: &Function, sites: &HashSet<InstId>) -> HashMap<InstId, TailSwitch> {
+/// The tail switches of `function` with their `br_table`s, in layout order.
+/// `sites` are its [`tail_calls`].
+pub fn tail_switches(function: &Function, sites: &HashSet<InstId>) -> Vec<(InstId, TailSwitch)> {
     let mut known_bits = None;
     function
         .layout
