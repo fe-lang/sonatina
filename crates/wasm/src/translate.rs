@@ -1178,7 +1178,7 @@ struct FunctionTranslator<'a> {
     /// Frame offsets of snapshots of the inputs of aggregate phis, by edge.
     edge_slots: FxHashMap<(BlockId, BlockId, InstId), u32>,
     /// Frame offsets of the zero-filled storage of aggregate `undef` operands.
-    undef_slots: FxHashMap<ValueId, u32>,
+    zero_slots: FxHashMap<ValueId, u32>,
     /// The calls that end their block as tail calls.
     tail_calls: FxHashSet<InstId>,
     /// The size of the largest copy made with loads and stores.
@@ -1231,7 +1231,7 @@ impl<'a> FunctionTranslator<'a> {
             phi_params: FxHashMap::default(),
             phi_slots: FxHashMap::default(),
             edge_slots: FxHashMap::default(),
-            undef_slots: FxHashMap::default(),
+            zero_slots: FxHashMap::default(),
             tail_calls,
             inline_copy_bytes: aggregate::inline_copy_bytes(opt_level),
         }
@@ -1512,16 +1512,16 @@ impl<'a> FunctionTranslator<'a> {
                     other => Err(self.unsupported_type("an immediate", other.ty())),
                 }
             }
-            Value::Undef { ty } => {
-                // An undefined value is materialized as zero, as the native
-                // backend does.
-                match repr(&self.module.ctx, *ty) {
-                    Some(Repr::Int(int)) => Ok(self.emit(wb).zero(int)),
-                    Some(Repr::Pointer) => Ok(self.emit(wb).c32(0)),
-                    Some(Repr::Aggregate) => self.undef_aggregate(wb, id, *ty),
-                    _ => Err(self.unsupported_type("an undefined value", *ty)),
-                }
-            }
+            Value::Undef { .. } => Err(invalid(format!(
+                "function `{}`: value v{}: translation takes concrete IR, which has no `undef`",
+                self.name, id.0
+            ))),
+            Value::Zero { ty } => match repr(&self.module.ctx, *ty) {
+                Some(Repr::Int(int)) => Ok(self.emit(wb).zero(int)),
+                Some(Repr::Pointer) => Ok(self.emit(wb).c32(0)),
+                Some(Repr::Aggregate) => self.zero_aggregate(wb, id, *ty),
+                _ => Err(self.unsupported_type("an undefined value", *ty)),
+            },
             Value::Global { gv, .. } => {
                 let address = self.plan.globals.get(gv).ok_or_else(|| {
                     invalid(format!(
@@ -1549,7 +1549,7 @@ impl<'a> FunctionTranslator<'a> {
             Value::Immediate { imm, .. } if Wide::from_type(imm.ty()).is_some() => {
                 Ok(self.emit(wb).wide_const(imm.zext(Type::I256).as_i256()))
             }
-            Value::Undef { ty } if Wide::from_type(*ty).is_some() => Ok(self.emit(wb).wide_zero()),
+            Value::Zero { ty } if Wide::from_type(*ty).is_some() => Ok(self.emit(wb).wide_zero()),
             Value::Immediate { imm, .. } => Err(self.unsupported_type("an immediate", imm.ty())),
             _ => Err(invalid(format!(
                 "function `{}`: value v{} is used before it is defined",
@@ -2448,9 +2448,12 @@ impl<'a> FunctionTranslator<'a> {
             NativeInstKind::Mstore(i) => self.mstore(wb, op, *i.addr(), *i.value(), *i.ty())?,
             NativeInstKind::Memzero(i) => self.memzero(wb, op, *i.dest(), *i.len())?,
             NativeInstKind::Memcopy(i) => self.memcopy(wb, op, *i.dest(), *i.src(), *i.len())?,
-            // Every use of a value sees one value, and an undefined one reads as
-            // zero in WebAssembly, so freezing changes nothing.
-            NativeInstKind::Freeze(i) => self.copy_value(*wb, inst_id, *i.arg())?,
+            NativeInstKind::Freeze(_) => {
+                return Err(invalid(format!(
+                    "function `{}`: translation takes concrete IR, which has no `freeze`",
+                    self.name
+                )));
+            }
             // Sonatina's passes keep it in place. WebAssembly has no way to hide
             // a value from the engine, so the module passes it on unchanged.
             NativeInstKind::BlackBox(i) => self.copy_value(*wb, inst_id, *i.arg())?,

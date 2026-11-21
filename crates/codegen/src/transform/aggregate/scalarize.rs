@@ -1086,7 +1086,7 @@ impl AggregateScalarize {
                 _ if substituted_values.contains(&value) => true,
                 Value::Undef { .. } => true,
                 Value::Arg { .. } => false,
-                Value::Immediate { .. } | Value::Global { .. } => false,
+                Value::Immediate { .. } | Value::Global { .. } | Value::Zero { .. } => false,
                 Value::Inst { inst, .. } => {
                     if func.dfg.call_info(*inst).is_some() {
                         false
@@ -1180,7 +1180,10 @@ impl AggregateScalarize {
     ) -> bool {
         match func.dfg.value(value) {
             Value::Undef { .. } => true,
-            Value::Arg { .. } | Value::Immediate { .. } | Value::Global { .. } => false,
+            Value::Arg { .. }
+            | Value::Immediate { .. }
+            | Value::Global { .. }
+            | Value::Zero { .. } => false,
             Value::Inst { inst, .. } => {
                 if let Some(make) = func.dfg.downcast::<&data::AggMake>(*inst) {
                     let agg_ty = func.dfg.value_ty(value);

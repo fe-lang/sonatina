@@ -5,8 +5,9 @@
 //! chains is respelled with `agg.make`, and one written with `agg.make` with
 //! chains, so the check keeps working while fixtures move from one spelling to
 //! the other. `i1` members are among what must match: each is stored and
-//! read as a word. Every compile folds chains into `agg.make` on entry
-//! (`fold_fresh_aggregates`), so both spellings reach every pass alike.
+//! read as a word. Every compile folds chains into `agg.make` before
+//! optimizing (`fold_fresh_aggregates`), so both spellings reach every pass
+//! alike.
 //!
 //! `AGG_MAKE_SPELLING_DIRS` adds directories of `.sntn` or `.sona` modules
 //! (such as Fe's `--emit ir` output), separated by `:`. With

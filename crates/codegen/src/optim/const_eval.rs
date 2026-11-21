@@ -99,7 +99,8 @@ impl ConstPathAnalysis {
             Value::Arg { .. }
             | Value::Immediate { .. }
             | Value::Global { .. }
-            | Value::Undef { .. } => None,
+            | Value::Undef { .. }
+            | Value::Zero { .. } => None,
         };
 
         visiting.remove(&value);
@@ -207,7 +208,8 @@ where
             Value::Arg { .. }
             | Value::Immediate { .. }
             | Value::Global { .. }
-            | Value::Undef { .. } => None,
+            | Value::Undef { .. }
+            | Value::Zero { .. } => None,
         };
 
         self.visiting.remove(&value);

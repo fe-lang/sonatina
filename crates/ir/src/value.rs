@@ -41,6 +41,11 @@ impl IrWrite<FuncWriteCtx<'_>> for ValueId {
                     ty.write(w, ctx)
                 }
 
+                Value::Zero { ty } => {
+                    write!(w, "zero.")?;
+                    ty.write(w, ctx)
+                }
+
                 Value::Arg { .. } | Value::Inst { .. } => {
                     write!(w, "v{}", self.0)
                 }
@@ -78,6 +83,13 @@ pub enum Value {
     /// condition, an address or object operand, or in a trusted variant
     /// assumption is undefined behavior. See `docs/undef.md`.
     Undef { ty: Type },
+
+    /// The value of `ty` whose bits are all zero: zero for an integer, the null
+    /// pointer or object reference, the tag of variant 0, an aggregate whose
+    /// fields are each zero, the unit value. It is an ordinary constant, not an
+    /// unspecified value; a null pointer or object reference names no location,
+    /// so an access through it is undefined behavior.
+    Zero { ty: Type },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

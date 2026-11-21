@@ -1,0 +1,68 @@
+#! `zero.T` is a constant: SCCP folds through it, and a branch on it goes
+#! one way, where a branch on `undef` stays (`branch_on_undef.sntn`).
+
+target = "evm-ethereum-london"
+
+type @pair = { i32, i64 };
+
+# sameln: func public %add_zero(v0.i32) -> i32 {
+# nextln:     block0:
+# nextln:         return 5.i32;
+func public %add_zero(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add zero.i32 5.i32;
+        return v1;
+}
+
+# sameln: func public %branch_on_zero() -> i32 {
+# nextln:     block0:
+# nextln:         return 2.i32;
+func public %branch_on_zero() -> i32 {
+    block0:
+        br zero.i1 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}
+
+# A null pointer is overdefined to SCCP, not unevaluated: what it computes
+# is evaluated, and a branch on it keeps both successors.
+# sameln: func public %branch_on_null() -> i32 {
+# nextln:     block0:
+# nextln:         v0.i256 = ptr_to_int zero.*i8 i256;
+# nextln:         v1.i1 = eq v0 0.i256;
+# nextln:         br v1 block1 block2;
+func public %branch_on_null() -> i32 {
+    block0:
+        v0.i256 = ptr_to_int zero.*i8 i256;
+        v1.i1 = eq v0 0.i256;
+        br v1 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}
+
+# So is a zero aggregate.
+# sameln: func public %branch_on_zero_field() -> i32 {
+# nextln:     block0:
+# nextln:         v0.i32 = extract_value zero.@pair 0.i32;
+# nextln:         v1.i1 = eq v0 0.i32;
+# nextln:         br v1 block1 block2;
+func public %branch_on_zero_field() -> i32 {
+    block0:
+        v0.i32 = extract_value zero.@pair 0.i32;
+        v1.i1 = eq v0 0.i32;
+        br v1 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}

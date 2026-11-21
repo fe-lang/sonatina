@@ -286,7 +286,10 @@ fn analyze_func(
                     &mut visited_insts,
                     &mut value_worklist,
                 ),
-                Value::Immediate { .. } | Value::Global { .. } | Value::Undef { .. } => {}
+                Value::Immediate { .. }
+                | Value::Global { .. }
+                | Value::Undef { .. }
+                | Value::Zero { .. } => {}
             }
         }
     });

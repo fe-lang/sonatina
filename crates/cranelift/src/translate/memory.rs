@@ -328,12 +328,13 @@ fn is_zero_initializer(init: &GvInitializer) -> bool {
     }
 }
 
-pub(super) fn is_undef(function: &Function, value: ValueId) -> bool {
-    matches!(function.dfg.value(value), Value::Undef { .. })
+/// Whether `value` is a `zero` constant.
+pub(super) fn is_zero_literal(function: &Function, value: ValueId) -> bool {
+    matches!(function.dfg.value(value), Value::Zero { .. })
 }
 
 /// Zeroes the field bytes of the `ty` value at `dst` outside the `written`
-/// ranges: the `undef` fields of an `agg.make`, which read as zero.
+/// ranges: the `zero` fields of an `agg.make`.
 /// Padding is not part of the value, so it keeps whatever it holds; a value
 /// too large for inline copies has its gaps zeroed whole.
 pub(super) fn zero_unwritten_fields(
@@ -457,8 +458,8 @@ pub(super) fn store_field(
     }
 }
 
-/// Writes `value`, stored as a `ty`, to `dst`. Native undef values are zero,
-/// so an undef value zeroes `dst` without a zeroed temporary.
+/// Writes `value`, stored as a `ty`, to `dst`. A `zero` zeroes `dst` without a
+/// zeroed temporary.
 pub(super) fn store_indirect(
     function: &Function,
     value: ValueId,
@@ -468,7 +469,7 @@ pub(super) fn store_indirect(
     config: TargetFrontendConfig,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
-    if is_undef(function, value) || is_zero_constant(function, value) {
+    if is_zero_literal(function, value) || is_zero_constant(function, value) {
         zero_bytes(
             dst,
             value_storage_size(ty, function.ctx())?,
@@ -483,7 +484,7 @@ pub(super) fn store_indirect(
     Ok(())
 }
 
-/// Resolves `value` like `resolve_value`, but reads an undef aggregate from a
+/// Resolves `value` like `resolve_value`, but reads a `zero` aggregate from a
 /// fresh zeroed slot. Consumers that only copy a value use `store_indirect`.
 pub(super) fn resolve_operand(
     function: &Function,
@@ -493,7 +494,8 @@ pub(super) fn resolve_operand(
     builder: &mut FunctionBuilder,
 ) -> Result<clif::Value, String> {
     let ty = function.dfg.value_ty(value);
-    if !is_undef(function, value) || !uses_indirect_value_representation(function.ctx(), ty) {
+    if !is_zero_literal(function, value) || !uses_indirect_value_representation(function.ctx(), ty)
+    {
         return resolve_value(function, value, value_map, builder);
     }
     let address = create_stack_slot_for_type(ty, function.ctx(), builder)?;

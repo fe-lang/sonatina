@@ -16,7 +16,10 @@ use sonatina_verifier::{VerifierConfig, verify_function_signature};
 use sonatina_codegen::{
     backend::{Backend, BackendOptions},
     optim::Pipeline,
-    transform::aggregate::{EnumTagLower, check_frame_lifetimes, fold_fresh_aggregates},
+    transform::{
+        aggregate::{EnumTagLower, check_frame_lifetimes},
+        concrete::{check_concrete_module, concretize},
+    },
 };
 
 /// The import module used for `extern` functions unless
@@ -148,18 +151,17 @@ pub const DEFAULT_STACK_BYTES: u32 = memory::DEFAULT_STACK_BYTES;
 /// are checked against the frame rule of `obj.alloc`: no reference outlives
 /// its frame.
 fn legalize_module(module: &Module) -> Result<(), WasmError> {
-    // Translation assumes fresh aggregates are spelled `agg.make`: no
-    // constant-index insert into `undef` or an `agg.make` is left, but for
-    // sparse inserts into long arrays (`fold_fresh_aggregates`). The final IR
-    // phase that makes values concrete, once it exists, takes this step over.
-    fold_fresh_aggregates(module);
     EnumTagLower.run(module);
+    // Translation takes concrete IR: no `undef`, no `freeze`, and fresh
+    // aggregates spelled `agg.make` (`transform::concrete`).
+    concretize(module);
     for func in module.funcs() {
         let report = verify_function_signature(&module.ctx, func, &VerifierConfig::default());
         if report.has_errors() {
             return Err(WasmError::Invalid(report.to_string()));
         }
     }
+    check_concrete_module(module).map_err(WasmError::Invalid)?;
     check_frame_lifetimes(module).map_err(WasmError::Unsupported)
 }
 

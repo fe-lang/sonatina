@@ -479,6 +479,10 @@ impl BuildCtx {
                 let ty = self.type_(&fb.module_builder, ty);
                 fb.make_undef_value(ty)
             }
+            ast::ValueKind::Zero(ty) => {
+                let ty = self.type_(&fb.module_builder, ty);
+                fb.make_zero_value(ty)
+            }
             ast::ValueKind::Global(name) => {
                 let Some(gv) = fb.module_builder.lookup_gv(&name.string) else {
                     self.errors.push(Error::Undefined(

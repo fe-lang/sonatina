@@ -3,7 +3,7 @@ use sonatina_cranelift::CraneliftJitBackend;
 use sonatina_ir::ir_writer::ModuleWriter;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
-use super::{alias_execution, parse_verified_native_module};
+use super::{alias_execution, parse_verified_native_module, zero_values};
 
 #[test]
 fn returned_local_allocations_are_rejected_natively() {
@@ -46,6 +46,24 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
         assert_eq!(text.matches("call %read_after_write").count(), 3, "{text}");
         let artifact = compiler.compile().expect("alias matrix should compile");
         for &(name, expected) in alias_execution::CASES {
+            let entry: unsafe extern "C" fn() -> i64 =
+                unsafe { std::mem::transmute(artifact.function_address(name).unwrap()) };
+            assert_eq!(unsafe { entry() }, expected, "{level:?}: {name}");
+        }
+    }
+}
+
+#[test]
+fn zero_values_run_at_all_optimization_levels() {
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let artifact = Compile::new(
+            parse_verified_native_module(zero_values::ZERO_SOURCE),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .expect("the zero values compile");
+        for &(name, expected) in zero_values::ZERO_CASES {
             let entry: unsafe extern "C" fn() -> i64 =
                 unsafe { std::mem::transmute(artifact.function_address(name).unwrap()) };
             assert_eq!(unsafe { entry() }, expected, "{level:?}: {name}");

@@ -1,6 +1,8 @@
 use sonatina_ir::{
-    Value,
+    Type, Value,
     inst::{data, downcast},
+    module::ModuleCtx,
+    types::CompoundType,
 };
 
 use crate::{
@@ -286,6 +288,23 @@ impl FunctionVerifier<'_> {
                         ));
                     }
                 }
+                Value::Zero { ty } => {
+                    let message = if !self.is_type_valid(*ty) {
+                        "zero value has invalid type"
+                    } else if !has_zero_value(self.ctx, *ty) {
+                        "zero value of a type with no zero: an enum without variants or a function"
+                    } else {
+                        continue;
+                    };
+                    self.emit(Diagnostic::error(
+                        DiagnosticCode::InvalidTypeRef,
+                        message,
+                        Location::Value {
+                            func: self.func_ref,
+                            value: value_id,
+                        },
+                    ));
+                }
             }
         }
     }
@@ -343,5 +362,36 @@ impl FunctionVerifier<'_> {
                 self.inst_location(inst),
             ));
         }
+    }
+}
+
+/// Whether `ty` has a value whose bits are all zero, `zero.ty`: an enum or its
+/// tag needs a variant 0, whose fields need one in turn, and a function type
+/// has none.
+fn has_zero_value(ctx: &ModuleCtx, ty: Type) -> bool {
+    let compound = match ty {
+        Type::EnumTag(compound) => {
+            return ctx.with_ty_store(|store| {
+                store
+                    .enum_data(compound)
+                    .is_some_and(|data| !data.variants.is_empty())
+            });
+        }
+        Type::Compound(compound) => {
+            ctx.with_ty_store(|store| store.resolve_compound(compound).clone())
+        }
+        _ => return true,
+    };
+    match compound {
+        CompoundType::Array { elem, len } => len == 0 || has_zero_value(ctx, elem),
+        CompoundType::Struct(data) => data.fields.iter().all(|&field| has_zero_value(ctx, field)),
+        CompoundType::Enum(data) => data.variants.first().is_some_and(|variant| {
+            variant
+                .fields
+                .iter()
+                .all(|&field| has_zero_value(ctx, field))
+        }),
+        CompoundType::Func { .. } => false,
+        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => true,
     }
 }

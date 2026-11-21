@@ -578,7 +578,9 @@ fn is_loop_invariant_value(
     }
 
     let invariant = match func.dfg.value(value) {
-        Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } => true,
+        Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } | Value::Zero { .. } => {
+            true
+        }
         Value::Undef { .. } => false,
         Value::Inst { inst, .. } => {
             let block = func.layout.inst_block(*inst);

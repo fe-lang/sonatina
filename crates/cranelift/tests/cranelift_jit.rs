@@ -3,6 +3,8 @@
 // Shared with the EVM execution tests in sonatina-codegen.
 #[path = "../../codegen/tests/alias_execution/mod.rs"]
 mod alias_execution;
+#[path = "../../codegen/tests/zero_values/mod.rs"]
+mod zero_values;
 
 #[path = "cranelift/abi.rs"]
 mod abi;

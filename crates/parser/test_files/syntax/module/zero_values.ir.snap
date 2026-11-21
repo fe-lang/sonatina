@@ -1,0 +1,26 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/zero_values.sntn
+---
+target = "evm-ethereum-london"
+
+type @pair = {i32, i64};
+type @flag = enum {
+    #A,
+    #B(i64),
+};
+
+func private %zeros(v0.*@pair) -> i64 {
+    block0:
+        mstore v0 zero.@pair @pair;
+        v1.[i8; 4] = insert_value zero.[i8; 4] 0.i8 zero.i8;
+        v2.i1 = eq zero.i1 0.i1;
+        v3.*i8 = gep zero.*i8 0.i8;
+        v5.i64 = extract_value zero.@pair 1.i8;
+        return v5;
+}
+
+func private %zero_enum() -> @flag {
+    block0:
+        return zero.@flag;
+}

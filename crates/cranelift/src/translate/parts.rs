@@ -38,8 +38,7 @@ pub(super) fn parts_within(parts: &Parts, offset: u32, size: u32) -> Range<usize
     from(offset)..from(offset + size)
 }
 
-/// The part values of `value`, a value of a type held in registers. Undef
-/// reads as zero, as everywhere in native code.
+/// The part values of `value`, a value of a type held in registers.
 pub(super) fn resolve_parts(
     function: &Function,
     value: ValueId,
@@ -51,7 +50,7 @@ pub(super) fn resolve_parts(
         return Ok(values.clone());
     }
     match function.dfg.value(value) {
-        Value::Undef { .. } => zero_parts(function.ctx(), parts, builder),
+        Value::Zero { .. } => zero_parts(function.ctx(), parts, builder),
         other => Err(format!(
             "unresolved register aggregate v{}: {other:?}",
             value.0

@@ -759,8 +759,9 @@ impl Plan {
             }
         }
         // The `agg.make` of a class and the inserts continuing it, if it is
-        // one. A chain on undef was folded into an `agg.make`, but for a
-        // sparse one into a long array, which is built like an update.
+        // one. `concretize` folded every chain on undef into an `agg.make`,
+        // but for a sparse one into a long array, which is built like an
+        // update.
         let chain_of = |class: usize| -> Option<Vec<InstId>> {
             let head = dfg.value_inst(*self.members[class].first()?)?;
             matches!(
@@ -894,7 +895,7 @@ impl Plan {
     }
 
     /// Places each class whose last value only fills a field of an `agg.make`
-    /// in that `agg.make`'s storage. An `agg.make` zeroes only its `undef`
+    /// in that `agg.make`'s storage. An `agg.make` zeroes only its `zero`
     /// fields and writes each field once, so building the class there before
     /// it loses nothing.
     fn embed(
@@ -1516,7 +1517,7 @@ declare external %g() -> [i64; 32];
 func public %f(v0.*[[i64; 32]; 2]) {
 block0:
     v1.[i64; 32] = call %g;
-    v2.[i64; 32] = agg.make [i64; 32] 5.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v2.[i64; 32] = agg.make [i64; 32] 5.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64;
     v4.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v1 v2;
     mstore v0 v4 [[i64; 32]; 2];
     return;
@@ -1557,7 +1558,7 @@ func public %f(v0.*[[i64; 32]; 2]) {
 block0:
     v1.[i64; 32] = call %g;
     v2.[i64; 32] = call %g;
-    v3.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v1 undef.[i64; 32];
+    v3.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v1 zero.[i64; 32];
     v4.[[i64; 32]; 2] = insert_value v3 0.i64 v2;
     mstore v0 v4 [[i64; 32]; 2];
     return;
@@ -1577,10 +1578,10 @@ block0:
 func public %f(v0.i64, v4.*i64, v7.*[i64; 32]) {
 block0:
     v1.objref<[i64; 32]> = obj.alloc [i64; 32];
-    v3.[i64; 32] = agg.make [i64; 32] v0 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v3.[i64; 32] = agg.make [i64; 32] v0 v0 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64;
     obj.store v1 v3;
     v8.objref<[i64; 32]> = obj.from_ptr v7;
-    v5.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v5.[i64; 32] = agg.make [i64; 32] v0 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64;
     v6.i64 = mload v4 i64;
     obj.store v8 v5;
     mstore v4 v6 i64;
@@ -1602,10 +1603,10 @@ declare external %g(i64) -> i64;
 func public %f(v0.i64, v7.*i64) {
 block0:
     v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
-    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v2.[i64; 32] = agg.make [i64; 32] v0 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64;
     mstore v7 v0 i64;
     v3.i64 = call %g v0;
-    v4.[i64; 32] = agg.make [i64; 32] undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v3 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v4.[i64; 32] = agg.make [i64; 32] zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 v3 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64;
     v6.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v4 v2;
     obj.store v1 v6;
     return;
@@ -1627,10 +1628,10 @@ block0:
     v14.objref<[i64; 32]> = obj.index v1 1.i64;
     v3.objref<i64> = obj.index v14 2.i64;
     obj.store v3 v0;
-    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v2.[i64; 32] = agg.make [i64; 32] v0 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64;
     v4.i64 = obj.load v3;
     mstore v10 v4 i64;
-    v5.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v2;
+    v5.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] zero.[i64; 32] v2;
     obj.store v1 v5;
     return;
 }
@@ -1652,7 +1653,7 @@ block0:
     v7.objref<i64> = obj.index v2 3.i64;
     obj.store v7 v0;
     v4.[i64; 32] = obj.load v2;
-    v3.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v3.[i64; 32] = agg.make [i64; 32] v0 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64;
     v6.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v4 v3;
     obj.store v1 v6;
     return;
@@ -1671,8 +1672,8 @@ block0:
 func public %f(v0.i64) {
 block0:
     v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
-    v3.[i64; 32] = agg.make [i64; 32] v0 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
-    v5.[i64; 32] = agg.make [i64; 32] undef.i64 undef.i64 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v3.[i64; 32] = agg.make [i64; 32] v0 v0 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64;
+    v5.[i64; 32] = agg.make [i64; 32] zero.i64 zero.i64 v0 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64;
     v6.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v5 v3;
     obj.store v1 v6;
     return;
@@ -1717,9 +1718,9 @@ block0:
 func public %f(v0.i64, v7.*i64, v8.*[[i64; 32]; 2]) {
 block0:
     v1.objref<[[i64; 32]; 2]> = obj.from_ptr v8;
-    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v2.[i64; 32] = agg.make [i64; 32] v0 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64;
     mstore v7 v0 i64;
-    v4.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v2;
+    v4.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] zero.[i64; 32] v2;
     obj.store v1 v4;
     return;
 }
@@ -1735,7 +1736,7 @@ block0:
             r#"
 func private %f(v0.objref<[i64; 32]>, v1.i64) {
 block0:
-    v2.[i64; 32] = agg.make [i64; 32] v1 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v2.[i64; 32] = agg.make [i64; 32] v1 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64 zero.i64;
     v3.objref<i64> = obj.index v0 0.i64;
     v4.i64 = obj.load v3;
     v5.[i64; 32] = insert_value v2 1.i64 v4;

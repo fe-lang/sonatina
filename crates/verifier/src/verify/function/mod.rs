@@ -360,7 +360,8 @@ impl<'a> FunctionVerifier<'a> {
             | Some(Value::Arg { ty, .. })
             | Some(Value::Immediate { ty, .. })
             | Some(Value::Global { ty, .. })
-            | Some(Value::Undef { ty }) => Some(*ty),
+            | Some(Value::Undef { ty })
+            | Some(Value::Zero { ty }) => Some(*ty),
             None => None,
         }
     }

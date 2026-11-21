@@ -4,7 +4,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Function, Inst, InstId, Type, Value, ValueId,
+    BlockId, Function, I256, Inst, InstId, Type, Value, ValueId,
     cfg::ControlFlowGraph,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{cast, control_flow, data},
@@ -458,9 +458,8 @@ impl AggregateLowerToMemoryLegalize {
 
         // Aggregate -> aggregate: copy between layout-compatible leaf views.
         if from_is_agg && to_is_agg {
-            if is_explicit_undef(func, from) {
-                let undef = func.dfg.make_undef_value(to_ty);
-                self.alias_and_remove(func, inst, result, undef);
+            if let Some(constant) = constant_like(func, from, to_ty) {
+                self.alias_and_remove(func, inst, result, constant);
                 return true;
             }
 
@@ -534,9 +533,8 @@ impl AggregateLowerToMemoryLegalize {
 
         // Aggregate -> scalar: only legal for single-word aggregates on EVM.
         let leaf = self.single_word_leaf(module, from_ty, "aggregate-to-scalar");
-        if is_explicit_undef(func, from) {
-            let undef = func.dfg.make_undef_value(to_ty);
-            self.alias_and_remove(func, inst, result, undef);
+        if let Some(constant) = constant_like(func, from, to_ty) {
+            self.alias_and_remove(func, inst, result, constant);
             return true;
         }
 
@@ -786,9 +784,8 @@ impl AggregateLowerToMemoryLegalize {
             return;
         }
 
-        if is_explicit_undef(func, *extract.dest()) {
-            let undef = func.dfg.make_undef_value(result_ty);
-            self.alias_and_remove(func, inst, result, undef);
+        if let Some(constant) = constant_like(func, *extract.dest(), result_ty) {
+            self.alias_and_remove(func, inst, result, constant);
             return;
         }
 
@@ -833,6 +830,11 @@ impl AggregateLowerToMemoryLegalize {
         if elem != result_ty {
             panic!("extract_value result type mismatch for dynamic array index");
         }
+        if is_zero(func, src_value) {
+            let zero = func.dfg.make_zero_value(result_ty);
+            self.alias_and_remove(func, inst, result, zero);
+            return;
+        }
         if shape::is_supported_aggregate_ty(module, result_ty) {
             let dst_ptr = self.materialized_ptr(func, result, module);
             let mut builder = BeforeCursor::new_before_inst(func, inst);
@@ -853,9 +855,8 @@ impl AggregateLowerToMemoryLegalize {
             return;
         }
 
-        if is_explicit_undef(func, src_value) {
-            let undef = func.dfg.make_undef_value(result_ty);
-            self.alias_and_remove(func, inst, result, undef);
+        if let Some(constant) = constant_like(func, src_value, result_ty) {
+            self.alias_and_remove(func, inst, result, constant);
             return;
         }
         if self.runtime_size_bytes_or_panic(module, result_ty) == 0 {
@@ -1360,6 +1361,20 @@ impl AggregateLowerToMemoryLegalize {
             return ptr;
         }
         let ptr = self.create_temp_alloca(func, ty);
+        if is_zero(func, value) {
+            // Nothing defines a `zero`, so its slot is zeroed where it is made.
+            let alloca = func
+                .dfg
+                .value_inst(ptr)
+                .expect("a temporary slot is an alloca");
+            let next = func
+                .layout
+                .next_inst_of(alloca)
+                .expect("the entry block ends in a terminator");
+            let mut builder = BeforeCursor::new_before_inst(func, next);
+            let shape = self.shape_or_panic(module, ty);
+            self.emit_zero_leaves(func, &mut builder, ptr, &shape.leaves);
+        }
         self.materialized_addr[value] = Some(ptr);
         self.materialized_slots.push(ptr);
         ptr
@@ -1534,6 +1549,11 @@ impl AggregateLowerToMemoryLegalize {
         dst: AggregateLeafCopyDst<'_>,
     ) {
         if is_explicit_undef(func, value) {
+            return;
+        }
+        // Unlike `undef`, a `zero` stores zero in every leaf.
+        if is_zero(func, value) {
+            self.emit_zero_leaves(func, builder, dst.ptr, dst.leaves);
             return;
         }
 
@@ -1746,6 +1766,10 @@ impl AggregateLowerToMemoryLegalize {
         if is_explicit_undef(func, src.value) {
             return;
         }
+        if is_zero(func, src.value) {
+            self.emit_zero_leaves(func, builder, dst.ptr, &dst_shape.leaves);
+            return;
+        }
 
         let src_ptr = self.materialized_ptr(func, src.value, module);
         let src_shape = self.shape_or_panic(module, src.root_ty);
@@ -1775,6 +1799,29 @@ impl AggregateLowerToMemoryLegalize {
             data::Mload::new_unchecked(func.inst_set(), ptr, ty),
             ty,
         )
+    }
+
+    /// Zeroes the bytes of `leaves` of the aggregate at `ptr`, from the first
+    /// leaf to the end of the last, with one `memzero`.
+    fn emit_zero_leaves(
+        &self,
+        func: &mut Function,
+        builder: &mut BeforeCursor,
+        ptr: ValueId,
+        leaves: &[shape::AggregateLeaf],
+    ) {
+        let mut sized = leaves.iter().filter(|leaf| leaf.size_bytes != 0);
+        let Some(first) = sized.next() else {
+            return;
+        };
+        let last = sized.next_back().unwrap_or(first);
+        let len = last.offset_bytes + last.size_bytes - first.offset_bytes;
+        let start = self.emit_gep_to_path(func, builder, ptr, &first.path, first.ty);
+        let len = func.dfg.make_imm_value(I256::from(len));
+        builder.insert_no_result(
+            func,
+            data::Memzero::new_unchecked(func.inst_set(), start, len),
+        );
     }
 
     fn emit_store_scalar_to_path(
@@ -2232,6 +2279,20 @@ fn append_component_rpo(
 
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
     matches!(func.dfg.value(value), Value::Undef { .. })
+}
+
+fn is_zero(func: &Function, value: ValueId) -> bool {
+    matches!(func.dfg.value(value), Value::Zero { .. })
+}
+
+/// The `undef` or `zero` of `ty`, when `value` is the `undef` or `zero` of
+/// another type: what a cast or field read of it gives.
+fn constant_like(func: &mut Function, value: ValueId, ty: Type) -> Option<ValueId> {
+    match func.dfg.value(value) {
+        Value::Undef { .. } => Some(func.dfg.make_undef_value(ty)),
+        Value::Zero { .. } => Some(func.dfg.make_zero_value(ty)),
+        _ => None,
+    }
 }
 
 pub fn assert_aggregate_legalized(function: &Function, module: &ModuleCtx) {

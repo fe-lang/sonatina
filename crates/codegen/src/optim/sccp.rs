@@ -886,6 +886,7 @@ impl SccpSolver {
         match func.dfg.value(value) {
             Value::Immediate { imm, .. } => LatticeCell::Const(*imm),
             Value::Global { .. } | Value::Undef { .. } => LatticeCell::Top,
+            Value::Zero { ty } => LatticeCell::of_zero(*ty),
             Value::Arg { .. } | Value::Inst { .. } => {
                 self.lattice.get(value).copied().unwrap_or_default()
             }
@@ -990,6 +991,19 @@ pub(super) enum LatticeCell {
     Bot,
 }
 
+impl LatticeCell {
+    /// The cell of `zero.ty`: the constant zero of an integer or enum tag, and
+    /// overdefined (`Top`, as for `undef`) for a pointer, object reference or
+    /// aggregate, which the lattice has no constant for.
+    fn of_zero(ty: Type) -> Self {
+        if ty.is_integral() || ty.is_enum_tag() {
+            Self::Const(Immediate::zero(ty))
+        } else {
+            Self::Top
+        }
+    }
+}
+
 impl PartialEq for LatticeCell {
     fn eq(&self, rhs: &Self) -> bool {
         match (self, rhs) {
@@ -1065,6 +1079,7 @@ impl State for CellState<'_, '_> {
         let cell = match self.dfg.value(value) {
             Value::Immediate { imm, .. } => LatticeCell::Const(*imm),
             Value::Global { .. } | Value::Undef { .. } => LatticeCell::Top,
+            Value::Zero { ty } => LatticeCell::of_zero(*ty),
             Value::Arg { .. } | Value::Inst { .. } => {
                 self.map.get(value).copied().unwrap_or_default()
             }

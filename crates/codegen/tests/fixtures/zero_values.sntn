@@ -1,0 +1,195 @@
+# `zero.T` in input IR, of each type class. `zero.T` is a constant: every
+# field of an aggregate is zero, and storing one writes zeros, here over
+# memory a store of nines made dirty first. Each case returns an `i64`.
+type @pair = { i64, i64 };
+type @nested = { @pair, [i8; 3], i1 };
+type @with_unit = { unit, i64 };
+type @flag = enum { #A, #B(i64) };
+
+func public %int() -> i64 {
+block0:
+    v0.i64 = add zero.i64 7.i64;
+    return v0;
+}
+
+func public %bool() -> i64 {
+block0:
+    v0.i64 = select zero.i1 1.i64 2.i64;
+    return v0;
+}
+
+func public %null() -> i64 {
+block0:
+    v0.i64 = ptr_to_int zero.*i8 i64;
+    v1.i64 = add v0 3.i64;
+    return v1;
+}
+
+func public %unit_field() -> i64 {
+block0:
+    v0.i64 = extract_value zero.@with_unit 1.i8;
+    v1.i64 = add v0 4.i64;
+    return v1;
+}
+
+func public %unit_operand() -> i64 {
+block0:
+    v0.@with_unit = agg.make @with_unit zero.unit 5.i64;
+    v1.i64 = extract_value v0 1.i8;
+    return v1;
+}
+
+func public %enum_variant() -> i64 {
+block0:
+    v0.i1 = enum.is_variant zero.@flag #A;
+    v1.i64 = zext v0 i64;
+    return v1;
+}
+
+func public %enum_tag() -> i64 {
+block0:
+    v0.enumtag(@flag) = enum.tag zero.@flag;
+    v1.i1 = eq v0 zero.enumtag(@flag);
+    v2.i64 = zext v1 i64;
+    return v2;
+}
+
+func inline(never) private %dirty_pair(v0.*@pair) {
+block0:
+    v1.@pair = agg.make @pair 9.i64 9.i64;
+    mstore v0 v1 @pair;
+    return;
+}
+
+func inline(never) private %store_zero_pair(v0.*@pair) {
+block0:
+    mstore v0 zero.@pair @pair;
+    return;
+}
+
+func inline(never) private %store_half_zero_pair(v0.*@pair) {
+block0:
+    v1.@pair = agg.make @pair zero.i64 6.i64;
+    mstore v0 v1 @pair;
+    return;
+}
+
+func public %struct_store() -> i64 {
+block0:
+    v0.*@pair = alloca @pair;
+    call %dirty_pair v0;
+    call %store_zero_pair v0;
+    v1.@pair = mload v0 @pair;
+    v2.i64 = extract_value v1 0.i8;
+    v3.i64 = extract_value v1 1.i8;
+    v4.i64 = add v2 v3;
+    return v4;
+}
+
+func public %zero_field_store() -> i64 {
+block0:
+    v0.*@pair = alloca @pair;
+    call %dirty_pair v0;
+    call %store_half_zero_pair v0;
+    v1.@pair = mload v0 @pair;
+    v2.i64 = extract_value v1 0.i8;
+    v3.i64 = extract_value v1 1.i8;
+    v4.i64 = mul v2 100.i64;
+    v5.i64 = add v4 v3;
+    return v5;
+}
+
+func inline(never) private %store_zero_array(v0.*[i64; 4]) {
+block0:
+    v1.[i64; 4] = agg.make [i64; 4] 9.i64 9.i64 9.i64 9.i64;
+    mstore v0 v1 [i64; 4];
+    mstore v0 zero.[i64; 4] [i64; 4];
+    return;
+}
+
+func public %array_store() -> i64 {
+block0:
+    v0.*[i64; 4] = alloca [i64; 4];
+    call %store_zero_array v0;
+    v1.[i64; 4] = mload v0 [i64; 4];
+    v2.i64 = extract_value v1 3.i8;
+    v3.i64 = add v2 8.i64;
+    return v3;
+}
+
+func inline(never) private %store_zero_nested(v0.*@nested) {
+block0:
+    v1.@pair = agg.make @pair 9.i64 9.i64;
+    v2.[i8; 3] = agg.make [i8; 3] 9.i8 9.i8 9.i8;
+    v3.@nested = agg.make @nested v1 v2 1.i1;
+    mstore v0 v3 @nested;
+    mstore v0 zero.@nested @nested;
+    return;
+}
+
+func public %nested_store() -> i64 {
+block0:
+    v0.*@nested = alloca @nested;
+    call %store_zero_nested v0;
+    v1.@nested = mload v0 @nested;
+    v2.[i8; 3] = extract_value v1 1.i8;
+    v3.i8 = extract_value v2 2.i8;
+    v4.i1 = extract_value v1 2.i8;
+    v5.@pair = extract_value v1 0.i8;
+    v6.i64 = extract_value v5 1.i8;
+    v7.i64 = sext v3 i64;
+    v8.i64 = zext v4 i64;
+    v9.i64 = add v7 v8;
+    v10.i64 = add v9 v6;
+    v11.i64 = add v10 10.i64;
+    return v11;
+}
+
+func public %insert_into_zero() -> i64 {
+block0:
+    v0.@pair = insert_value zero.@pair 1.i8 11.i64;
+    v1.i64 = extract_value v0 0.i8;
+    v2.i64 = extract_value v0 1.i8;
+    v3.i64 = add v1 v2;
+    return v3;
+}
+
+func inline(never) private %pick(v0.i1) -> i64 {
+block0:
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    v1.@pair = agg.make @pair 3.i64 3.i64;
+    jump block3;
+block3:
+    v2.@pair = phi (zero.@pair block1) (v1 block2);
+    v3.i64 = extract_value v2 0.i8;
+    return v3;
+}
+
+func public %phi_zero() -> i64 {
+block0:
+    v0.i64 = call %pick 1.i1;
+    v1.i64 = call %pick 0.i1;
+    v2.i64 = mul v0 10.i64;
+    v3.i64 = add v2 v1;
+    return v3;
+}
+
+func public %large_array() -> i64 {
+block0:
+    v0.[i64; 100000] = insert_value zero.[i64; 100000] 5.i32 1.i64;
+    v1.i64 = extract_value v0 99999.i32;
+    v2.i64 = extract_value v0 5.i32;
+    v3.i64 = add v1 v2;
+    v4.i64 = add v3 13.i64;
+    return v4;
+}
+
+func public %frozen() -> i64 {
+block0:
+    v0.i64 = freeze zero.i64;
+    v1.i64 = add v0 15.i64;
+    return v1;
+}

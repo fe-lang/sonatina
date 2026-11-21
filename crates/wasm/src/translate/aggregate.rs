@@ -192,19 +192,19 @@ impl FunctionTranslator<'_> {
         );
     }
 
-    /// An aggregate `undef` operand is storage filled with zero.
-    pub(super) fn undef_aggregate(
+    /// A `zero` aggregate operand is storage filled with zero.
+    pub(super) fn zero_aggregate(
         &mut self,
         wb: waffle::Block,
         id: ValueId,
         ty: Type,
     ) -> Result<V, WasmError> {
         let (size, align) = self.layout_of(ty)?;
-        let slot = match self.undef_slots.get(&id) {
+        let slot = match self.zero_slots.get(&id) {
             Some(&slot) => slot,
             None => {
                 let slot = self.slot(size, align)?;
-                self.undef_slots.insert(id, slot);
+                self.zero_slots.insert(id, slot);
                 slot
             }
         };
@@ -868,7 +868,7 @@ impl FunctionTranslator<'_> {
             // what it held before does not matter.
             match function.dfg.value(dest) {
                 _ if self.inserts_write_every_byte(block, inst_id, result_ty, size)? => {}
-                Value::Undef { .. } => self.fill_zero(wb, address, size),
+                Value::Zero { .. } => self.fill_zero(wb, address, size),
                 _ => {
                     let source = self.operand(wb, dest)?;
                     self.copy_bytes(wb, address, source, size);
@@ -941,8 +941,8 @@ impl FunctionTranslator<'_> {
     }
 
     /// `agg.make`: a new aggregate in a slot of the frame, with each field
-    /// stored from its operand. As for an insert chain on undef, the bytes
-    /// no stored field covers are zero: padding, and `undef` fields.
+    /// stored from its operand. The bytes no stored field covers are zero:
+    /// padding, and `zero` fields.
     pub(super) fn agg_make(
         &mut self,
         wb: waffle::Block,
@@ -955,7 +955,8 @@ impl FunctionTranslator<'_> {
         let address = self.slot_address(wb, slot)?;
         let mut fields = Vec::new();
         for (idx, &value) in values.iter().enumerate() {
-            if matches!(self.function.dfg.value(value), Value::Undef { .. }) {
+            // A `zero` field is left to the fill below.
+            if matches!(self.function.dfg.value(value), Value::Zero { .. }) {
                 continue;
             }
             let (offset, elem_ty) = self.element_offset(ty, idx)?;
