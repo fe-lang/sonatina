@@ -1,4 +1,4 @@
-#! Reads are never undef, so a guard on a loaded operand holds for the subtraction it guards; an undef-dependent operand does not.
+#! A guard on an operand holds for the subtraction it guards, whatever the operand is computed from: where it is unspecified, the branch on the guard is undefined.
 
 target = "evm-ethereum-osaka"
 
@@ -29,7 +29,8 @@ block2:
 }
 
 # check: func public %undef_dependent_operand(v0.*i64) -> i64 {
-# check: usubo 20.i64 v5
+# check: sub 20.i64 v5;
+# not: usubo
 func public %undef_dependent_operand(v0.*i64) -> i64 {
 block0:
     v1.i64 = mload v0 i64;

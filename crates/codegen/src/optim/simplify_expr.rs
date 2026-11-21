@@ -64,8 +64,6 @@ pub(crate) trait ExprFactProvider {
     fn range(&self, _v: ValueId) -> Option<RangeFact> {
         None
     }
-    fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool;
-    fn may_be_undef(&self, v: ValueId) -> bool;
 }
 
 /// Facts that are only constants: values known to be `known`, and
@@ -89,14 +87,6 @@ impl ExprFactProvider for ConstantFacts<'_> {
             KnownBits::from_imm,
         )
     }
-
-    fn same_non_undef(&self, _lhs: ValueId, _rhs: ValueId) -> bool {
-        false
-    }
-
-    fn may_be_undef(&self, value: ValueId) -> bool {
-        self.known_imm(value).is_none()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,12 +99,6 @@ pub(crate) enum EvmModOp {
 pub(crate) enum ZextI1CompareRewrite {
     Copy(ValueId),
     IsZero(ValueId),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct KnownValueFact {
-    pub(crate) imm: Option<Immediate>,
-    pub(crate) may_be_undef: bool,
 }
 
 pub(crate) fn integral_bit_width(ty: Type) -> Option<usize> {
@@ -269,24 +253,21 @@ pub(crate) fn fold_evm_modop(
 }
 
 pub(crate) fn simplify_evm_modop_known(
-    lhs: KnownValueFact,
-    rhs: KnownValueFact,
-    modulus: KnownValueFact,
+    lhs: Option<Immediate>,
+    rhs: Option<Immediate>,
+    modulus: Option<Immediate>,
     ty: Type,
     op: EvmModOp,
 ) -> Option<Immediate> {
     if !ty.is_integral() {
         return None;
     }
-    if lhs.may_be_undef || rhs.may_be_undef || modulus.may_be_undef {
-        return None;
-    }
 
-    if modulus.imm.is_some_and(Immediate::is_zero) {
+    if modulus.is_some_and(Immediate::is_zero) {
         return Some(Immediate::zero(ty));
     }
 
-    fold_evm_modop(lhs.imm?, rhs.imm?, modulus.imm?, op)
+    fold_evm_modop(lhs?, rhs?, modulus?, op)
 }
 
 pub(crate) fn fold_evm_exp(base: Immediate, exponent: Immediate) -> Option<Immediate> {
@@ -313,26 +294,23 @@ pub(crate) fn fold_evm_exp(base: Immediate, exponent: Immediate) -> Option<Immed
 }
 
 pub(crate) fn simplify_evm_exp_known(
-    base: KnownValueFact,
-    exponent: KnownValueFact,
+    base: Option<Immediate>,
+    exponent: Option<Immediate>,
     ty: Type,
 ) -> Option<Immediate> {
     if !ty.is_integral() {
         return None;
     }
-    if base.may_be_undef || exponent.may_be_undef {
-        return None;
-    }
 
-    if exponent.imm.is_some_and(Immediate::is_zero) || base.imm.is_some_and(Immediate::is_one) {
+    if exponent.is_some_and(Immediate::is_zero) || base.is_some_and(Immediate::is_one) {
         return Some(Immediate::one(ty));
     }
 
-    if base.imm.is_some_and(Immediate::is_zero) && exponent.imm.is_some_and(|imm| !imm.is_zero()) {
+    if base.is_some_and(Immediate::is_zero) && exponent.is_some_and(|imm| !imm.is_zero()) {
         return Some(Immediate::zero(ty));
     }
 
-    fold_evm_exp(base.imm?, exponent.imm?)
+    fold_evm_exp(base?, exponent?)
 }
 
 pub(crate) fn fold_evm_byte(pos: Immediate, value: Immediate) -> Option<Immediate> {
@@ -359,22 +337,19 @@ pub(crate) fn fold_evm_byte(pos: Immediate, value: Immediate) -> Option<Immediat
 }
 
 pub(crate) fn simplify_evm_byte_known(
-    pos: KnownValueFact,
-    value: KnownValueFact,
+    pos: Option<Immediate>,
+    value: Option<Immediate>,
     ty: Type,
 ) -> Option<Immediate> {
     if !ty.is_integral() {
         return None;
     }
-    if pos.may_be_undef || value.may_be_undef {
-        return None;
-    }
 
-    if value.imm.is_some_and(Immediate::is_zero) {
+    if value.is_some_and(Immediate::is_zero) {
         return Some(Immediate::zero(ty));
     }
 
-    fold_evm_byte(pos.imm?, value.imm?)
+    fold_evm_byte(pos?, value?)
 }
 
 fn fold_evm_signextend_raw(byte: U256, value: U256, ty: Type) -> U256 {
@@ -403,19 +378,19 @@ pub(crate) fn fold_evm_signextend(byte: Immediate, value: Immediate) -> Option<I
 }
 
 pub(crate) fn simplify_evm_signextend_known(
-    byte: KnownValueFact,
-    value: KnownValueFact,
+    byte: Option<Immediate>,
+    value: Option<Immediate>,
     ty: Type,
 ) -> Option<Immediate> {
-    if !ty.is_integral() || byte.may_be_undef || value.may_be_undef {
+    if !ty.is_integral() {
         return None;
     }
 
-    if value.imm.is_some_and(Immediate::is_zero) {
+    if value.is_some_and(Immediate::is_zero) {
         return Some(Immediate::zero(ty));
     }
 
-    fold_evm_signextend(byte.imm?, value.imm?)
+    fold_evm_signextend(byte?, value?)
 }
 
 pub(crate) fn simplify_inst_with_facts(
@@ -492,10 +467,10 @@ fn simplify_key_identities(
             let &[cond, then, otherwise] = key.values() else {
                 return None;
             };
-            let chosen = match defined_imm(facts, cond) {
+            let chosen = match facts.known_imm(cond) {
                 Some(cond) if cond.is_zero() => otherwise,
                 Some(_) => then,
-                None if then == otherwise || facts.same_non_undef(then, otherwise) => then,
+                None if then == otherwise => then,
                 None => return None,
             };
             Some(SimplifiedInst::one(SimplifiedResult::Copy(chosen)))
@@ -523,7 +498,7 @@ fn fold_unary_with_facts(
     kind: UnaryInstKind,
     facts: &impl ExprFactProvider,
 ) -> Option<SimplifiedInst> {
-    let arg = defined_imm(facts, key.unary_arg()?)?;
+    let arg = facts.known_imm(key.unary_arg()?)?;
     let result_ty = *key.result_tys().first()?;
     let result = match kind {
         UnaryInstKind::Neg => SimplifiedInst::one(SimplifiedResult::Const(-arg)),
@@ -564,15 +539,11 @@ fn fold_binary_with_facts(
         BinaryInstKind::Uaddo => {
             return fold_checked_binary(facts, lhs, rhs, Immediate::overflowing_uadd);
         }
-        BinaryInstKind::Uaddsat => {
-            defined_imm(facts, lhs)?.saturating_uadd(defined_imm(facts, rhs)?)
-        }
+        BinaryInstKind::Uaddsat => facts.known_imm(lhs)?.saturating_uadd(facts.known_imm(rhs)?),
         BinaryInstKind::Saddo => {
             return fold_checked_binary(facts, lhs, rhs, Immediate::overflowing_sadd);
         }
-        BinaryInstKind::Saddsat => {
-            defined_imm(facts, lhs)?.saturating_sadd(defined_imm(facts, rhs)?)
-        }
+        BinaryInstKind::Saddsat => facts.known_imm(lhs)?.saturating_sadd(facts.known_imm(rhs)?),
         BinaryInstKind::Mul => {
             let (lhs, rhs) = word_binary_imms(func, facts, lhs, rhs, result_ty)?;
             fold_result_imm(lhs * rhs, result_ty)?
@@ -580,15 +551,11 @@ fn fold_binary_with_facts(
         BinaryInstKind::Umulo => {
             return fold_checked_binary(facts, lhs, rhs, Immediate::overflowing_umul);
         }
-        BinaryInstKind::Umulsat => {
-            defined_imm(facts, lhs)?.saturating_umul(defined_imm(facts, rhs)?)
-        }
+        BinaryInstKind::Umulsat => facts.known_imm(lhs)?.saturating_umul(facts.known_imm(rhs)?),
         BinaryInstKind::Smulo => {
             return fold_checked_binary(facts, lhs, rhs, Immediate::overflowing_smul);
         }
-        BinaryInstKind::Smulsat => {
-            defined_imm(facts, lhs)?.saturating_smul(defined_imm(facts, rhs)?)
-        }
+        BinaryInstKind::Smulsat => facts.known_imm(lhs)?.saturating_smul(facts.known_imm(rhs)?),
         BinaryInstKind::Sub => {
             let (lhs, rhs) = word_binary_imms(func, facts, lhs, rhs, result_ty)?;
             fold_result_imm(lhs - rhs, result_ty)?
@@ -596,15 +563,11 @@ fn fold_binary_with_facts(
         BinaryInstKind::Usubo => {
             return fold_checked_binary(facts, lhs, rhs, Immediate::overflowing_usub);
         }
-        BinaryInstKind::Usubsat => {
-            defined_imm(facts, lhs)?.saturating_usub(defined_imm(facts, rhs)?)
-        }
+        BinaryInstKind::Usubsat => facts.known_imm(lhs)?.saturating_usub(facts.known_imm(rhs)?),
         BinaryInstKind::Ssubo => {
             return fold_checked_binary(facts, lhs, rhs, Immediate::overflowing_ssub);
         }
-        BinaryInstKind::Ssubsat => {
-            defined_imm(facts, lhs)?.saturating_ssub(defined_imm(facts, rhs)?)
-        }
+        BinaryInstKind::Ssubsat => facts.known_imm(lhs)?.saturating_ssub(facts.known_imm(rhs)?),
         BinaryInstKind::Sdiv => {
             fold_nonzero_word_binary(func, facts, lhs, rhs, result_ty, Immediate::sdiv)?
         }
@@ -721,21 +684,19 @@ fn fold_binary_with_facts(
         | BinaryInstKind::EvmUmulsat
         | BinaryInstKind::EvmSmulsat => fold_evm_saturating(
             kind,
-            defined_imm(facts, lhs)?,
-            defined_imm(facts, rhs)?,
+            facts.known_imm(lhs)?,
+            facts.known_imm(rhs)?,
             key.extra_ty()?,
             result_ty,
         )?,
         BinaryInstKind::EvmExp => {
-            simplify_evm_exp_known(known_value(facts, lhs), known_value(facts, rhs), result_ty)?
+            simplify_evm_exp_known(facts.known_imm(lhs), facts.known_imm(rhs), result_ty)?
         }
-        BinaryInstKind::EvmSignExtend => simplify_evm_signextend_known(
-            known_value(facts, lhs),
-            known_value(facts, rhs),
-            result_ty,
-        )?,
+        BinaryInstKind::EvmSignExtend => {
+            simplify_evm_signextend_known(facts.known_imm(lhs), facts.known_imm(rhs), result_ty)?
+        }
         BinaryInstKind::EvmByte => {
-            simplify_evm_byte_known(known_value(facts, lhs), known_value(facts, rhs), result_ty)?
+            simplify_evm_byte_known(facts.known_imm(lhs), facts.known_imm(rhs), result_ty)?
         }
     };
     Some(SimplifiedInst::one(SimplifiedResult::Const(result)))
@@ -751,7 +712,7 @@ fn fold_cast_with_facts(
         return None;
     }
 
-    let value = defined_imm(facts, arg)?;
+    let value = facts.known_imm(arg)?;
     let result = match kind {
         CastInstKind::Sext => value.sext(ty),
         CastInstKind::Zext => value.zext(ty),
@@ -772,7 +733,7 @@ fn fold_opaque_with_facts(
         let words = key
             .values()
             .iter()
-            .map(|&word| defined_imm(facts, word).map(imm_to_u256))
+            .map(|&word| facts.known_imm(word).map(imm_to_u256))
             .collect::<Option<SmallVec<[_; 2]>>>()?;
         let digest = EvmKeccak256Words::digest(words);
         return Some(SimplifiedInst::one(SimplifiedResult::Const(
@@ -788,9 +749,9 @@ fn fold_opaque_with_facts(
         _ => return None,
     };
     let result = simplify_evm_modop_known(
-        known_value(facts, *lhs),
-        known_value(facts, *rhs),
-        known_value(facts, *modulus),
+        facts.known_imm(*lhs),
+        facts.known_imm(*rhs),
+        facts.known_imm(*modulus),
         *key.result_tys().first()?,
         op,
     )?;
@@ -803,7 +764,7 @@ fn fold_checked_binary(
     rhs: ValueId,
     fold: fn(Immediate, Immediate) -> (Immediate, bool),
 ) -> Option<SimplifiedInst> {
-    let (value, overflow) = fold(defined_imm(facts, lhs)?, defined_imm(facts, rhs)?);
+    let (value, overflow) = fold(facts.known_imm(lhs)?, facts.known_imm(rhs)?);
     Some(SimplifiedInst {
         results: smallvec![
             SimplifiedResult::Const(value),
@@ -875,8 +836,8 @@ fn word_binary_imms(
     rhs: ValueId,
     result_ty: Type,
 ) -> Option<(Immediate, Immediate)> {
-    let lhs = defined_imm(facts, lhs)?;
-    let rhs = defined_imm(facts, rhs)?;
+    let lhs = facts.known_imm(lhs)?;
+    let rhs = facts.known_imm(rhs)?;
     if lhs.ty() == rhs.ty() {
         if lhs.ty() == Type::I1 && result_ty == Type::I256 {
             return Some((lhs.zext(Type::I256), rhs.zext(Type::I256)));
@@ -935,7 +896,7 @@ fn simplify_snego_zero(
         // itself is verified to take an integral operand.
         return None;
     }
-    (defined_imm(facts, arg) == Some(Immediate::zero(arg_ty)))
+    (facts.known_imm(arg) == Some(Immediate::zero(arg_ty)))
         .then(|| checked_value_no_overflow(SimplifiedResult::Const(Immediate::zero(arg_ty))))
 }
 
@@ -946,10 +907,6 @@ fn simplify_checked_binary_with_facts(
     rhs: ValueId,
     facts: &impl ExprFactProvider,
 ) -> Option<SimplifiedInst> {
-    if facts.may_be_undef(lhs) || facts.may_be_undef(rhs) {
-        return None;
-    }
-
     let ty = func.dfg.value_ty(lhs);
     if !ty.is_integral() {
         return None;
@@ -1096,19 +1053,6 @@ fn normalize_imm_for_type(imm: Immediate, ty: Type) -> Option<Immediate> {
     }
 }
 
-fn known_value(facts: &impl ExprFactProvider, value: ValueId) -> KnownValueFact {
-    KnownValueFact {
-        imm: facts.known_imm(value),
-        may_be_undef: facts.may_be_undef(value),
-    }
-}
-
-fn defined_imm(facts: &impl ExprFactProvider, value: ValueId) -> Option<Immediate> {
-    (!facts.may_be_undef(value))
-        .then(|| facts.known_imm(value))
-        .flatten()
-}
-
 pub(crate) fn simplify_unary_with_same_inner(
     kind: UnaryInstKind,
     arg: ValueId,
@@ -1134,23 +1078,21 @@ pub(crate) fn simplify_binary_with_facts(
     let ty = func.dfg.value_ty(lhs);
     let lhs_imm = facts.known_imm(lhs);
     let rhs_imm = facts.known_imm(rhs);
-    let lhs_defined = !facts.may_be_undef(lhs);
-    let rhs_defined = !facts.may_be_undef(rhs);
 
     match kind {
         BinaryInstKind::Add => {
-            if lhs_defined && lhs_imm.is_some_and(Immediate::is_zero) {
+            if lhs_imm.is_some_and(Immediate::is_zero) {
                 return SimplifiedResult::Copy(rhs);
             }
-            if rhs_defined && rhs_imm.is_some_and(Immediate::is_zero) {
+            if rhs_imm.is_some_and(Immediate::is_zero) {
                 return SimplifiedResult::Copy(lhs);
             }
         }
         BinaryInstKind::Sub => {
-            if ty.is_integral() && facts.same_non_undef(lhs, rhs) {
+            if ty.is_integral() && lhs == rhs {
                 return SimplifiedResult::Const(Immediate::zero(ty));
             }
-            if rhs_defined && rhs_imm == Some(Immediate::zero(ty)) {
+            if rhs_imm == Some(Immediate::zero(ty)) {
                 return SimplifiedResult::Copy(lhs);
             }
         }
@@ -1158,13 +1100,13 @@ pub(crate) fn simplify_binary_with_facts(
             if ty.is_integral() {
                 let zero = Immediate::zero(ty);
                 let one = Immediate::one(ty);
-                if lhs_defined && rhs_defined && (lhs_imm == Some(zero) || rhs_imm == Some(zero)) {
+                if lhs_imm == Some(zero) || rhs_imm == Some(zero) {
                     return SimplifiedResult::Const(zero);
                 }
-                if lhs_defined && lhs_imm == Some(one) {
+                if lhs_imm == Some(one) {
                     return SimplifiedResult::Copy(rhs);
                 }
-                if rhs_defined && rhs_imm == Some(one) {
+                if rhs_imm == Some(one) {
                     return SimplifiedResult::Copy(lhs);
                 }
             }
@@ -1173,13 +1115,13 @@ pub(crate) fn simplify_binary_with_facts(
             if ty.is_integral() {
                 let zero = Immediate::zero(ty);
                 let all_one = Immediate::all_one(ty);
-                if lhs_defined && rhs_defined && (lhs_imm == Some(zero) || rhs_imm == Some(zero)) {
+                if lhs_imm == Some(zero) || rhs_imm == Some(zero) {
                     return SimplifiedResult::Const(zero);
                 }
-                if lhs_defined && lhs_imm == Some(all_one) {
+                if lhs_imm == Some(all_one) {
                     return SimplifiedResult::Copy(rhs);
                 }
-                if rhs_defined && rhs_imm == Some(all_one) {
+                if rhs_imm == Some(all_one) {
                     return SimplifiedResult::Copy(lhs);
                 }
 
@@ -1189,7 +1131,7 @@ pub(crate) fn simplify_binary_with_facts(
                     return SimplifiedResult::Copy(copy);
                 }
             }
-            if facts.same_non_undef(lhs, rhs) {
+            if lhs == rhs {
                 return SimplifiedResult::Copy(lhs);
             }
         }
@@ -1197,16 +1139,13 @@ pub(crate) fn simplify_binary_with_facts(
             if ty.is_integral() {
                 let zero = Immediate::zero(ty);
                 let all_one = Immediate::all_one(ty);
-                if lhs_defined
-                    && rhs_defined
-                    && (lhs_imm == Some(all_one) || rhs_imm == Some(all_one))
-                {
+                if lhs_imm == Some(all_one) || rhs_imm == Some(all_one) {
                     return SimplifiedResult::Const(all_one);
                 }
-                if lhs_defined && lhs_imm == Some(zero) {
+                if lhs_imm == Some(zero) {
                     return SimplifiedResult::Copy(rhs);
                 }
-                if rhs_defined && rhs_imm == Some(zero) {
+                if rhs_imm == Some(zero) {
                     return SimplifiedResult::Copy(lhs);
                 }
 
@@ -1216,20 +1155,20 @@ pub(crate) fn simplify_binary_with_facts(
                     return SimplifiedResult::Copy(copy);
                 }
             }
-            if facts.same_non_undef(lhs, rhs) {
+            if lhs == rhs {
                 return SimplifiedResult::Copy(lhs);
             }
         }
         BinaryInstKind::Xor => {
             if ty.is_integral() {
                 let zero = Immediate::zero(ty);
-                if lhs_defined && lhs_imm == Some(zero) {
+                if lhs_imm == Some(zero) {
                     return SimplifiedResult::Copy(rhs);
                 }
-                if rhs_defined && rhs_imm == Some(zero) {
+                if rhs_imm == Some(zero) {
                     return SimplifiedResult::Copy(lhs);
                 }
-                if facts.same_non_undef(lhs, rhs) {
+                if lhs == rhs {
                     return SimplifiedResult::Const(zero);
                 }
             }
@@ -1238,7 +1177,7 @@ pub(crate) fn simplify_binary_with_facts(
         | BinaryInstKind::Sdiv
         | BinaryInstKind::EvmUdiv
         | BinaryInstKind::EvmSdiv => {
-            if ty.is_integral() && rhs_defined && rhs_imm == Some(Immediate::one(ty)) {
+            if ty.is_integral() && rhs_imm == Some(Immediate::one(ty)) {
                 return SimplifiedResult::Copy(lhs);
             }
         }
@@ -1246,48 +1185,41 @@ pub(crate) fn simplify_binary_with_facts(
         | BinaryInstKind::Smod
         | BinaryInstKind::EvmUmod
         | BinaryInstKind::EvmSmod => {
-            if ty.is_integral() && lhs_defined && rhs_defined && rhs_imm == Some(Immediate::one(ty))
-            {
+            if ty.is_integral() && rhs_imm == Some(Immediate::one(ty)) {
                 return SimplifiedResult::Const(Immediate::zero(ty));
             }
         }
         BinaryInstKind::Eq => {
             if let Some(ZextI1CompareRewrite::Copy(value)) =
-                simplify_zext_i1_compare(func, kind, lhs, rhs, |v| defined_imm(facts, v))
+                simplify_zext_i1_compare(func, kind, lhs, rhs, |v| facts.known_imm(v))
             {
                 return SimplifiedResult::Copy(value);
             }
-            if facts.same_non_undef(lhs, rhs) {
+            if lhs == rhs {
                 return SimplifiedResult::Const(Immediate::one(Type::I1));
             }
-            if !facts.may_be_undef(lhs)
-                && !facts.may_be_undef(rhs)
-                && has_conflicting_known_bits(
-                    facts.known_bits(func, lhs),
-                    facts.known_bits(func, rhs),
-                    ty,
-                )
-            {
+            if has_conflicting_known_bits(
+                facts.known_bits(func, lhs),
+                facts.known_bits(func, rhs),
+                ty,
+            ) {
                 return SimplifiedResult::Const(Immediate::zero(Type::I1));
             }
         }
         BinaryInstKind::Ne => {
             if let Some(ZextI1CompareRewrite::Copy(value)) =
-                simplify_zext_i1_compare(func, kind, lhs, rhs, |v| defined_imm(facts, v))
+                simplify_zext_i1_compare(func, kind, lhs, rhs, |v| facts.known_imm(v))
             {
                 return SimplifiedResult::Copy(value);
             }
-            if facts.same_non_undef(lhs, rhs) {
+            if lhs == rhs {
                 return SimplifiedResult::Const(Immediate::zero(Type::I1));
             }
-            if !facts.may_be_undef(lhs)
-                && !facts.may_be_undef(rhs)
-                && has_conflicting_known_bits(
-                    facts.known_bits(func, lhs),
-                    facts.known_bits(func, rhs),
-                    ty,
-                )
-            {
+            if has_conflicting_known_bits(
+                facts.known_bits(func, lhs),
+                facts.known_bits(func, rhs),
+                ty,
+            ) {
                 return SimplifiedResult::Const(Immediate::one(Type::I1));
             }
         }
@@ -1295,7 +1227,7 @@ pub(crate) fn simplify_binary_with_facts(
             if !ty.is_integral() {
                 return SimplifiedResult::NoChange;
             }
-            if facts.same_non_undef(lhs, rhs) {
+            if lhs == rhs {
                 return SimplifiedResult::Const(Immediate::I1(matches!(
                     kind,
                     BinaryInstKind::Ge | BinaryInstKind::Le
@@ -1304,7 +1236,6 @@ pub(crate) fn simplify_binary_with_facts(
 
             let zero = Immediate::zero(ty);
             match kind {
-                _ if !lhs_defined || !rhs_defined => {}
                 BinaryInstKind::Gt if lhs_imm == Some(zero) => {
                     return SimplifiedResult::Const(Immediate::zero(Type::I1));
                 }
@@ -1323,20 +1254,16 @@ pub(crate) fn simplify_binary_with_facts(
         BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar => {
             let value_ty = func.dfg.value_ty(rhs);
             let value_zero = Immediate::zero(value_ty);
-            if lhs_defined && rhs_defined && rhs_imm == Some(value_zero) {
+            if rhs_imm == Some(value_zero) {
                 return SimplifiedResult::Const(value_zero);
             }
-            if lhs_defined && lhs_imm.is_some_and(Immediate::is_zero) {
+            if lhs_imm.is_some_and(Immediate::is_zero) {
                 return SimplifiedResult::Copy(rhs);
             }
             if let Some(count) = lhs_imm.map(imm_to_u256)
                 && let Some(width) = integral_bit_width(value_ty)
             {
-                if kind != BinaryInstKind::Sar
-                    && count >= U256::from(width)
-                    && lhs_defined
-                    && rhs_defined
-                {
+                if kind != BinaryInstKind::Sar && count >= U256::from(width) {
                     return SimplifiedResult::Const(value_zero);
                 }
                 if let Some(value) = undo_inverse_shift(func, kind, count, rhs, facts) {
@@ -1345,17 +1272,7 @@ pub(crate) fn simplify_binary_with_facts(
             }
         }
         BinaryInstKind::EvmSignExtend => {
-            if let Some(result) = simplify_evm_signextend_known(
-                KnownValueFact {
-                    imm: lhs_imm,
-                    may_be_undef: facts.may_be_undef(lhs),
-                },
-                KnownValueFact {
-                    imm: rhs_imm,
-                    may_be_undef: facts.may_be_undef(rhs),
-                },
-                ty,
-            ) {
+            if let Some(result) = simplify_evm_signextend_known(lhs_imm, rhs_imm, ty) {
                 return SimplifiedResult::Const(result);
             }
             if let Some(value) = simplify_evm_signextend_copy_with_facts(func, lhs, rhs, facts) {
@@ -1363,12 +1280,12 @@ pub(crate) fn simplify_binary_with_facts(
             }
         }
         BinaryInstKind::Slt | BinaryInstKind::Sgt => {
-            if facts.same_non_undef(lhs, rhs) {
+            if lhs == rhs {
                 return SimplifiedResult::Const(Immediate::I1(false));
             }
         }
         BinaryInstKind::Sle | BinaryInstKind::Sge => {
-            if facts.same_non_undef(lhs, rhs) {
+            if lhs == rhs {
                 return SimplifiedResult::Const(Immediate::I1(true));
             }
         }
@@ -1395,16 +1312,12 @@ pub(crate) fn simplify_binary_with_facts(
         | BinaryInstKind::EvmUmulsat
         | BinaryInstKind::EvmSmulsat => {}
         BinaryInstKind::EvmExp => {
-            if let Some(result) =
-                simplify_evm_exp_known(known_value(facts, lhs), known_value(facts, rhs), ty)
-            {
+            if let Some(result) = simplify_evm_exp_known(lhs_imm, rhs_imm, ty) {
                 return SimplifiedResult::Const(result);
             }
         }
         BinaryInstKind::EvmByte => {
-            if let Some(result) =
-                simplify_evm_byte_known(known_value(facts, lhs), known_value(facts, rhs), ty)
-            {
+            if let Some(result) = simplify_evm_byte_known(lhs_imm, rhs_imm, ty) {
                 return SimplifiedResult::Const(result);
             }
         }
@@ -1436,10 +1349,7 @@ fn undo_inverse_shift(
     };
     let ty = func.dfg.value_ty(x);
     let width = integral_bit_width(ty)?;
-    if count >= U256::from(width)
-        || facts.known_imm(inner_count).map(imm_to_u256) != Some(count)
-        || facts.may_be_undef(x)
-    {
+    if count >= U256::from(width) || facts.known_imm(inner_count).map(imm_to_u256) != Some(count) {
         return None;
     }
 
@@ -1449,54 +1359,6 @@ fn undo_inverse_shift(
         _ => low_mask(count as u16),
     };
     facts.known_bits(func, x).all_zero_in(dropped).then_some(x)
-}
-
-#[allow(dead_code)]
-pub(crate) fn simplify_binary_with_known_imm(
-    func: &Function,
-    kind: BinaryInstKind,
-    lhs: ValueId,
-    rhs: ValueId,
-    known_imm: impl Fn(ValueId) -> Option<Immediate>,
-    same_value: impl Fn(ValueId, ValueId) -> bool,
-) -> SimplifiedResult {
-    struct KnownImmFacts<K, S> {
-        known_imm: K,
-        same_value: S,
-    }
-
-    impl<K, S> ExprFactProvider for KnownImmFacts<K, S>
-    where
-        K: Fn(ValueId) -> Option<Immediate>,
-        S: Fn(ValueId, ValueId) -> bool,
-    {
-        fn known_imm(&self, v: ValueId) -> Option<Immediate> {
-            (self.known_imm)(v)
-        }
-
-        fn known_bits(&self, func: &Function, v: ValueId) -> KnownBits {
-            KnownBits::unknown(func.dfg.value_ty(v))
-        }
-
-        fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool {
-            (self.same_value)(lhs, rhs)
-        }
-
-        fn may_be_undef(&self, v: ValueId) -> bool {
-            (self.known_imm)(v).is_none()
-        }
-    }
-
-    simplify_binary_with_facts(
-        func,
-        kind,
-        lhs,
-        rhs,
-        &KnownImmFacts {
-            known_imm,
-            same_value,
-        },
-    )
 }
 
 pub(crate) fn simplify_cast(
@@ -1640,7 +1502,7 @@ fn simplify_evm_signextend_copy_with_facts(
 ) -> Option<ValueId> {
     let ty = func.dfg.value_ty(value);
     let byte_imm = imm_to_u256(facts.known_imm(byte)?);
-    if !ty.is_integral() || facts.may_be_undef(byte) {
+    if !ty.is_integral() {
         return None;
     }
     if byte_imm >= U256::from(32u8) {
@@ -1652,10 +1514,6 @@ fn simplify_evm_signextend_copy_with_facts(
     if sign_width >= width {
         return Some(value);
     }
-    if facts.may_be_undef(value) {
-        return None;
-    }
-
     let low_mask = (U256::one() << sign_width) - U256::one();
     let sign_mask = U256::one() << (sign_width - 1);
     let high_mask = type_mask(ty) & !low_mask;
@@ -1673,7 +1531,7 @@ fn simplify_mask_copy_with_facts(
     keeps_mask: impl Fn(KnownBits, sonatina_ir::U256) -> bool,
 ) -> Option<ValueId> {
     let ty = func.dfg.value_ty(value);
-    if !supports_known_bits(ty) || facts.may_be_undef(value) {
+    if !supports_known_bits(ty) {
         return None;
     }
 
@@ -1714,7 +1572,6 @@ mod tests {
     struct MockFacts {
         known_bits: std::collections::BTreeMap<ValueId, KnownBits>,
         known_imm: std::collections::BTreeMap<ValueId, Immediate>,
-        may_be_undef: std::collections::BTreeMap<ValueId, bool>,
     }
 
     impl ExprFactProvider for MockFacts {
@@ -1727,14 +1584,6 @@ mod tests {
                 .get(&v)
                 .copied()
                 .unwrap_or_else(|| KnownBits::unknown(func.dfg.value_ty(v)))
-        }
-
-        fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool {
-            lhs == rhs && !self.may_be_undef(lhs)
-        }
-
-        fn may_be_undef(&self, v: ValueId) -> bool {
-            self.may_be_undef.get(&v).copied().unwrap_or_default()
         }
     }
 
@@ -1753,7 +1602,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_binary_with_known_imm_folds_shift_identities() {
+    fn simplify_binary_with_facts_folds_shift_by_zero() {
         let isa = test_isa();
         let ctx = ModuleCtx::new(&isa);
         let sig = Signature::new_single("f", Linkage::Private, &[], Type::I256);
@@ -1763,14 +1612,12 @@ mod tests {
             .dfg
             .make_imm_value(Immediate::from_i256(I256::from(7), Type::I256));
 
-        let simplified = simplify_binary_with_known_imm(
-            &func,
-            BinaryInstKind::Shl,
-            bits,
-            value,
-            |v| func.dfg.value_imm(v),
-            |_lhs, _rhs| false,
-        );
+        let facts = ConstantFacts {
+            func: &func,
+            known: FxHashMap::default(),
+        };
+        let simplified =
+            simplify_binary_with_facts(&func, BinaryInstKind::Shl, bits, value, &facts);
         assert_eq!(simplified, SimplifiedResult::Copy(value));
     }
 
@@ -1794,7 +1641,6 @@ mod tests {
             known_imm: [(mask, Immediate::from_i256(I256::from(u32::MAX), Type::I256))]
                 .into_iter()
                 .collect(),
-            may_be_undef: Default::default(),
         };
 
         let simplified =
@@ -1822,7 +1668,6 @@ mod tests {
             known_imm: [(mask, Immediate::from_i256(I256::from(0xffu8), Type::I256))]
                 .into_iter()
                 .collect(),
-            may_be_undef: Default::default(),
         };
 
         let simplified = simplify_binary_with_facts(&func, BinaryInstKind::Or, value, mask, &facts);
@@ -1851,7 +1696,6 @@ mod tests {
             .into_iter()
             .collect(),
             known_imm: Default::default(),
-            may_be_undef: Default::default(),
         };
 
         assert_eq!(
@@ -1875,7 +1719,6 @@ mod tests {
         let facts = MockFacts {
             known_bits: Default::default(),
             known_imm: [(zero, Immediate::zero(Type::I256))].into_iter().collect(),
-            may_be_undef: Default::default(),
         };
 
         assert_eq!(
@@ -1901,34 +1744,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_binary_with_facts_preserves_undef_in_unsigned_zero_bound_compares() {
-        let isa = test_isa();
-        let ctx = ModuleCtx::new(&isa);
-        let sig = Signature::new_single("f", Linkage::Private, &[Type::I256], Type::I1);
-        let mut func = Function::new(&ctx, &sig);
-        let value = func.arg_values[0];
-        let zero = func.dfg.make_imm_value(Immediate::zero(Type::I256));
-        let facts = MockFacts {
-            known_bits: Default::default(),
-            known_imm: [(zero, Immediate::zero(Type::I256))].into_iter().collect(),
-            may_be_undef: [(value, true)].into_iter().collect(),
-        };
-
-        for (kind, lhs, rhs) in [
-            (BinaryInstKind::Gt, zero, value),
-            (BinaryInstKind::Lt, value, zero),
-            (BinaryInstKind::Ge, value, zero),
-            (BinaryInstKind::Le, zero, value),
-        ] {
-            assert_eq!(
-                simplify_binary_with_facts(&func, kind, lhs, rhs, &facts),
-                SimplifiedResult::NoChange
-            );
-        }
-    }
-
-    #[test]
-    fn simplify_binary_with_facts_keeps_copy_fold_blocked_for_maybe_undef() {
+    fn simplify_binary_with_facts_folds_mask_copy_from_known_bits() {
         let isa = test_isa();
         let ctx = ModuleCtx::new(&isa);
         let sig = Signature::new_single("f", Linkage::Private, &[Type::I256], Type::I256);
@@ -1947,16 +1763,15 @@ mod tests {
             known_imm: [(mask, Immediate::from_i256(I256::from(u32::MAX), Type::I256))]
                 .into_iter()
                 .collect(),
-            may_be_undef: [(value, true)].into_iter().collect(),
         };
 
         let simplified =
             simplify_binary_with_facts(&func, BinaryInstKind::And, value, mask, &facts);
-        assert_eq!(simplified, SimplifiedResult::NoChange);
+        assert_eq!(simplified, SimplifiedResult::Copy(value));
     }
 
     #[test]
-    fn simplify_binary_with_facts_preserves_undef_through_absorbing_identities() {
+    fn simplify_binary_with_facts_folds_absorbing_identities() {
         let isa = test_isa();
         let ctx = ModuleCtx::new(&isa);
         let sig = Signature::new_single("f", Linkage::Private, &[Type::I256], Type::I256);
@@ -1974,18 +1789,37 @@ mod tests {
             ]
             .into_iter()
             .collect(),
-            may_be_undef: [(value, true)].into_iter().collect(),
         };
 
-        for (kind, lhs, rhs) in [
-            (BinaryInstKind::Mul, value, zero),
-            (BinaryInstKind::And, value, zero),
-            (BinaryInstKind::Or, value, all_one),
-            (BinaryInstKind::Umod, value, one),
+        for (kind, lhs, rhs, folded) in [
+            (
+                BinaryInstKind::Mul,
+                value,
+                zero,
+                Immediate::zero(Type::I256),
+            ),
+            (
+                BinaryInstKind::And,
+                value,
+                zero,
+                Immediate::zero(Type::I256),
+            ),
+            (
+                BinaryInstKind::Or,
+                value,
+                all_one,
+                Immediate::all_one(Type::I256),
+            ),
+            (
+                BinaryInstKind::Umod,
+                value,
+                one,
+                Immediate::zero(Type::I256),
+            ),
         ] {
             assert_eq!(
                 simplify_binary_with_facts(&func, kind, lhs, rhs, &facts),
-                SimplifiedResult::NoChange
+                SimplifiedResult::Const(folded)
             );
         }
     }
@@ -2021,7 +1855,6 @@ func private %entry(v0.i256) {
             let facts = MockFacts {
                 known_bits: Default::default(),
                 known_imm: [(*zero, Immediate::zero(Type::I256))].into_iter().collect(),
-                may_be_undef: Default::default(),
             };
             assert_eq!(
                 simplify_inst_with_facts(func, inst, &facts)
@@ -2031,18 +1864,6 @@ func private %entry(v0.i256) {
                     SimplifiedResult::Copy(*arg),
                     SimplifiedResult::Const(Immediate::I1(false)),
                 ]
-            );
-
-            let facts = MockFacts {
-                known_bits: Default::default(),
-                known_imm: [(*zero, Immediate::zero(Type::I256))].into_iter().collect(),
-                may_be_undef: [(*arg, true)].into_iter().collect(),
-            };
-            assert_eq!(
-                simplify_inst_with_facts(func, inst, &facts)
-                    .results
-                    .as_slice(),
-                &[SimplifiedResult::NoChange, SimplifiedResult::NoChange]
             );
         });
     }
@@ -2081,7 +1902,6 @@ func private %entry(v0.i256) {
             known_imm: [(byte32, Immediate::from_i256(I256::from(32u8), Type::I256))]
                 .into_iter()
                 .collect(),
-            may_be_undef: Default::default(),
         };
 
         assert_eq!(
@@ -2102,7 +1922,6 @@ func private %entry(v0.i256) {
             .into_iter()
             .collect(),
             known_imm: [(byte0, Immediate::zero(Type::I256))].into_iter().collect(),
-            may_be_undef: Default::default(),
         };
 
         assert_eq!(
@@ -2111,138 +1930,24 @@ func private %entry(v0.i256) {
         );
     }
 
+    /// A result the known operand decides folds whether or not the other
+    /// operand is known.
     #[test]
-    fn simplify_evm_signextend_known_blocks_maybe_undef_zero_fold() {
+    fn simplify_evm_one_sided_helpers_fold_on_the_deciding_operand() {
         let ty = Type::I256;
-        assert_eq!(
-            simplify_evm_signextend_known(
-                KnownValueFact {
-                    imm: None,
-                    may_be_undef: true,
-                },
-                KnownValueFact {
-                    imm: Some(Immediate::zero(ty)),
-                    may_be_undef: false,
-                },
-                ty,
-            ),
-            None
-        );
-        assert_eq!(
-            simplify_evm_signextend_known(
-                KnownValueFact {
-                    imm: None,
-                    may_be_undef: false,
-                },
-                KnownValueFact {
-                    imm: Some(Immediate::zero(ty)),
-                    may_be_undef: false,
-                },
-                ty,
-            ),
-            Some(Immediate::zero(ty))
-        );
-    }
+        let zero = Some(Immediate::zero(ty));
+        let one = Some(Immediate::one(ty));
+        let seven = Some(Immediate::from_i256(I256::from(7), ty));
 
-    #[test]
-    fn simplify_evm_exp_known_blocks_maybe_undef_one_sided_folds() {
-        let ty = Type::I256;
-
+        assert_eq!(simplify_evm_signextend_known(None, zero, ty), zero);
+        assert_eq!(simplify_evm_exp_known(None, zero, ty), one);
+        assert_eq!(simplify_evm_exp_known(one, None, ty), one);
         assert_eq!(
-            simplify_evm_exp_known(
-                KnownValueFact {
-                    imm: None,
-                    may_be_undef: true,
-                },
-                KnownValueFact {
-                    imm: Some(Immediate::zero(ty)),
-                    may_be_undef: false,
-                },
-                ty,
-            ),
-            None
+            simplify_evm_modop_known(None, seven, zero, ty, EvmModOp::Add),
+            zero
         );
-        assert_eq!(
-            simplify_evm_exp_known(
-                KnownValueFact {
-                    imm: Some(Immediate::one(ty)),
-                    may_be_undef: false,
-                },
-                KnownValueFact {
-                    imm: None,
-                    may_be_undef: true,
-                },
-                ty,
-            ),
-            None
-        );
-        assert_eq!(
-            simplify_evm_exp_known(
-                KnownValueFact {
-                    imm: Some(Immediate::one(ty)),
-                    may_be_undef: false,
-                },
-                KnownValueFact {
-                    imm: None,
-                    may_be_undef: false,
-                },
-                ty,
-            ),
-            Some(Immediate::one(ty))
-        );
-    }
-
-    #[test]
-    fn simplify_evm_one_sided_helpers_block_maybe_undef_ignored_operands() {
-        let ty = Type::I256;
-
-        assert_eq!(
-            simplify_evm_modop_known(
-                KnownValueFact {
-                    imm: None,
-                    may_be_undef: true,
-                },
-                KnownValueFact {
-                    imm: Some(Immediate::from_i256(I256::from(7), ty)),
-                    may_be_undef: false,
-                },
-                KnownValueFact {
-                    imm: Some(Immediate::zero(ty)),
-                    may_be_undef: false,
-                },
-                ty,
-                EvmModOp::Add,
-            ),
-            None
-        );
-        assert_eq!(
-            simplify_evm_byte_known(
-                KnownValueFact {
-                    imm: None,
-                    may_be_undef: true,
-                },
-                KnownValueFact {
-                    imm: Some(Immediate::zero(ty)),
-                    may_be_undef: false,
-                },
-                ty,
-            ),
-            None
-        );
-        assert_eq!(
-            simplify_evm_byte_known(
-                KnownValueFact {
-                    imm: None,
-                    may_be_undef: false,
-                },
-                KnownValueFact {
-                    imm: Some(Immediate::zero(ty)),
-                    may_be_undef: false,
-                },
-                ty,
-            ),
-            Some(Immediate::zero(ty))
-        );
+        assert_eq!(simplify_evm_byte_known(None, zero, ty), zero);
+        assert_eq!(simplify_evm_byte_known(None, None, ty), None);
     }
 
     #[test]

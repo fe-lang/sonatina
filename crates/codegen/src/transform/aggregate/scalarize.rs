@@ -12,7 +12,6 @@ use sonatina_ir::{
 use sonatina_triple::Architecture;
 
 use crate::{
-    analysis::definedness::{UndefTaint, insert_before, is_defined_source, is_scalar},
     cfg_edit::{CfgEditor, CleanupMode, trivial_phi_input},
     optim::const_eval::{
         ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys, eval_const_path_subtree,
@@ -279,8 +278,6 @@ impl AggregateScalarize {
             .map(|root| (root.root_value, root))
             .collect();
 
-        // The freezes of stored scalars, kept below only where needed.
-        let mut freezes = Vec::new();
         // Phi placeholders handle loop edges; other definitions precede their uses.
         for (block, insts) in blocks.into_iter().rev() {
             for inst in insts {
@@ -298,7 +295,6 @@ impl AggregateScalarize {
                     &mut scalarized_agg,
                     &mut ssa,
                     &mut modified_leaves,
-                    &mut freezes,
                 );
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
@@ -379,21 +375,6 @@ impl AggregateScalarize {
         if self.changed {
             func.rebuild_users();
         }
-        // Every scalar phi has its operands now, so the taint shows which
-        // stored values hold no undef.
-        let taint = UndefTaint::new(func);
-        for frozen in freezes {
-            // Cleanup removes the freezes no read uses.
-            if func.dfg.has_value(frozen)
-                && let Some(inst) = func.dfg.value_inst(frozen)
-                && func.layout.is_inst_inserted(inst)
-                && let Some(&arg) = func.dfg.downcast::<&data::Freeze>(inst).map(|f| f.arg())
-                && !taint.holds_undef(func, arg)
-            {
-                func.dfg.change_to_alias(frozen, arg);
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-            }
-        }
         self.changed
     }
 
@@ -461,7 +442,11 @@ impl AggregateScalarize {
                 let init = match promoted.init {
                     // Fresh memory holds arbitrary but fixed bits, which every
                     // read before the first store sees alike.
-                    RootInit::UndefFresh if is_scalar(func, leaf.ty) => {
+                    RootInit::UndefFresh
+                        if leaf.ty.is_integral()
+                            || leaf.ty.is_enum_tag()
+                            || leaf.ty.is_pointer(func.ctx()) =>
+                    {
                         self.insert_frozen_undef_leaf(func, promoted, leaf.ty)
                     }
                     RootInit::UndefFresh => func.dfg.make_undef_value(leaf.ty),
@@ -1545,7 +1530,6 @@ impl AggregateScalarize {
         scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
         ssa: &mut SsaBuilder,
         modified_leaves: &mut FxHashMap<ValueId, FxHashSet<usize>>,
-        freezes: &mut Vec<ValueId>,
     ) {
         if let Some((projection_value, ty, result)) = func
             .dfg
@@ -1732,7 +1716,6 @@ impl AggregateScalarize {
                     let leaf_idx = base_leaf + i;
                     let stored =
                         bitcast_before_inst(func, inst, payload_leaf, view_ty, underlying_leaf.ty);
-                    let stored = freeze_stored(func, inst, stored, freezes);
                     ssa.def_var(promoted.leaf_vars[leaf_idx], stored, block);
                 }
                 record_modified_leaves(
@@ -1805,7 +1788,6 @@ impl AggregateScalarize {
             {
                 let var = promoted.leaf_vars[projection.slice.first_leaf + i];
                 let stored = bitcast_before_inst(func, inst, val, view_ty, underlying_leaf.ty);
-                let stored = freeze_stored(func, inst, stored, freezes);
                 ssa.def_var(var, stored, block);
             }
             record_modified_leaves(modified_leaves, projection.root_value.value(), leaf_range);
@@ -1819,7 +1801,6 @@ impl AggregateScalarize {
         let underlying_leaf = &underlying_leaves[0];
         let var = promoted.leaf_vars[projection.slice.first_leaf];
         let stored = bitcast_before_inst(func, inst, value, ty, underlying_leaf.ty);
-        let stored = freeze_stored(func, inst, stored, freezes);
         ssa.def_var(var, stored, block);
         record_modified_leaves(modified_leaves, projection.root_value.value(), leaf_range);
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -3011,26 +2992,6 @@ impl RootKind {
     }
 }
 
-/// A slot read is never undef, so a stored scalar is frozen, and every later
-/// read of the slot sees the one value. Until the scalar phis that hold
-/// stored aggregates have their operands, no taint shows which stores need
-/// it, but a parameter, immediate, read or call result never does.
-fn freeze_stored(
-    func: &mut Function,
-    inst: InstId,
-    value: ValueId,
-    freezes: &mut Vec<ValueId>,
-) -> ValueId {
-    let ty = func.dfg.value_ty(value);
-    if !is_scalar(func, ty) || is_defined_source(func, value) {
-        return value;
-    }
-    let freeze = data::Freeze::new_unchecked(func.inst_set(), value);
-    let frozen = insert_before(func, inst, freeze, ty);
-    freezes.push(frozen);
-    frozen
-}
-
 fn initializer_leaf_immediate(
     module: &sonatina_ir::module::ModuleCtx,
     ty: Type,
@@ -3706,7 +3667,7 @@ func private %f(v0.i256) -> i256 {
     }
 
     #[test]
-    fn scalarize_freezes_stored_phis_with_undefined_fields() {
+    fn scalarize_reads_stored_phis_with_undefined_fields() {
         let dumped = scalarize_verified(
             r#"
 target = "evm-ethereum-osaka"
@@ -3731,17 +3692,11 @@ func private %f(v0.i1, v1.i256) -> i256 {
 }
 "#,
         );
-        // Field 1 merges undef with `v1`; every read of it sees one value.
-        let (frozen, _) = dumped
-            .lines()
-            .find_map(|line| line.trim().split_once(" = freeze "))
-            .unwrap_or_else(|| panic!("{dumped}"));
-        let frozen = frozen.split_once('.').unwrap().0;
-        assert!(
-            dumped.contains(&format!("sub {frozen} {frozen}")),
-            "{dumped}"
-        );
-        assert_eq!(dumped.matches(" = freeze ").count(), 1, "{dumped}");
+        // A read gives the stored value, unspecified parts included: field 1
+        // is the phi of `undef` and `v1`, and `sub` of it with itself stays as
+        // it is for later folding.
+        assert!(!dumped.contains("freeze"), "{dumped}");
+        assert!(!dumped.contains("obj.load"), "{dumped}");
     }
 
     #[test]
@@ -4533,7 +4488,7 @@ block0:
                 assert!(
                     memory
                         .read_state(load)
-                        .is_none_or(|read| !read.may_be_undef())
+                        .is_none_or(|read| !read.uninitialized())
                 );
                 AggregateScalarize::default().run_for_func(
                     func_ref,

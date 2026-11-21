@@ -73,9 +73,10 @@ pub enum Value {
     /// The value is global value.
     Global { gv: GlobalVariableRef, ty: Type },
 
-    /// Any value of `ty`, chosen separately at each use; `freeze` fixes one
-    /// choice for every use of its result. Undef never crosses memory or a
-    /// call: storing, passing or returning it gives one arbitrary value.
+    /// The unspecified value of `ty`, which any value of `ty` refines.
+    /// Operations, phis, calls and memory pass it on; using it as a branch
+    /// condition, an address or object operand, or in a trusted variant
+    /// assumption is undefined behavior. See `docs/undef.md`.
     Undef { ty: Type },
 }
 

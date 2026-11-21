@@ -12,12 +12,13 @@ block0:
     return v3;
 }
 
-# Keep the constraint when strict undef propagation makes BYTE undefined.
-# sameln: func public %keeps_undef_byte_mask(v0.i256) -> i256 {
+# BYTE of an unspecified word is unspecified, and so is its mask, so the mask
+# goes as for any other BYTE.
+# sameln: func public %drops_undef_byte_mask(v0.i256) -> i256 {
 # check: v1.i256 = evm_byte v0 undef.i256;
-# check: v2.i256 = and v1 255.i256;
-# check: return v2;
-func public %keeps_undef_byte_mask(v0.i256) -> i256 {
+# not: and
+# check: return v1;
+func public %drops_undef_byte_mask(v0.i256) -> i256 {
 block0:
     v1.i256 = evm_byte v0 undef.i256;
     v2.i256 = and v1 255.i256;

@@ -17,6 +17,7 @@ pub struct LicmSolver {
 #[derive(Clone, Copy)]
 struct LoopInvariantCtx<'a> {
     cfg: &'a ControlFlowGraph,
+    domtree: &'a DomTree,
     lpt: &'a LoopTree,
     lp: Loop,
     object_memory: Option<&'a ObjectMemoryAnalysis>,
@@ -63,6 +64,7 @@ impl LicmSolver {
                 func,
                 LoopInvariantCtx {
                     cfg,
+                    domtree: &domtree,
                     lpt,
                     lp,
                     object_memory,
@@ -125,7 +127,14 @@ impl LicmSolver {
         inst_id: InstId,
     ) -> bool {
         if ctx.object_memory.is_some_and(|object_memory| {
-            object_memory.read_is_loop_invariant(func, ctx.cfg, ctx.lpt, ctx.lp, inst_id)
+            object_memory.read_is_loop_invariant(
+                func,
+                ctx.cfg,
+                ctx.domtree,
+                ctx.lpt,
+                ctx.lp,
+                inst_id,
+            )
         }) {
             return true;
         }

@@ -1,16 +1,12 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
-use sonatina_ir::{
-    Function, ValueId,
-    inst::{cast, control_flow, data, downcast},
-};
+use sonatina_ir::{Function, ValueId, inst::data};
 
 use super::{inst_const_index, is_explicit_undef, shape};
 use shape::FieldPath;
 
 #[derive(Default)]
 pub(super) struct AggregateValueFacts {
-    pub(super) definitely_non_undef: SecondaryMap<ValueId, bool>,
     pub(super) reconstructed: SecondaryMap<ValueId, Option<ValueId>>,
 }
 
@@ -20,7 +16,6 @@ struct Insert {
     value: ValueId,
     index: Option<u32>,
     field_count: usize,
-    field_matches: bool,
     source: Option<ValueId>,
 }
 
@@ -30,41 +25,32 @@ enum Visit {
     Exit(ValueId),
 }
 
-#[derive(Clone, Copy)]
-struct Field {
-    defined: bool,
-    source: Option<ValueId>,
-}
-
+/// The fields the inserts on the current path assigned, each with the
+/// aggregate its value was extracted from, if any.
 #[derive(Default)]
 struct Assignments {
-    fields: FxHashMap<u32, Field>,
-    defined: usize,
+    fields: FxHashMap<u32, Option<ValueId>>,
     sources: FxHashMap<ValueId, usize>,
     sourced: usize,
 }
 
 impl Assignments {
-    fn replace(&mut self, index: u32, field: Option<Field>) -> Option<Field> {
+    fn replace(&mut self, index: u32, field: Option<Option<ValueId>>) -> Option<Option<ValueId>> {
         let previous = self.fields.remove(&index);
-        if let Some(previous) = previous {
-            self.defined -= usize::from(previous.defined);
-            if let Some(source) = previous.source {
-                self.sourced -= 1;
-                let count = self.sources.get_mut(&source).unwrap();
-                *count -= 1;
-                if *count == 0 {
-                    self.sources.remove(&source);
-                }
+        if let Some(Some(source)) = previous {
+            self.sourced -= 1;
+            let count = self.sources.get_mut(&source).unwrap();
+            *count -= 1;
+            if *count == 0 {
+                self.sources.remove(&source);
             }
         }
-        if let Some(field) = field {
-            self.defined += usize::from(field.defined);
-            if let Some(source) = field.source {
+        if let Some(source) = field {
+            if let Some(source) = source {
                 self.sourced += 1;
                 *self.sources.entry(source).or_default() += 1;
             }
-            self.fields.insert(index, field);
+            self.fields.insert(index, source);
         }
         previous
     }
@@ -81,7 +67,6 @@ impl AggregateValueFacts {
         let mut inserts = SecondaryMap::<ValueId, Option<Insert>>::default();
         let mut children = SecondaryMap::<ValueId, Vec<ValueId>>::default();
         for &value in &aggregates {
-            facts.definitely_non_undef[value] = !is_explicit_undef(func, value);
             if let Some(inst) = func.dfg.value_inst(value)
                 && let Some(insert) = func.dfg.downcast::<&data::InsertValue>(inst)
             {
@@ -92,9 +77,6 @@ impl AggregateValueFacts {
                     value: *insert.value(),
                     index,
                     field_count: shape::aggregate_child_count(func.ctx(), ty).unwrap_or(0),
-                    field_matches: index
-                        .and_then(|index| shape::aggregate_child_ty(func.ctx(), ty, index))
-                        == Some(func.dfg.value_ty(*insert.value())),
                     source: None,
                 });
                 children[*insert.dest()].push(value);
@@ -120,8 +102,8 @@ impl AggregateValueFacts {
             }
         }
 
-        // Coverage does not depend on definedness. Compute it once, including
-        // dynamic-index barriers, before asking about nested reconstructions.
+        // Compute coverage once, including dynamic-index barriers, before
+        // asking about nested reconstructions.
         let mut complete = SecondaryMap::<ValueId, bool>::default();
         let mut counts = FxHashMap::<u32, usize>::default();
         let mut invalid = 0usize;
@@ -171,93 +153,28 @@ impl AggregateValueFacts {
 
         let mut assignments = Assignments::default();
         let mut undo = Vec::new();
-        loop {
-            let mut changed = false;
-            for &value in &aggregates {
-                if inserts[value].is_none() {
-                    let next = non_insert_is_defined(func, value, &facts.definitely_non_undef);
-                    changed |= facts.definitely_non_undef[value] != next;
-                    facts.definitely_non_undef[value] = next;
-                }
-            }
-            for visit in &visits {
-                let (Visit::Enter(value) | Visit::Exit(value)) = *visit;
-                let insert = inserts[value].unwrap();
-                match visit {
-                    Visit::Enter(_) => {
-                        if let Some(index) = insert.index {
-                            let field = Field {
-                                defined: insert.field_matches
-                                    && value_is_defined(
-                                        func,
-                                        insert.value,
-                                        &facts.definitely_non_undef,
-                                    ),
-                                source: insert.source,
-                            };
-                            undo.push(assignments.replace(index, Some(field)));
-                        }
-                        let next = facts.definitely_non_undef[insert.base]
-                            || complete[value] && assignments.defined == insert.field_count;
-                        changed |= facts.definitely_non_undef[value] != next;
-                        facts.definitely_non_undef[value] = next;
-                        facts.reconstructed[value] = (complete[value]
-                            && assignments.sourced == insert.field_count
-                            && assignments.sources.len() == 1)
-                            .then(|| *assignments.sources.keys().next().unwrap());
+        for visit in &visits {
+            let (Visit::Enter(value) | Visit::Exit(value)) = *visit;
+            let insert = inserts[value].unwrap();
+            match visit {
+                Visit::Enter(_) => {
+                    if let Some(index) = insert.index {
+                        undo.push(assignments.replace(index, Some(insert.source)));
                     }
-                    Visit::Exit(_) => {
-                        if let Some(index) = insert.index {
-                            assignments.replace(index, undo.pop().unwrap());
-                        }
+                    facts.reconstructed[value] = (complete[value]
+                        && assignments.sourced == insert.field_count
+                        && assignments.sources.len() == 1)
+                        .then(|| *assignments.sources.keys().next().unwrap());
+                }
+                Visit::Exit(_) => {
+                    if let Some(index) = insert.index {
+                        assignments.replace(index, undo.pop().unwrap());
                     }
                 }
-            }
-            if !changed {
-                return facts;
             }
         }
+        facts
     }
-}
-
-fn value_is_defined(
-    func: &Function,
-    value: ValueId,
-    defined: &SecondaryMap<ValueId, bool>,
-) -> bool {
-    if shape::is_supported_aggregate_ty(func.ctx(), func.dfg.value_ty(value)) {
-        defined[value]
-    } else {
-        !is_explicit_undef(func, value)
-    }
-}
-
-fn non_insert_is_defined(
-    func: &Function,
-    value: ValueId,
-    defined: &SecondaryMap<ValueId, bool>,
-) -> bool {
-    if is_explicit_undef(func, value) {
-        return false;
-    }
-    let Some(inst) = func.dfg.value_inst(value) else {
-        return true;
-    };
-    let data = func.dfg.inst(inst);
-    if let Some(phi) = downcast::<&control_flow::Phi>(func.inst_set(), data) {
-        return phi.args().iter().any(|&(arg, _)| arg != value)
-            && phi.args().iter().all(|&(arg, _)| {
-                func.dfg.value_ty(arg) == func.dfg.value_ty(value)
-                    && value_is_defined(func, arg, defined)
-            });
-    }
-    if let Some(extract) = downcast::<&data::ExtractValue>(func.inst_set(), data) {
-        return value_is_defined(func, *extract.dest(), defined);
-    }
-    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), data) {
-        return value_is_defined(func, *bitcast.from(), defined);
-    }
-    false
 }
 
 struct ReconstructionSources<'a> {

@@ -1,4 +1,4 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use sonatina_ir::{
     ControlFlowGraph, Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
     inst::{BinaryInstKind, InstClassKind, logic::And},
@@ -8,7 +8,6 @@ use sonatina_triple::Architecture;
 
 use crate::{
     analysis::{
-        definedness::maybe_undef_values,
         known_bits::{KnownBits, type_bits, type_mask},
         scalar_facts::ScalarFacts,
     },
@@ -53,7 +52,6 @@ struct LocalExprFacts<'a, 'b> {
     func: &'a Function,
     scalar_facts: &'b ScalarFacts<'a, 'b>,
     range_env: Option<&'b RangeEnv>,
-    maybe_undef: &'b FxHashSet<ValueId>,
 }
 
 impl ExprFactProvider for LocalExprFacts<'_, '_> {
@@ -72,14 +70,6 @@ impl ExprFactProvider for LocalExprFacts<'_, '_> {
 
     fn range(&self, value: ValueId) -> Option<RangeFact> {
         self.range_env.and_then(|env| env.get(&value).copied())
-    }
-
-    fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool {
-        lhs == rhs && !self.may_be_undef(lhs)
-    }
-
-    fn may_be_undef(&self, v: ValueId) -> bool {
-        self.maybe_undef.contains(&v)
     }
 }
 
@@ -126,8 +116,6 @@ impl KnownBitsSimplify {
             range_analysis = Some(analysis);
         }
 
-        // A loop-carried value that no undef reaches is defined.
-        let maybe_undef = maybe_undef_values(func);
         let mut counts = Vec::new();
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
@@ -141,7 +129,6 @@ impl KnownBitsSimplify {
                     func,
                     scalar_facts: &scalar_facts,
                     range_env: range_env.as_ref(),
-                    maybe_undef: &maybe_undef,
                 };
                 match self.plan_inst(func, &facts, inst) {
                     Some((plan, false)) => self.plans.push(plan),
@@ -421,10 +408,6 @@ fn simplify_copy_when_only_undemanded_bits_change(
     facts: &LocalExprFacts<'_, '_>,
     changed: fn(Type, KnownBits) -> U256,
 ) -> Option<ValueId> {
-    if facts.may_be_undef(value) || facts.may_be_undef(other) {
-        return None;
-    }
-
     let changed = changed(func.dfg.value_ty(value), facts.known_bits(func, other));
     (facts.scalar_facts.demanded_bits(result) & changed == U256::zero()).then_some(value)
 }

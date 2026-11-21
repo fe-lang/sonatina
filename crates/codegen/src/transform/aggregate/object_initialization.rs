@@ -1,16 +1,16 @@
-//! Sparse definedness of typed values and object subtrees. This is stronger than
-//! verifier readability: a trusted payload assumption cannot define scalar undef.
+//! Sparse initialization of typed values and object subtrees: a leaf is
+//! initialized once something other than `undef` set it. This is stronger than
+//! verifier readability: a trusted payload assumption initializes no leaf.
 
 use rpds::RedBlackTreeMapSync;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, Type, Value, ValueId,
+    Function, InstId, Type, Value, ValueId,
+    effects::AccessKind,
     inst::{control_flow, data, downcast},
     module::ModuleCtx,
     types::{CompoundType, EnumVariantRef},
 };
-
-use crate::analysis::definedness::{is_read_or_call, value_may_be_undef};
 
 use super::{
     object_tracking::root_leaf_count_for_ty,
@@ -341,24 +341,36 @@ impl ValueInitialization<'_> {
                 .reduce(|a, b| a.join(func.ctx(), &b))
                 .unwrap_or_else(|| InitializedValue::new(ty, false));
         } else if !is_read_or_call(func, inst) {
-            // Reads and calls produce defined bits, but defined bits need not
-            // form a valid aggregate (an uninitialized enum read has an
-            // arbitrary tag). Both raw and high-level object reads were
-            // excluded above; only a point-specific snapshot can establish a
-            // memory read's initialization.
-            for used in data.collect_values() {
-                self.value(used);
-            }
-            let defined = !value_may_be_undef(func, value, &mut FxHashMap::default(), |used| {
-                self.snapshots
-                    .get(&used)
-                    .or_else(|| self.values.get(&used))
-                    .map(|facts| !facts.defined(func.ctx()))
+            // A computed value is initialized where its operands are. A read
+            // or call operand gives bits, but those bits need not form a valid
+            // aggregate (an uninitialized enum read has an arbitrary tag): only
+            // a point-specific snapshot can establish a read's initialization.
+            // Counting such operands as initialized only widens what readers
+            // see as initialized scalars; no variant follows from a scalar,
+            // so payload readability (`InitializedValue::at`) is unaffected.
+            let defined = data.collect_values().into_iter().all(|used| {
+                func.dfg
+                    .value_inst(used)
+                    .is_some_and(|inst| is_read_or_call(func, inst))
+                    || self.value(used).defined(func.ctx())
             });
             return InitializedValue::new(ty, defined);
         }
         InitializedValue::new(ty, false)
     }
+}
+
+/// Whether `inst` reads memory or calls.
+fn is_read_or_call(func: &Function, inst: InstId) -> bool {
+    func.dfg.is_call(inst)
+        || func.dfg.downcast::<&data::ObjLoad>(inst).is_some()
+        || func.dfg.downcast::<&data::EnumGetTag>(inst).is_some()
+        || func
+            .dfg
+            .effects(inst)
+            .accesses
+            .iter()
+            .any(|access| access.kind == AccessKind::Read)
 }
 
 #[cfg(test)]

@@ -2538,12 +2538,10 @@ func public %defined_enums(v0.i256) -> i256 {
 }
 "#;
 
-/// A parameter or call result is never undef: an inlined aggregate argument
-/// or result has its undefined fields frozen, and a call that passes or
-/// returns an enum part that may be undef stays. An undef payload of no
-/// bytes, as in `Result::Ok(())`, is no undefined part.
+/// A call passes arguments and results on unchanged, unspecified parts
+/// included, so every call inlines and nothing is frozen.
 #[test]
-fn inlining_defines_undefined_parts_of_arguments_and_results() {
+fn inlining_passes_undefined_parts_of_arguments_and_results() {
     for config in [InlinerConfig::default(), full_only_inliner_test_config()] {
         let mut module = sonatina_parser::parse_module(UNDEFINED_PARTS)
             .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
@@ -2557,16 +2555,18 @@ fn inlining_defines_undefined_parts_of_arguments_and_results() {
                 FuncWriter::new(func_ref, func).dump_string()
             })
         };
-        for name in ["nested_argument", "partial_result"] {
+        for name in [
+            "nested_argument",
+            "partial_result",
+            "enum_argument",
+            "enum_result",
+            "defined_enums",
+            "empty_payload_result",
+        ] {
             let text = dump(name);
             assert!(!text.contains("call"), "{text}");
-            assert!(text.contains("freeze undef.i256"), "{text}");
-            assert!(!text.contains("freeze v0"), "{text}");
+            assert!(!text.contains("freeze"), "{text}");
         }
-        assert!(dump("enum_argument").contains("call %pass_opt"));
-        assert!(dump("enum_result").contains("call %undef_opt"));
-        assert!(!dump("defined_enums").contains("call"));
-        assert!(!dump("empty_payload_result").contains("call"));
     }
 }
 
@@ -2617,11 +2617,10 @@ func public %unchecked(v0.i256, v1.i256) -> i256 {
 }
 "#;
 
-/// A quotient a branch found the divisor of nonzero is defined, so an enum
-/// returning it inlines; an unchecked quotient may be undef, so its call
-/// stays.
+/// An enum returning a quotient inlines whether or not a branch checked the
+/// divisor: the call gives the caller whatever the division gives.
 #[test]
-fn inlining_returns_enums_of_checked_quotients() {
+fn inlining_returns_enums_of_quotients() {
     for config in [full_inliner_test_config(), full_only_inliner_test_config()] {
         let mut module = sonatina_parser::parse_module(DIVISION_RESULTS)
             .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
@@ -2635,8 +2634,9 @@ fn inlining_returns_enums_of_checked_quotients() {
                 FuncWriter::new(func_ref, func).dump_string()
             })
         };
-        assert!(!dump("checked").contains("call"), "{}", dump("checked"));
-        assert!(dump("unchecked").contains("call %unchecked_quotient"));
+        for name in ["checked", "unchecked"] {
+            assert!(!dump(name).contains("call"), "{}", dump(name));
+        }
     }
 }
 

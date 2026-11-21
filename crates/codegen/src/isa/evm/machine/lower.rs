@@ -424,6 +424,9 @@ impl FuncLowerCtx<'_> {
             EvmInstKind::EvmKeccak256Words(_) => {
                 Err("evm_keccak256_words must be lowered before machine lowering".to_string())
             }
+            EvmInstKind::Freeze(_) => {
+                Err("freeze must be lowered before machine lowering".to_string())
+            }
             _ => self.lower_structural(source_inst),
         }
     }
@@ -917,7 +920,7 @@ impl FuncLowerCtx<'_> {
                 self.map.values[value] = Some(lowered);
                 Ok(lowered)
             }
-            // `undef` may be any value, and zero is the cheapest to push. A machine `undef` has
+            // Any value refines `undef`, and zero is the cheapest to push. A machine `undef` has
             // no definition, so stackify would reload it from a spill word nothing stores.
             Value::Undef { ty } => {
                 let imm = lower_immediate(Immediate::zero(Type::I256), *ty, self.source_module)?;
