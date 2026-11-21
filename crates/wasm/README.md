@@ -329,7 +329,9 @@ Multiplication, division and shifts by a count that is not a constant are
 functions of the module, emitted only when used. A shift by a constant, `sar`
 included, is built in place, and so is a product with at most three limb products that are not
 zero: any 128-bit product, and a 256-bit product of values extended from 64
-bits. Limbs that are constants, such as the zero high limbs of a value
+bits. A longer product calls a function that computes only its low 256 bits;
+only the checked and saturating 256-bit products compute whether there are
+more. Limbs that are constants, such as the zero high limbs of a value
 extended from 64 or 128 bits, are folded out of additions, subtractions,
 comparisons and bitwise operations. A limb that no use reads is not computed:
 before encoding, the backend removes every operator without effects whose

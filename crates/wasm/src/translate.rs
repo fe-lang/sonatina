@@ -67,7 +67,7 @@ mod aggregate;
 mod parts;
 mod wide_ops;
 
-use wide_ops::{WideHelpers, WideOp, constant_shift};
+use wide_ops::{NeededHelpers, WideHelpers, WideOp, constant_shift};
 
 type V = waffle::Value;
 
@@ -226,9 +226,8 @@ struct Scan {
     /// The module declares the external C routine `free`, so it needs a `free`
     /// function.
     free: bool,
-    /// Which 256-bit helper functions are used: multiplication, division, left
-    /// and right shifts.
-    helpers: (bool, bool, bool, bool, bool, bool),
+    /// Which 256-bit helper functions are used.
+    helpers: NeededHelpers,
     /// The module uses `sha256_compress`.
     sha256: bool,
 }
@@ -280,7 +279,7 @@ fn scan_module(module: &Module) -> Scan {
     let mut runtime = module.ctx.with_gv_store(|store| !store.is_empty());
     let mut arena = false;
     let mut free = false;
-    let mut helpers = (false, false, false, false, false, false);
+    let mut helpers = NeededHelpers::default();
     let mut sha256 = false;
     let mut called = FxHashSet::default();
     let inst_set = native_inst_set();
@@ -332,19 +331,15 @@ fn scan_module(module: &Module) -> Scan {
                             && constant_shift(function, rhs).is_some())
                         && !(op == WideOp::Mul && wide == Wide::I128)
                     {
-                        let (mulo, divrem, shl, shr) = op.needs();
-                        helpers.0 |= mulo;
-                        helpers.1 |= divrem;
-                        helpers.2 |= shl;
-                        helpers.3 |= shr;
+                        op.mark_needed(wide, &mut helpers);
                     }
                     // Modular arithmetic of every width runs at 256 bits.
                     match &kind {
                         NativeInstKind::EvmAddMod(_) => {
-                            helpers.1 = true;
-                            helpers.4 = true;
+                            helpers.udivrem = true;
+                            helpers.addmod = true;
                         }
-                        NativeInstKind::EvmMulMod(_) => helpers.5 = true,
+                        NativeInstKind::EvmMulMod(_) => helpers.mulmod = true,
                         _ => {}
                     }
                 }
@@ -626,8 +621,17 @@ pub(super) fn translate_module(
         helper_bodies.push((func, sig, name.to_string(), kind));
         func
     };
-    let (needs_mulo, needs_divrem, needs_shl, needs_shr, needs_addmod, needs_mulmod) = scan.helpers;
-    if needs_mulo {
+    let needed = scan.helpers;
+    if needed.mul {
+        helpers.mul = Some(declare(
+            &mut wmod,
+            "i256.mul",
+            2,
+            wide_results(LIMBS),
+            HelperKind::Mul,
+        ));
+    }
+    if needed.mulo {
         let mut results = wide_results(LIMBS);
         results.push(WType::I32);
         helpers.mulo = Some(declare(
@@ -638,7 +642,7 @@ pub(super) fn translate_module(
             HelperKind::Mulo,
         ));
     }
-    if needs_divrem {
+    if needed.udivrem {
         helpers.udivrem = Some(declare(
             &mut wmod,
             "i256.udivrem",
@@ -647,7 +651,7 @@ pub(super) fn translate_module(
             HelperKind::DivRem,
         ));
     }
-    if needs_shl {
+    if needed.shl {
         helpers.shl = Some(declare(
             &mut wmod,
             "i256.shl",
@@ -656,7 +660,7 @@ pub(super) fn translate_module(
             HelperKind::Shift { left: true },
         ));
     }
-    if needs_shr {
+    if needed.shr {
         helpers.shr = Some(declare(
             &mut wmod,
             "i256.shr",
@@ -665,7 +669,7 @@ pub(super) fn translate_module(
             HelperKind::Shift { left: false },
         ));
     }
-    if needs_addmod {
+    if needed.addmod {
         helpers.addmod = Some(declare(
             &mut wmod,
             "i256.addmod",
@@ -674,7 +678,7 @@ pub(super) fn translate_module(
             HelperKind::Modular { product: false },
         ));
     }
-    if needs_mulmod {
+    if needed.mulmod {
         helpers.mulmod = Some(declare(
             &mut wmod,
             "i256.mulmod",
@@ -734,6 +738,7 @@ pub(super) fn translate_module(
 
     for (func, sig, name, kind) in helper_bodies {
         let body = match kind {
+            HelperKind::Mul => wide::build_mul(&wmod, sig),
             HelperKind::Mulo => wide::build_mulo(&wmod, sig),
             HelperKind::DivRem => wide::build_udivrem(&wmod, sig),
             HelperKind::Shift { left } => wide::build_shift(&wmod, sig, left),
@@ -887,6 +892,7 @@ fn tail_call_sites(
 /// Which 256-bit helper function a declaration is for.
 #[derive(Clone, Copy)]
 enum HelperKind {
+    Mul,
     Mulo,
     DivRem,
     Shift { left: bool },

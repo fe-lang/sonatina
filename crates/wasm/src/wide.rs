@@ -621,6 +621,39 @@ impl Emit<'_> {
             .expect("the index is at most one past the top limb")
     }
 
+    /// The low 256 bits of the product: the partial products below the top
+    /// limb in full, and only the low halves of those in it.
+    // The column of a partial product is the sum of two indices.
+    #[allow(clippy::needless_range_loop)]
+    fn wide_mul_low(&mut self, a: Limbs, b: Limbs) -> Limbs {
+        let zero = self.c64(0);
+        let mut result = [zero; LIMBS];
+        for i in 0..LIMBS {
+            let mut carry = zero;
+            for j in 0..LIMBS - i {
+                let k = i + j;
+                if k == LIMBS - 1 {
+                    let low = self.op(Operator::I64Mul, &[a[i], b[j]], WType::I64);
+                    let sum = self.op(Operator::I64Add, &[result[k], low], WType::I64);
+                    result[k] = self.op(Operator::I64Add, &[sum, carry], WType::I64);
+                    continue;
+                }
+                let (low, high) = self.mul_wide(a[i], b[j]);
+                let sum = self.op(Operator::I64Add, &[result[k], low], WType::I64);
+                let carry_a = self.cmp64(Operator::I64LtU, sum, result[k]);
+                let sum_c = self.op(Operator::I64Add, &[sum, carry], WType::I64);
+                let carry_b = self.cmp64(Operator::I64LtU, sum_c, sum);
+                result[k] = sum_c;
+                // `high` is at most 2^64 - 2, so adding two carries cannot wrap.
+                let carry_a64 = self.zero_extend(carry_a);
+                let carry_b64 = self.zero_extend(carry_b);
+                let next = self.op(Operator::I64Add, &[high, carry_a64], WType::I64);
+                carry = self.op(Operator::I64Add, &[next, carry_b64], WType::I64);
+            }
+        }
+        result
+    }
+
     /// The low 256 bits of the product and whether the product has more.
     // The column of a partial product is the sum of two indices.
     #[allow(clippy::needless_range_loop)]
@@ -741,6 +774,29 @@ fn limbs_at(values: &[V], start: usize) -> Limbs {
         values[start + 2],
         values[start + 3],
     ]
+}
+
+/// `mul(a, b)` returns the low 256 bits of `a * b`.
+pub(super) fn build_mul(
+    wmod: &waffle::Module<'static>,
+    sig: waffle::Signature,
+) -> waffle::FunctionBody {
+    let mut body = waffle::FunctionBody::new(wmod, sig);
+    let entry = body.entry;
+    let params = helper_params(&body, 2 * LIMBS);
+    let (a, b) = (limbs_at(&params, 0), limbs_at(&params, LIMBS));
+    let limbs = Emit {
+        body: &mut body,
+        block: entry,
+    }
+    .wide_mul_low(a, b);
+    body.set_terminator(
+        entry,
+        waffle::Terminator::Return {
+            values: limbs.to_vec(),
+        },
+    );
+    body
 }
 
 /// `mulo(a, b)` returns the low 256 bits of `a * b` and an `i32` that is 1 if

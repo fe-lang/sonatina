@@ -17,6 +17,7 @@ use crate::{
 /// translated.
 #[derive(Default, Clone, Copy)]
 pub(super) struct WideHelpers {
+    pub(super) mul: Option<Func>,
     pub(super) mulo: Option<Func>,
     pub(super) udivrem: Option<Func>,
     pub(super) shl: Option<Func>,
@@ -42,16 +43,32 @@ pub(super) enum WideOp {
     Sar,
 }
 
+/// Which helper functions the instructions of a module call.
+#[derive(Default, Clone, Copy)]
+pub(super) struct NeededHelpers {
+    pub(super) mul: bool,
+    pub(super) mulo: bool,
+    pub(super) udivrem: bool,
+    pub(super) shl: bool,
+    pub(super) shr: bool,
+    pub(super) addmod: bool,
+    pub(super) mulmod: bool,
+}
+
 impl WideOp {
-    pub(super) fn needs(self) -> (bool, bool, bool, bool) {
-        // (mulo, udivrem, shl, shr)
+    /// Mark the helper that this operation of `wide` calls. A checked or
+    /// saturating product of 128-bit operands is exact in 256 bits, so it
+    /// needs only the low half of the product.
+    pub(super) fn mark_needed(self, wide: Wide, needed: &mut NeededHelpers) {
         match self {
-            Self::Mul | Self::Umulo | Self::Smulo | Self::Umulsat | Self::Smulsat => {
-                (true, false, false, false)
+            Self::Mul => needed.mul = true,
+            Self::Umulo | Self::Smulo | Self::Umulsat | Self::Smulsat if wide == Wide::I128 => {
+                needed.mul = true
             }
-            Self::Udiv | Self::Umod | Self::Sdiv | Self::Smod => (false, true, false, false),
-            Self::Shl => (false, false, true, false),
-            Self::Shr | Self::Sar => (false, false, false, true),
+            Self::Umulo | Self::Smulo | Self::Umulsat | Self::Smulsat => needed.mulo = true,
+            Self::Udiv | Self::Umod | Self::Sdiv | Self::Smod => needed.udivrem = true,
+            Self::Shl => needed.shl = true,
+            Self::Shr | Self::Sar => needed.shr = true,
         }
     }
 }
@@ -112,6 +129,14 @@ impl FunctionTranslator<'_> {
         ))
     }
 
+    /// The low 256 bits of `a * b`.
+    fn unsigned_mul(&mut self, wb: waffle::Block, a: Limbs, b: Limbs) -> Result<Limbs, WasmError> {
+        let func = self.helper(self.wide_helpers.mul, "multiplication")?;
+        let args: Vec<V> = a.into_iter().chain(b).collect();
+        let out = self.call_helper(wb, func, &args, &[WType::I64; LIMBS]);
+        Ok([out[0], out[1], out[2], out[3]])
+    }
+
     fn unsigned_mulo(
         &mut self,
         wb: waffle::Block,
@@ -150,7 +175,7 @@ impl FunctionTranslator<'_> {
             let result = match arith {
                 Arith::Add => self.emit(wb).wide_add(a, b).0,
                 Arith::Sub => self.emit(wb).wide_sub(a, b).0,
-                Arith::Mul => self.unsigned_mulo(wb, self.wide_helpers.mulo, a, b)?.0,
+                Arith::Mul => self.unsigned_mul(wb, a, b)?,
             };
             let overflow = self.emit(wb).wide_exceeds(wide, signed, result);
             return Ok((result, overflow));
@@ -302,7 +327,7 @@ impl FunctionTranslator<'_> {
             WideOp::Mul => {
                 let result = match self.emit(wb).wide_mul_short(wide.limbs(), a, b) {
                     Some(result) => result,
-                    None => self.unsigned_mulo(wb, helpers.mulo, a, b)?.0,
+                    None => self.unsigned_mul(wb, a, b)?,
                 };
                 self.define_wide(wb, inst_id, 0, wide, result)
             }
