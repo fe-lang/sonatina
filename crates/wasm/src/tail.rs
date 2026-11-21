@@ -3,19 +3,29 @@
 //! WAFFLE has no `return_call`. The translator ends a tail call's block with
 //! a return of the call's results, which WAFFLE encodes as the call, moves of
 //! the results through locals, and `return`. This pass makes that sequence a
-//! `return_call` in the functions the translator names.
+//! `return_call` in the functions the translator names, and a
+//! `call_indirect` through the dispatch table so followed a
+//! `return_call_indirect`.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use waffle::wasmparser::{BinaryReader, BinaryReaderError, FunctionBody, Operator, Result};
 
 use super::WasmError;
 
-/// The functions that make tail calls, with the callees of those calls, by
-/// their indices in the module. A callee returns the types its caller does.
-pub(super) type TailCallSites = FxHashMap<u32, FxHashSet<u32>>;
+/// The tail calls of a module, by the indices of functions and tables.
+#[derive(Default)]
+pub(super) struct TailCallSites {
+    /// The functions that make tail calls, with the callees of those calls.
+    /// A callee returns the types its caller does.
+    pub(super) calls: FxHashMap<u32, FxHashSet<u32>>,
+    /// The table through which tail switches call. Every call through it is
+    /// in tail position.
+    pub(super) table: Option<u32>,
+}
 
 const CODE_SECTION: u8 = 10;
 const RETURN_CALL: u8 = 0x12;
+const RETURN_CALL_INDIRECT: u8 = 0x13;
 
 fn malformed(error: BinaryReaderError) -> WasmError {
     WasmError::Emission(format!("the encoded module cannot be read back: {error}"))
@@ -36,7 +46,7 @@ pub(super) fn rewrite(
     imported: u32,
     sites: &TailCallSites,
 ) -> std::result::Result<Vec<u8>, WasmError> {
-    if sites.is_empty() {
+    if sites.calls.is_empty() {
         return Ok(bytes);
     }
     // The header, then sections: an id, a size and that many bytes.
@@ -59,8 +69,8 @@ pub(super) fn rewrite(
         for index in imported..imported + count {
             let size = section.read_var_u32().map_err(malformed)? as usize;
             let body = section.read_bytes(size).map_err(malformed)?;
-            let rewritten = match sites.get(&index) {
-                Some(callees) => rewrite_body(body, callees).map_err(malformed)?,
+            let rewritten = match sites.calls.get(&index) {
+                Some(callees) => rewrite_body(body, callees, sites.table).map_err(malformed)?,
                 None => body.to_vec(),
             };
             write_u32(&mut code, rewritten.len() as u32);
@@ -73,11 +83,12 @@ pub(super) fn rewrite(
     Ok(out)
 }
 
-/// The body of a function with each call of one of `callees` that the body
-/// returns the results of at once as a `return_call`. Between such a call
-/// and its `return`, or the end of the body, WAFFLE pops results into locals
-/// and pushes the same locals back.
-fn rewrite_body(body: &[u8], callees: &FxHashSet<u32>) -> Result<Vec<u8>> {
+/// The body of a function with each call of one of `callees`, or through
+/// `table`, that the body returns the results of at once as a `return_call`
+/// or `return_call_indirect`. Between such a call and its `return`, or the
+/// end of the body, WAFFLE pops results into locals and pushes the same
+/// locals back.
+fn rewrite_body(body: &[u8], callees: &FxHashSet<u32>, table: Option<u32>) -> Result<Vec<u8>> {
     let mut reader = FunctionBody::new(BinaryReader::new(body, 0)).get_operators_reader()?;
     let mut operators = Vec::new();
     while !reader.eof() {
@@ -88,11 +99,21 @@ fn rewrite_body(body: &[u8], callees: &FxHashSet<u32>) -> Result<Vec<u8>> {
     let mut index = 0;
     while let Some((operator, start)) = operators.get(index) {
         index += 1;
-        let &Operator::Call { function_index } = operator else {
-            continue;
-        };
-        if !callees.contains(&function_index) {
-            continue;
+        let mut tail_call = Vec::new();
+        match *operator {
+            Operator::Call { function_index } if callees.contains(&function_index) => {
+                tail_call.push(RETURN_CALL);
+                write_u32(&mut tail_call, function_index);
+            }
+            Operator::CallIndirect {
+                type_index,
+                table_index,
+            } if Some(table_index) == table => {
+                tail_call.push(RETURN_CALL_INDIRECT);
+                write_u32(&mut tail_call, type_index);
+                write_u32(&mut tail_call, table_index);
+            }
+            _ => continue,
         }
         let mut next = index;
         let mut locals = Vec::new();
@@ -113,8 +134,7 @@ fn rewrite_body(body: &[u8], callees: &FxHashSet<u32>) -> Result<Vec<u8>> {
         };
         if let Some(end) = end.filter(|_| pushed_back) {
             out.extend_from_slice(&body[copied..*start]);
-            out.push(RETURN_CALL);
-            write_u32(&mut out, function_index);
+            out.extend_from_slice(&tail_call);
             copied = end;
             index = next;
         }

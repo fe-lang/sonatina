@@ -9,19 +9,26 @@ use crate::{harness::Machine, memory_runtime::build_with};
 
 const LEVELS: [OptLevel; 4] = [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os];
 
-/// The number of `return_call`s in a module.
-fn return_calls(bytes: &[u8]) -> usize {
+/// The number of operators of a module that `matches` picks.
+fn operators(bytes: &[u8], matches: impl Fn(&Operator) -> bool) -> usize {
     let mut count = 0;
     for payload in Parser::new(0).parse_all(bytes) {
         if let Payload::CodeSectionEntry(body) = payload.unwrap() {
             let operators = body.get_operators_reader().unwrap();
             count += operators
                 .into_iter()
-                .filter(|operator| matches!(operator, Ok(Operator::ReturnCall { .. })))
+                .filter(|operator| matches(operator.as_ref().unwrap()))
                 .count();
         }
     }
     count
+}
+
+/// The number of `return_call`s in a module.
+fn return_calls(bytes: &[u8]) -> usize {
+    operators(bytes, |operator| {
+        matches!(operator, Operator::ReturnCall { .. })
+    })
 }
 
 #[test]
@@ -277,6 +284,103 @@ func public %run(v0.i32, v1.*i8, v2.*i64) -> i64 {
                 Val::I32(base as i32 + 8),
             ],
         );
+        assert_eq!(got[0].unwrap_i64(), want, "{level:?}");
+    }
+}
+
+#[test]
+fn a_switch_of_tail_calls_is_one_indirect_tail_call_at_os() {
+    // Every destination of `%next`'s `br_table`, the default included,
+    // tail-calls with the cursor, so at `Os` the switch is one
+    // `return_call_indirect` through a table of the handlers, which both
+    // handlers share. Other levels keep direct calls, which engines make
+    // faster. The opcode is a byte, so the table has 256 entries and no
+    // index falls outside it: 3 runs `%halt` from the default, which is not
+    // inlined, so that the default begins with its call.
+    let source = "type @Cursor = {*i8, i32, i64};
+func private %next(v0.@Cursor) -> i64 {
+    block0:
+        v1.*i8 = extract_value v0 0.i32;
+        v2.i32 = extract_value v0 1.i32;
+        v3.*i8 = gep v1 v2;
+        v4.i8 = mload v3 i8;
+        br_table v4 block3 (0.i8 block1) (1.i8 block2);
+    block1:
+        v5.i64 = call %inc v0;
+        return v5;
+    block2:
+        v6.i64 = call %twice v0;
+        return v6;
+    block3:
+        v7.i64 = call %halt v0;
+        return v7;
+}
+func private %inc(v0.@Cursor) -> i64 {
+    block0:
+        v1.i64 = extract_value v0 2.i32;
+        v2.i64 = add v1 1.i64;
+        v3.i32 = extract_value v0 1.i32;
+        v4.i32 = add v3 1.i32;
+        v5.@Cursor = insert_value v0 2.i32 v2;
+        v6.@Cursor = insert_value v5 1.i32 v4;
+        v7.i64 = call %next v6;
+        return v7;
+}
+func private %twice(v0.@Cursor) -> i64 {
+    block0:
+        v1.i64 = extract_value v0 2.i32;
+        v2.i64 = add v1 v1;
+        v3.i32 = extract_value v0 1.i32;
+        v4.i32 = add v3 1.i32;
+        v5.@Cursor = insert_value v0 2.i32 v2;
+        v6.@Cursor = insert_value v5 1.i32 v4;
+        v7.i64 = call %next v6;
+        return v7;
+}
+func inline(never) private %halt(v0.@Cursor) -> i64 {
+    block0:
+        v1.i64 = extract_value v0 2.i32;
+        return v1;
+}
+func public %run(v0.*i8) -> i64 {
+    block0:
+        v1.@Cursor = agg.make @Cursor v0 0.i32 0.i64;
+        v2.i64 = call %next v1;
+        return v2;
+}";
+    for level in [OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let bytes = build_with(source, level, WasmBackend::new().with_stack_size(4096));
+        let indirect = operators(&bytes, |operator| {
+            matches!(operator, Operator::ReturnCallIndirect { .. })
+        });
+        let tables = operators(&bytes, |operator| {
+            matches!(operator, Operator::BrTable { .. })
+        });
+        // The inliner may copy `%next` into each handler.
+        if level == OptLevel::Os {
+            assert!(indirect >= 1 && tables == 0, "{level:?}");
+        } else {
+            assert_eq!(indirect, 0, "{level:?}");
+        }
+        let mut machine = Machine::new(&bytes);
+        let base = machine.memory_size();
+        machine.grow_memory(2);
+        // 100,000 increments and doublings, and a halt.
+        let mut code = vec![0u8; 100_000];
+        for (index, byte) in code.iter_mut().enumerate() {
+            *byte = u8::from(index % 50 == 49);
+        }
+        code.push(3);
+        machine.write(base, &code);
+        let want = (0..100_000).fold(0i64, |value: i64, index| {
+            if index % 50 == 49 {
+                value.wrapping_add(value)
+            } else {
+                value.wrapping_add(1)
+            }
+        });
+        let run = machine.func("run");
+        let got = machine.call(&run, &[Val::I32(base as i32)]);
         assert_eq!(got[0].unwrap_i64(), want, "{level:?}");
     }
 }

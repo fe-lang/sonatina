@@ -161,8 +161,18 @@ cursor from one to the next runs in constant stack in both. A call in tail
 position that passes an aggregate held in memory built in the caller's frame
 is an ordinary call.
 
+At `Os`, a `br_table` each of whose destinations, the default included,
+begins with a tail call taking the same arguments, as an interpreter's
+dispatch does, is one `return_call_indirect` through a table of the callees,
+a range of the module's one function table with an entry for each value the
+scrutinee can take. Switches with the same callees share a range. Other
+levels keep the `br_table` and direct calls: an engine calls through a table
+more slowly (V8 12 four times more slowly), but switches make fevm's module
+at `Os` 60% smaller.
+
 WAFFLE 0.3.3 has no `return_call`. The backend emits the call followed by a
-return of its results and rewrites that sequence in the encoded module.
+return of its results and rewrites that sequence in the encoded module, and
+the same for a `call_indirect` through the function table.
 
 ### The heap
 
