@@ -337,7 +337,9 @@ Calls, returns, phis and memory carry only its two limbs.
 
 `evm_add_mod` and `evm_mul_mod` compute at 256 bits for every width: narrower
 operands are zero-extended, as on the native target, so the sum or product
-does not wrap.
+does not wrap. As natively, a sum of operands below the modulus is one
+addition and one conditional subtraction, a product below the modulus is its
+own remainder, and any other sum or product is divided by the modulus once.
 
 `bswap` of a 128- or 256-bit integer reverses the bytes of each 16-byte half
 with an `i8x16.shuffle` and exchanges the halves. A value loaded from memory to
