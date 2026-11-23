@@ -3700,3 +3700,131 @@ func private %null() -> *i8 {
         );
     }
 }
+
+#[test]
+fn uninhabited_types_rejected_in_signatures_and_ssa_values() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+
+    // Inhabited containers and pointers to uninhabited types are allowed.
+    let ok = r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+type @flipped = enum { #Err(@empty), #Ok(i256) };
+type @opt = enum { #None, #Some(@empty) };
+func private %ptr(v0.*@empty) -> *@empty {
+    block0:
+        return v0;
+}
+func private %empty_arr(v0.[@empty; 0]) -> [@empty; 0] {
+    block0:
+        return v0;
+}
+func private %flipped(v0.i256) -> @flipped {
+    block0:
+        v1.@flipped = enum.make @flipped #Ok (v0);
+        return v1;
+}
+func private %opt_none() -> @opt {
+    block0:
+        return zero.@opt;
+}
+"#;
+    if let Err(err) = parse_and_verify_module(ok, &cfg) {
+        panic!("inhabited containers/pointers of uninhabited types should verify: {err:?}");
+    }
+
+    // `zero.@flipped` is still rejected because variant 0 is uninhabited.
+    let bad_zero = r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+type @flipped = enum { #Err(@empty), #Ok(i256) };
+func private %f() -> @flipped {
+    block0:
+        return zero.@flipped;
+}
+"#;
+    let Err(ParseVerifyError::Verify(report)) = parse_and_verify_module(bad_zero, &cfg) else {
+        panic!("zero.@flipped should fail verification");
+    };
+    assert!(
+        has_message(
+            &report,
+            "zero value of a type with no zero: an enum without variants or a function"
+        ),
+        "{report}"
+    );
+
+    // Uninhabited parameters, returns, and SSA values are rejected (V4).
+    for (name, src) in [
+        (
+            "empty_enum_param",
+            r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+func private %f(v0.@empty) {
+    block0:
+        unreachable;
+}
+"#,
+        ),
+        (
+            "all_empty_enum_ret",
+            r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+type @all_empty = enum { #A(@empty), #B(i256, @empty) };
+func private %f() -> @all_empty {
+    block0:
+        unreachable;
+}
+"#,
+        ),
+        (
+            "struct_with_empty_param",
+            r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+type @mixed = { i256, @empty };
+func private %f(v0.@mixed) {
+    block0:
+        unreachable;
+}
+"#,
+        ),
+        (
+            "nonempty_array_of_empty_ssa",
+            r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+func private %f(v0.*[@empty; 3]) {
+    block0:
+        v1.[@empty; 3] = mload v0 [@empty; 3];
+        return;
+}
+"#,
+        ),
+        (
+            "uninhabited_enum_tag_ssa",
+            r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+func private %f(v0.objref<@empty>) {
+    block0:
+        v1.enumtag(@empty) = enum.get_tag v0;
+        return;
+}
+"#,
+        ),
+    ] {
+        let Err(ParseVerifyError::Verify(report)) = parse_and_verify_module(src, &cfg) else {
+            panic!("{name} should fail V4 verification");
+        };
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("uninhabited type")),
+            "{name} expected uninhabited-type diagnostic, got:\n{report}"
+        );
+    }
+}

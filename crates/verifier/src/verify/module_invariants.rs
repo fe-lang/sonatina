@@ -23,7 +23,9 @@ use crate::{
     report::VerificationReport,
 };
 
-use super::type_utils::{is_pointer_ty, is_type_valid, is_variadic_arg_ty, iter_nested_types};
+use super::type_utils::{
+    is_pointer_ty, is_type_inhabited, is_type_valid, is_variadic_arg_ty, iter_nested_types,
+};
 
 pub(super) fn collect_module_invariants(
     module: &Module,
@@ -536,6 +538,18 @@ fn verify_signature_type(
             Diagnostic::error(
                 DiagnosticCode::InvalidSignature,
                 "function signature contains a by-value function type",
+                location.clone(),
+            )
+            .with_note(usage.clone()),
+            cfg.max_diagnostics,
+        );
+    }
+
+    if type_is_valid && !is_type_inhabited(ctx, ty) {
+        report.push(
+            Diagnostic::error(
+                DiagnosticCode::InvalidSignature,
+                "function signature contains an uninhabited type",
                 location.clone(),
             )
             .with_note(usage.clone()),

@@ -1,13 +1,16 @@
+use rustc_hash::FxHashSet;
 use sonatina_ir::{
     Type, Value,
     inst::{data, downcast},
     module::ModuleCtx,
-    types::CompoundType,
+    types::{CompoundType, CompoundTypeRef},
 };
 
 use crate::{
     diagnostic::{Diagnostic, DiagnosticCode, Location},
-    verify::module_invariants::has_by_value_function_type_in_signature,
+    verify::{
+        module_invariants::has_by_value_function_type_in_signature, type_utils::is_type_inhabited,
+    },
 };
 
 use super::FunctionVerifier;
@@ -61,6 +64,18 @@ impl FunctionVerifier<'_> {
                             Diagnostic::error(
                                 DiagnosticCode::InvalidTypeRef,
                                 "argument value has an invalid type",
+                                Location::Value {
+                                    func: self.func_ref,
+                                    value: *value,
+                                },
+                            )
+                            .with_note(format!("arg index {index}")),
+                        );
+                    } else if !is_type_inhabited(self.ctx, *ty) {
+                        self.emit(
+                            Diagnostic::error(
+                                DiagnosticCode::InvalidSignature,
+                                "argument value has an uninhabited type",
                                 Location::Value {
                                     func: self.func_ref,
                                     value: *value,
@@ -159,6 +174,16 @@ impl FunctionVerifier<'_> {
                             )),
                         );
                     }
+                    if self.is_type_valid(*ty) && !is_type_inhabited(self.ctx, *ty) {
+                        self.emit(Diagnostic::error(
+                            DiagnosticCode::InvalidTypeRef,
+                            "SSA value has an uninhabited type",
+                            Location::Value {
+                                func: self.func_ref,
+                                value: value_id,
+                            },
+                        ));
+                    }
                 }
                 Value::Arg { ty, idx } => {
                     if !self.is_type_valid(*ty) {
@@ -166,6 +191,18 @@ impl FunctionVerifier<'_> {
                             Diagnostic::error(
                                 DiagnosticCode::InvalidTypeRef,
                                 "argument value has an invalid type",
+                                Location::Value {
+                                    func: self.func_ref,
+                                    value: value_id,
+                                },
+                            )
+                            .with_note(format!("arg index {}", idx)),
+                        );
+                    } else if !is_type_inhabited(self.ctx, *ty) {
+                        self.emit(
+                            Diagnostic::error(
+                                DiagnosticCode::InvalidSignature,
+                                "argument value has an uninhabited type",
                                 Location::Value {
                                     func: self.func_ref,
                                     value: value_id,
@@ -238,6 +275,15 @@ impl FunctionVerifier<'_> {
                                 value: value_id,
                             },
                         ));
+                    } else if !is_type_inhabited(self.ctx, *ty) {
+                        self.emit(Diagnostic::error(
+                            DiagnosticCode::InvalidTypeRef,
+                            "SSA value has an uninhabited type",
+                            Location::Value {
+                                func: self.func_ref,
+                                value: value_id,
+                            },
+                        ));
                     }
                 }
                 Value::Global { gv, ty } => {
@@ -281,6 +327,15 @@ impl FunctionVerifier<'_> {
                         self.emit(Diagnostic::error(
                             DiagnosticCode::InvalidTypeRef,
                             "undef value has invalid type",
+                            Location::Value {
+                                func: self.func_ref,
+                                value: value_id,
+                            },
+                        ));
+                    } else if !is_type_inhabited(self.ctx, *ty) {
+                        self.emit(Diagnostic::error(
+                            DiagnosticCode::InvalidTypeRef,
+                            "SSA value has an uninhabited type",
                             Location::Value {
                                 func: self.func_ref,
                                 value: value_id,
@@ -369,29 +424,44 @@ impl FunctionVerifier<'_> {
 /// tag needs a variant 0, whose fields need one in turn, and a function type
 /// has none.
 fn has_zero_value(ctx: &ModuleCtx, ty: Type) -> bool {
-    let compound = match ty {
-        Type::EnumTag(compound) => {
-            return ctx.with_ty_store(|store| {
-                store
-                    .enum_data(compound)
-                    .is_some_and(|data| !data.variants.is_empty())
-            });
+    fn inner(ctx: &ModuleCtx, ty: Type, visiting: &mut FxHashSet<CompoundTypeRef>) -> bool {
+        let compound_ref = match ty {
+            Type::EnumTag(compound) => {
+                return ctx.with_ty_store(|store| {
+                    store.enum_data(compound).is_some_and(|data| {
+                        data.variants.first().is_some_and(|variant| {
+                            variant
+                                .fields
+                                .iter()
+                                .all(|&field| is_type_inhabited(ctx, field))
+                        })
+                    })
+                });
+            }
+            Type::Compound(compound) => compound,
+            _ => return true,
+        };
+        if !visiting.insert(compound_ref) {
+            return false;
         }
-        Type::Compound(compound) => {
-            ctx.with_ty_store(|store| store.resolve_compound(compound).clone())
-        }
-        _ => return true,
-    };
-    match compound {
-        CompoundType::Array { elem, len } => len == 0 || has_zero_value(ctx, elem),
-        CompoundType::Struct(data) => data.fields.iter().all(|&field| has_zero_value(ctx, field)),
-        CompoundType::Enum(data) => data.variants.first().is_some_and(|variant| {
-            variant
-                .fields
-                .iter()
-                .all(|&field| has_zero_value(ctx, field))
-        }),
-        CompoundType::Func { .. } => false,
-        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => true,
+        let compound = ctx.with_ty_store(|store| store.resolve_compound(compound_ref).clone());
+        let ok = match compound {
+            CompoundType::Array { elem, len } => len == 0 || inner(ctx, elem, visiting),
+            CompoundType::Struct(data) => {
+                data.fields.iter().all(|&field| inner(ctx, field, visiting))
+            }
+            CompoundType::Enum(data) => data.variants.first().is_some_and(|variant| {
+                variant
+                    .fields
+                    .iter()
+                    .all(|&field| inner(ctx, field, visiting))
+            }),
+            CompoundType::Func { .. } => false,
+            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => true,
+        };
+        visiting.remove(&compound_ref);
+        ok
     }
+
+    inner(ctx, ty, &mut FxHashSet::default())
 }
