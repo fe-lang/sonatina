@@ -3647,3 +3647,135 @@ fn assert_evm_cases_at_all_optimization_levels(name: &str, source: &str) {
         }
     }
 }
+
+#[test]
+fn evm_mload_bytes_and_return_code_at_all_levels() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func public %init() {
+    block0:
+        v0.i256 = sym_addr &runtime;
+        v1.i256 = sym_size &runtime;
+        evm_return_code v0 v1;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.*i256 = alloca i256;
+        mstore v2 0x112233445566778899aabbccddeeff00102030405060708090a0b0c0d0e0f001.i256 i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v4.i1 = eq v0 0.i256;
+        br v4 block1 block2;
+
+    block1:
+        v10.i256 = evm_mload_bytes v3 0.i256;
+        v11.i256 = evm_mload_bytes v3 1.i256;
+        v12.i256 = evm_mload_bytes v3 4.i256;
+        v13.i256 = evm_mload_bytes v3 32.i256;
+        v14.i256 = add v10 v11;
+        v15.i256 = add v14 v12;
+        v16.i256 = xor v15 v13;
+        mstore 0.i256 v16 i256;
+        evm_return 0.i256 32.i256;
+
+    block2:
+        v20.i1 = eq v0 1.i256;
+        br v20 block3 block4;
+
+    block3:
+        v21.i256 = evm_mload_bytes v3 v1;
+        mstore 0.i256 v21 i256;
+        evm_return 0.i256 32.i256;
+
+    block4:
+        # Zero-length read with a huge unmapped address must return 0 without reading memory.
+        v30.i256 = evm_mload_bytes 0xdeadbeefdeadbeef.i256 v1;
+        mstore 0.i256 v30 i256;
+        evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+    section init {
+        entry %init;
+        embed .runtime as &runtime;
+    }
+    section runtime {
+        entry %entry;
+    }
+}
+"#;
+    let word = IrU256::from_str_radix(
+        "112233445566778899aabbccddeeff00102030405060708090a0b0c0d0e0f001",
+        16,
+    )
+    .unwrap();
+    let expected_const = (IrU256::from(0x11u64) + IrU256::from(0x11223344u64)) ^ word;
+
+    let encode_pair = |a: u64, b: u64| {
+        let mut data = Vec::with_capacity(64);
+        data.extend_from_slice(&IrU256::from(a).to_big_endian());
+        data.extend_from_slice(&IrU256::from(b).to_big_endian());
+        data
+    };
+
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let artifacts = Compile::new(parse_sona(source).module, EvmCompiler::default())
+            .with_opt_level(level)
+            .compile()
+            .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let init_bytes = &artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "init")
+            .unwrap()
+            .1
+            .bytes;
+        let runtime_bytes = &artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap()
+            .1
+            .bytes;
+
+        // Deploy via `evm_return_code` and verify deployed runtime matches `runtime` section.
+        let (deploy_res, mut harness) = EvmHarness::deploy(init_bytes);
+        let ExecutionResult::Success {
+            output: Output::Create(deployed, _),
+            ..
+        } = deploy_res
+        else {
+            panic!("{level:?}: evm_return_code deploy failed: {deploy_res:?}");
+        };
+        assert_eq!(
+            deployed.as_ref(),
+            runtime_bytes.as_slice(),
+            "{level:?}: evm_return_code deploy"
+        );
+        for (label, calldata, expected) in [
+            ("const", encode_pair(0, 0), expected_const),
+            ("dyn_0", encode_pair(1, 0), IrU256::zero()),
+            ("dyn_1", encode_pair(1, 1), IrU256::from(0x11u64)),
+            ("dyn_4", encode_pair(1, 4), IrU256::from(0x11223344u64)),
+            ("dyn_32", encode_pair(1, 32), word),
+            ("dyn_zero_huge_addr", encode_pair(2, 0), IrU256::zero()),
+        ] {
+            let result = harness.call(&calldata);
+            let ExecutionResult::Success {
+                output: Output::Call(output),
+                ..
+            } = result
+            else {
+                panic!("{level:?} {label}: {result:?}");
+            };
+            assert_eq!(
+                output.as_ref(),
+                expected.to_big_endian(),
+                "{level:?} {label}"
+            );
+        }
+    }
+}

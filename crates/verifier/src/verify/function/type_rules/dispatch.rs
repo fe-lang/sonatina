@@ -2394,6 +2394,7 @@ impl_evm_no_result_rule!(
     evm::EvmLog3,
     evm::EvmLog4,
     evm::EvmReturn,
+    evm::EvmReturnCode,
     evm::EvmRevert,
     evm::EvmSelfDestruct,
 );
@@ -2447,6 +2448,13 @@ impl VerifyInst for evm::EvmKeccak256Words {
 }
 
 impl VerifyInst for evm::EvmCodeLoad {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        verifier.verify_evm_rule_common(inst_id, &self.collect_values(), false);
+        verifier.expect_result_ty(inst_id, Type::I256, verifier.inst_location(inst_id));
+    }
+}
+
+impl VerifyInst for evm::EvmMloadBytes {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         verifier.verify_evm_rule_common(inst_id, &self.collect_values(), false);
         verifier.expect_result_ty(inst_id, Type::I256, verifier.inst_location(inst_id));

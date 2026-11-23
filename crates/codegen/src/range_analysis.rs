@@ -11,7 +11,8 @@ use sonatina_ir::{
         control_flow::BranchKind,
         data::Freeze,
         evm::{
-            EvmCalldataSize, EvmCodeSize, EvmExtCodeSize, EvmMalloc, EvmMsize, EvmReturnDataSize,
+            EvmCalldataSize, EvmCodeSize, EvmExtCodeSize, EvmMalloc, EvmMloadBytes, EvmMsize,
+            EvmReturnDataSize,
         },
         logic::Select,
     },
@@ -533,11 +534,36 @@ fn transfer_inst(
             );
             set_env_fact(func, env, result, fact);
         }
-        _ => match evm_byte_len_fact(func, inst) {
-            Some((result, fact)) => set_env_fact(func, env, result, fact),
-            None => clear_inst_results(func, env, inst),
-        },
+        _ => {
+            match evm_mload_bytes_fact(func, env, inst).or_else(|| evm_byte_len_fact(func, inst)) {
+                Some((result, fact)) => set_env_fact(func, env, result, fact),
+                None => clear_inst_results(func, env, inst),
+            }
+        }
     }
+}
+
+fn evm_mload_bytes_fact(
+    func: &Function,
+    env: &RangeEnv,
+    inst: InstId,
+) -> Option<(ValueId, RangeFact)> {
+    let load = func.dfg.downcast::<&EvmMloadBytes>(inst)?;
+    let result = func.dfg.inst_result_at(inst, 0)?;
+    let ty = func.dfg.value_ty(result);
+    if !supports_range_facts(ty) {
+        return None;
+    }
+    let len_hi = fact_for_value(func, env, *load.len()).unsigned.hi;
+    if len_hi.is_zero() {
+        return Some((result, RangeFact::singleton(Immediate::zero(ty))));
+    }
+    if len_hi < U256::from(32u8) {
+        let bits = len_hi.as_usize() * 8;
+        let hi = (U256::one() << bits) - U256::one();
+        return Some((result, unsigned_fact(U256::zero(), hi, ty)));
+    }
+    None
 }
 
 /// Every byte length the EVM reports is below `2**62`. Gas is a `u64`, and

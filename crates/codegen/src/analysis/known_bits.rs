@@ -8,7 +8,9 @@ use std::{
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     Function, Immediate, Type, U256, Value, ValueId,
-    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, data, downcast, logic},
+    inst::{
+        BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, data, downcast, evm, logic,
+    },
 };
 
 use crate::optim::const_eval::{
@@ -282,6 +284,22 @@ impl KnownBitsQuery {
         let inst_data = func.dfg.inst(inst);
         if let Some(load) = downcast::<&data::ConstLoad>(func.inst_set(), inst_data) {
             return self.const_load_known_bits(func, *load.object(), ty);
+        }
+        if let Some(load) = downcast::<&evm::EvmMloadBytes>(func.inst_set(), inst_data) {
+            if let Some(imm) = self
+                .value_imm(func, *load.len())
+                .or_else(|| func.dfg.value_const_imm(*load.len()))
+                && let Some(bytes) = imm.to_nonnegative_usize()
+                && bytes <= 32
+            {
+                if bytes == 0 {
+                    return KnownBits::from_imm(Immediate::zero(ty));
+                }
+                if bytes < 32 {
+                    return KnownBits::normalized(ty, !low_mask((bytes * 8) as u16), U256::zero());
+                }
+            }
+            return KnownBits::unknown(ty);
         }
         // A frozen value is one of its argument's.
         if let Some(freeze) = downcast::<&data::Freeze>(func.inst_set(), inst_data) {

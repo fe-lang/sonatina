@@ -8,7 +8,7 @@ use sonatina_ir::{
         arith::{Add, Mul, Sub},
         cast::{Bitcast, IntToPtr, PtrToInt},
         data::{Gep, Mload, Mstore},
-        evm::EvmMstore8,
+        evm::{EvmMloadBytes, EvmMstore8},
     },
 };
 
@@ -998,6 +998,14 @@ fn rewrite_mem_addr(func: &mut Function, inst: InstId, new_addr: ValueId) {
             inst,
             Box::new(EvmMstore8::new_unchecked(is, new_addr, *mstore8.val())),
         );
+        return;
+    }
+    if let Some(load) = <&EvmMloadBytes as InstDowncast>::downcast(is, func.dfg.inst(inst)).cloned()
+    {
+        func.dfg.replace_inst_preserving_results(
+            inst,
+            Box::new(EvmMloadBytes::new_unchecked(is, new_addr, *load.len())),
+        );
     }
 }
 
@@ -1011,6 +1019,9 @@ fn memory_addr_operand(func: &Function, inst: InstId) -> Option<ValueId> {
     }
     if let Some(mstore8) = <&EvmMstore8 as InstDowncast>::downcast(is, func.dfg.inst(inst)) {
         return Some(*mstore8.addr());
+    }
+    if let Some(load) = <&EvmMloadBytes as InstDowncast>::downcast(is, func.dfg.inst(inst)) {
+        return Some(*load.addr());
     }
     None
 }

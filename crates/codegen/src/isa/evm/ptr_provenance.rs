@@ -1029,6 +1029,15 @@ pub(crate) fn compute_provenance(
                             memory_load(&data, module).expect("matched a memory load");
                         next.union_with(&info.load_value_memory(addr, bytes));
                     }
+                    EvmInstKind::EvmMloadBytes(load) => {
+                        let bytes =
+                            value_imm_u32(function, *load.len()).map(|len| (len as usize).min(32));
+                        if bytes != Some(0) {
+                            next.union_with(
+                                &info.load_value_memory(*load.addr(), bytes.unwrap_or(32)),
+                            );
+                        }
+                    }
                     EvmInstKind::Phi(phi) => {
                         for (val, _) in phi.args().iter() {
                             let _ = next.union_with(&info.value[*val]);

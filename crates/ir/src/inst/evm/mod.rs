@@ -344,6 +344,17 @@ pub struct EvmMload {
     addr: ValueId,
 }
 
+/// Read `len` (`0..=32`) big-endian bytes starting at `addr` from linear
+/// memory, returning them zero-extended in the low `8 * len` bits of an
+/// `i256` word. When `len == 0`, returns `0` without reading memory.
+/// Lowers to `evm_mload` + shift at EVM machine lowering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Read))]
+pub struct EvmMloadBytes {
+    addr: ValueId,
+    len: ValueId,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]
 pub struct EvmMstore {
@@ -485,6 +496,17 @@ pub struct EvmCallCode {
 #[inst(terminator)]
 pub struct EvmReturn {
     addr: ValueId,
+    len: ValueId,
+}
+
+/// Halt and return `code[code_offset..code_offset + len]` without modifying IR
+/// linear memory. Lowers to `evm_code_copy 0 code_offset len; evm_return 0 len`
+/// at EVM machine lowering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Control))]
+#[inst(terminator)]
+pub struct EvmReturnCode {
+    code_offset: ValueId,
     len: ValueId,
 }
 

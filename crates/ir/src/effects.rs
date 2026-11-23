@@ -14,10 +14,10 @@ use crate::{
             EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeLoad, EvmCodeSize, EvmCoinBase, EvmCreate,
             EvmCreate2, EvmDelegateCall, EvmExtCodeCopy, EvmExtCodeHash, EvmExtCodeSize, EvmGas,
             EvmGasLimit, EvmGasPrice, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3,
-            EvmLog4, EvmMalloc, EvmMcopy, EvmMload, EvmMsize, EvmMstore, EvmMstore8, EvmNumber,
-            EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert,
-            EvmSelfBalance, EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop,
-            EvmTimestamp, EvmTload, EvmTstore,
+            EvmLog4, EvmMalloc, EvmMcopy, EvmMload, EvmMloadBytes, EvmMsize, EvmMstore, EvmMstore8,
+            EvmNumber, EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnCode, EvmReturnDataCopy,
+            EvmReturnDataSize, EvmRevert, EvmSelfBalance, EvmSelfDestruct, EvmSload, EvmSstore,
+            EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore,
         },
     },
     isa::evm::space::{CALLDATA, CODE, MEMORY, RETURNDATA, STORAGE, TRANSIENT},
@@ -617,6 +617,20 @@ fn classify_declared_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
+    if let Some(mload) = dfg.downcast::<&EvmMloadBytes>(inst_id) {
+        if let Some(imm) = dfg.value_const_imm(*mload.len())
+            && let Some(bytes) = imm.to_nonnegative_usize()
+            && bytes <= EVM_WORD_BYTES as usize
+        {
+            if bytes > 0 {
+                sink.read_exact(MEMORY, *mload.addr(), bytes as u32, Type::I256);
+            }
+        } else {
+            sink.read_range(MEMORY, *mload.addr(), *mload.len());
+        }
+        return sink.finish();
+    }
+
     if let Some(mstore) = dfg.downcast::<&EvmMstore>(inst_id) {
         sink.write_exact(MEMORY, *mstore.addr(), EVM_WORD_BYTES, Type::I256);
         return sink.finish();
@@ -795,6 +809,12 @@ fn classify_declared_effects_with<S: EffectSink>(
 
     if let Some(ret) = dfg.downcast::<&EvmReturn>(inst_id) {
         record_read_memory_with_other(&mut sink, *ret.addr(), *ret.len(), OtherEffects::CONTROL);
+        return sink.finish();
+    }
+
+    if let Some(ret) = dfg.downcast::<&EvmReturnCode>(inst_id) {
+        sink.read_range(CODE, *ret.code_offset(), *ret.len());
+        sink.add_other(OtherEffects::CONTROL);
         return sink.finish();
     }
 

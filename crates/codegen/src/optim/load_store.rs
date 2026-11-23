@@ -8,8 +8,9 @@ use sonatina_ir::{
         control_flow,
         data::{Alloca, Memzero, Mload, Mstore},
         evm::{
-            EvmCalldataLoad, EvmCodeLoad, EvmInvalid, EvmMalloc, EvmMstore8, EvmReturn, EvmRevert,
-            EvmSelfDestruct, EvmSload, EvmSstore, EvmStop, EvmTload, EvmTstore,
+            EvmCalldataLoad, EvmCodeLoad, EvmInvalid, EvmMalloc, EvmMloadBytes, EvmMstore8,
+            EvmReturn, EvmReturnCode, EvmRevert, EvmSelfDestruct, EvmSload, EvmSstore, EvmStop,
+            EvmTload, EvmTstore,
         },
     },
 };
@@ -1138,6 +1139,7 @@ fn forwardable_read_key(
     let is = func.inst_set();
 
     if <&Mload as InstDowncast>::downcast(is, inst_data).is_none()
+        && <&EvmMloadBytes as InstDowncast>::downcast(is, inst_data).is_none()
         && <&EvmSload as InstDowncast>::downcast(is, inst_data).is_none()
         && <&EvmTload as InstDowncast>::downcast(is, inst_data).is_none()
         && <&EvmCalldataLoad as InstDowncast>::downcast(is, inst_data).is_none()
@@ -1237,6 +1239,7 @@ fn exit_commits_visible_writes(func: &Function, block: sonatina_ir::BlockId) -> 
 
     if <&control_flow::Return as InstDowncast>::downcast(is, inst).is_some()
         || <&EvmReturn as InstDowncast>::downcast(is, inst).is_some()
+        || <&EvmReturnCode as InstDowncast>::downcast(is, inst).is_some()
         || <&EvmSelfDestruct as InstDowncast>::downcast(is, inst).is_some()
         || <&EvmStop as InstDowncast>::downcast(is, inst).is_some()
     {

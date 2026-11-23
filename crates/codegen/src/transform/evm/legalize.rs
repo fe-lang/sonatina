@@ -367,6 +367,7 @@ fn gives_wider_word(kind: EvmInstKind<'_>, width: ScalarWidth) -> bool {
         // A word or pointer result, which the verifier requires, or an aggregate.
         EvmInstKind::EvmKeccak256Words(_)
         | EvmInstKind::EvmCodeLoad(_)
+        | EvmInstKind::EvmMloadBytes(_)
         | EvmInstKind::EvmMalloc(_)
         | EvmInstKind::MemAllocDynamic(_)
         | EvmInstKind::IntToPtr(_)
@@ -425,6 +426,7 @@ fn gives_wider_word(kind: EvmInstKind<'_>, width: ScalarWidth) -> bool {
         | EvmInstKind::EvmLog3(_)
         | EvmInstKind::EvmLog4(_)
         | EvmInstKind::EvmReturn(_)
+        | EvmInstKind::EvmReturnCode(_)
         | EvmInstKind::EvmRevert(_)
         | EvmInstKind::EvmSelfDestruct(_) => false,
     }
@@ -691,10 +693,12 @@ fn operand_uses(kind: EvmInstKind<'_>) -> Option<&'static [OperandUse]> {
         | EvmInstKind::EvmSstore(_)
         | EvmInstKind::EvmTstore(_) => Some(&[P, P]),
         EvmInstKind::Memzero(_)
+        | EvmInstKind::EvmMloadBytes(_)
         | EvmInstKind::EvmKeccak256(_)
         | EvmInstKind::EvmLog0(_)
         | EvmInstKind::EvmReturn(_)
         | EvmInstKind::EvmRevert(_) => Some(&[P, E]),
+        EvmInstKind::EvmReturnCode(_) => Some(&[E, E]),
         EvmInstKind::Memcopy(_) | EvmInstKind::EvmMcopy(_) => Some(&[P, P, E]),
         EvmInstKind::MemAllocDynamic(_)
         | EvmInstKind::EvmMalloc(_)
