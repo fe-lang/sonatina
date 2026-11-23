@@ -59,9 +59,9 @@ frontend contract.
   outside it. For sub-word reads out of packed byte buffers on EVM,
   `evm_mload_bytes addr len` reads `len` bytes (`0 <= len <= 32`) starting at
   `addr` and returns them big-endian, zero-extended in a 256-bit word (`len ==
-  0` returns `0` without reading memory). `evm_mload_bytes` lowers to
-  `evm_mload` plus shift/mask at machine lowering, where flat EVM memory is
-  defined past the allocation.
+  0` returns `0` without reading memory; `len > 32` is U5). `evm_mload_bytes`
+  lowers to `evm_mload` plus shift/mask at machine lowering, where flat EVM
+  memory is defined past the allocation.
 
 ## The EVM Address Space
 
@@ -102,6 +102,9 @@ frontend contract.
   - `obj.index` or `const.index` out of bounds;
   - `enum.assert_variant`, `enum.assert_variant_ref`, or `enum.extract` on an
     inactive variant.
+- **U5.** An operand outside an instruction's domain:
+  - `evm_mload_bytes` with `len > 32` (the verifier rejects a constant one;
+    EVM machine lowering yields `0` for a dynamic one).
 
 ## Defined Operations
 

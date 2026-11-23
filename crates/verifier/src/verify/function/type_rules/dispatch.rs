@@ -2483,6 +2483,18 @@ impl VerifyInst for evm::EvmMloadBytes {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         verifier.verify_evm_rule_common(inst_id, &self.collect_values(), false);
         verifier.expect_result_ty(inst_id, Type::I256, verifier.inst_location(inst_id));
+        if let Some(len) = verifier.value_imm(*self.len())
+            && len.as_i256().to_u256() > U256::from(32)
+        {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::MloadBytesLengthOutOfRange,
+                    "evm_mload_bytes length must be at most 32",
+                    verifier.inst_location(inst_id),
+                )
+                .with_note(format!("length {}", len.as_i256().to_u256())),
+            );
+        }
     }
 }
 

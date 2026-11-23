@@ -3900,6 +3900,37 @@ func private %f(v0.i256) -> i256 {
 }
 
 #[test]
+fn evm_mload_bytes_rejects_constant_length_above_32() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let source = |len: &str| {
+        format!(
+            r#"
+target = "evm-ethereum-osaka"
+func public %f(v0.*i8, v1.i256) -> i256 {{
+    block0:
+        v2.i256 = evm_mload_bytes v0 {len};
+        return v2;
+}}
+"#
+        )
+    };
+    for len in ["0.i256", "32.i256", "v1"] {
+        let result = parse_and_verify_module(&source(len), &cfg);
+        assert!(result.is_ok(), "length {len} must verify");
+    }
+    for len in ["33.i256", "-1.i256"] {
+        let Err(ParseVerifyError::Verify(report)) = parse_and_verify_module(&source(len), &cfg)
+        else {
+            panic!("length {len} must be rejected");
+        };
+        assert!(
+            has_code(&report, "IR0614"),
+            "length {len} expected IR0614, got:\n{report}"
+        );
+    }
+}
+
+#[test]
 fn evm_fixed_memory_limit_rejects_backend_slots_and_out_of_bounds_scratch() {
     let cfg = VerifierConfig::for_level(VerificationLevel::Full).with_evm_fixed_memory_limit(0x40);
 

@@ -346,8 +346,10 @@ pub struct EvmMload {
 
 /// Read `len` (`0..=32`) big-endian bytes starting at `addr` from linear
 /// memory, returning them zero-extended in the low `8 * len` bits of an
-/// `i256` word. When `len == 0`, returns `0` without reading memory.
-/// Lowers to `evm_mload` + shift at EVM machine lowering.
+/// `i256` word. When `len == 0`, returns `0` without reading memory. A `len`
+/// above 32 is undefined behavior (U5 in `docs/memory.md`); the verifier
+/// rejects a constant one. Lowers to `evm_mload` + shift at EVM machine
+/// lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Read))]
 pub struct EvmMloadBytes {
