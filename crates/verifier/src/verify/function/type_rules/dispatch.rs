@@ -2166,6 +2166,36 @@ impl VerifyInst for control_flow::BrTable {
                 ));
             }
         }
+        if self.default().is_none() {
+            match scrutinee_ty {
+                Type::EnumTag(enum_ref) => {
+                    let variant_count = verifier.ctx.with_ty_store(|store| {
+                        store.enum_data(enum_ref).map(|data| data.variants.len())
+                    });
+                    if let Some(variant_count) = variant_count {
+                        let exhaustive = seen_keys.len() == variant_count
+                            && seen_keys.iter().all(|imm| {
+                                imm.to_nonnegative_usize()
+                                    .is_some_and(|idx| idx < variant_count)
+                            });
+                        if !exhaustive {
+                            verifier.emit(Diagnostic::error(
+                                DiagnosticCode::NonExhaustiveBrTable,
+                                "default-less br_table over enum tag must cover every variant",
+                                location.clone(),
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    verifier.emit(Diagnostic::error(
+                        DiagnosticCode::NonExhaustiveBrTable,
+                        "br_table without a default requires an exhaustive enum tag scrutinee",
+                        location.clone(),
+                    ));
+                }
+            }
+        }
         verifier.expect_no_result(inst_id, location);
     }
 

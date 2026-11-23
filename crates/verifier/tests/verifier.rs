@@ -10,8 +10,9 @@ use sonatina_ir::{
 use sonatina_parser::parse_module;
 use sonatina_triple::TargetTriple;
 use sonatina_verifier::{
-    ModuleBuilderVerifyExt, ParseVerifyError, VerificationLevel, VerifierConfig, build_and_verify,
-    parse_and_verify_module, verify_function_signature, verify_module, verify_module_invariants,
+    DiagnosticCode, ModuleBuilderVerifyExt, ParseVerifyError, VerificationLevel, VerifierConfig,
+    build_and_verify, parse_and_verify_module, verify_function_signature, verify_module,
+    verify_module_invariants,
 };
 
 fn has_code(report: &sonatina_verifier::VerificationReport, code: &str) -> bool {
@@ -3825,6 +3826,158 @@ func private %f(v0.objref<@empty>) {
                 .iter()
                 .any(|d| d.message.contains("uninhabited type")),
             "{name} expected uninhabited-type diagnostic, got:\n{report}"
+        );
+    }
+}
+
+#[test]
+fn default_less_br_table_requires_exhaustive_enum_tag() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+
+    let ok_enum = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #A, #B, #C };
+func private %f(v0.enumtag(@E)) -> i256 {
+    block0:
+        br_table v0 (0.enumtag(@E) block1) (1.enumtag(@E) block2) (2.enumtag(@E) block3);
+    block1:
+        return 1.i256;
+    block2:
+        return 2.i256;
+    block3:
+        return 3.i256;
+}
+"#;
+    assert!(parse_and_verify_module(ok_enum, &cfg).is_ok());
+
+    let bad_non_exhaustive_enum = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #A, #B, #C };
+func private %f(v0.enumtag(@E)) -> i256 {
+    block0:
+        br_table v0 (0.enumtag(@E) block1) (1.enumtag(@E) block2);
+    block1:
+        return 1.i256;
+    block2:
+        return 2.i256;
+}
+"#;
+    let Err(ParseVerifyError::Verify(report)) =
+        parse_and_verify_module(bad_non_exhaustive_enum, &cfg)
+    else {
+        panic!("non-exhaustive default-less enum br_table must fail");
+    };
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == DiagnosticCode::NonExhaustiveBrTable
+                && d.message.contains("must cover every variant")),
+        "{report}"
+    );
+
+    let bad_int = r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.i256) -> i256 {
+    block0:
+        br_table v0 (0.i256 block1) (1.i256 block2);
+    block1:
+        return 1.i256;
+    block2:
+        return 2.i256;
+}
+"#;
+    let Err(ParseVerifyError::Verify(report)) = parse_and_verify_module(bad_int, &cfg) else {
+        panic!("default-less integer br_table must fail");
+    };
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == DiagnosticCode::NonExhaustiveBrTable
+                && d.message.contains("exhaustive enum tag scrutinee")),
+        "{report}"
+    );
+}
+
+#[test]
+fn evm_fixed_memory_limit_rejects_backend_slots_and_out_of_bounds_scratch() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full).with_evm_fixed_memory_limit(0x40);
+
+    let ok_scratch = r#"
+target = "evm-ethereum-osaka"
+func public %ok(v0.i256) {
+    block0:
+        mstore 0.i256 v0 i256;
+        v1.i256 = mload 32.i256 i256;
+        v2.*i8 = evm_malloc 32.i256;
+        mstore v2 v1 i256;
+        evm_revert 0.i256 36.i256;
+}
+"#;
+    assert!(parse_and_verify_module(ok_scratch, &cfg).is_ok());
+
+    for (name, src, needle) in [
+        (
+            "free_ptr_slot",
+            r#"
+target = "evm-ethereum-osaka"
+func public %bad() -> i256 {
+    block0:
+        v0.i256 = mload 64.i256 i256;
+        return v0;
+}
+"#,
+            "backend-owned slot",
+        ),
+        (
+            "free_ptr_slot_via_int_to_ptr",
+            r#"
+target = "evm-ethereum-osaka"
+func public %bad() -> i256 {
+    block0:
+        v0.*i256 = int_to_ptr 64.i256 *i256;
+        v1.i256 = mload v0 i256;
+        return v1;
+}
+"#,
+            "backend-owned slot",
+        ),
+        (
+            "dyn_sp_slot",
+            r#"
+target = "evm-ethereum-osaka"
+func public %bad(v0.i256) {
+    block0:
+        mstore 128.i256 v0 i256;
+        return;
+}
+"#,
+            "backend-owned slot",
+        ),
+        (
+            "past_declared_limit",
+            r#"
+target = "evm-ethereum-osaka"
+func public %bad() -> i256 {
+    block0:
+        v0.i256 = mload 96.i256 i256;
+        return v0;
+}
+"#,
+            "exceeds declared fixed scratch bounds",
+        ),
+    ] {
+        let Err(ParseVerifyError::Verify(report)) = parse_and_verify_module(src, &cfg) else {
+            panic!("{name} should fail E2 verification");
+        };
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.code == DiagnosticCode::EvmFixedMemoryOutOfBounds
+                    && d.message.contains(needle)),
+            "{name} expected `{needle}`, got:\n{report}"
         );
     }
 }

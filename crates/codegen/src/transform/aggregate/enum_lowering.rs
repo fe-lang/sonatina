@@ -9,7 +9,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, I256, Immediate, Inst, InstId, Module, Type, Value, ValueId,
     global_variable::GvInitializer,
-    inst::{cast, cmp, data},
+    inst::{cast, cmp, control_flow, data},
     module::ModuleCtx,
     types::{CompoundType, CompoundTypeRef, EnumData, EnumVariantRef},
 };
@@ -168,8 +168,47 @@ fn lower_imm_tag(ctx: &ModuleCtx, imm: Immediate) -> Immediate {
 }
 
 /// Replaces `function`'s enum tag immediates by integers, which a type
-/// rewrite cannot retype.
+/// rewrite cannot retype, and discharges exhaustive default-less `br_table`s
+/// over `Type::EnumTag` by promoting their last arm to an explicit `default`.
 pub(super) fn lower_tag_immediates(function: &mut Function) -> bool {
+    let mut changed = false;
+    let blocks: Vec<_> = function.layout.iter_block().collect();
+    for block in blocks {
+        let Some(term) = function.layout.last_inst_of(block) else {
+            continue;
+        };
+        let Some(table) = function
+            .dfg
+            .downcast::<&control_flow::BrTable>(term)
+            .cloned()
+        else {
+            continue;
+        };
+        if table.default().is_some() || !function.dfg.value_ty(*table.scrutinee()).is_enum_tag() {
+            continue;
+        }
+        let Some((&(_, last), init)) = table.table().split_last() else {
+            continue;
+        };
+        let is = function.inst_set();
+        if init.is_empty() {
+            function
+                .dfg
+                .replace_inst(term, Box::new(control_flow::Jump::new_unchecked(is, last)));
+        } else {
+            function.dfg.replace_inst(
+                term,
+                Box::new(control_flow::BrTable::new_unchecked(
+                    is,
+                    *table.scrutinee(),
+                    Some(last),
+                    init.to_vec(),
+                )),
+            );
+        }
+        changed = true;
+    }
+
     let tags: Vec<_> = function
         .dfg
         .immediates
@@ -186,7 +225,7 @@ pub(super) fn lower_tag_immediates(function: &mut Function) -> bool {
             ty: lowered.ty(),
         };
     }
-    !tags.is_empty()
+    changed || !tags.is_empty()
 }
 
 /// An enum lowered for EVM memory, where every type with bytes takes whole
