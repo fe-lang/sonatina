@@ -84,7 +84,7 @@ impl Liveness {
         for block in cfg.post_order() {
             for_each_use(func, block, |val, phi_source_block| {
                 let val = normalize(val);
-                if func.dfg.value_is_imm(val) {
+                if func.dfg.value_is_imm(val) || func.dfg.value_is_zero(val) {
                     self.mark_use(val, block);
                 } else if let Some(pred_block) = phi_source_block {
                     // A phi input is considered to be a use by the associated
@@ -176,7 +176,7 @@ impl InstLiveness {
             // omit when the input is defined in the block.
             for &succ in cfg.succs_of(block) {
                 for value in phi_args_for_edge(func, block, succ) {
-                    if !func.dfg.value_is_imm(value) {
+                    if !func.dfg.value_is_imm(value) && !func.dfg.value_is_zero(value) {
                         live.insert(value);
                     }
                 }
@@ -195,7 +195,7 @@ impl InstLiveness {
                 }
 
                 func.dfg.inst(inst).for_each_value(&mut |v| {
-                    if !func.dfg.value_is_imm(v) {
+                    if !func.dfg.value_is_imm(v) && !func.dfg.value_is_zero(v) {
                         live.insert(v);
                     }
                 });
@@ -487,5 +487,51 @@ block2:
         // `v1` feeds `block1`'s phi from `block0`, and `v4` its own backedge.
         assert!(inst_live.live_out(v2_def).contains(v(1)));
         assert!(inst_live.live_out(loop_add).contains(v(4)));
+    }
+
+    #[test]
+    fn inst_liveness_excludes_zero_constants() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func private %callee() {
+block0:
+    return;
+}
+
+func public %caller() -> i256 {
+block0:
+    call %callee;
+    v0.i256 = add zero.i256 1.i256;
+    return v0;
+}
+"#;
+        let parsed = parse_module(SRC).unwrap();
+        let caller = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "caller"))
+            .unwrap();
+
+        parsed.module.func_store.view(caller, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut live = Liveness::default();
+            live.compute(function, &cfg);
+
+            let mut inst_live = InstLiveness::default();
+            inst_live.compute(function, &cfg, &live);
+
+            let zero = *function.dfg.zeros.get(&sonatina_ir::Type::I256).unwrap();
+            let call_inst = function
+                .layout
+                .iter_all_insts()
+                .find(|&inst| function.dfg.call_info(inst).is_some())
+                .unwrap();
+            assert!(!inst_live.live_out(call_inst).contains(zero));
+            assert!(!inst_live.call_live_values(function).contains(zero));
+        });
     }
 }

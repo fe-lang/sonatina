@@ -66,7 +66,13 @@ pub fn concretize_function(func: &mut Function) {
         .collect();
     for value in undefs {
         let ty = func.dfg.value_ty(value);
-        func.dfg.values[value] = Value::Zero { ty };
+        if let Some(&canonical) = func.dfg.zeros.get(&ty) {
+            func.dfg.change_to_alias(value, canonical);
+            func.dfg.delete_value(value);
+        } else {
+            func.dfg.values[value] = Value::Zero { ty };
+            func.dfg.zeros.insert(ty, value);
+        }
     }
     for inst in left {
         let arg = *func.dfg.downcast::<&Freeze>(inst).expect("a freeze").arg();

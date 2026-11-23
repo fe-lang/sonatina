@@ -796,12 +796,7 @@ impl<'a> FunctionLegalizer<'a> {
             self.func.dfg.values[value] = replacement;
         }
 
-        self.func.dfg.immediates.clear();
-        for value in self.func.dfg.value_ids().collect::<Vec<_>>() {
-            if let Value::Immediate { imm, .. } = self.func.dfg.value(value).clone() {
-                self.func.dfg.immediates.insert(imm, value);
-            }
-        }
+        self.func.dfg.rebuild_value_caches();
     }
 
     fn legalize_instructions(&mut self) {

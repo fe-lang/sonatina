@@ -753,7 +753,7 @@ fn callsite_known_arg_mask(func: &Function, call_inst: InstId) -> u128 {
         .fold(0, |mask, (index, &arg)| {
             if matches!(
                 func.dfg.value(arg),
-                Value::Immediate { .. } | Value::Global { .. }
+                Value::Immediate { .. } | Value::Global { .. } | Value::Zero { .. }
             ) {
                 mask | (1u128 << index)
             } else {
@@ -770,10 +770,7 @@ fn callsite_known_args(func: &Function, call_inst: InstId) -> cost::KnownArgs {
     call.args()
         .iter()
         .enumerate()
-        .filter_map(|(index, &arg)| match func.dfg.value(arg) {
-            Value::Immediate { imm, .. } => Some((index, *imm)),
-            _ => None,
-        })
+        .filter_map(|(index, &arg)| func.dfg.value_const_imm(arg).map(|imm| (index, imm)))
         .collect()
 }
 

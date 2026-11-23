@@ -43,6 +43,7 @@ enum AggregateFieldLookup {
     Found(ValueId),
     BaseNeedsExtract(ValueId),
     Undef(Type),
+    Zero(Type),
     Unknown,
 }
 
@@ -307,6 +308,7 @@ impl AggregateCombine {
             func.dfg.value_ty(value).resolve_compound(func.ctx()),
             Some(CompoundType::Struct(_) | CompoundType::Array { .. } | CompoundType::Enum(_))
         ) || is_explicit_undef(func, value)
+            || func.dfg.value_is_zero(value)
             || value_initialization(func, value, &FxHashMap::default(), &mut self.layout_cache)
                 .defined(func.ctx())
     }
@@ -465,6 +467,14 @@ impl AggregateCombine {
                 }
                 let undef = func.dfg.make_undef_value(field_ty);
                 self.replace_with_alias(func, inst, result, undef);
+                true
+            }
+            AggregateFieldLookup::Zero(field_ty) => {
+                if field_ty != func.dfg.value_ty(result) {
+                    return false;
+                }
+                let zero = func.dfg.make_zero_const(field_ty);
+                self.replace_with_alias(func, inst, result, zero);
                 true
             }
             AggregateFieldLookup::BaseNeedsExtract(_) | AggregateFieldLookup::Unknown => self
@@ -1384,6 +1394,9 @@ fn insert_phi_before(
     if args.iter().all(|&(arg, _)| is_explicit_undef(func, arg)) {
         return func.dfg.make_undef_value(ty);
     }
+    if !args.is_empty() && args.iter().all(|&(arg, _)| func.dfg.value_is_zero(arg)) {
+        return func.dfg.make_zero_const(ty);
+    }
     let phi = control_flow::Phi::new_unchecked(func.inst_set(), args);
     let loc = func.layout.prev_inst_of(at).map_or(
         CursorLocation::BlockTop(func.layout.inst_block(at)),
@@ -1559,6 +1572,13 @@ fn walk_insert_chain_for_field(
         let agg_ty = func.dfg.value_ty(aggregate);
         if let Some(field_ty) = shape::aggregate_child_ty(func.ctx(), agg_ty, target_idx) {
             return AggregateFieldLookup::Undef(field_ty);
+        }
+        return AggregateFieldLookup::Unknown;
+    }
+    if func.dfg.value_is_zero(aggregate) {
+        let agg_ty = func.dfg.value_ty(aggregate);
+        if let Some(field_ty) = shape::aggregate_child_ty(func.ctx(), agg_ty, target_idx) {
+            return AggregateFieldLookup::Zero(field_ty);
         }
         return AggregateFieldLookup::Unknown;
     }

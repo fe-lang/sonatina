@@ -78,7 +78,7 @@ impl ExprFactProvider for ConstantFacts<'_> {
         self.known
             .get(&value)
             .copied()
-            .or_else(|| self.func.dfg.value_imm(value))
+            .or_else(|| self.func.dfg.value_const_imm(value))
     }
 
     fn known_bits(&self, func: &Function, value: ValueId) -> KnownBits {

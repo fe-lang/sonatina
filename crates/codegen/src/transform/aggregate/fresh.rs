@@ -18,13 +18,18 @@ use super::shape;
 /// `agg.make` of mostly `undef` operands.
 pub const MAX_UNWRITTEN_FIELDS: usize = 1024;
 
+enum ChainBase {
+    AggMake(InstId),
+    Undef,
+    Zero,
+}
+
 /// A chain of constant-index inserts that ends at an insert and starts at
-/// `undef` or an `agg.make`.
+/// `undef`, `zero`, or an `agg.make`.
 struct Chain {
     ty: Type,
     fields: usize,
-    /// The `agg.make` the chain starts at, or `None` for `undef`.
-    base: Option<InstId>,
+    base: ChainBase,
     /// The inserts from the last back, with the field and value each writes.
     inserts: SmallVec<[(InstId, usize, ValueId); 4]>,
 }
@@ -37,7 +42,7 @@ impl Chain {
         let fields = shape::aggregate_child_count(func.ctx(), ty)?;
         let mut inserts = SmallVec::new();
         let mut inst = last;
-        loop {
+        let base = loop {
             let insert = func.dfg.downcast::<&InsertValue>(inst)?;
             let field = shape::const_u32(&func.dfg, *insert.idx())? as usize;
             if field >= fields {
@@ -45,21 +50,23 @@ impl Chain {
             }
             inserts.push((inst, field, *insert.value()));
             let dest = *insert.dest();
-            if matches!(func.dfg.value(dest), Value::Undef { .. }) {
-                break;
+            match func.dfg.value(dest) {
+                Value::Undef { .. } => break ChainBase::Undef,
+                Value::Zero { .. } => break ChainBase::Zero,
+                _ => {}
             }
             let def = func.dfg.value_inst(dest)?;
             if func.dfg.downcast::<&AggMake>(def).is_some() {
                 return Some(Self {
                     ty,
                     fields,
-                    base: Some(def),
+                    base: ChainBase::AggMake(def),
                     inserts,
                 });
             }
             inst = def;
-        }
-        // From `undef`, every field no insert writes becomes an operand.
+        };
+        // From `undef` or `zero`, every field no insert writes becomes an operand.
         if fields > MAX_UNWRITTEN_FIELDS + inserts.len() {
             return None;
         }
@@ -71,7 +78,7 @@ impl Chain {
         (unwritten <= MAX_UNWRITTEN_FIELDS).then_some(Self {
             ty,
             fields,
-            base: None,
+            base,
             inserts,
         })
     }
@@ -79,7 +86,11 @@ impl Chain {
     /// The chain's instructions from its last insert back, its `agg.make`
     /// base included.
     fn insts(&self) -> impl Iterator<Item = InstId> + '_ {
-        self.inserts.iter().map(|&(inst, ..)| inst).chain(self.base)
+        let base = match self.base {
+            ChainBase::AggMake(inst) => Some(inst),
+            ChainBase::Undef | ChainBase::Zero => None,
+        };
+        self.inserts.iter().map(|&(inst, ..)| inst).chain(base)
     }
 }
 
@@ -120,17 +131,24 @@ pub(crate) fn is_fresh_chain_end(func: &Function, inst: InstId) -> bool {
 pub(crate) fn fold_fresh_insert(func: &mut Function, last: InstId) -> Option<Vec<InstId>> {
     let chain = Chain::of(func, last)?;
     let mut values: SmallVec<[ValueId; 4]> = match chain.base {
-        Some(base) => func
+        ChainBase::AggMake(base) => func
             .dfg
             .downcast::<&AggMake>(base)
             .expect("the chain starts at an agg.make")
             .values()
             .clone(),
-        None => (0..chain.fields)
+        ChainBase::Undef => (0..chain.fields)
             .map(|field| {
                 let ty = shape::aggregate_child_ty(func.ctx(), chain.ty, field as u32)
                     .expect("a field of the chain's type");
                 func.dfg.make_undef_value(ty)
+            })
+            .collect(),
+        ChainBase::Zero => (0..chain.fields)
+            .map(|field| {
+                let ty = shape::aggregate_child_ty(func.ctx(), chain.ty, field as u32)
+                    .expect("a field of the chain's type");
+                func.dfg.make_zero_const(ty)
             })
             .collect(),
     };

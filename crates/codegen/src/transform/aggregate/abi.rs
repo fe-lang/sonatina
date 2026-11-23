@@ -178,8 +178,8 @@ impl AggregateExpandAbi {
 
         for (&old_arg, expansion) in old_args.iter().zip(&plan.args) {
             if expansion.scalar_tys.is_empty() {
-                let undef = func.dfg.make_undef_value(expansion.original_ty);
-                func.dfg.change_to_alias(old_arg, undef);
+                let zero = func.dfg.make_zero_const(expansion.original_ty);
+                func.dfg.change_to_alias(old_arg, zero);
                 func.dfg.delete_value(old_arg);
                 continue;
             }
@@ -309,7 +309,7 @@ impl AggregateExpandAbi {
                 &new_results[next_scalar_result..next_scalar_result + expansion.scalar_tys.len()];
             next_scalar_result += leaves.len();
             let replacement = match leaves {
-                [] => func.dfg.make_undef_value(expansion.original_ty),
+                [] => func.dfg.make_zero_const(expansion.original_ty),
                 [scalar] if !expansion.is_aggregate => *scalar,
                 _ => self.rebuild_aggregate_from_leaves(func, inst, expansion.original_ty, leaves),
             };
@@ -361,7 +361,7 @@ impl AggregateExpandAbi {
         scalar_leaves: &[ValueId],
     ) -> ValueId {
         if scalar_leaves.is_empty() {
-            return func.dfg.make_undef_value(agg_ty);
+            return func.dfg.make_zero_const(agg_ty);
         }
 
         let mut fields = SmallVec::new();
@@ -369,7 +369,7 @@ impl AggregateExpandAbi {
             .expect("aggregate reconstruction requires struct or array type")
         {
             fields.push(if child.leaf_count == 0 {
-                func.dfg.make_undef_value(child.ty)
+                func.dfg.make_zero_const(child.ty)
             } else if shape::is_supported_aggregate_ty(func.ctx(), child.ty) {
                 self.rebuild_aggregate_from_leaves(
                     func,

@@ -244,8 +244,9 @@ impl KnownBitsQuery {
 
         let ty = self.value_ty(func, value);
         match func.dfg.value(value) {
-            // A `zero` is all zero bits, but known as unknown, like the `undef`
-            // that `concretize` turns into it, so later analyses decide as before.
+            Value::Zero { ty } if supports_known_bits(*ty) => {
+                KnownBits::from_imm(Immediate::zero(*ty))
+            }
             Value::Arg { .. } | Value::Global { .. } | Value::Undef { .. } | Value::Zero { .. } => {
                 KnownBits::unknown(ty)
             }

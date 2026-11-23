@@ -148,7 +148,7 @@ struct GvnExprFacts<'a, 'b> {
 
 impl ExprFactProvider for GvnExprFacts<'_, '_> {
     fn known_imm(&self, v: ValueId) -> Option<Immediate> {
-        self.func.dfg.value_imm(v)
+        self.func.dfg.value_const_imm(v)
     }
 
     fn known_bits(&self, func: &Function, v: ValueId) -> KnownBits {
@@ -229,6 +229,11 @@ impl GvnSolver {
         // Make and assign classes for global values.
         for &value in func.dfg.globals.values() {
             self.assign_class_to_global_value(value);
+        }
+
+        // Make and assign classes for zero constants.
+        for &value in func.dfg.zeros.values() {
+            self.assign_class_to_zero_value(value);
         }
 
         // Assign rank to function arguments and create class for them.
@@ -765,7 +770,10 @@ impl GvnSolver {
         let mut current_block = Some(target_block);
         // Try to infer value until the representative value becomes immediate or current block
         // becomes `None`.
-        while current_block.is_some() && (!func.dfg.value_is_imm(rep_value)) {
+        while current_block.is_some()
+            && !func.dfg.value_is_imm(rep_value)
+            && !func.dfg.value_is_zero(rep_value)
+        {
             let block = current_block.unwrap();
             if let Some(dominant_edge) = self.dominant_reachable_in_edges(block) {
                 // Stop looking up the value to avoid infinite lookup loop.
@@ -1456,6 +1464,18 @@ impl GvnSolver {
         self.always_avail.push(value);
 
         // Create a congruence class for the global.
+        let class = self.make_class(GvnInsn::Value(value), None);
+        self.assign_class(value, class);
+    }
+
+    /// Make and assign class to zero constant value.
+    fn assign_class_to_zero_value(&mut self, value: ValueId) {
+        if self.values[value].class != INITIAL_CLASS {
+            return;
+        }
+
+        self.values[value].rank = IMMEDIATE_RANK;
+        self.always_avail.push(value);
         let class = self.make_class(GvnInsn::Value(value), None);
         self.assign_class(value, class);
     }
@@ -3790,5 +3810,41 @@ func public %intermediate(v0.i1, v1.i1, v2.i1, v3.i256) -> i256 {
         assert!(top(join(10, 11), join(10, 11)).is_some());
         // Two different phis in `block1` tell apart the paths through both joins.
         assert_eq!(top(join(10, 11), join(12, 13)), None);
+    }
+
+    #[test]
+    fn gvn_assigns_congruence_class_to_zero_values() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.*i256) -> i1 {
+    block0:
+        v1.i1 = eq v0 zero.*i256;
+        br v1 block1 block2;
+    block1:
+        v2.i1 = eq v0 zero.*i256;
+        return v2;
+    block2:
+        return 0.i1;
+}
+"#,
+        )
+        .unwrap()
+        .module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            let mut domtree = DomTree::new();
+            let mut solver = GvnSolver::new();
+            solver.run(func, &mut cfg, &mut domtree);
+            let zero = *func.dfg.zeros.values().next().unwrap();
+            assert!(solver.is_congruent_value(zero, zero));
+            // In block1, `v1` implies `v0 == zero.*i256`, so `v2` folds to `1.i1`.
+            let block1 = BlockId(1);
+            let ret = func.layout.last_inst_of(block1).unwrap();
+            let ret_val = func.dfg.inst(ret).collect_values()[0];
+            assert_eq!(func.dfg.value_imm(ret_val), Some(Immediate::I1(true)));
+        });
     }
 }

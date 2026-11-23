@@ -432,7 +432,7 @@ fn unknown_data_address_barriers(
     let mut unknown = BitSet::default();
     for value in uses.iter() {
         match function.dfg.get_value(value)? {
-            Value::Immediate { .. } => {}
+            Value::Immediate { .. } | Value::Zero { .. } => {}
             Value::Inst { inst, .. } => {
                 if matches!(
                     isa.inst_set().resolve_inst(function.dfg.inst(*inst)),

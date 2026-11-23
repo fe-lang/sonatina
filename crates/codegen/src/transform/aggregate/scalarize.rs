@@ -1084,9 +1084,9 @@ impl AggregateScalarize {
             }
             let ok = match func.dfg.value(value) {
                 _ if substituted_values.contains(&value) => true,
-                Value::Undef { .. } => true,
+                Value::Undef { .. } | Value::Zero { .. } => true,
                 Value::Arg { .. } => false,
-                Value::Immediate { .. } | Value::Global { .. } | Value::Zero { .. } => false,
+                Value::Immediate { .. } | Value::Global { .. } => false,
                 Value::Inst { inst, .. } => {
                     if func.dfg.call_info(*inst).is_some() {
                         false
@@ -1179,11 +1179,8 @@ impl AggregateScalarize {
         value: ValueId,
     ) -> bool {
         match func.dfg.value(value) {
-            Value::Undef { .. } => true,
-            Value::Arg { .. }
-            | Value::Immediate { .. }
-            | Value::Global { .. }
-            | Value::Zero { .. } => false,
+            Value::Undef { .. } | Value::Zero { .. } => true,
+            Value::Arg { .. } | Value::Immediate { .. } | Value::Global { .. } => false,
             Value::Inst { inst, .. } => {
                 if let Some(make) = func.dfg.downcast::<&data::AggMake>(*inst) {
                     let agg_ty = func.dfg.value_ty(value);
@@ -2716,6 +2713,15 @@ impl AggregateScalarize {
             let mut leaves = LeafValues::new();
             for leaf in agg_shape.leaves {
                 leaves.push(func.dfg.make_undef_value(leaf.ty));
+            }
+            return Some(leaves);
+        }
+
+        if func.dfg.value_is_zero(value) {
+            let agg_shape = self.aggregate_shape(module, ty)?;
+            let mut leaves = LeafValues::new();
+            for leaf in agg_shape.leaves {
+                leaves.push(func.dfg.make_zero_const(leaf.ty));
             }
             return Some(leaves);
         }

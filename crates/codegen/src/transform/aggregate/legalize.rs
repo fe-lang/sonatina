@@ -737,8 +737,8 @@ impl AggregateLowerToMemoryLegalize {
                 panic!("zero-sized aggregate projection produced non-zero scalar extract");
             }
             if child_view.runtime_leaf_count == 0 {
-                let undef = func.dfg.make_undef_value(result_ty);
-                self.alias_and_remove(func, inst, result, undef);
+                let zero = func.dfg.make_zero_const(result_ty);
+                self.alias_and_remove(func, inst, result, zero);
                 return;
             }
             if child_view.runtime_leaf_count != 1 {
@@ -796,8 +796,8 @@ impl AggregateLowerToMemoryLegalize {
             panic!("zero-sized aggregate leaf produced non-zero scalar extract");
         }
         if src_leaf.size_bytes == 0 {
-            let undef = func.dfg.make_undef_value(result_ty);
-            self.alias_and_remove(func, inst, result, undef);
+            let zero = func.dfg.make_zero_const(result_ty);
+            self.alias_and_remove(func, inst, result, zero);
             return;
         }
         let mut builder = BeforeCursor::new_before_inst(func, inst);
@@ -860,8 +860,8 @@ impl AggregateLowerToMemoryLegalize {
             return;
         }
         if self.runtime_size_bytes_or_panic(module, result_ty) == 0 {
-            let undef = func.dfg.make_undef_value(result_ty);
-            self.alias_and_remove(func, inst, result, undef);
+            let zero = func.dfg.make_zero_const(result_ty);
+            self.alias_and_remove(func, inst, result, zero);
             return;
         }
 
@@ -1034,8 +1034,8 @@ impl AggregateLowerToMemoryLegalize {
             if !func.layout.is_inst_inserted(scalar_use.inst) {
                 continue;
             }
-            let undef = func.dfg.make_undef_value(scalar_use.result_ty);
-            self.alias_and_remove(func, scalar_use.inst, scalar_use.result, undef);
+            let zero = func.dfg.make_zero_const(scalar_use.result_ty);
+            self.alias_and_remove(func, scalar_use.inst, scalar_use.result, zero);
         }
 
         self.remove_dead_transparents(func, &plan.transparent_insts);

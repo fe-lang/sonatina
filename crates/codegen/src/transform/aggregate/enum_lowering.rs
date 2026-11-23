@@ -641,7 +641,7 @@ fn read_word_value(
     ty: Type,
 ) -> ValueId {
     if words(func.ctx(), ty) == 0 {
-        return func.dfg.make_undef_value(ty);
+        return func.dfg.make_zero_const(ty);
     }
     let path = layout.path(func.ctx(), word, ty);
     let node_ty = path.last().unwrap().1;

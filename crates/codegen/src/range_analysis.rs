@@ -434,7 +434,7 @@ pub(crate) fn fact_for_value(func: &Function, env: &RangeEnv, value: ValueId) ->
     let ty = func.dfg.value_ty(value);
     debug_assert!(supports_range_facts(ty));
 
-    if let Some(imm) = func.dfg.value_imm(value) {
+    if let Some(imm) = func.dfg.value_const_imm(value) {
         return RangeFact::singleton(imm);
     }
 
@@ -452,7 +452,7 @@ pub(crate) fn exact_immediate(
     env: &RangeEnv,
     value: ValueId,
 ) -> Option<Immediate> {
-    if let Some(imm) = func.dfg.value_imm(value) {
+    if let Some(imm) = func.dfg.value_const_imm(value) {
         return Some(imm);
     }
 
