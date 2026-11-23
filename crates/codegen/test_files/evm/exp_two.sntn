@@ -1,0 +1,30 @@
+#! evm.config: { opt: 2 }
+#! evm.case: zero
+#!   calldata: u256(0)
+#!   expect: return u256(0) u256(1)
+#! evm.case: two
+#!   calldata: u256(2)
+#!   expect: return u256(4) u256(4)
+#! evm.case: last_bit
+#!   calldata: u256(255)
+#!   expect: return u256(65025) u256(57896044618658097711785492504343953926634992332820282019728792003956564819968)
+#! evm.case: word_width
+#!   calldata: u256(256)
+#!   expect: return u256(65536) u256(0)
+#! evm.case: max_word
+#!   calldata: u256(115792089237316195423570985008687907853269984665640564039457584007913129639935)
+#!   expect: return u256(1) u256(0)
+
+target = "evm-ethereum-osaka"
+func public %entry() {
+block0:
+ v0.i256 = evm_calldata_load 0.i256;
+ v1.i256 = evm_exp v0 2.i256;
+ v2.i256 = evm_exp 2.i256 v0;
+ mstore 0.i256 v1 i256;
+ mstore 32.i256 v2 i256;
+ evm_return 0.i256 64.i256;
+}
+object @Contract {
+ section runtime { entry %entry; }
+}
