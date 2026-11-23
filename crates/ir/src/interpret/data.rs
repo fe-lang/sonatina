@@ -28,21 +28,12 @@ impl Interpret for BlackBox {
     }
 }
 
-impl Interpret for Freeze {
-    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
-        state.set_action(Action::Continue);
-        let ty = state.dfg().value_ty(*self.arg());
-        let value = state.lookup_val(*self.arg());
-        single_result(state.freeze(value, ty))
-    }
-}
-
 impl Interpret for Gep {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let Some(base_addr) = state.lookup_val(self.values()[0]).as_imm() else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         let mut current_ty = state.dfg().value_ty(self.values()[0]);
@@ -55,7 +46,7 @@ impl Interpret for Gep {
         let mut offset = I256::zero();
         for value in self.values()[1..].iter() {
             let Some(idx_value) = state.lookup_val(*value).as_imm() else {
-                return single_result(EvalValue::Undef);
+                return single_result(EvalValue::Unknown);
             };
 
             let cmpd = match current_ty {
@@ -109,12 +100,12 @@ impl Interpret for Gep {
 
                 CompoundType::Struct(_) => {
                     let Some(idx) = nonnegative_imm_usize(idx_value) else {
-                        return single_result(EvalValue::Undef);
+                        return single_result(EvalValue::Unknown);
                     };
                     let Some((field_offset, field_ty)) =
                         state.dfg().ctx.aggregate_elem_offset(current_ty, idx)
                     else {
-                        return single_result(EvalValue::Undef);
+                        return single_result(EvalValue::Unknown);
                     };
                     offset = offset.overflowing_add(I256::from(field_offset)).0;
                     current_ty = field_ty;
@@ -137,21 +128,21 @@ impl Interpret for Gep {
 impl Interpret for GetFunctionPtr {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
-        single_result(EvalValue::Undef)
+        single_result(EvalValue::Unknown)
     }
 }
 
 impl Interpret for SymAddr {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
-        single_result(EvalValue::Undef)
+        single_result(EvalValue::Unknown)
     }
 }
 
 impl Interpret for SymSize {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
-        single_result(EvalValue::Undef)
+        single_result(EvalValue::Unknown)
     }
 }
 
@@ -186,7 +177,7 @@ impl Interpret for InsertValue {
         let mut fields = match dest {
             EvalValue::Aggregate { fields, .. } => fields.clone(),
 
-            EvalValue::Undef => {
+            EvalValue::Unknown => {
                 let len = match ty.resolve_compound(&state.dfg().ctx).unwrap() {
                     CompoundType::Array { len, .. } => len,
                     CompoundType::Struct(s) => s.fields.len(),
@@ -196,7 +187,7 @@ impl Interpret for InsertValue {
                     CompoundType::ConstRef(_) => unreachable!(),
                     CompoundType::Func { .. } => unreachable!(),
                 };
-                vec![EvalValue::Undef; len]
+                vec![EvalValue::Unknown; len]
             }
 
             EvalValue::Imm(_) => {
@@ -207,17 +198,17 @@ impl Interpret for InsertValue {
         let idx_val = state.lookup_val(*self.idx());
         let Some(idx_imm) = idx_val.as_imm() else {
             debug_assert!(
-                idx_val.is_undef(),
+                idx_val.is_unknown(),
                 "insert_value index must be an immediate"
             );
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
         let Some(idx) = nonnegative_imm_usize(idx_imm) else {
             debug_assert!(
                 idx_imm.is_negative(),
                 "insert_value index must be non-negative"
             );
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
         if idx >= fields.len() {
             debug_assert!(
@@ -225,7 +216,7 @@ impl Interpret for InsertValue {
                 "insert_value index out of bounds: idx={idx} len={}",
                 fields.len()
             );
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         }
         fields[idx] = state.lookup_val(*self.value());
 
@@ -241,8 +232,8 @@ impl Interpret for ExtractValue {
         let dest = match dest {
             EvalValue::Aggregate { fields, .. } => fields,
 
-            EvalValue::Undef => {
-                return single_result(EvalValue::Undef);
+            EvalValue::Unknown => {
+                return single_result(EvalValue::Unknown);
             }
 
             EvalValue::Imm(_) => {
@@ -253,17 +244,17 @@ impl Interpret for ExtractValue {
         let idx_val = state.lookup_val(*self.idx());
         let Some(idx_imm) = idx_val.as_imm() else {
             debug_assert!(
-                idx_val.is_undef(),
+                idx_val.is_unknown(),
                 "extract_value index must be an immediate"
             );
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
         let Some(idx) = nonnegative_imm_usize(idx_imm) else {
             debug_assert!(
                 idx_imm.is_negative(),
                 "extract_value index must be non-negative"
             );
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
         single_result(dest.get(idx).cloned().unwrap_or_else(|| {
             debug_assert!(
@@ -271,7 +262,7 @@ impl Interpret for ExtractValue {
                 "extract_value index out of bounds: idx={idx} len={}",
                 dest.len()
             );
-            EvalValue::Undef
+            EvalValue::Unknown
         }))
     }
 }
@@ -356,11 +347,11 @@ mod tests {
 
         assert_eq!(
             InsertValue::new(&TestHasInst, dest, idx, value).interpret(&mut state),
-            single_result(EvalValue::Undef)
+            single_result(EvalValue::Unknown)
         );
         assert_eq!(
             ExtractValue::new(&TestHasInst, dest, idx).interpret(&mut state),
-            single_result(EvalValue::Undef)
+            single_result(EvalValue::Unknown)
         );
     }
 
@@ -375,13 +366,16 @@ mod tests {
             ty: Type::I32,
             idx: 0,
         });
-        let second = dfg.make_undef_value(Type::I64);
+        let second = dfg.make_value(Value::Arg {
+            ty: Type::I64,
+            idx: 1,
+        });
         let mut state = TestState::with_dfg(dfg, [(first, EvalValue::Imm(Immediate::I32(7)))]);
 
         assert_eq!(
             AggMake::new(&TestHasInst, pair_ty, smallvec![first, second]).interpret(&mut state),
             single_result(EvalValue::Aggregate {
-                fields: vec![EvalValue::Imm(Immediate::I32(7)), EvalValue::Undef],
+                fields: vec![EvalValue::Imm(Immediate::I32(7)), EvalValue::Unknown],
                 ty: pair_ty,
             })
         );

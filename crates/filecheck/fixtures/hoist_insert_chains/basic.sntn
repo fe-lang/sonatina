@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 # nextln: block0:
 # nextln: v2.i64 = add v0 1.i64;
 # nextln: v4.[i64; 2] = agg.make [i64; 2] v2 v0;
-# nextln: v5.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v4 undef.[i64; 2];
+# nextln: v5.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v4 zero.[i64; 2];
 # nextln: br v1 block1 block2;
 func private %across_blocks(v0.i64, v1.i1) -> [[i64; 2]; 2] {
 block0:
@@ -22,7 +22,7 @@ block2:
 
 block3:
     v4.[i64; 2] = agg.make [i64; 2] v2 v0;
-    v5.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v4 undef.[i64; 2];
+    v5.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v4 zero.[i64; 2];
     return v5;
 }
 
@@ -34,7 +34,7 @@ block3:
 # nextln: v3.i64 = phi
 # nextln: v5.[i64; 2] = agg.make [i64; 2] v2 v3;
 # nextln: v6.i64 = mul v2 v3;
-# nextln: v7.[i64; 2] = agg.make [i64; 2] v6 undef.i64;
+# nextln: v7.[i64; 2] = agg.make [i64; 2] v6 0.i64;
 # nextln: v9.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v7 v5;
 func private %after_phis(v0.i64, v1.i1) -> [[i64; 2]; 2] {
 block0:
@@ -50,7 +50,7 @@ block3:
     v2.i64 = phi (v0 block1) (1.i64 block2);
     v3.i64 = phi (2.i64 block1) (v0 block2);
     v6.i64 = mul v2 v3;
-    v7.[i64; 2] = agg.make [i64; 2] v6 undef.i64;
+    v7.[i64; 2] = agg.make [i64; 2] v6 0.i64;
     v5.[i64; 2] = agg.make [i64; 2] v2 v3;
     v9.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v7 v5;
     return v9;
@@ -59,21 +59,21 @@ block3:
 # A chain stays in its loop, and one whose result is stored stays put.
 # sameln: func private %stays(v0.i64, v1.i1, v2.*[i64; 2]) -> [[i64; 2]; 2] {
 # check: block1:
-# nextln: v3.[i64; 2] = agg.make [i64; 2] v0 undef.i64;
+# nextln: v3.[i64; 2] = agg.make [i64; 2] v0 0.i64;
 # check: block2:
-# nextln: v5.[i64; 2] = agg.make [i64; 2] undef.i64 v0;
+# nextln: v5.[i64; 2] = agg.make [i64; 2] 0.i64 v0;
 # nextln: mstore v2 v5 [i64; 2];
 func private %stays(v0.i64, v1.i1, v2.*[i64; 2]) -> [[i64; 2]; 2] {
 block0:
     jump block1;
 
 block1:
-    v3.[i64; 2] = agg.make [i64; 2] v0 undef.i64;
-    v4.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v3 undef.[i64; 2];
+    v3.[i64; 2] = agg.make [i64; 2] v0 0.i64;
+    v4.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v3 zero.[i64; 2];
     br v1 block1 block2;
 
 block2:
-    v5.[i64; 2] = agg.make [i64; 2] undef.i64 v0;
+    v5.[i64; 2] = agg.make [i64; 2] 0.i64 v0;
     mstore v2 v5 [i64; 2];
     return v4;
 }

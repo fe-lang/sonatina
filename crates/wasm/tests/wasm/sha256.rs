@@ -53,7 +53,7 @@ fn reference(state: [u32; 8], block: [u32; 16]) -> [u32; 8] {
 }
 
 /// `%compress(state, block, dst)` loads both operands, compresses and stores
-/// the result; `%undefs(dst)` compresses `undef` operands.
+/// the result; `%zeros(dst)` compresses `zero` operands.
 const SOURCE: &str = "func public %compress(v0.*i8, v1.*i8, v2.*i8) {
     block0:
         v3.*[i32; 8] = bitcast v0 *[i32; 8];
@@ -65,10 +65,10 @@ const SOURCE: &str = "func public %compress(v0.*i8, v1.*i8, v2.*i8) {
         mstore v5 v8 [i32; 8];
         return;
 }
-func public %undefs(v0.*i8) {
+func public %zeros(v0.*i8) {
     block0:
         v1.*[i32; 8] = bitcast v0 *[i32; 8];
-        v2.[i32; 8] = sha256_compress undef.[i32; 8] undef.[i32; 16];
+        v2.[i32; 8] = sha256_compress zero.[i32; 8] zero.[i32; 16];
         mstore v1 v2 [i32; 8];
         return;
 }";
@@ -127,8 +127,8 @@ fn sha256_compress_matches_the_reference() {
             );
         }
         // An undefined operand is zero.
-        let undefs = machine.func("undefs");
-        machine.call(&undefs, &[Val::I32(dst as i32)]);
+        let zeros = machine.func("zeros");
+        machine.call(&zeros, &[Val::I32(dst as i32)]);
         assert_eq!(
             words(&machine.read(dst, 32)),
             reference([0; 8], [0; 16]),

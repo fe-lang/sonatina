@@ -340,7 +340,6 @@ fn fold_bitwise_pair(
         (Xor, Or, Xor) | (Xor, Xor, Or) => And,
         _ => return None,
     };
-    // Both original inputs remain operands, preserving strict undef dependencies.
     Some(InstSpec::Binary {
         kind,
         lhs: Operand::Value(x),
@@ -1554,28 +1553,6 @@ block0:
                 }
             }
         }
-    }
-
-    #[test]
-    fn bitwise_pairs_retain_undef_operands() {
-        let source = r#"target = "evm-ethereum-osaka"
-func public %f(v0.i256) -> i256 {
-block0:
- v1.i256 = add undef.i256 v0;
- v2.i256 = and v0 v1;
- v3.i256 = xor v0 v1;
- v4.i256 = or v2 v3;
- return v4;
-}"#;
-        let (module, f) = parse_test_module(source);
-        module.func_store.modify(f, |func| {
-            ScalarCanonicalize::new().run(func);
-        });
-        let dumped = dump_func(&module, f);
-        assert!(dumped.contains("add undef.i256 v0"), "{dumped}");
-        assert!(dumped.contains("or v0 v1"), "{dumped}");
-        assert!(!dumped.contains(" = and "), "{dumped}");
-        assert!(!dumped.contains(" = xor "), "{dumped}");
     }
 
     #[test]

@@ -379,7 +379,7 @@ block4:
 block5:
     jump block6;
 block6:
-    v11.[i64; 20] = phi (v5 block3) (v8 block4) (undef.[i64; 20] block5);
+    v11.[i64; 20] = phi (v5 block3) (v8 block4) (zero.[i64; 20] block5);
     v12.i64 = phi (v7 block3) (v9 block4) (-1.i64 block5);
     v13.[i64; 20] = insert_value v11 19.i64 v12;
     mstore v3 v13 [i64; 20];

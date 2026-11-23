@@ -6,8 +6,8 @@ input_file: test_files/evm/narrow_aggregate_reads_bool_agg_make_noopt.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 130 bytes
-  total: 130 bytes
+  section runtime: 135 bytes
+  total: 135 bytes
 
 functions:
   mem: global_dyn_base=0x1060 arena_base=0x1060 scratch_peak_words=0 stable_chain_peak_words=0
@@ -15,7 +15,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   store: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=0 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  store_undef: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=0 imm_bytes=2
+  store_zero: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   array: ir_blocks=1 ir_insts=5 vcode_ops=11 fixups=0 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -25,4 +25,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case bool_members: calldata_len=64 success reason=Return gas_used=22029 gas_refunded=0 logs=0 output=call len=96 tx_gas=21280 runtime_gas=749
+  case bool_members: calldata_len=64 success reason=Return gas_used=22037 gas_refunded=0 logs=0 output=call len=96 tx_gas=21280 runtime_gas=757

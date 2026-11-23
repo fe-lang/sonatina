@@ -145,7 +145,8 @@ pub(super) struct Anchor {
 pub(super) struct References {
     pub views: BTreeSet<View>,
     pub unknown: bool,
-    /// A literal `undef`, which names no location. Implies no views and not
+    /// A null reference (`zero.objref`), which names no location. Implies no
+    /// views and not
     /// `unknown`. Distinct from `default()`, an unwritten cell's references.
     pub undefined: bool,
     pub anchors: BTreeSet<Anchor>,

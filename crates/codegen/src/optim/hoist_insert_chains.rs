@@ -57,7 +57,7 @@ pub struct HoistInsertChains;
 impl HoistInsertChains {
     pub fn run(&mut self, func: &mut Function, domtree: &DomTree, lpt: &LoopTree) -> bool {
         // Placement assumes fresh aggregates are spelled `agg.make`; passes
-        // since backend entry may have made new insert chains on undef. A
+        // since backend entry may have made new insert chains on `zero`. A
         // sparse chain into a long array stays where it is.
         let mut changed = fold_fresh_aggregates_in(func);
         let heads: Vec<InstId> = domtree

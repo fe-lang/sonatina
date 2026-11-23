@@ -2190,7 +2190,7 @@ block0:
     #[test]
     fn aggregate_return_reference_is_not_local_only() {
         for build in [
-            "v3.@Selection = insert_value undef.@Selection 0.i256 v2;\n\
+            "v3.@Selection = insert_value zero.@Selection 0.i256 v2;\n\
              v4.@Selection = insert_value v3 1.i256 42.i256;",
             "v4.@Selection = agg.make @Selection v2 42.i256;",
         ] {
@@ -2264,14 +2264,14 @@ block0:
                  block2:\n\
                      jump block3;\n\
                  block3:\n\
-                     v5.@Pair = phi (v4 block1) (undef.@Pair block2);\n\
+                     v5.@Pair = phi (v4 block1) (zero.@Pair block2);\n\
                      v6.i256 = extract_value v5 0.i256;\n\
                      return v6;",
                 false,
             ),
             (
                 "nested_other_field",
-                "v5.@Outer = insert_value undef.@Outer 0.i256 v4;\n\
+                "v5.@Outer = insert_value zero.@Outer 0.i256 v4;\n\
                  v6.@Outer = insert_value v5 1.i256 3.i256;\n\
                  v7.i256 = extract_value v6 1.i256;\n\
                  return v7;",

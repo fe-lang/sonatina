@@ -1167,12 +1167,6 @@ fn translate_function(
                         value_map.insert(result, result_val);
                     }
                 }
-                NativeInstKind::Freeze(_) => {
-                    return Err(
-                        "translation takes concrete IR: `concretize` leaves no `freeze`"
-                            .to_string(),
-                    );
-                }
                 NativeInstKind::Bitcast(bitcast)
                     if [function.dfg.value_ty(*bitcast.from()), *bitcast.ty()]
                         .into_iter()
@@ -2442,7 +2436,7 @@ fn translate_function(
                         let result_ty = function.dfg.value_ty(result);
                         let addr =
                             storage_address(&frame, function, result, &value_map, &mut builder)?;
-                        // `undef` fields are zero, written first. Padding is
+                        // `zero` fields are written first. Padding is
                         // not part of the value, so it keeps whatever it
                         // holds.
                         let mut written = Vec::new();

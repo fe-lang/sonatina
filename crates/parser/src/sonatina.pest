@@ -122,10 +122,9 @@ inst_arg        = { multi_value_list | value | type_name | variant_identifier | 
 multi_value_list = { "(" ~ (value ~ ("," ~ value)*)? ~ ")" }
 value_block_map = { "(" ~ value ~ block_ident ~ ")" }
 
-value        =  { value_name | imm_number | undef | zero | global_value }
+value        =  { value_name | imm_number | zero | global_value }
 imm_number   = ${ number ~ "." ~ (primitive_type | enumtag_type) }
 global_value =  { gv_identifier }
-undef        = ${ "undef" ~ "." ~ type_name }
 zero         = ${ "zero" ~ "." ~ type_name }
 number       = _{ hex | decimal }
 decimal      = @{ "-"? ~ ASCII_DIGIT+ }

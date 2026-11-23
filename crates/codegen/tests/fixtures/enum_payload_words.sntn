@@ -344,7 +344,7 @@ block2:
 
 func inline(never) public %big_by_value() -> i64 {
 block0:
-    v1.[i256; 6] = agg.make [i256; 6] 4.i256 undef.i256 undef.i256 undef.i256 undef.i256 2.i256;
+    v1.[i256; 6] = agg.make [i256; 6] 4.i256 0.i256 0.i256 0.i256 0.i256 2.i256;
     v2.@Big = enum.make @Big #Big (v1);
     v3.i64 = call %big_sum v2;
     v4.@Big = call %big_echo v2 1.i1;
@@ -431,11 +431,11 @@ block2:
 
 func inline(never) public %zero_sized_field() -> i64 {
 block0:
-    v0.@Zero = enum.make @Zero #Z (undef.[i64; 0], 7.i64);
+    v0.@Zero = enum.make @Zero #Z (zero.[i64; 0], 7.i64);
     v1.i64 = call %zero_sum v0;
     v2.objref<@Zero> = obj.alloc @Zero;
     enum.write_variant v2 #W (-1.i256);
-    enum.write_variant v2 #Z (undef.[i64; 0], 8.i64);
+    enum.write_variant v2 #Z (zero.[i64; 0], 8.i64);
     v3.objref<[i64; 0]> = enum.proj v2 #Z 0.i8;
     v4.@Zero = obj.load v2;
     v5.i64 = call %zero_sum v4;

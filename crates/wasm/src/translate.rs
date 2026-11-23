@@ -1318,7 +1318,7 @@ struct FunctionTranslator<'a> {
     phi_slots: FxHashMap<ValueId, u32>,
     /// Frame offsets of snapshots of the inputs of aggregate phis, by edge.
     edge_slots: FxHashMap<(BlockId, BlockId, InstId), u32>,
-    /// Frame offsets of the zero-filled storage of aggregate `undef` operands.
+    /// Frame offsets of the zero-filled storage of aggregate `zero` operands.
     zero_slots: FxHashMap<ValueId, u32>,
     /// The calls that end their block as tail calls.
     tail_calls: FxHashSet<InstId>,
@@ -1691,10 +1691,6 @@ impl<'a> FunctionTranslator<'a> {
                     other => Err(self.unsupported_type("an immediate", other.ty())),
                 }
             }
-            Value::Undef { .. } => Err(invalid(format!(
-                "function `{}`: value v{}: translation takes concrete IR, which has no `undef`",
-                self.name, id.0
-            ))),
             Value::Zero { ty } => match repr(&self.module.ctx, *ty) {
                 Some(Repr::Int(int)) => Ok(self.emit(wb).zero(int)),
                 Some(Repr::Pointer) => Ok(self.emit(wb).c32(0)),
@@ -2676,12 +2672,6 @@ impl<'a> FunctionTranslator<'a> {
             NativeInstKind::Mstore(i) => self.mstore(wb, op, *i.addr(), *i.value(), *i.ty())?,
             NativeInstKind::Memzero(i) => self.memzero(wb, op, *i.dest(), *i.len())?,
             NativeInstKind::Memcopy(i) => self.memcopy(wb, op, *i.dest(), *i.src(), *i.len())?,
-            NativeInstKind::Freeze(_) => {
-                return Err(invalid(format!(
-                    "function `{}`: translation takes concrete IR, which has no `freeze`",
-                    self.name
-                )));
-            }
             // Sonatina's passes keep it in place. WebAssembly has no way to hide
             // a value from the engine, so the module passes it on unchanged.
             NativeInstKind::BlackBox(i) => self.copy_value(*wb, inst_id, *i.arg())?,

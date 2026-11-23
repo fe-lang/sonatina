@@ -250,14 +250,14 @@ block0:
 }
 func inline(never) public %moved_param_loop() -> i64 {
 block0:
-    v0.[i64; 8] = agg.make [i64; 8] 1.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v0.[i64; 8] = agg.make [i64; 8] 1.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     v1.i64 = call %bump_thrice v0;
     return v1;
 }
 func inline(never) public %moved_local_loop() -> i64 {
 block0:
     v0.objref<[i64; 8]> = obj.alloc [i64; 8];
-    v1.[i64; 8] = agg.make [i64; 8] 1.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v1.[i64; 8] = agg.make [i64; 8] 1.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     obj.store v0 v1;
     v2.[i64; 8] = obj.load v0;
     jump block1;

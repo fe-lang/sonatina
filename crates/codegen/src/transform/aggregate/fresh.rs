@@ -1,7 +1,7 @@
 //! Fresh aggregates are spelled `agg.make`. An `insert_value` with a constant
-//! index into `undef` or into an `agg.make` builds one too, and folds into an
-//! `agg.make`: the base's operands, or `undef` per field, with the inserted
-//! fields replaced. Fields are independent (`docs/undef.md`), so both spell the
+//! index into `zero` or into an `agg.make` builds one too, and folds into an
+//! `agg.make`: the base's operands, or zero per field, with the inserted
+//! fields replaced. Fields are independent (`docs/memory.md`), so both spell the
 //! same value. A whole chain of such inserts folds at once, from its last
 //! insert, so a long chain costs one pass over it.
 
@@ -20,12 +20,11 @@ pub const MAX_UNWRITTEN_FIELDS: usize = 1024;
 
 enum ChainBase {
     AggMake(InstId),
-    Undef,
     Zero,
 }
 
 /// A chain of constant-index inserts that ends at an insert and starts at
-/// `undef`, `zero`, or an `agg.make`.
+/// `zero` or an `agg.make`.
 struct Chain {
     ty: Type,
     fields: usize,
@@ -50,10 +49,8 @@ impl Chain {
             }
             inserts.push((inst, field, *insert.value()));
             let dest = *insert.dest();
-            match func.dfg.value(dest) {
-                Value::Undef { .. } => break ChainBase::Undef,
-                Value::Zero { .. } => break ChainBase::Zero,
-                _ => {}
+            if matches!(func.dfg.value(dest), Value::Zero { .. }) {
+                break ChainBase::Zero;
             }
             let def = func.dfg.value_inst(dest)?;
             if func.dfg.downcast::<&AggMake>(def).is_some() {
@@ -66,7 +63,7 @@ impl Chain {
             }
             inst = def;
         };
-        // From `undef` or `zero`, every field no insert writes becomes an operand.
+        // From `zero`, every field no insert writes becomes an operand.
         if fields > MAX_UNWRITTEN_FIELDS + inserts.len() {
             return None;
         }
@@ -88,7 +85,7 @@ impl Chain {
     fn insts(&self) -> impl Iterator<Item = InstId> + '_ {
         let base = match self.base {
             ChainBase::AggMake(inst) => Some(inst),
-            ChainBase::Undef | ChainBase::Zero => None,
+            ChainBase::Zero => None,
         };
         self.inserts.iter().map(|&(inst, ..)| inst).chain(base)
     }
@@ -137,13 +134,6 @@ pub(crate) fn fold_fresh_insert(func: &mut Function, last: InstId) -> Option<Vec
             .expect("the chain starts at an agg.make")
             .values()
             .clone(),
-        ChainBase::Undef => (0..chain.fields)
-            .map(|field| {
-                let ty = shape::aggregate_child_ty(func.ctx(), chain.ty, field as u32)
-                    .expect("a field of the chain's type");
-                func.dfg.make_undef_value(ty)
-            })
-            .collect(),
         ChainBase::Zero => (0..chain.fields)
             .map(|field| {
                 let ty = shape::aggregate_child_ty(func.ctx(), chain.ty, field as u32)
@@ -253,12 +243,12 @@ type @kinds = {{ @flag, unit, [i8; 0], @pair, [i64; 2] }};
     }
 
     #[test]
-    fn a_chain_on_undef_becomes_one_agg_make() {
+    fn a_chain_on_zero_becomes_one_agg_make() {
         // The last insert of a field wins.
         let (changed, text) = fold(
             "func public %f(v0.i64, v1.i64) -> [i64; 3] {
 block0:
-    v2.[i64; 3] = insert_value undef.[i64; 3] 0.i8 v0;
+    v2.[i64; 3] = insert_value zero.[i64; 3] 0.i8 v0;
     v3.[i64; 3] = insert_value v2 2.i8 v1;
     v4.[i64; 3] = insert_value v3 0.i8 v1;
     return v4;
@@ -266,7 +256,7 @@ block0:
         );
         assert!(changed);
         assert!(
-            text.contains("v4.[i64; 3] = agg.make [i64; 3] v1 undef.i64 v1;"),
+            text.contains("v4.[i64; 3] = agg.make [i64; 3] v1 0.i64 v1;"),
             "{text}"
         );
         assert!(!text.contains("insert_value"), "{text}");
@@ -297,7 +287,7 @@ block0:
             "func public %f(v0.@pair, v1.i64, v2.i8) -> @pair {
 block0:
     v3.@pair = insert_value v0 0.i8 v1;
-    v4.[i64; 2] = insert_value undef.[i64; 2] v2 v1;
+    v4.[i64; 2] = insert_value zero.[i64; 2] v2 v1;
     v5.i64 = extract_value v4 0.i8;
     v6.@pair = insert_value v3 1.i8 v5;
     return v6;
@@ -311,14 +301,14 @@ block0:
         let (changed, text) = fold(
             "func public %f(v0.i64, v1.i8) -> [i64; 2] {
 block0:
-    v2.[i64; 2] = insert_value undef.[i64; 2] 0.i8 v0;
+    v2.[i64; 2] = insert_value zero.[i64; 2] 0.i8 v0;
     v3.[i64; 2] = insert_value v2 v1 v0;
     return v3;
 }",
         );
         assert!(changed);
         assert!(
-            text.contains("v2.[i64; 2] = agg.make [i64; 2] v0 undef.i64;"),
+            text.contains("v2.[i64; 2] = agg.make [i64; 2] v0 0.i64;"),
             "{text}"
         );
         assert!(
@@ -332,7 +322,7 @@ block0:
         let (changed, text) = fold(
             "func public %f(v0.i64, v1.i64) -> @pair {
 block0:
-    v2.@pair = insert_value undef.@pair 0.i8 v0;
+    v2.@pair = insert_value zero.@pair 0.i8 v0;
     v3.@pair = insert_value v2 1.i8 v0;
     v4.@pair = insert_value v2 1.i8 v1;
     v5.i64 = extract_value v3 1.i8;
@@ -353,7 +343,7 @@ block0:
 block0:
     v1.@pair = agg.make @pair v0 v0;
     v2.@pair = insert_value v1 0.i8 v0;
-    v3.@pair = insert_value undef.@pair 0.i8 v0;
+    v3.@pair = insert_value zero.@pair 0.i8 v0;
     v4.@pair = insert_value v3 1.i8 v0;
     return v0;
 }",
@@ -367,7 +357,7 @@ block0:
     fn a_long_chain_folds_once() {
         let len = 1000;
         let mut body = format!("func public %f(v0.i64) -> [i64; {len}] {{\nblock0:\n");
-        let mut current = format!("undef.[i64; {len}]");
+        let mut current = format!("zero.[i64; {len}]");
         for index in 0..len {
             let next = format!("v{}", index + 1);
             body.push_str(&format!(
@@ -391,7 +381,7 @@ block0:
             let (changed, _) = fold(&format!(
                 "func public %f(v0.i8) -> [i8; {len}] {{
 block0:
-    v1.[i8; {len}] = insert_value undef.[i8; {len}] 0.i8 v0;
+    v1.[i8; {len}] = insert_value zero.[i8; {len}] 0.i8 v0;
     return v1;
 }}"
             ));
@@ -400,18 +390,18 @@ block0:
     }
 
     #[test]
-    fn unwritten_fields_are_undef_of_their_type() {
+    fn unwritten_fields_are_zero_of_their_type() {
         let (changed, text) = fold(
             "func private %f(v0.@flag) -> @kinds {
 block0:
-    v1.@kinds = insert_value undef.@kinds 0.i8 v0;
+    v1.@kinds = insert_value zero.@kinds 0.i8 v0;
     return v1;
 }",
         );
         assert!(changed);
         assert!(
             text.contains(
-                "v1.@kinds = agg.make @kinds v0 undef.unit undef.[i8; 0] undef.@pair undef.[i64; 2];"
+                "v1.@kinds = agg.make @kinds v0 zero.unit zero.[i8; 0] zero.@pair zero.[i64; 2];"
             ),
             "{text}"
         );

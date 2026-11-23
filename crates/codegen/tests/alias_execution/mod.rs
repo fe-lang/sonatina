@@ -40,12 +40,12 @@ block0:
 
 pub const CAPTURE_SOURCE: &str = include_str!("../fixtures/object_alias_capture.sntn");
 
-/// Inserts into `undef` that passes make: each case returns field 0 of the
+/// Inserts into `zero` that passes make: each case returns field 0 of the
 /// aggregate its route builds.
 pub const FRESH_SOURCE: &str = include_str!("../fixtures/fresh_aggregate_routes.sntn");
 pub const FRESH_CASES: &[(&str, i64)] = &[
     ("inlined", 11),
-    ("extracted_undef", 12),
+    ("extracted_zero", 12),
     ("extracted_make", 13),
     ("folded_branch", 14),
     ("forwarded", 15),

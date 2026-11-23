@@ -405,7 +405,7 @@ block1:
 block2:
     jump block3;
 block3:
-    v5.@pair = phi (v4 block1) (undef.@pair block2);
+    v5.@pair = phi (v4 block1) (zero.@pair block2);
     br v1 block4 block5;
 block4:
     v6.i64 = extract_value v5 0.i64;

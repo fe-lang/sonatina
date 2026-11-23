@@ -321,7 +321,7 @@ func public %entry(v0.i32, v1.i32) -> i32 {
     }
 
     #[test]
-    fn forwards_arguments_with_undefined_parts() {
+    fn forwards_arguments_with_zero_parts() {
         let parsed = parse_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -347,10 +347,10 @@ func private %touch_opt(v0.@opt, v1.@opt) -> (@opt, @opt) {
 
 func public %entry(v0.i256) -> i256 {
     block0:
-        v1.@pair = agg.make @pair v0 undef.i256;
+        v1.@pair = agg.make @pair v0 0.i256;
         v2.@pair = call %touch_pair v1;
         v3.i256 = extract_value v2 1.i8;
-        v4.@opt = enum.make @opt #Some (undef.i256);
+        v4.@opt = enum.make @opt #Some (0.i256);
         v5.@opt = enum.make @opt #Some (v0);
         (v6.@opt, v7.@opt) = call %touch_opt v4 v5;
         enum.assert_variant v6 #Some;
@@ -366,11 +366,10 @@ func public %entry(v0.i256) -> i256 {
 
         let stats = run_forwarded_ret_elim(&parsed.module, &[], ForwardedRetElimConfig::default());
 
-        // A call result is the returned argument, unspecified parts and
-        // all, so every forwarding lane goes.
+        // A call result is the returned argument, zero parts and all, so
+        // every forwarding lane goes.
         assert_eq!(stats.removed_rets, 3);
         let entry = dump_function(&parsed.module, "entry");
-        assert!(!entry.contains("freeze"), "{entry}");
         assert!(entry.contains("extract_value v1 1.i8"), "{entry}");
         assert!(entry.contains("enum.extract v4 #Some"), "{entry}");
         assert!(entry.contains("enum.extract v5 #Some"), "{entry}");

@@ -1743,7 +1743,10 @@ block0:
         let mut dfg = DataFlowGraph::new(module.ctx.clone());
         let zero = dfg.make_imm_value(0i8);
         let one = dfg.make_imm_value(1i8);
-        let dyn_idx = dfg.make_undef_value(Type::I8);
+        let dyn_idx = dfg.make_value(sonatina_ir::Value::Arg {
+            ty: Type::I8,
+            idx: 0,
+        });
 
         let arr_slice =
             aggregate_slice_for_gep_path(&module.ctx, pair, &[zero, one], &dfg).expect("slice");

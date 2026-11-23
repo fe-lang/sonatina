@@ -125,7 +125,7 @@ the alignment of its type, for each `alloca`, each `obj.alloc` (an object lives 
 its function returns, as the front end promises), each struct, array or enum
 held in memory that an instruction builds (results of `agg.make`, `insert_value`,
 `enum.make`, `obj.load`, `mload` of an aggregate, a call that returns an
-aggregate, an aggregate `undef`), and each phi of such an aggregate. Values
+aggregate, an aggregate `zero`), and each phi of such an aggregate. Values
 held in parts take no slot. It passes the end of
 its frame to the functions it calls. Frames are 16-byte aligned. A call whose
 frame does not fit below the end of the stack traps. Slots are static: an
@@ -320,7 +320,7 @@ aggregate combination and object returns the backend runs first.
   256-bit integers). An address that does not fit in 32 bits traps.
 - A `gep` index behaves the same whether it is a constant or computed at run
   time: one that does not fit in 32 bits traps when it is executed.
-- Aggregate `undef` is zero-filled storage.
+- Aggregate `zero` is zero-filled storage.
 
 ## 128- and 256-bit integers
 
@@ -396,7 +396,6 @@ native backend:
 - `sha256_compress` calls a function of the module that runs the 64 rounds in
   a loop: WebAssembly has no SHA instructions. Every use shares the function,
   which is about 1 KB with its table of round constants.
-- An `undef` operand is materialized as zero.
 
 ## Order of effects
 

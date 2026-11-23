@@ -1724,21 +1724,10 @@ block1:
             .expect("test_run should exist");
         module.func_store.view(test_run, |func| {
             let dumped = FuncWriter::new(test_run, func).dump_string();
-            assert!(
-                dumped.contains("unreachable;"),
-                "split continuation after noreturn call should be trimmed:\n{dumped}"
-            );
-            assert!(
-                !dumped.contains("eq "),
-                "trimmed tail should not leave eq behind:\n{dumped}"
-            );
-            assert!(
-                !dumped.contains("is_zero "),
-                "unreachable continuation should be removed:\n{dumped}"
-            );
-            assert!(
-                !dumped.contains("undef"),
-                "structural noreturn cleanup should not synthesize undef:\n{dumped}"
+            // Nothing of the continuation is left, and no value is made for it.
+            assert_eq!(
+                dumped,
+                "func private %test_run() {\n    block0:\n        v0.i256 = call %run;\n        unreachable;\n}\n",
             );
         });
     }
@@ -1835,13 +1824,13 @@ func private %entry(v0.i256) -> i256 {
     }
 
     #[test]
-    fn sccp_folds_compare_contradiction_on_maybe_undef_operands() {
+    fn sccp_folds_compare_contradiction_on_nonconst_operands() {
         let source = r#"
 target = "evm-ethereum-london"
 
-func private %entry() -> i256 {
+func private %entry(v0.i8) -> i256 {
     block0:
-        v1.i8 = and undef.i8 1.i8;
+        v1.i8 = and v0 1.i8;
         v2.i8 = or v1 2.i8;
         v3.i1 = eq v1 v2;
         br v3 block1 block2;
@@ -1865,44 +1854,6 @@ func private %entry() -> i256 {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
             assert!(!dumped.contains("return 1.i256;"), "{dumped}");
             assert!(dumped.contains("return 2.i256;"), "{dumped}");
-        });
-    }
-
-    #[test]
-    fn sccp_does_not_copy_fold_phi_with_undef_incoming() {
-        let source = r#"
-target = "evm-ethereum-london"
-
-func private %entry(v0.i1) -> i256 {
-    block0:
-        br v0 block1 block2;
-
-    block1:
-        jump block3;
-
-    block2:
-        jump block3;
-
-    block3:
-        v1.i256 = phi (undef.i256 block1) (7.i256 block2);
-        v2.i256 = and v1 4294967295.i256;
-        return v2;
-}
-"#;
-
-        let mut module = parse_module(source).expect("parse should succeed").module;
-        let func_ref = module.funcs()[0];
-        run_test_func_passes(
-            &mut module,
-            &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup],
-        );
-
-        module.func_store.view(func_ref, |func| {
-            let dumped = FuncWriter::new(func_ref, func).dump_string();
-            assert!(
-                dumped.contains("v2.i256 = and v1 4294967295.i256;"),
-                "{dumped}"
-            );
         });
     }
 
@@ -2636,13 +2587,13 @@ func private %entry(v0.i1, v1.i32) -> i32 {
     }
 
     #[test]
-    fn gvn_folds_self_cmp_when_value_may_be_undef() {
+    fn gvn_folds_self_cmp_on_nonconst_value() {
         let source = r#"
 target = "evm-ethereum-london"
 
-func private %entry() -> i256 {
+func private %entry(v0.i256) -> i256 {
     block0:
-        v1.i256 = add undef.i256 1.i256;
+        v1.i256 = add v0 1.i256;
         v2.i1 = eq v1 v1;
         br v2 block1 block2;
 
@@ -2697,13 +2648,13 @@ func private %entry(v0.i256) -> i256 {
     }
 
     #[test]
-    fn gvn_folds_compare_contradiction_on_maybe_undef_operands() {
+    fn gvn_folds_compare_contradiction_on_nonconst_operands() {
         let source = r#"
 target = "evm-ethereum-london"
 
-func private %entry() -> i256 {
+func private %entry(v0.i8) -> i256 {
     block0:
-        v1.i8 = and undef.i8 1.i8;
+        v1.i8 = and v0 1.i8;
         v2.i8 = or v1 2.i8;
         v3.i1 = eq v1 v2;
         br v3 block1 block2;
@@ -2727,46 +2678,6 @@ func private %entry() -> i256 {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
             assert!(!dumped.contains("return 1.i256;"), "{dumped}");
             assert!(dumped.contains("return 2.i256;"), "{dumped}");
-        });
-    }
-
-    #[test]
-    fn gvn_does_not_cancel_sub_add_when_operand_may_be_undef() {
-        let source = r#"
-target = "evm-ethereum-london"
-
-func private %entry() -> i256 {
-    block0:
-        v1.i256 = add 5.i256 undef.i256;
-        v2.i256 = sub v1 undef.i256;
-        v3.i1 = eq v2 5.i256;
-        br v3 block1 block2;
-
-    block1:
-        return 1.i256;
-
-    block2:
-        return 2.i256;
-}
-"#;
-
-        let mut module = parse_module(source).expect("parse should succeed").module;
-        let func_ref = module.funcs()[0];
-        run_test_func_passes(
-            &mut module,
-            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
-        );
-
-        module.func_store.view(func_ref, |func| {
-            let dumped = FuncWriter::new(func_ref, func).dump_string();
-            assert!(
-                dumped.contains("return 1.i256;"),
-                "then branch should remain reachable:\n{dumped}"
-            );
-            assert!(
-                dumped.contains("return 2.i256;"),
-                "else branch should remain reachable when sub/add cancellation operand may be undef:\n{dumped}"
-            );
         });
     }
 

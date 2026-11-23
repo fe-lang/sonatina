@@ -349,7 +349,8 @@ impl ObjectMemoryAnalysis {
         guards: &[ObjectGuard],
     ) -> bool {
         // Guard validity is separate from scalar definedness. A readable snapshot
-        // containing undef can still share storage while its ancestor tags hold.
+        // containing uninitialized cells can still share storage while its
+        // ancestor tags hold.
         guards.is_empty()
             || self.inst_pre_states.get(&inst).is_some_and(|state| {
                 guards.iter().all(|guard| {
@@ -526,7 +527,7 @@ fn initial_state(
                 .unwrap_or(RootInit::LoadLiveIn);
             let token = match init {
                 RootInit::LoadLiveIn => ObjectMemToken::LiveIn { root },
-                RootInit::UndefFresh => ObjectMemToken::FreshEntry { root },
+                RootInit::Fresh => ObjectMemToken::FreshEntry { root },
             };
             activate_root(&mut state, root_slice, token, relevant_slices);
             if init == RootInit::LoadLiveIn {
@@ -560,7 +561,7 @@ fn initial_state(
         };
         let token = match init {
             RootInit::LoadLiveIn => ObjectMemToken::LiveIn { root },
-            RootInit::UndefFresh => ObjectMemToken::FreshEntry { root },
+            RootInit::Fresh => ObjectMemToken::FreshEntry { root },
         };
         activate_root(&mut state, root_slice, token, relevant_slices);
         if init == RootInit::LoadLiveIn {
@@ -1406,7 +1407,7 @@ block0:
 
     #[test]
     fn copied_load_keeps_its_own_initialization_snapshot() {
-        for (initial, expected_undef) in [("", true), ("obj.store v0 11.i256;", false)] {
+        for (initial, expected_uninitialized) in [("", true), ("obj.store v0 11.i256;", false)] {
             check_memory(
                 &format!(
                     r#"
@@ -1417,7 +1418,7 @@ block0:
     v1.objref<i256> = obj.alloc i256;
     {initial}
     v2.i256 = obj.load v0;
-    obj.store v0 undef.i256;
+    obj.store v0 0.i256;
     obj.store v1 v2;
     v3.i256 = obj.load v1;
     return v3;
@@ -1428,11 +1429,11 @@ block0:
                 |_, memory, loads| {
                     assert_eq!(
                         memory.read_state(loads[0]).unwrap().uninitialized(),
-                        expected_undef
+                        expected_uninitialized
                     );
                     assert_eq!(
                         memory.read_state(loads[1]).unwrap().uninitialized(),
-                        expected_undef
+                        expected_uninitialized
                     );
                 },
             );
@@ -1519,7 +1520,7 @@ type @Pair = {{ i256, i256 }};
 func private %make(v0.i256) -> objref<@Pair> {{
 block0:
     v1.objref<@Pair> = obj.alloc @Pair;
-    obj.store v1 undef.@Pair;
+    obj.store v1 zero.@Pair;
     v2.objref<i256> = obj.proj v1 0.i8;
     obj.store v2 v0;
     v3.objref<i256> = obj.proj v1 1.i8;
@@ -1754,49 +1755,7 @@ block0:
     }
 
     #[test]
-    fn aggregate_construction_and_partial_snapshot_preserve_field_definedness() {
-        for (field, undefined) in [("11.i256", false), ("undef.i256", true)] {
-            check_memory(
-                &format!(
-                    r#"
-target = "evm-ethereum-osaka"
-type @Pair = {{ i256, i256 }};
-func private %f() -> i256 {{
-block0:
-    v0.objref<@Pair> = obj.alloc @Pair;
-    v1.objref<@Pair> = obj.alloc @Pair;
-    v3.@Pair = agg.make @Pair {field} 22.i256;
-    obj.store v0 v3;
-    v4.@Pair = obj.load v0;
-    obj.store v0 undef.@Pair;
-    obj.store v1 v4;
-    v5.objref<i256> = obj.proj v1 0.i8;
-    v6.objref<i256> = obj.proj v1 1.i8;
-    v7.i256 = obj.load v5;
-    v8.i256 = obj.load v6;
-    v9.i256 = add v7 v8;
-    return v9;
-}}
-"#
-                ),
-                &[],
-                |_, memory, loads| {
-                    assert_eq!(
-                        memory.read_state(loads[0]).unwrap().uninitialized(),
-                        undefined
-                    );
-                    assert_eq!(
-                        memory.read_state(loads[1]).unwrap().uninitialized(),
-                        undefined
-                    );
-                    assert!(!memory.read_state(loads[2]).unwrap().uninitialized());
-                },
-            );
-        }
-    }
-
-    #[test]
-    fn scalar_computation_from_defined_field_ignores_undefined_sibling() {
+    fn scalar_computation_from_defined_field_ignores_sibling() {
         check_memory(
             r#"
 target = "evm-ethereum-osaka"
@@ -1804,7 +1763,7 @@ type @Pair = { i256, i256 };
 func private %f() -> i256 {
 block0:
     v0.objref<i256> = obj.alloc i256;
-    v1.@Pair = agg.make @Pair 11.i256 undef.i256;
+    v1.@Pair = agg.make @Pair 11.i256 0.i256;
     v2.i256 = extract_value v1 0.i8;
     v3.i256 = add v2 1.i256;
     obj.store v0 v3;
@@ -1824,18 +1783,19 @@ block0:
         check_memory(
             r#"
 target = "evm-ethereum-osaka"
-func private %f(v0.objref<[i256; 1000000]>) -> i256 {
+func private %f() -> i256 {
 block0:
+    v0.objref<[i256; 1000000]> = obj.alloc [i256; 1000000];
     v1.objref<i256> = obj.index v0 123456.i256;
     v2.objref<i256> = obj.index v0 999999.i256;
-    obj.store v1 undef.i256;
+    obj.store v2 7.i256;
     v3.i256 = obj.load v1;
     v4.i256 = obj.load v2;
     v5.i256 = add v3 v4;
     return v5;
 }
 "#,
-            &[0],
+            &[],
             |_, memory, loads| {
                 assert!(memory.read_state(loads[0]).unwrap().uninitialized());
                 assert!(!memory.read_state(loads[1]).unwrap().uninitialized());
@@ -1877,37 +1837,6 @@ block0:
                         })
                         .unwrap();
                     assert!(!memory.inst_clobbers_slice(assertion, read.read_slice()));
-                },
-            );
-        }
-    }
-
-    #[test]
-    fn variant_value_assumption_does_not_define_undefined_scalar() {
-        for (payload, undefined) in [("11.i256", false), ("undef.i256", true)] {
-            check_memory(
-                &format!(
-                    r#"
-target = "evm-ethereum-osaka"
-type @Choice = enum {{ #None, #Some(i256) }};
-func private %f() -> i256 {{
-block0:
-    v0.@Choice = enum.make @Choice #Some ({payload});
-    enum.assert_variant v0 #Some;
-    v1.i256 = enum.extract v0 #Some 0.i8;
-    v2.objref<i256> = obj.alloc i256;
-    obj.store v2 v1;
-    v3.i256 = obj.load v2;
-    return v3;
-}}
-"#
-                ),
-                &[],
-                |_, memory, loads| {
-                    assert_eq!(
-                        memory.read_state(loads[0]).unwrap().uninitialized(),
-                        undefined
-                    );
                 },
             );
         }
@@ -1981,7 +1910,7 @@ type @Pair = {{ i256, i256 }};
 func private %f() -> @Pair {{
 block0:
     v0.objref<@Pair> = obj.alloc @Pair;
-    v1.@Pair = agg.make @Pair 11.i256 undef.i256;
+    v1.@Pair = agg.make @Pair 11.i256 0.i256;
 {inserts}
     v301.@Pair = insert_value v300 1.i8 22.i256;
     obj.store v0 v301;

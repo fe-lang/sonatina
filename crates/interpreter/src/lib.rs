@@ -37,7 +37,7 @@ impl Machine {
     pub fn run(&mut self, func_ref: FuncRef, args: Vec<EvalValue>) -> EvalValue {
         let results = self.run_results(func_ref, args);
         match results.as_slice() {
-            [] => EvalValue::Undef,
+            [] => EvalValue::Unknown,
             [value] => value.clone(),
             _ => panic!("run called on multi-return function {func_ref:?}"),
         }
@@ -156,7 +156,7 @@ impl State for Machine {
             // Fixing the unspecified value gives each part zero.
             Value::Zero { ty } => {
                 let ty = *ty;
-                EvalValue::Undef.fixed(&self.module_ctx, ty)
+                EvalValue::Unknown.fixed(&self.module_ctx, ty)
             }
             Value::Global { .. } => {
                 todo!()
@@ -209,7 +209,7 @@ impl State for Machine {
     // it holds.
     fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue {
         let Some(addr) = addr.as_imm().and_then(nonnegative_imm_usize) else {
-            return EvalValue::Undef.fixed(&self.module_ctx, ty);
+            return EvalValue::Unknown.fixed(&self.module_ctx, ty);
         };
         let size = self.module_ctx.size_of_unchecked(ty);
 
@@ -275,15 +275,15 @@ impl State for Machine {
     }
 
     fn store(&mut self, addr: EvalValue, value: EvalValue, ty: Type) -> EvalValue {
-        if value.is_undef() {
-            return EvalValue::Undef;
+        if value.is_unknown() {
+            return EvalValue::Unknown;
         }
 
         let Some(addr) = addr.as_imm() else {
-            panic!("udnef address in store")
+            panic!("store to a non-immediate address")
         };
         let Some(addr) = nonnegative_imm_usize(addr) else {
-            return EvalValue::Undef;
+            return EvalValue::Unknown;
         };
         let size = self.module_ctx.size_of_unchecked(ty);
         if addr + size > self.memory.len() {
@@ -313,7 +313,7 @@ impl State for Machine {
                             field_count,
                             "aggregate value field count must match type"
                         );
-                        return EvalValue::Undef;
+                        return EvalValue::Unknown;
                     }
 
                     for (idx, field) in fields.iter().enumerate() {
@@ -348,12 +348,12 @@ impl State for Machine {
                 }
             }
 
-            return EvalValue::Undef;
+            return EvalValue::Unknown;
         }
 
         // Store a value of integer/pointer type.
         let Some(value) = value.as_imm() else {
-            panic!("undef value in store");
+            panic!("non-immediate value in a scalar store");
         };
 
         match self.module_ctx.endian() {
@@ -371,7 +371,7 @@ impl State for Machine {
             }
         }
 
-        EvalValue::Undef
+        EvalValue::Unknown
     }
 
     fn alloca(&mut self, ty: Type) -> EvalValue {
@@ -413,7 +413,7 @@ mod tests {
                 EvalValue::Imm(Immediate::I8(9)),
                 Type::I8,
             ),
-            EvalValue::Undef
+            EvalValue::Unknown
         );
         assert_eq!(machine.memory, before);
     }

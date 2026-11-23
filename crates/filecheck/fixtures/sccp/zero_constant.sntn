@@ -1,5 +1,5 @@
 #! `zero.T` is a constant: SCCP folds through it, and a branch on it goes
-#! one way, where a branch on `undef` stays (`branch_on_undef.sntn`).
+#! one way.
 
 target = "evm-ethereum-london"
 

@@ -97,7 +97,7 @@ impl ObjectReachability {
         }
         // Only values without definitions start unknown. Recognized producers
         // grow from bottom; an unrelated unresolved SSA value is not published.
-        // A raw pointer immediate or `undef` reaches only published objects.
+        // A raw pointer immediate reaches only published objects.
         for value in func.dfg.value_ids() {
             if this.aliases.is_fresh(RootValue::new(value)) {
                 this.references[value].roots.insert(RootValue::new(value));

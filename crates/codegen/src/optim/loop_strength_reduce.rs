@@ -557,7 +557,6 @@ fn can_materialize_in_preheader_from_anchor(
         Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } | Value::Zero { .. } => {
             true
         }
-        Value::Undef { .. } => false,
         Value::Inst { inst, .. } => {
             let inst = *inst;
             let block = func.layout.inst_block(inst);
@@ -611,7 +610,6 @@ fn materialize_invariant_in_preheader(
         Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } | Value::Zero { .. } => {
             value
         }
-        Value::Undef { .. } => return None,
         Value::Inst { inst, .. } => {
             let inst = *inst;
             let block = func.layout.inst_block(inst);

@@ -249,9 +249,7 @@ impl KnownBitsQuery {
             Value::Zero { ty } if supports_known_bits(*ty) => {
                 KnownBits::from_imm(Immediate::zero(*ty))
             }
-            Value::Arg { .. } | Value::Global { .. } | Value::Undef { .. } | Value::Zero { .. } => {
-                KnownBits::unknown(ty)
-            }
+            Value::Arg { .. } | Value::Global { .. } | Value::Zero { .. } => KnownBits::unknown(ty),
             Value::Immediate { .. } => unreachable!("immediates handled above"),
             Value::Inst {
                 inst, result_idx, ..
@@ -300,10 +298,6 @@ impl KnownBitsQuery {
                 }
             }
             return KnownBits::unknown(ty);
-        }
-        // A frozen value is one of its argument's.
-        if let Some(freeze) = downcast::<&data::Freeze>(func.inst_set(), inst_data) {
-            return self.known_of(func, *freeze.arg());
         }
         // A selected value is one of its two.
         if let Some(select) = downcast::<&logic::Select>(func.inst_set(), inst_data) {
@@ -1379,12 +1373,12 @@ block0:
         builder.insert_inst_no_result_with(|| Jump::new(is, join));
 
         builder.switch_to_block(right);
-        let undef = builder.make_undef_value(ptr_ty);
+        let null_ptr = builder.make_zero_value(ptr_ty);
         builder.insert_inst_no_result_with(|| Jump::new(is, join));
 
         builder.switch_to_block(join);
         let phi = builder.insert_inst_with(
-            || Phi::new(is, smallvec![(ptr, left), (undef, right)]),
+            || Phi::new(is, smallvec![(ptr, left), (null_ptr, right)]),
             ptr_ty,
         );
         builder.insert_inst_no_result_with(|| Return::new_unit(is));

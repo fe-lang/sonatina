@@ -236,67 +236,6 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
     }
 }
 
-/// A phi of an alloca and a null pointer, written once with `undef` and once
-/// with `zero`, compiles to the same bytes at every level: the null pointer
-/// has the provenance of `undef` (`zero_provenance`).
-#[test]
-fn zero_pointers_compile_as_undef_pointers() {
-    let source = |null: &str| {
-        format!(
-            r#"target = "evm-ethereum-osaka"
-func public %entry() {{
-    block0:
-        v0.i256 = evm_calldata_load 0.i32;
-        v1.i1 = ne v0 0.i256;
-        v2.i256 = evm_calldata_load 32.i32;
-        v3.i256 = call %store_through v1 v2;
-        mstore 0.i32 v3 i256;
-        evm_return 0.i8 32.i8;
-}}
-
-func private %store_through(v0.i1, v1.i256) -> i256 {{
-    block0:
-        v2.*i256 = alloca i256;
-        br v0 block1 block2;
-    block1:
-        jump block3;
-    block2:
-        jump block3;
-    block3:
-        v3.*i256 = phi (v2 block1) ({null}.*i256 block2);
-        v4.*i256 = freeze v3;
-        mstore v4 v1 i256;
-        v5.i256 = mload v4 i256;
-        return v5;
-}}
-
-object @Contract {{
-    section runtime {{
-        entry %entry;
-    }}
-}}
-"#
-        )
-    };
-    let runtime = |null: &str, level: OptLevel| {
-        let artifacts = Compile::new(parse_sona(&source(null)).module, EvmCompiler::default())
-            .with_opt_level(level)
-            .compile()
-            .unwrap_or_else(|err| panic!("{level:?}: {err:?}"));
-        artifacts[0]
-            .sections
-            .iter()
-            .find(|(name, _)| name.0 == "runtime")
-            .unwrap()
-            .1
-            .bytes
-            .clone()
-    };
-    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
-        assert_eq!(runtime("undef", level), runtime("zero", level), "{level:?}");
-    }
-}
-
 #[test]
 fn zero_values_run_at_all_levels() {
     assert_i64_cases(zero_values::ZERO_SOURCE, zero_values::ZERO_CASES);

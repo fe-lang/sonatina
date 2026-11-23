@@ -885,7 +885,7 @@ impl SccpSolver {
     fn cell_of(&self, func: &Function, value: ValueId) -> LatticeCell {
         match func.dfg.value(value) {
             Value::Immediate { imm, .. } => LatticeCell::Const(*imm),
-            Value::Global { .. } | Value::Undef { .. } => LatticeCell::Top,
+            Value::Global { .. } => LatticeCell::Top,
             Value::Zero { ty } => LatticeCell::of_zero(*ty),
             Value::Arg { .. } | Value::Inst { .. } => {
                 self.lattice.get(value).copied().unwrap_or_default()
@@ -993,7 +993,7 @@ pub(super) enum LatticeCell {
 
 impl LatticeCell {
     /// The cell of `zero.ty`: the constant zero of an integer or enum tag, and
-    /// overdefined (`Top`, as for `undef`) for a pointer, object reference or
+    /// overdefined (`Top`) for a pointer, object reference or
     /// aggregate, which the lattice has no constant for.
     fn of_zero(ty: Type) -> Self {
         if ty.is_integral() || ty.is_enum_tag() {
@@ -1078,7 +1078,7 @@ impl State for CellState<'_, '_> {
     fn lookup_val(&mut self, value: ValueId) -> EvalValue {
         let cell = match self.dfg.value(value) {
             Value::Immediate { imm, .. } => LatticeCell::Const(*imm),
-            Value::Global { .. } | Value::Undef { .. } => LatticeCell::Top,
+            Value::Global { .. } => LatticeCell::Top,
             Value::Zero { ty } => LatticeCell::of_zero(*ty),
             Value::Arg { .. } | Value::Inst { .. } => {
                 self.map.get(value).copied().unwrap_or_default()
@@ -1089,11 +1089,11 @@ impl State for CellState<'_, '_> {
             LatticeCell::Const(imm) => EvalValue::Imm(imm),
             LatticeCell::Top => {
                 self.used_has_top = true;
-                EvalValue::Undef
+                EvalValue::Unknown
             }
             LatticeCell::Bot => {
                 self.used_has_bot = true;
-                EvalValue::Undef
+                EvalValue::Unknown
             }
         }
     }
@@ -1104,11 +1104,6 @@ impl State for CellState<'_, '_> {
         _args: Vec<EvalValue>,
     ) -> sonatina_ir::interpret::EvalResults {
         panic!("call instuctuion must not be Interpreted")
-    }
-
-    // An undef here may be a cell not evaluated yet, not a known undef.
-    fn freeze(&mut self, value: EvalValue, _ty: Type) -> EvalValue {
-        value
     }
 
     fn set_action(&mut self, action: Action) {
@@ -1198,7 +1193,7 @@ mod tests {
             }
         }
         for (ty, index, other_index) in [
-            ("[i256; 2]", "v4", "undef.i256"),
+            ("[i256; 2]", "v4", "v1"),
             ("@Pair", "0.i256", "1.i256"),
             ("@Triple", "2.i256", "0.i256"),
         ] {
@@ -1215,10 +1210,10 @@ mod tests {
      v4.i256 = phi (v1 block0);
      v5.i256 = phi (v2 block0);
      v6.{ty} = insert_value v3 {index} v5;
-     v7.{ty} = insert_value undef.{ty} {index} v5;
+     v7.{ty} = insert_value zero.{ty} {index} v5;
      v8.{ty} = insert_value v3 {other_index} v5;
-     v9.{ty} = insert_value v3 {index} undef.i256;
-     v10.{ty} = insert_value undef.{ty} {other_index} undef.i256;
+     v9.{ty} = insert_value v3 {index} 0.i256;
+     v10.{ty} = insert_value zero.{ty} {other_index} 0.i256;
      return v6;
  }}
  "#
@@ -1230,6 +1225,7 @@ mod tests {
                 let known_bits = KnownBitsQuery::new(func);
                 for &cells in &cases {
                     let mut solver = SccpSolver::new();
+                    solver.lattice[ValueId::from_u32(1)] = LatticeCell::Top;
                     for (idx, cell) in cells.into_iter().enumerate() {
                         solver.lattice[ValueId::from_u32(idx as u32 + 3)] = cell;
                     }

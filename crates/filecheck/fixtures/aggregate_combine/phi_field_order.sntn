@@ -14,16 +14,16 @@ func public %ac_nested_phi_order(v0.i1, v1.i256, v2.i256, v3.i256) -> i256 {
         br v0 block1 block2;
 
     block1:
-        v4.@inner = insert_value undef.@inner 0.i8 v1;
+        v4.@inner = insert_value zero.@inner 0.i8 v1;
         v5.@inner = insert_value v4 1.i8 v2;
-        v6.@outer = insert_value undef.@outer 0.i8 v3;
+        v6.@outer = insert_value zero.@outer 0.i8 v3;
         v7.@outer = insert_value v6 1.i8 v5;
         jump block3;
 
     block2:
-        v8.@inner = insert_value undef.@inner 0.i8 v2;
+        v8.@inner = insert_value zero.@inner 0.i8 v2;
         v9.@inner = insert_value v8 1.i8 v3;
-        v10.@outer = insert_value undef.@outer 0.i8 v1;
+        v10.@outer = insert_value zero.@outer 0.i8 v1;
         v11.@outer = insert_value v10 1.i8 v9;
         jump block3;
 

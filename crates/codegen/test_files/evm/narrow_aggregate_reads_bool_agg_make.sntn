@@ -1,6 +1,6 @@
 #! evm.config: { opt: 2 }
 #! evm.case: bool_members
-#!   calldata: u256(1) u256(2)
+#!   calldata: u256(1) u256(3)
 #!   expect: return u256(1) u256(0) u256(1)
 
 target = "evm-ethereum-osaka"
@@ -8,9 +8,10 @@ target = "evm-ethereum-osaka"
 type @B = { i1, i256 };
 
 # An `i1` operand of an `agg.make` is stored as the word it widens to, and the
-# member read back from memory keeps the low bit. The slots start dirty with 2:
-# the `undef.i1` operand stores nothing, so its member reads as the low bit of
-# 2, `false`. `%array` builds a `[i1; 2]`, whose type legalizes to `[i256; 2]`.
+# member read back from memory keeps the low bit. The slots start dirty with 3:
+# the zero `i1` operand overwrites that word, so its member reads `false`; had
+# it stored nothing, the member would read the low bit of 3, `true`. `%array`
+# builds a `[i1; 2]`, whose type legalizes to `[i256; 2]`.
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
@@ -18,7 +19,7 @@ func public %entry() {
         mstore 4096.i32 v1 i256;
         mstore 4160.i32 v1 i256;
         call %store v0;
-        call %store_undef;
+        call %store_zero;
         call %array v0;
         v2.i256 = call %read 4096.i32;
         v3.i256 = call %read 4160.i32;
@@ -37,9 +38,9 @@ func inline(never) private %store(v0.i256) {
         return;
 }
 
-func inline(never) private %store_undef() {
+func inline(never) private %store_zero() {
     block0:
-        v0.@B = agg.make @B undef.i1 9.i256;
+        v0.@B = agg.make @B 0.i1 9.i256;
         mstore 4160.i32 v0 @B;
         return;
 }
@@ -57,8 +58,7 @@ func inline(never) private %read(v0.i32) -> i256 {
     block0:
         v1.@B = mload v0 @B;
         v2.i1 = extract_value v1 0.i8;
-        v3.i1 = freeze v2;
-        v4.i256 = zext v3 i256;
+        v4.i256 = zext v2 i256;
         return v4;
 }
 

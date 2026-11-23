@@ -29,9 +29,9 @@ func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
         v1.i256 = evm_calldata_load 32.i32;
-        v2.i256 = call %diff undef.unit v0 undef.unit v1;
-        v3.i256 = call %only_unit undef.unit;
-        v4.i256 = call %forward v0 undef.unit v1;
+        v2.i256 = call %diff zero.unit v0 zero.unit v1;
+        v3.i256 = call %only_unit zero.unit;
+        v4.i256 = call %forward v0 zero.unit v1;
         mstore 0.i32 v2 i256;
         mstore 32.i32 v3 i256;
         mstore 64.i32 v4 i256;

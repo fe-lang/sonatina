@@ -32,7 +32,7 @@ func private %only_unit(v0.unit) -> i256 {
 # nextln:         return v5;
 func public %entry(v0.i256, v1.i256) -> i256 {
     block0:
-        (v2.unit, v3.i256) = call %pick undef.unit v0 undef.unit v1;
+        (v2.unit, v3.i256) = call %pick zero.unit v0 zero.unit v1;
         v4.i256 = call %only_unit v2;
         v5.i256 = add v3 v4;
         return v5;

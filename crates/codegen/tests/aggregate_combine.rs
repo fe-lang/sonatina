@@ -27,7 +27,7 @@ fn insert_chain_module(
     for stage in 0..stages {
         let block = stage + 1;
         let mut body = format!("block{block}:\n");
-        let mut aggregate = format!("undef.[i8; {length}]");
+        let mut aggregate = format!("zero.[i8; {length}]");
         for index in 0..length {
             let field = next;
             let result = next + 1;

@@ -84,12 +84,6 @@ impl VerifyInst for data::Sha256Compress {
     }
 }
 
-impl VerifyInst for data::Freeze {
-    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
-        verifier.verify_freeze(inst_id, *self.arg());
-    }
-}
-
 impl VerifyInst for logic::Bswap {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         verifier.verify_unary_integral_same(inst_id, *self.arg(), "bswap");

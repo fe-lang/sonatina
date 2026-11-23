@@ -87,7 +87,7 @@ block3:
 
 block4:
     v4.i1 = phi (1.i1 block2) (0.i1 block3);
-    v5.i256 = phi (v2 block2) (undef.i256 block3);
+    v5.i256 = phi (v2 block2) (0.i256 block3);
     br v4 block1 block5;
 
 block5:

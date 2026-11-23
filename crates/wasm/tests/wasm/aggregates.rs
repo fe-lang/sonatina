@@ -566,10 +566,10 @@ fn memory_fills(bytes: &[u8]) -> usize {
 }
 
 #[test]
-fn undef_fields_are_stored_as_zero() {
+fn zero_fields_are_stored_as_zero() {
     // Six words are too many to hold in parts, so the struct is built in the
-    // frame. `%full` writes every field. `%partial` leaves every other field
-    // undef, which reads as zero although `%full` left a value in the frame
+    // frame. `%full` writes every field. `%partial` writes zero to every other
+    // field, which reads as zero although `%full` left a value in the frame
     // both use: three stores of zero, which are faster than `memory.fill`.
     let source = "type @Six = { i64, i64, i64, i64, i64, i64 };
 func public %full(v0.i64, v1.i64, v2.*@Six) {
@@ -580,7 +580,7 @@ func public %full(v0.i64, v1.i64, v2.*@Six) {
 }
 func public %partial(v0.i64, v1.*@Six) {
     block0:
-        v2.@Six = agg.make @Six v0 undef.i64 v0 undef.i64 v0 undef.i64;
+        v2.@Six = agg.make @Six v0 0.i64 v0 0.i64 v0 0.i64;
         mstore v1 v2 @Six;
         return;
 }";
@@ -619,7 +619,7 @@ fn inserts_cover_an_aggregate_in_any_order_but_not_its_padding() {
 type @Gap = { i8, i64, i64, i64, i64, i64 };
 func public %reversed(v0.i64, v1.i64, v2.*@Six) {
     block0:
-        v3.@Six = insert_value undef.@Six 5.i32 v1;
+        v3.@Six = insert_value zero.@Six 5.i32 v1;
         v4.@Six = insert_value v3 4.i32 v0;
         v5.@Six = insert_value v4 3.i32 v1;
         v6.@Six = insert_value v5 2.i32 v0;
@@ -636,7 +636,7 @@ func public %padded(v0.i8, v1.i64, v2.*@Gap) {
 }
 func public %huge(v0.i8, v1.*[i8; 1073741824]) {
     block0:
-        v2.[i8; 1073741824] = insert_value undef.[i8; 1073741824] 0.i32 v0;
+        v2.[i8; 1073741824] = insert_value zero.[i8; 1073741824] 0.i32 v0;
         mstore v1 v2 [i8; 1073741824];
         return;
 }";
@@ -700,7 +700,7 @@ func private %make(v0.i64) -> @Big {
     block0:
         v1.i256 = zext v0 i256;
         v2.i256 = shl 200.i256 v1;
-        v5.[i64; 6] = agg.make [i64; 6] v0 undef.i64 undef.i64 undef.i64 undef.i64 9.i64;
+        v5.[i64; 6] = agg.make [i64; 6] v0 0.i64 0.i64 0.i64 0.i64 9.i64;
         v7.@Big = agg.make @Big v2 v5 -1.i8;
         return v7;
 }
@@ -858,8 +858,8 @@ fn agg_make_stores_each_field_and_zeroes_its_zero_fields() {
     // `@Pair`, `[i64; 3]` and `@Gap` are held in parts and `@Outer`, of
     // seven, in the frame. `%outer` stores every field of `@Outer`: the
     // padding of `@Gap` is not part of the value. `%pair` stores its parts.
-    // `%partial` leaves fields `undef`, which read as zero, as an insert
-    // chain on undef does: one range of 40 bytes, zeroed with stores.
+    // `%partial` leaves fields zero, as an insert chain on `zero` does: one
+    // range of 40 bytes, zeroed with stores.
     let source = "type @Pair = { i64, i64 };
 type @Gap = { i8, i64 };
 type @Outer = { @Pair, [i64; 3], @Gap };
@@ -881,8 +881,8 @@ func public %outer(v0.i64, v1.i64, v2.*@Outer) {
 }
 func public %partial(v0.i64, v1.i64, v2.*@Outer) {
     block0:
-        v3.@Pair = agg.make @Pair v0 undef.i64;
-        v4.@Outer = agg.make @Outer v3 undef.[i64; 3] undef.@Gap;
+        v3.@Pair = agg.make @Pair v0 0.i64;
+        v4.@Outer = agg.make @Outer v3 zero.[i64; 3] zero.@Gap;
         mstore v2 v4 @Outer;
         return;
 }";

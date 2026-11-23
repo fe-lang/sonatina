@@ -14,8 +14,7 @@ use sonatina_ir::{
         cast::{self, Bitcast, IntToPtr, PtrToInt},
         cmp::{self, Eq, IsZero, Ne, Sgt, Slt},
         data::{
-            AggMake, Alloca, ExtractValue, Freeze, InsertValue, MemAllocDynamic, Memcopy, Mload,
-            Mstore,
+            AggMake, Alloca, ExtractValue, InsertValue, MemAllocDynamic, Memcopy, Mload, Mstore,
         },
         downcast,
         evm::{
@@ -32,10 +31,7 @@ use sonatina_ir::{
 use sonatina_triple::Architecture;
 
 use super::{const_data::emit_const_load_from_addr, scalar_words::legalize_evm_scalar_immediate};
-use crate::{
-    optim::adce::AdceSolver,
-    transform::{aggregate::shape::is_supported_aggregate_ty, concrete::lower_frozen_undef},
-};
+use crate::{optim::adce::AdceSolver, transform::aggregate::shape::is_supported_aggregate_ty};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScalarWidth {
@@ -358,12 +354,11 @@ fn gives_wider_word(kind: EvmInstKind<'_>, width: ScalarWidth) -> bool {
         | EvmInstKind::EvmDelegateCall(_)
         | EvmInstKind::EvmStaticCall(_) => false,
         // A value passed on from elsewhere, which its producer made a value of its type: a phi
-        // input, a returned value, the argument of `black_box` or `freeze`, or a member an insert
-        // or a typed store put there.
+        // input, a returned value, the argument of `black_box`, or a member an insert or a typed
+        // store put there.
         EvmInstKind::Phi(_)
         | EvmInstKind::Call(_)
         | EvmInstKind::BlackBox(_)
-        | EvmInstKind::Freeze(_)
         | EvmInstKind::ExtractValue(_) => false,
         // A word or pointer result, which the verifier requires, or an aggregate.
         EvmInstKind::EvmKeccak256Words(_)
@@ -531,199 +526,6 @@ pub(crate) fn legalize_evm_section(module: &Module, funcs: &[FuncRef]) {
     }
 }
 
-/// How an instruction uses an operand, for normalizing narrow values on EVM.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OperandUse {
-    /// Sets what an effect does: a length, size, gas, value, call target, salt, or an offset into
-    /// calldata, code or return data. A narrow word that holds the unspecified value may be wider
-    /// than its type, so it is made a value of its type here, as `freeze` makes one.
-    Effect,
-    /// Needs no mask: strict data, data passed on or written out as bits, or a use that is
-    /// undefined when the value is unspecified (an address, object, index, condition or
-    /// variant assumption).
-    Plain,
-}
-
-/// The use of each operand of an instruction, in operand order, or `None` when every operand is
-/// `Plain`. The match has no catch-all arm, so an instruction added to the EVM instruction set
-/// does not compile until it is classified here, and legalization checks that each slice has
-/// one entry per operand.
-fn operand_uses(kind: EvmInstKind<'_>) -> Option<&'static [OperandUse]> {
-    use OperandUse::{Effect as E, Plain as P};
-    match kind {
-        EvmInstKind::Neg(_)
-        | EvmInstKind::Add(_)
-        | EvmInstKind::Uaddo(_)
-        | EvmInstKind::Uaddsat(_)
-        | EvmInstKind::Saddo(_)
-        | EvmInstKind::Saddsat(_)
-        | EvmInstKind::Mul(_)
-        | EvmInstKind::Sub(_)
-        | EvmInstKind::Usubo(_)
-        | EvmInstKind::Usubsat(_)
-        | EvmInstKind::Ssubo(_)
-        | EvmInstKind::Ssubsat(_)
-        | EvmInstKind::Umulo(_)
-        | EvmInstKind::Umulsat(_)
-        | EvmInstKind::Smulo(_)
-        | EvmInstKind::Smulsat(_)
-        | EvmInstKind::Snego(_)
-        | EvmInstKind::Sdiv(_)
-        | EvmInstKind::Udiv(_)
-        | EvmInstKind::Umod(_)
-        | EvmInstKind::Smod(_)
-        | EvmInstKind::Shl(_)
-        | EvmInstKind::Shr(_)
-        | EvmInstKind::Sar(_)
-        | EvmInstKind::Sext(_)
-        | EvmInstKind::Zext(_)
-        | EvmInstKind::Trunc(_)
-        | EvmInstKind::TruncNuw(_)
-        | EvmInstKind::Bitcast(_)
-        | EvmInstKind::IntToPtr(_)
-        | EvmInstKind::PtrToInt(_)
-        | EvmInstKind::Lt(_)
-        | EvmInstKind::Gt(_)
-        | EvmInstKind::Slt(_)
-        | EvmInstKind::Sgt(_)
-        | EvmInstKind::Le(_)
-        | EvmInstKind::Ge(_)
-        | EvmInstKind::Sle(_)
-        | EvmInstKind::Sge(_)
-        | EvmInstKind::Eq(_)
-        | EvmInstKind::Ne(_)
-        | EvmInstKind::IsZero(_)
-        | EvmInstKind::Not(_)
-        | EvmInstKind::And(_)
-        | EvmInstKind::Or(_)
-        | EvmInstKind::Xor(_)
-        | EvmInstKind::Select(_)
-        | EvmInstKind::Bswap(_)
-        | EvmInstKind::Clz(_)
-        | EvmInstKind::Ctz(_)
-        | EvmInstKind::EvmSdiv(_)
-        | EvmInstKind::EvmUdiv(_)
-        | EvmInstKind::EvmSdivo(_)
-        | EvmInstKind::EvmUdivo(_)
-        | EvmInstKind::EvmUmod(_)
-        | EvmInstKind::EvmSmod(_)
-        | EvmInstKind::EvmUmodo(_)
-        | EvmInstKind::EvmSmodo(_)
-        | EvmInstKind::EvmUaddsat(_)
-        | EvmInstKind::EvmSaddsat(_)
-        | EvmInstKind::EvmUsubsat(_)
-        | EvmInstKind::EvmSsubsat(_)
-        | EvmInstKind::EvmUmulsat(_)
-        | EvmInstKind::EvmSmulsat(_)
-        | EvmInstKind::EvmAddMod(_)
-        | EvmInstKind::EvmMulMod(_)
-        | EvmInstKind::EvmExp(_)
-        | EvmInstKind::EvmSignExtend(_)
-        | EvmInstKind::EvmByte(_)
-        | EvmInstKind::EvmKeccak256Words(_)
-        | EvmInstKind::EvmBalance(_)
-        | EvmInstKind::EvmExtCodeSize(_)
-        | EvmInstKind::EvmExtCodeHash(_)
-        | EvmInstKind::EvmBlockHash(_)
-        | EvmInstKind::EvmBlobHash(_) => None,
-        EvmInstKind::Jump(_)
-        | EvmInstKind::Br(_)
-        | EvmInstKind::Phi(_)
-        | EvmInstKind::BrTable(_)
-        | EvmInstKind::Call(_)
-        | EvmInstKind::Return(_)
-        | EvmInstKind::Unreachable(_)
-        | EvmInstKind::Freeze(_)
-        | EvmInstKind::BlackBox(_)
-        | EvmInstKind::Gep(_)
-        | EvmInstKind::GetFunctionPtr(_)
-        | EvmInstKind::SymAddr(_)
-        | EvmInstKind::SymSize(_)
-        | EvmInstKind::Alloca(_)
-        | EvmInstKind::ObjAlloc(_)
-        | EvmInstKind::ConstRef(_)
-        | EvmInstKind::ConstProj(_)
-        | EvmInstKind::ConstIndex(_)
-        | EvmInstKind::ConstLoad(_)
-        | EvmInstKind::ObjProj(_)
-        | EvmInstKind::ObjIndex(_)
-        | EvmInstKind::ObjLoad(_)
-        | EvmInstKind::ObjStore(_)
-        | EvmInstKind::EnumMake(_)
-        | EvmInstKind::EnumTag(_)
-        | EvmInstKind::EnumIsVariant(_)
-        | EvmInstKind::EnumAssertVariant(_)
-        | EvmInstKind::EnumAssertVariantRef(_)
-        | EvmInstKind::EnumExtract(_)
-        | EvmInstKind::EnumSetTag(_)
-        | EvmInstKind::EnumWriteVariant(_)
-        | EvmInstKind::EnumGetTag(_)
-        | EvmInstKind::EnumProj(_)
-        | EvmInstKind::ObjMaterializeStack(_)
-        | EvmInstKind::ObjFromPtr(_)
-        | EvmInstKind::AggMake(_)
-        | EvmInstKind::InsertValue(_)
-        | EvmInstKind::ExtractValue(_)
-        | EvmInstKind::EvmStop(_)
-        | EvmInstKind::EvmInvalid(_)
-        | EvmInstKind::EvmAddress(_)
-        | EvmInstKind::EvmOrigin(_)
-        | EvmInstKind::EvmCaller(_)
-        | EvmInstKind::EvmCallValue(_)
-        | EvmInstKind::EvmCalldataSize(_)
-        | EvmInstKind::EvmCodeSize(_)
-        | EvmInstKind::EvmGasPrice(_)
-        | EvmInstKind::EvmReturnDataSize(_)
-        | EvmInstKind::EvmCoinBase(_)
-        | EvmInstKind::EvmTimestamp(_)
-        | EvmInstKind::EvmNumber(_)
-        | EvmInstKind::EvmPrevRandao(_)
-        | EvmInstKind::EvmGasLimit(_)
-        | EvmInstKind::EvmChainId(_)
-        | EvmInstKind::EvmSelfBalance(_)
-        | EvmInstKind::EvmBaseFee(_)
-        | EvmInstKind::EvmBlobBaseFee(_)
-        | EvmInstKind::EvmMsize(_)
-        | EvmInstKind::EvmGas(_) => None,
-        EvmInstKind::Mload(_)
-        | EvmInstKind::EvmMload(_)
-        | EvmInstKind::EvmSload(_)
-        | EvmInstKind::EvmTload(_) => Some(&[P]),
-        EvmInstKind::Mstore(_)
-        | EvmInstKind::EvmMstore(_)
-        | EvmInstKind::EvmMstore8(_)
-        | EvmInstKind::EvmSstore(_)
-        | EvmInstKind::EvmTstore(_) => Some(&[P, P]),
-        EvmInstKind::Memzero(_)
-        | EvmInstKind::EvmMloadBytes(_)
-        | EvmInstKind::EvmKeccak256(_)
-        | EvmInstKind::EvmLog0(_)
-        | EvmInstKind::EvmReturn(_)
-        | EvmInstKind::EvmRevert(_) => Some(&[P, E]),
-        EvmInstKind::EvmReturnCode(_) => Some(&[E, E]),
-        EvmInstKind::Memcopy(_) | EvmInstKind::EvmMcopy(_) => Some(&[P, P, E]),
-        EvmInstKind::MemAllocDynamic(_)
-        | EvmInstKind::EvmMalloc(_)
-        | EvmInstKind::EvmCalldataLoad(_)
-        | EvmInstKind::EvmCodeLoad(_)
-        | EvmInstKind::EvmSelfDestruct(_) => Some(&[E]),
-        EvmInstKind::EvmCalldataCopy(_)
-        | EvmInstKind::EvmCodeCopy(_)
-        | EvmInstKind::EvmReturnDataCopy(_) => Some(&[P, E, E]),
-        EvmInstKind::EvmExtCodeCopy(_) => Some(&[E, P, E, E]),
-        EvmInstKind::EvmLog1(_) => Some(&[P, E, P]),
-        EvmInstKind::EvmLog2(_) => Some(&[P, E, P, P]),
-        EvmInstKind::EvmLog3(_) => Some(&[P, E, P, P, P]),
-        EvmInstKind::EvmLog4(_) => Some(&[P, E, P, P, P, P]),
-        EvmInstKind::EvmCreate(_) => Some(&[E, P, E]),
-        EvmInstKind::EvmCreate2(_) => Some(&[E, P, E, E]),
-        EvmInstKind::EvmCall(_) | EvmInstKind::EvmCallCode(_) => Some(&[E, E, E, P, E, P, E]),
-        EvmInstKind::EvmDelegateCall(_) | EvmInstKind::EvmStaticCall(_) => {
-            Some(&[E, E, P, E, P, E])
-        }
-    }
-}
-
 struct FunctionLegalizer<'a> {
     ctx: &'a ModuleCtx,
     func: &'a mut Function,
@@ -792,9 +594,6 @@ impl<'a> FunctionLegalizer<'a> {
                     gv,
                     ty: self.types.legalize_type(self.ctx, ty),
                 },
-                Value::Undef { ty } => Value::Undef {
-                    ty: self.types.legalize_type(self.ctx, ty),
-                },
                 Value::Zero { ty } => Value::Zero {
                     ty: self.types.legalize_type(self.ctx, ty),
                 },
@@ -819,7 +618,6 @@ impl<'a> FunctionLegalizer<'a> {
     }
 
     fn legalize_inst(&mut self, inst: InstId) {
-        self.normalize_effect_operands(inst);
         if self.bool_member_reads.contains(&inst) {
             self.rewrite_bool_member_read(inst);
             return;
@@ -1131,8 +929,6 @@ impl<'a> FunctionLegalizer<'a> {
             downcast::<&logic::Ctz>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
         {
             self.rewrite_ctz(inst, arg);
-        } else if downcast::<&Freeze>(is, self.func.dfg.inst(inst)).is_some() {
-            self.rewrite_freeze(inst);
         } else if let Some((lhs, rhs)) =
             downcast::<&cmp::Slt>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
@@ -1245,52 +1041,6 @@ impl<'a> FunctionLegalizer<'a> {
 
     fn one_i256(&mut self) -> ValueId {
         self.imm_i256(U256::one())
-    }
-
-    /// Makes each narrow operand that sets what an effect does a value of its type. An `i1`
-    /// needs no mask: every `i1` is a compare, a constant or a word bitcast to `i1`.
-    fn normalize_effect_operands(&mut self, inst: InstId) {
-        let is = self.evm_inst_set();
-        let Some(uses) = operand_uses(is.resolve_inst(self.func.dfg.inst(inst))) else {
-            return;
-        };
-        let operands = self.func.dfg.inst(inst).collect_values();
-        assert_eq!(
-            uses.len(),
-            operands.len(),
-            "the operand uses of `{}` do not match its operands",
-            self.func.dfg.inst(inst).as_text()
-        );
-        let mut masked = SmallVec::<[(usize, ValueId); 2]>::new();
-        for (pos, (&operand, &usage)) in operands.iter().zip(uses).enumerate() {
-            if usage == OperandUse::Effect
-                && self.func.dfg.value_imm(operand).is_none()
-                && !matches!(self.func.dfg.value(operand), Value::Zero { .. })
-                && let Some(ScalarWidth::Narrow(bits)) = self.width_of(operand)
-            {
-                let mask = self.mask_value(bits);
-                let value = self.insert_before_one(
-                    inst,
-                    And::new(is, operand, mask),
-                    Type::I256,
-                    Some(ScalarWidth::Narrow(bits)),
-                );
-                masked.push((pos, value));
-            }
-        }
-        if masked.is_empty() {
-            return;
-        }
-        let mut pos = 0;
-        self.func
-            .dfg
-            .inst_mut(inst)
-            .for_each_value_mut(&mut |value| {
-                if let Some(&(_, masked)) = masked.iter().find(|&&(at, _)| at == pos) {
-                    *value = masked;
-                }
-                pos += 1;
-            });
     }
 
     fn mask_value(&mut self, bits: u16) -> ValueId {
@@ -2817,23 +2567,13 @@ impl<'a> FunctionLegalizer<'a> {
         }
     }
 
-    /// `else ^ ((then ^ else) & -cond)` on frozen arms: the result depends on
-    /// both, and an unspecified arm would make it unspecified where the other
-    /// is chosen. The operands are normalized to the result's width, and so is
-    /// their masked difference.
+    /// `else ^ ((then ^ else) & -cond)`. The operands are normalized to the
+    /// result's width, and so is their masked difference.
     fn rewrite_select(&mut self, inst: InstId, cond: ValueId, then: ValueId, otherwise: ValueId) {
         let Some(width) = self.single_result_width(inst) else {
             return;
         };
         let ty = self.func.dfg.value_ty(then);
-        let mut freeze = |value| {
-            if self.func.dfg.value_is_imm(value) {
-                return value;
-            }
-            let width = self.width_of(value);
-            self.insert_before_one(inst, Freeze::new(self.evm_inst_set(), value), ty, width)
-        };
-        let (then, otherwise) = (freeze(then), freeze(otherwise));
         let mask = self.bool_to_mask_i256(inst, cond);
         let delta = self.insert_before_one(
             inst,
@@ -3304,42 +3044,6 @@ impl<'a> FunctionLegalizer<'a> {
         )
     }
 
-    /// Masks the word a narrow integer freeze makes concrete, and lowers `freeze undef`. The zero
-    /// that replaces `freeze undef` may be an immediate no value had before; it takes the freeze's
-    /// width.
-    fn rewrite_freeze(&mut self, inst: InstId) {
-        let width = self.single_result_width(inst);
-        let arg = *downcast::<&Freeze>(self.evm_inst_set(), self.func.dfg.inst(inst))
-            .expect("a freeze")
-            .arg();
-        // A `zero` is a constant, and a frozen constant is itself.
-        if matches!(self.func.dfg.value(arg), Value::Zero { .. }) {
-            self.replace_with_aliases(inst, &[arg]);
-            return;
-        }
-        // A narrow word is a value of its type or holds the unspecified value, and `freeze` makes
-        // it a value of its type. The mask is on a word-typed freeze, so it is not skipped on the
-        // width the argument is tagged with; known bits may drop it later.
-        if let Some(width @ ScalarWidth::Narrow(_)) = width
-            && !matches!(self.func.dfg.value(arg), Value::Undef { .. })
-        {
-            let frozen = self.insert_before_one(
-                inst,
-                Freeze::new(self.evm_inst_set(), arg),
-                Type::I256,
-                Some(ScalarWidth::Full256),
-            );
-            let result = self.normalize_and_retag_width(inst, frozen, width);
-            self.replace_with_aliases(inst, &[result]);
-            return;
-        }
-        if let Some(lowered) = lower_frozen_undef(self.func, inst)
-            && self.width_of(lowered).is_none()
-        {
-            self.provenance[lowered] = width;
-        }
-    }
-
     /// Reads an `i1` member of an aggregate as the word it is, then keeps its low bit through a
     /// `bitcast` to `i1`.
     fn rewrite_bool_member_read(&mut self, inst: InstId) {
@@ -3383,9 +3087,7 @@ impl<'a> FunctionLegalizer<'a> {
 
     /// Builds an `agg.make` of the legalized type, whose `i1` members are words: an `i1`
     /// operand is the word it was copied from or widens through a `bitcast`, as one inserted
-    /// does. An `undef.i1` becomes `undef.i256`; memory legalization stores nothing for it, as
-    /// for any `undef` operand, and a read keeps the low bit of whatever word the slot holds, an
-    /// `i1` either way.
+    /// does.
     fn legalize_agg_make(&mut self, inst: InstId, make: AggMake) {
         let values = make
             .values()
@@ -3393,10 +3095,8 @@ impl<'a> FunctionLegalizer<'a> {
             .map(|&value| {
                 if self.func.dfg.value_ty(value) != Type::I1 {
                     value
-                } else if matches!(self.func.dfg.value(value), Value::Undef { .. }) {
-                    self.func.dfg.make_undef_value(Type::I256)
                 } else if matches!(self.func.dfg.value(value), Value::Zero { .. }) {
-                    self.func.dfg.make_zero_value(Type::I256)
+                    self.func.dfg.make_imm_value(Immediate::zero(Type::I256))
                 } else {
                     self.word_from_bool(inst, value)
                 }
@@ -3468,13 +3168,8 @@ enum SignedCmpKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{legalize_evm_section, operand_uses};
-    use sonatina_ir::{
-        Function, InstSetExt,
-        ir_writer::FuncWriter,
-        isa::{Isa, evm::Evm},
-        module::FuncRef,
-    };
+    use super::legalize_evm_section;
+    use sonatina_ir::{Function, ir_writer::FuncWriter, module::FuncRef};
     use sonatina_parser::{ParsedModule, parse_module};
 
     fn parse(src: &str) -> ParsedModule {
@@ -3511,28 +3206,6 @@ mod tests {
             .view(func_ref, |function| dump_func(function, func_ref))
     }
 
-    const FROZEN_UNDEF: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %entry() -> i256 {
-block0:
-    v0.*i256 = freeze undef.*i256;
-    v1.i256 = ptr_to_int v0 i256;
-    v2.i256 = freeze undef.i256;
-    v3.i256 = add v1 v2;
-    return v3;
-}
-"#;
-
-    fn assert_frozen_undef_lowered(dumped: &str) {
-        assert!(!dumped.contains("freeze"), "{dumped}");
-        assert!(
-            dumped.contains("v0.*i256 = int_to_ptr 0.i256 *i256;"),
-            "{dumped}"
-        );
-        assert!(dumped.contains("add v1 0.i256;"), "{dumped}");
-    }
-
     #[test]
     fn memory_copies_lower_to_mcopy() {
         let dumped = legalize_and_dump(
@@ -3549,113 +3222,6 @@ block0:
         );
         assert!(dumped.contains("evm_mcopy v0 v1 v2;"), "{dumped}");
         assert!(!dumped.contains("memcopy"), "{dumped}");
-    }
-
-    #[test]
-    fn frozen_undef_pointers_lower_to_null() {
-        assert_frozen_undef_lowered(&legalize_and_dump(FROZEN_UNDEF, "entry"));
-    }
-
-    #[test]
-    fn late_frozen_undef_pointers_lower_to_null() {
-        let parsed = parse(FROZEN_UNDEF);
-        let func_ref = find_func(&parsed, "entry");
-        let dumped = parsed.module.func_store.modify(func_ref, |function| {
-            crate::transform::concrete::concretize_function(function);
-            dump_func(function, func_ref)
-        });
-        assert_frozen_undef_lowered(&dumped);
-    }
-
-    #[test]
-    fn late_freezes_of_frozen_values_lower() {
-        let parsed = parse(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %entry() -> i256 {
-block0:
-    v0.i256 = freeze undef.i256;
-    v1.i256 = freeze v0;
-    return v1;
-}
-"#,
-        );
-        let func_ref = find_func(&parsed, "entry");
-        let dumped = parsed.module.func_store.modify(func_ref, |function| {
-            crate::transform::concrete::concretize_function(function);
-            dump_func(function, func_ref)
-        });
-        assert!(dumped.contains("return 0.i256;"), "{dumped}");
-    }
-
-    /// A freeze of a value that may be unspecified stays until the last IR
-    /// pass: `br v2` would branch on `undef` on the path from `block1`.
-    const FROZEN_PHI: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %entry(v0.i1, v1.i256) -> i256 {
-block0:
-    br v0 block1 block2;
-block1:
-    jump block3;
-block2:
-    jump block3;
-block3:
-    v2.i256 = phi (undef.i256 block1) (v1 block2);
-    v3.i256 = freeze v2;
-    br v3 block4 block5;
-block4:
-    return 1.i256;
-block5:
-    return 2.i256;
-}
-"#;
-
-    #[test]
-    fn freezes_of_values_stay_through_legalization() {
-        let dumped = legalize_and_dump(FROZEN_PHI, "entry");
-        assert!(dumped.contains("v3.i256 = freeze v2;"), "{dumped}");
-        assert!(dumped.contains("br v3 block4 block5;"), "{dumped}");
-    }
-
-    #[test]
-    fn late_freezes_of_values_lower_to_their_argument() {
-        let parsed = parse(FROZEN_PHI);
-        let func_ref = find_func(&parsed, "entry");
-        let dumped = parsed.module.func_store.modify(func_ref, |function| {
-            crate::transform::concrete::concretize_function(function);
-            dump_func(function, func_ref)
-        });
-        assert!(!dumped.contains("freeze"), "{dumped}");
-        assert!(dumped.contains("br v2 block4 block5;"), "{dumped}");
-    }
-
-    /// The xor form depends on both arms: unfrozen, `undef` in the arm not
-    /// chosen would make the branch on the result undefined.
-    #[test]
-    fn selects_freeze_their_arms() {
-        let dumped = legalize_and_dump(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %entry(v0.i1, v1.i256) -> i256 {
-block0:
-    v2.i256 = select v0 v1 undef.i256;
-    br v2 block1 block2;
-block1:
-    return 1.i256;
-block2:
-    return 2.i256;
-}
-"#,
-            "entry",
-        );
-        assert!(dumped.contains("= freeze v1;"), "{dumped}");
-        assert!(dumped.contains("= freeze undef.i256;"), "{dumped}");
-        assert!(!dumped.contains("select"), "{dumped}");
-        assert!(!dumped.contains("xor v1"), "{dumped}");
-        assert!(!dumped.contains("xor undef"), "{dumped}");
     }
 
     #[test]
@@ -3867,85 +3433,5 @@ block0:
             );
             assert!(dumped.contains("0.i1"), "{dumped}");
         }
-    }
-
-    /// Every instruction with an operand that sets what an effect does, one of each.
-    const EFFECT_OPERANDS: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %accesses(v0.i256, v1.*i256) {
-    block0:
-        v2.i256 = mload v1 i256;
-        mstore v1 v0 i256;
-        memzero v1 v0;
-        memcopy v1 v1 v0;
-        v3.*i8 = mem.alloc_dynamic v0;
-        v4.i256 = evm_mload v0;
-        evm_mstore v0 v0;
-        evm_mstore8 v0 v0;
-        v5.i256 = evm_sload v0;
-        evm_sstore v0 v0;
-        v6.i256 = evm_tload v0;
-        evm_tstore v0 v0;
-        v7.i256 = evm_keccak256 v0 v0;
-        evm_log0 v0 v0;
-        evm_log1 v0 v0 v0;
-        evm_log2 v0 v0 v0 v0;
-        evm_log3 v0 v0 v0 v0 v0;
-        evm_log4 v0 v0 v0 v0 v0 v0;
-        evm_mcopy v0 v0 v0;
-        v8.*i8 = evm_malloc v0;
-        v9.i256 = evm_calldata_load v0;
-        v10.i256 = evm_code_load v0;
-        evm_calldata_copy v0 v0 v0;
-        evm_code_copy v0 v0 v0;
-        evm_return_data_copy v0 v0 v0;
-        evm_ext_code_copy v0 v0 v0 v0;
-        v11.i256 = evm_create v0 v0 v0;
-        v12.i256 = evm_create2 v0 v0 v0 v0;
-        v13.i256 = evm_call v0 v0 v0 v0 v0 v0 v0;
-        v14.i256 = evm_call_code v0 v0 v0 v0 v0 v0 v0;
-        v15.i256 = evm_delegate_call v0 v0 v0 v0 v0 v0;
-        v16.i256 = evm_static_call v0 v0 v0 v0 v0 v0;
-        evm_return v0 v0;
-}
-
-func public %reverts(v0.i256) {
-    block0:
-        evm_revert v0 v0;
-}
-
-func public %self_destructs(v0.i256) {
-    block0:
-        evm_self_destruct v0;
-}
-"#;
-
-    #[test]
-    fn operand_uses_match_operands() {
-        let parsed = parse(EFFECT_OPERANDS);
-        let is = Evm::new(parsed.module.ctx.triple).inst_set();
-        let mut classified = 0;
-        for func_ref in parsed.module.funcs() {
-            parsed.module.func_store.view(func_ref, |function| {
-                for block in function.layout.iter_block() {
-                    for inst in function.layout.iter_inst(block) {
-                        let data = function.dfg.inst(inst);
-                        let Some(uses) = operand_uses(is.resolve_inst(data)) else {
-                            continue;
-                        };
-                        assert_eq!(
-                            uses.len(),
-                            data.collect_values().len(),
-                            "operand uses of `{}`",
-                            data.as_text()
-                        );
-                        classified += 1;
-                    }
-                }
-            });
-        }
-        // Every kind `operand_uses` gives a list for occurs above.
-        assert_eq!(classified, 35);
     }
 }

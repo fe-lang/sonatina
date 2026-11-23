@@ -186,10 +186,3 @@ block0:
     v4.i64 = add v3 13.i64;
     return v4;
 }
-
-func public %frozen() -> i64 {
-block0:
-    v0.i64 = freeze zero.i64;
-    v1.i64 = add v0 15.i64;
-    return v1;
-}

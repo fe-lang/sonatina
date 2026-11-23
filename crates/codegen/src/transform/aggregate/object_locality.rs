@@ -15,7 +15,7 @@ use super::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RootInit {
-    UndefFresh,
+    Fresh,
     LoadLiveIn,
 }
 
@@ -49,7 +49,7 @@ impl LocalObjectArgInfo {
     pub(crate) fn init(self, function: &Function, index: usize) -> Option<RootInit> {
         self.is_valid_for(function, index).then_some(match self {
             Self::Borrowed => RootInit::LoadLiveIn,
-            Self::Output(_) => RootInit::UndefFresh,
+            Self::Output(_) => RootInit::Fresh,
         })
     }
 }

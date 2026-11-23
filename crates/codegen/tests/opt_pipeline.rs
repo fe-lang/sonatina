@@ -1089,7 +1089,7 @@ func public %entry() -> i256 {
 }
 
 #[test]
-fn sccp_folds_maybe_undef_saturating_zero_identities() {
+fn sccp_folds_maybe_zero_saturating_zero_identities() {
     let (module, func_ref) = parse_test_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -1105,7 +1105,7 @@ func public %entry(v0.i1) -> i8 {
         jump block3;
 
     block3:
-        v1.i8 = phi (undef.i8 block1) (7.i8 block2);
+        v1.i8 = phi (0.i8 block1) (7.i8 block2);
         v2.i8 = usubsat 0.i8 v1;
         v3.i8 = umulsat v1 0.i8;
         v4.i8 = add v2 v3;
@@ -1128,7 +1128,7 @@ func public %entry(v0.i1) -> i8 {
 }
 
 #[test]
-fn sccp_folds_maybe_undef_one_sided_evm_folds() {
+fn sccp_folds_maybe_zero_one_sided_evm_folds() {
     let (module, func_ref) = parse_test_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -1144,7 +1144,7 @@ func public %entry(v0.i1) -> i256 {
         jump block3;
 
     block3:
-        v1.i256 = phi (undef.i256 block1) (7.i256 block2);
+        v1.i256 = phi (0.i256 block1) (7.i256 block2);
         v2.i256 = evm_add_mod v1 3.i256 0.i256;
         v3.i256 = evm_exp v1 0.i256;
         v4.i256 = evm_exp 1.i256 v1;
@@ -1636,7 +1636,7 @@ func public %entry(v0.i256, v1.i256) -> i256 {
 }
 
 #[test]
-fn gvn_folds_maybe_undef_saturating_zero_identities() {
+fn gvn_folds_maybe_zero_saturating_zero_identities() {
     let (module, func_ref) = parse_test_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -1652,7 +1652,7 @@ func public %entry(v0.i1) -> i8 {
         jump block3;
 
     block3:
-        v1.i8 = phi (undef.i8 block1) (7.i8 block2);
+        v1.i8 = phi (0.i8 block1) (7.i8 block2);
         v2.i8 = usubsat 0.i8 v1;
         v3.i8 = umulsat v1 0.i8;
         v4.i8 = add v2 v3;
@@ -1676,7 +1676,7 @@ func public %entry(v0.i1) -> i8 {
 }
 
 #[test]
-fn gvn_folds_maybe_undef_one_sided_evm_folds() {
+fn gvn_folds_maybe_zero_one_sided_evm_folds() {
     let (module, func_ref) = parse_test_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -1692,7 +1692,7 @@ func public %entry(v0.i1) -> i256 {
         jump block3;
 
     block3:
-        v1.i256 = phi (undef.i256 block1) (7.i256 block2);
+        v1.i256 = phi (0.i256 block1) (7.i256 block2);
         v2.i256 = evm_add_mod v1 3.i256 0.i256;
         v3.i256 = evm_exp v1 0.i256;
         v4.i256 = evm_exp 1.i256 v1;
@@ -2111,7 +2111,7 @@ fn assert_fast_verified(module: &Module) {
 
 #[test]
 fn undefined_reference_merges_verify_after_passes() {
-    // A merge of `undef` with a defined reference, dispatched on a correlated
+    // A merge of a null reference with a defined one, dispatched on a correlated
     // site tag, must still verify after the passes that thread or merge the
     // dispatch. The object comes in as an argument so it stays an object.
     // Constant tags let threading send each arm to its own case; a dynamic tag
@@ -2136,7 +2136,7 @@ block2:
 {defined_arm}
  jump block3;
 block3:
- v2.{ty} = phi (undef.{ty} block1) ({defined} block2);
+ v2.{ty} = phi (zero.{ty} block1) ({defined} block2);
  v3.i8 = phi ({undefined_tag} block1) (1.i8 block2);
  br_table v3 block5 (1.i8 block4);
 block4:
@@ -2195,7 +2195,7 @@ block0:
                 // check is not vacuous.
                 let text = ModuleWriter::new(&parsed.module).dump_string();
                 assert!(
-                    !merged || text.contains("phi (undef.objref") && text.contains("obj.load"),
+                    !merged || text.contains("phi (zero.objref") && text.contains("obj.load"),
                     "{text}"
                 );
             }

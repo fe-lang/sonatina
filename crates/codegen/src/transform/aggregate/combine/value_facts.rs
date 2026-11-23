@@ -2,7 +2,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{Function, ValueId, inst::data};
 
-use super::{inst_const_index, is_explicit_undef, shape};
+use super::{inst_const_index, shape};
 use shape::FieldPath;
 
 #[derive(Default)]
@@ -144,10 +144,9 @@ impl AggregateValueFacts {
                 && let Some(index) = insert.index
             {
                 let mut path = FieldPath::from_slice(&[index]);
-                insert.source = sources.resolve(insert.value, &mut path).filter(|&source| {
-                    !is_explicit_undef(func, source)
-                        && func.dfg.value_ty(source) == func.dfg.value_ty(value)
-                });
+                insert.source = sources
+                    .resolve(insert.value, &mut path)
+                    .filter(|&source| func.dfg.value_ty(source) == func.dfg.value_ty(value));
             }
         }
 

@@ -18,19 +18,19 @@ func public %entry() {
         jump block3;
 
     block3:
-        v57.i256 = phi (v0 block0) (v59 block4);
-        v59.i256 = phi (v1 block0) (v57 block4);
-        v42.i256 = phi (v2 block0) (v47 block4);
-        v56.i1 = is_zero v42;
-        br v56 block5 block4;
+        v56.i256 = phi (v0 block0) (v58 block4);
+        v58.i256 = phi (v1 block0) (v56 block4);
+        v42.i256 = phi (v2 block0) (v46 block4);
+        v55.i1 = is_zero v42;
+        br v55 block5 block4;
 
     block4:
-        v47.i256 = sub v42 1.i256;
+        v46.i256 = sub v42 1.i256;
         jump block3;
 
     block5:
-        v52.i256 = mul v59 100.i256;
-        v53.i256 = add v52 v57;
+        v51.i256 = mul v58 100.i256;
+        v52.i256 = add v51 v56;
         v19.i256 = add v0 v1;
         mstore 0.i32 v19 i256;
         v21.[i256; 3] = agg.make [i256; 3] v0 v1 v19;
@@ -39,7 +39,7 @@ func public %entry() {
         v25.i256 = add v0 1.i256;
         v33.i256 = add v1 v25;
         mstore 64.i32 v33 i256;
-        mstore 96.i32 v53 i256;
+        mstore 96.i32 v52 i256;
         evm_return 0.i8 -128.i8;
 }
 

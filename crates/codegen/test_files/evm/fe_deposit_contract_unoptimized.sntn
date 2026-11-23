@@ -53,7 +53,7 @@ func private %__DepositContract_init(v0.i256) {
         jump block1;
 
     block1:
-        v8.@layout_14 = agg.make @layout_14 undef.@layout_13 31.i256;
+        v8.@layout_14 = agg.make @layout_14 zero.@layout_13 31.i256;
         v9.i256 = call %core__lib__range__impl_trait_Range_83a5__len__g7b34_bb33 v8;
         jump block2;
 
@@ -477,7 +477,7 @@ func private %__DepositContract_recv_0_0(v0.@layout_0, v1.@layout_0, v2.@layout_
         evm_sstore v268 v270;
         v274.i256 = add v4 32.i256;
         v275.i256 = evm_sload v274;
-        v279.@layout_14 = agg.make @layout_14 undef.@layout_13 32.i256;
+        v279.@layout_14 = agg.make @layout_14 zero.@layout_13 32.i256;
         v280.i256 = call %core__lib__range__impl_trait_Range_83a5__len__g7b34_c5ca v279;
         jump block26;
 
@@ -526,7 +526,7 @@ func private %__DepositContract_recv_0_1(v0.i256) -> i256 {
     block1:
         v7.i256 = add v0 32.i256;
         v8.i256 = evm_sload v7;
-        v13.@layout_14 = agg.make @layout_14 undef.@layout_13 32.i256;
+        v13.@layout_14 = agg.make @layout_14 zero.@layout_13 32.i256;
         v14.i256 = call %core__lib__range__impl_trait_Range_83a5__len__g7b34_bb33 v13;
         jump block2;
 

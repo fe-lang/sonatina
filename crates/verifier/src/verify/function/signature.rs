@@ -322,27 +322,6 @@ impl FunctionVerifier<'_> {
                         }
                     }
                 }
-                Value::Undef { ty } => {
-                    if !self.is_type_valid(*ty) {
-                        self.emit(Diagnostic::error(
-                            DiagnosticCode::InvalidTypeRef,
-                            "undef value has invalid type",
-                            Location::Value {
-                                func: self.func_ref,
-                                value: value_id,
-                            },
-                        ));
-                    } else if !is_type_inhabited(self.ctx, *ty) {
-                        self.emit(Diagnostic::error(
-                            DiagnosticCode::InvalidTypeRef,
-                            "SSA value has an uninhabited type",
-                            Location::Value {
-                                func: self.func_ref,
-                                value: value_id,
-                            },
-                        ));
-                    }
-                }
                 Value::Zero { ty } => {
                     let message = if !self.is_type_valid(*ty) {
                         "zero value has invalid type"

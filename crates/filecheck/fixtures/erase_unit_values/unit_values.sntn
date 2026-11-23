@@ -16,8 +16,8 @@ func public %loop_phi(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v1.unit = phi (undef.unit block0) (v2 block1);
-        v2.unit = phi (undef.unit block0) (v1 block1);
+        v1.unit = phi (zero.unit block0) (v2 block1);
+        v2.unit = phi (zero.unit block0) (v1 block1);
         v3.i256 = phi (0.i256 block0) (v4 block1);
         v4.i256 = add v3 1.i256;
         v5.i1 = lt v4 v0;
@@ -37,7 +37,7 @@ func public %loop_phi(v0.i256) -> i256 {
 # nextln:         return v2;
 func public %memory(v0.i256) -> i256 {
     block0:
-        mstore v0 undef.unit unit;
+        mstore v0 zero.unit unit;
         v1.unit = mload v0 unit;
         call %sink v1;
         mstore v0 v1 unit;
@@ -59,7 +59,7 @@ func public %phi_use(v0.i1) {
         jump block3;
 
     block3:
-        v1.unit = phi (undef.unit block1) (undef.unit block2);
+        v1.unit = phi (zero.unit block1) (zero.unit block2);
         call %sink v1;
         return;
 }

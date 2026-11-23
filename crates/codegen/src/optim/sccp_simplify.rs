@@ -25,7 +25,7 @@ pub(super) enum SimplifyAction {
     Const(Immediate),
     Copy(ValueId),
     BuildIsZero(ValueId),
-    /// The last insert of a chain into `undef` or an `agg.make`: it becomes
+    /// The last insert of a chain into `zero` or an `agg.make`: it becomes
     /// an `agg.make` (`transform::aggregate::fresh`).
     FoldFreshInsert,
     NoChange,
@@ -208,17 +208,6 @@ pub(super) fn simplify_inst(
             }
         }
         InstClassKind::Phi | InstClassKind::Opaque => {
-            // A constant, or what another freeze gives, is specified already.
-            // Parameters, call results and reads may be unspecified.
-            if let Some(freeze) = downcast::<&data::Freeze>(is, inst)
-                && let arg = *freeze.arg()
-                && (facts.known_imm(arg).is_some()
-                    || func.dfg.value_inst(arg).is_some_and(|inst| {
-                        downcast::<&data::Freeze>(is, func.dfg.inst(inst)).is_some()
-                    }))
-            {
-                return wrap_action(SimplifyAction::Copy(arg));
-            }
             if let Some(extract) = downcast::<&data::ExtractValue>(is, inst)
                 && let Some(make) = func
                     .dfg

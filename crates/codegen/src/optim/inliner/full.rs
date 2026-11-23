@@ -395,10 +395,7 @@ struct OperandValidator<'a> {
 impl OperandValidator<'_> {
     fn validate_value(&mut self, value: ValueId) {
         match self.callee.dfg.value(value) {
-            Value::Immediate { .. }
-            | Value::Global { .. }
-            | Value::Undef { .. }
-            | Value::Zero { .. } => {}
+            Value::Immediate { .. } | Value::Global { .. } | Value::Zero { .. } => {}
             Value::Arg { .. } => {
                 if !self.arg_values.contains(&value) {
                     self.ok = false;
@@ -537,7 +534,6 @@ fn map_or_materialize(
     let mapped = match callee.dfg.value(old) {
         Value::Immediate { imm, .. } => caller.dfg.make_imm_value(*imm),
         Value::Global { gv, .. } => caller.dfg.make_global_value(*gv),
-        Value::Undef { ty } => caller.dfg.make_undef_value(*ty),
         Value::Zero { ty } => caller.dfg.make_zero_value(*ty),
         Value::Arg { .. } | Value::Inst { .. } => return None,
     };

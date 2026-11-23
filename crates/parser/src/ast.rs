@@ -871,7 +871,6 @@ pub struct Value {
 pub enum ValueKind {
     Immediate(Immediate),
     EnumTagImmediate { enum_ty: StructName, value: I256 },
-    Undef(Type),
     Zero(Type),
     Named(ValueName),
     Global(GvName),
@@ -1021,11 +1020,6 @@ impl FromSyntax<Error> for Value {
                     },
                     _ => unreachable!(),
                 }
-            }
-
-            Rule::undef => {
-                let ty = node.single(Rule::type_name);
-                ValueKind::Undef(ty)
             }
 
             Rule::zero => {

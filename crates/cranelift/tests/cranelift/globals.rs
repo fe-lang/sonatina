@@ -154,7 +154,7 @@ block0:
 }
 
 #[test]
-fn undef_materializes_zero_for_scalar_pointer_and_aggregate_values() {
+fn zero_materializes_for_scalar_pointer_and_aggregate_values() {
     for (ty, size) in [
         ("i1", 1),
         ("i8", 1),
@@ -173,7 +173,7 @@ fn undef_materializes_zero_for_scalar_pointer_and_aggregate_values() {
 type @Padded = {{i8, i128}};
 func private %make() -> {ty} {{
 block0:
-    return undef.{ty};
+    return zero.{ty};
 }}
 func public %write(v0.*{ty}) {{
 block0:
@@ -208,12 +208,12 @@ block0:
 }
 
 #[test]
-fn partial_aggregate_insert_keeps_undef_fields_zero() {
+fn partial_aggregate_insert_keeps_unwritten_fields_zero() {
     let source = r#"
 type @Padded = {i8, i128};
 func public %write(v0.*@Padded) {
 block0:
-    v1.@Padded = agg.make @Padded 7.i8 undef.i128;
+    v1.@Padded = agg.make @Padded 7.i8 0.i128;
     mstore v0 v1 @Padded;
     return;
 }
@@ -230,7 +230,7 @@ block0:
             unsafe { std::mem::transmute(artifact.function_address("write").unwrap()) };
         let mut output = [0xa5; 32];
         unsafe { write(output.as_mut_ptr()) };
-        // The i8 at 0 and the undef i128 at 16; the padding between is
+        // The i8 at 0 and the zero i128 at 16; the padding between is
         // not part of the value.
         assert_eq!(output[0], 7);
         assert!(output[16..].iter().all(|&byte| byte == 0), "{level:?}");

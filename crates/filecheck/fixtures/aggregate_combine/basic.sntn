@@ -46,12 +46,12 @@ func public %ac_reconstruct(v0.@slice) -> i256 {
         return v5;
 }
 
-# sameln: func public %ac_extract_undef() -> i256 {
+# sameln: func public %ac_extract_zero() -> i256 {
 # check:     block0:
-# check:         return undef.i256;
-func public %ac_extract_undef() -> i256 {
+# check:         return 0.i256;
+func public %ac_extract_zero() -> i256 {
     block0:
-        v0.i256 = extract_value undef.@slice 1.i8;
+        v0.i256 = extract_value zero.@slice 1.i8;
         return v0;
 }
 
@@ -77,16 +77,15 @@ func public %ac_insert_identical_field_fully_initialized_insert_chain(v0.i256, v
         return v5;
 }
 
-# Reinserting a field read from the same aggregate gives that aggregate, even
-# where the field is unspecified.
-# sameln: func public %ac_insert_identical_field_maybe_undef(v0.i1, v1.@slice, v2.i256) -> @slice {
+# Reinserting a field read from the same aggregate gives that aggregate.
+# sameln: func public %ac_insert_identical_field_of_phi(v0.i1, v1.@slice, v2.i256) -> @slice {
 # check:     block3:
 # check:         v4.@slice = phi (v1 block0) (v3 block2);
 # not:           insert_value v4
 # check:         return v4;
-func public %ac_insert_identical_field_maybe_undef(v0.i1, v1.@slice, v2.i256) -> @slice {
+func public %ac_insert_identical_field_of_phi(v0.i1, v1.@slice, v2.i256) -> @slice {
     block0:
-        v3.@slice = agg.make @slice v2 undef.i256;
+        v3.@slice = agg.make @slice v2 0.i256;
         br v0 block1 block2;
 
     block1:

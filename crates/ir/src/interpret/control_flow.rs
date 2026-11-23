@@ -64,7 +64,7 @@ impl Interpret for Phi {
             }
         }
 
-        single_result(EvalValue::Undef)
+        single_result(EvalValue::Unknown)
     }
 }
 

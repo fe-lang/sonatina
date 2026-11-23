@@ -1293,7 +1293,7 @@ type @nested = {{i256, @pair}};
 func public %f(v0.i256) -> i256 {{
 block0:
     v1.*@nested = alloca @nested;
-    v2.@pair = agg.make @pair 7.i256 undef.i256;
+    v2.@pair = agg.make @pair 7.i256 0.i256;
     v3.@pair = insert_value v2 1.i8 {field};
     v5.@nested = agg.make @nested v0 v3;
     mstore v1 v5 @nested;
@@ -1387,8 +1387,8 @@ block0:
 
     /// A read gives what the store wrote, unspecified fields included.
     #[test]
-    fn reads_take_stored_aggregates_with_undefined_fields() {
-        for field in ["undef.i256", "v0"] {
+    fn reads_take_stored_aggregates_with_zero_fields() {
+        for field in ["0.i256", "v0"] {
             let dumped = forward_pair_read(field);
             assert!(!dumped.contains("mload"), "{field}: {dumped}");
         }

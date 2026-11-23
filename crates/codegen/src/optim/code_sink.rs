@@ -386,11 +386,9 @@ fn value_available_at(
                 domtree.dominates(def_block, block)
             }
         }
-        Value::Arg { .. }
-        | Value::Immediate { .. }
-        | Value::Global { .. }
-        | Value::Undef { .. }
-        | Value::Zero { .. } => true,
+        Value::Arg { .. } | Value::Immediate { .. } | Value::Global { .. } | Value::Zero { .. } => {
+            true
+        }
     }
 }
 

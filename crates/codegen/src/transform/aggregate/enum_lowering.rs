@@ -986,13 +986,14 @@ block0:
             1,
             "storing #None should only write the tag word:\n{store_ir}"
         );
-        assert!(!store_ir.contains("undef"), "{store_ir}");
 
         let ret_none = lookup_func(&module, "ret_none");
         let ret_ir = module
             .func_store
             .view(ret_none, |f| FuncWriter::new(ret_none, f).dump_string());
-        assert!(!ret_ir.contains("undef"), "{ret_ir}");
-        assert!(ret_ir.contains("agg.make "), "{ret_ir}");
+        assert!(
+            ret_ir.contains("= agg.make @__enum_lowered_Opt_0 0.i1 0.i256 0.i256;"),
+            "returning #None should set the unset payload words to zero:\n{ret_ir}"
+        );
     }
 }

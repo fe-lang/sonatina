@@ -368,13 +368,13 @@ block5:
     }
 
     #[test]
-    fn incoming_paths_drop_undef_dependent_checks() {
+    fn incoming_paths_drop_guarded_checks() {
         let output = optimized(
             r#"
 target = "evm-ethereum-osaka"
-func public %test(v0.i8, v1.i8) -> i1 {
+func public %test(v0.i8, v1.i8, v12.i8) -> i1 {
 block0:
-    v11.i8 = add v0 undef.i8;
+    v11.i8 = add v0 v12;
     v2.i1 = lt v1 10.i8;
     br v2 block1 block5;
 block1:
@@ -532,15 +532,15 @@ func public %test() -> i1 {
     }
 
     #[test]
-    fn guarded_subtraction_drops_undef_dependent_checks() {
+    fn guarded_subtraction_drops_guarded_checks() {
         let text = optimized(
             r#"
 target = "evm-ethereum-osaka"
-func public %test() -> i1 {
+func public %test(v21.i32) -> i1 {
  block0:
   v20.i256 = evm_call_value;
   v0.i32 = trunc v20 i32;
-  v1.i32 = add undef.i32 v0;
+  v1.i32 = add v21 v0;
   v2.i1 = lt v1 v0;
   br v2 block1 block2;
  block1:
@@ -551,8 +551,6 @@ func public %test() -> i1 {
 }
 "#,
         );
-        // Where `v1` is unspecified the branch on the comparison is
-        // undefined, so the comparison holds for the subtraction.
         assert!(!text.contains("usubo"), "{text}");
     }
     #[test]
@@ -589,7 +587,7 @@ func public %test() -> i1 {{
     #[test]
     fn guarded_subtraction_trusts_parameters() {
         for linkage in ["private", "public"] {
-            for (args, rhs) in [("undef.i256 7.i256", "v1"), ("7.i256 undef.i256", "v2")] {
+            for (args, rhs) in [("0.i256 7.i256", "v1"), ("7.i256 0.i256", "v2")] {
                 let text = optimized(&format!(
                     r#"
 target = "evm-ethereum-osaka"
@@ -641,7 +639,7 @@ func public %test() -> i1 {{
 }}
 func private %source() -> i256 {{
  block0:
-  return undef.i256;
+  return 0.i256;
 }}
 "#
             ));

@@ -1568,13 +1568,13 @@ func public %bad_gep(v0.*@s) -> unit {
 
 func public %bad_insert() -> unit {
     block0:
-        v0.@s = insert_value undef.@s -1.i32 1.i32;
+        v0.@s = insert_value zero.@s -1.i32 1.i32;
         return;
 }
 
 func public %bad_extract() -> unit {
     block0:
-        v0.i32 = extract_value undef.@s -1.i32;
+        v0.i32 = extract_value zero.@s -1.i32;
         return;
 }
 "#;
@@ -1599,7 +1599,7 @@ type @empty = {};
 
 func public %f(v0.i32) -> @nested {
     block0:
-        v1.@s = agg.make @s v0 undef.i64;
+        v1.@s = agg.make @s v0 0.i64;
         v2.[i8; 2] = agg.make [i8; 2] 1.i8 2.i8;
         v3.@nested = agg.make @nested v1 v2;
         v4.@empty = agg.make @empty;
@@ -1851,13 +1851,13 @@ func private %bad_gep(v0.*@s) -> unit {
 
 func private %bad_insert() -> unit {
     block0:
-        v0.[i32; 2] = insert_value undef.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256 1.i32;
+        v0.[i32; 2] = insert_value zero.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256 1.i32;
         return;
 }
 
 func private %bad_extract() -> unit {
     block0:
-        v0.i32 = extract_value undef.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256;
+        v0.i32 = extract_value zero.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256;
         return;
 }
 
@@ -3670,8 +3670,7 @@ func private %flag() -> @flag {
 }
 func private %null() -> *i8 {
     block0:
-        v0.*i8 = freeze zero.*i8;
-        return v0;
+        return zero.*i8;
 }
 "#;
     if let Err(err) = parse_and_verify_module(ok, &cfg) {

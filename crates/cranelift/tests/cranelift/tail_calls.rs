@@ -135,7 +135,7 @@ block0:
     v2.i1 = eq v0 0.i64;
     br v2 block1 block2;
 block1:
-    v4.@Quad = agg.make @Quad 2.i8 v1 undef.i16 undef.i64;
+    v4.@Quad = agg.make @Quad 2.i8 v1 0.i16 0.i64;
     return (v4, v1, v4);
 block2:
     v5.i64 = sub v0 1.i64;
@@ -172,7 +172,7 @@ block0:
             let mut result = [0xa5u8; 72];
             unsafe { run(depth, result.as_mut_ptr()) };
             // An even depth ends in `%even`, an odd one in `%odd`, whose
-            // fields it leaves undef are zero.
+            // other fields are zero.
             let sum = (depth / 2 * 3 + depth % 2 * 2).to_le_bytes();
             let mut quad = [0u8; 32];
             quad[8..16].copy_from_slice(&sum);
@@ -345,7 +345,7 @@ fn tail_calls_pass_aggregate_arguments_on() {
     let source = r#"
 func inline(never) private %fill(v0.i64) -> [i64; 32] {
 block0:
-    v1.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v1.[i64; 32] = agg.make [i64; 32] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     return v1;
 }
 

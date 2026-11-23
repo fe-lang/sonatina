@@ -180,11 +180,6 @@ impl DataFlowGraph {
         value
     }
 
-    pub fn make_undef_value(&mut self, ty: Type) -> ValueId {
-        let value_data = Value::Undef { ty };
-        self.make_value(value_data)
-    }
-
     /// The constant `zero.ty`: the value of `ty` whose bits are all zero.
     pub fn make_zero_value(&mut self, ty: Type) -> ValueId {
         if let Some(&value) = self.zeros.get(&ty) {
@@ -434,7 +429,6 @@ impl DataFlowGraph {
             | Value::Arg { ty, .. }
             | Value::Immediate { ty, .. }
             | Value::Global { ty, .. }
-            | Value::Undef { ty }
             | Value::Zero { ty } => *ty,
         }
     }
@@ -453,7 +447,6 @@ impl DataFlowGraph {
             Value::Inst { ty, .. }
             | Value::Arg { ty, .. }
             | Value::Global { ty, .. }
-            | Value::Undef { ty }
             | Value::Zero { ty } => *ty = new_ty,
         }
     }
@@ -1063,7 +1056,10 @@ mod tests {
     fn retype_value_updates_non_immediate_type() {
         let isa = test_isa();
         let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
-        let value = dfg.make_undef_value(Type::I8);
+        let value = dfg.make_value(Value::Arg {
+            ty: Type::I8,
+            idx: 0,
+        });
 
         dfg.retype_value(value, Type::I16);
 

@@ -430,9 +430,6 @@ impl FuncLowerCtx<'_> {
             EvmInstKind::EvmKeccak256Words(_) => {
                 Err("evm_keccak256_words must be lowered before machine lowering".to_string())
             }
-            EvmInstKind::Freeze(_) => {
-                Err("freeze must be lowered before machine lowering".to_string())
-            }
             _ => self.lower_structural(source_inst),
         }
     }
@@ -995,11 +992,6 @@ impl FuncLowerCtx<'_> {
                 self.map.values[value] = Some(lowered);
                 Ok(lowered)
             }
-            Value::Undef { .. } => Err(format!(
-                "value v{} in func {}: machine lowering takes concrete IR, which has no `undef`",
-                value.as_u32(),
-                self.func_ref.as_u32()
-            )),
             Value::Zero { ty } => {
                 let imm = lower_immediate(Immediate::zero(Type::I256), *ty, self.source_module)?;
                 let lowered = self.machine.dfg.make_imm_value(imm);

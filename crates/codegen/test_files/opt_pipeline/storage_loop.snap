@@ -31,15 +31,15 @@ func private %__Foo_runtime() {
         evm_revert 0.i256 0.i256;
 
     block16:
-        v40.i256 = phi (0.i256 block6) (v45 block17);
-        v41.i1 = lt v40 20.i256;
-        br v41 block17 block7;
+        v39.i256 = phi (0.i256 block6) (v44 block17);
+        v40.i1 = lt v39 20.i256;
+        br v40 block17 block7;
 
     block17:
-        v43.i256 = evm_sload 0.i256;
-        v44.i256 = add v43 1.i256;
-        evm_sstore 0.i256 v44;
-        v45.i256 = add v40 1.i256;
+        v42.i256 = evm_sload 0.i256;
+        v43.i256 = add v42 1.i256;
+        evm_sstore 0.i256 v43;
+        v44.i256 = add v39 1.i256;
         jump block16;
 
     block7:

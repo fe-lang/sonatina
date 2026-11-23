@@ -1,4 +1,4 @@
-//! A fresh array built by an `insert_value` chain on undef and by an
+//! A fresh array built by an `insert_value` chain on `zero` and by an
 //! `agg.make` weighs the same in the size budgets of loop rotation, loop
 //! unrolling, jump threading and insert chain placement: each pass applies to
 //! both spellings or to neither.
@@ -16,7 +16,7 @@ fn build(result: &str, len: usize, elem: &str, make: bool) -> String {
         return format!("{result}.{ty} = agg.make {ty}{elems};\n");
     }
     let mut text = String::new();
-    let mut current = format!("undef.{ty}");
+    let mut current = format!("zero.{ty}");
     for index in 0..len {
         let next = if index + 1 == len {
             result.to_string()

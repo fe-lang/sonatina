@@ -332,7 +332,6 @@ impl World {
             Value::Immediate { imm, .. } => {
                 Node::scalar(imm.to_nonnegative_usize().expect("small model integer") as u64)
             }
-            Value::Undef { ty } => Node::uninitialized(func.ctx(), *ty),
             Value::Zero { ty } => Node::zero(func.ctx(), *ty),
             _ => self.values[&value].clone(),
         }
@@ -538,7 +537,7 @@ fn execute_block(
             .or_else(|| downcast::<&data::ObjIndex>(is, data).map(|index| *index.object()))
             .filter(|&base| matches!(value(base).data, Data::Reference(None)))
         {
-            // Address formation from an `undef` reference denotes no location.
+            // Address formation from a null reference denotes no location.
             Some(value(base))
         } else if let Some(proj) = downcast::<&data::EnumProj>(is, data) {
             let mut view = value(*proj.object()).view();

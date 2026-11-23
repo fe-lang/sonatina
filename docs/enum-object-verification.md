@@ -25,22 +25,22 @@ reference carrier preserves this obligation, including phis, SSA aggregates,
 enum payloads and memory-held references.
 
 Initialization means enum payload readability. This is not a general check of
-scalar definedness, poison, `undef`, lifetime, bounds or borrowing. In particular,
+scalar definedness, lifetime, bounds or borrowing. In particular,
 ordinary whole object loads outside guarded views retain their existing local
 verification contract, but transport the source's known initialization state;
 copying an uninitialized object cannot manufacture initialized payload facts.
-Scalar SSA results follow the existing definedness contract after their source
+Scalar SSA results follow the existing contract after their source
 read is checked. Aggregate snapshots retain their source subtree facts. The
 concrete tests use defined scalar inputs for claims about executed reads.
 
-An `undef` object reference names no location (`Value::Undef`). Copying,
+A null object reference names no location (`Value::Zero`). Copying,
 merging, projecting, passing, returning or storing it as a value is defined; a
 load, store, tag read or write, constant initialization, materialization or
 trusted variant assumption that needs its location has no defined behavior.
-The verifier therefore takes no facts from an undefined alternative of a
-reference: a merge of an undefined alternative with a defined one has the
+The verifier therefore takes no facts from a null alternative of a
+reference: a merge of a null alternative with a defined one has the
 defined one's provenance and view certificate. A strict use of a reference that
-is undefined on every path to it is reported and ends the analyzed path, except
+is null on every path to it is reported and ends the analyzed path, except
 a trusted variant assumption, which is contradicted and ends it silently.
 This differs from a reference of unresolved provenance, which is still rejected
 when used, and from a real cell whose contents are uninitialized, which is still
@@ -224,10 +224,11 @@ The finite vocabulary is derived from the validated function and its types:
 - A guarded alternative pairs a possible location with a set of
   `(ancestor location, variant)` guards. Deduplicate repeated guards. Unknown
   targets and unknown local guard provenance are explicit alternatives.
-- A literal `undef` object reference is the bottom of the reference
-  alternatives. It has no targets, no unknown contributor and no equalities, so
-  a join with a defined reference is that reference, view certificate included.
-  A strict use of a reference undefined on every path is `NoFlow`.
+- A literal null object reference (`zero.objref<T>`) is the bottom of the
+  reference alternatives. It has no targets, no unknown contributor and no
+  equalities, so a join with a defined reference is that reference, view
+  certificate included. A strict use of a reference null on every path is
+  `NoFlow`.
 - Symbolic views are keyed by SSA value and structural child path. They carry
   guarantees about the location denoted by that value on the current path, in
   addition to conservative facts about its candidate allocations. Reference
@@ -311,7 +312,7 @@ dominators validates operand availability. Malformed IR must receive diagnostics
 before any semantic transfer uses unchecked type/operand information.
 
 Analysis eligibility depends on the function's validated value types, including
-arguments, instruction results and typed constants/undef values. Traverse each
+arguments, instruction results and typed constants. Traverse each
 type once, following by-value fields and object references. If any of these
 types can contain an enum, run the analysis regardless of the instruction that
 recovers a reference. Calls, raw loads and future carriers can introduce local

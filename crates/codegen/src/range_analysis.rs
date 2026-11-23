@@ -9,7 +9,6 @@ use sonatina_ir::{
     inst::{
         BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind,
         control_flow::BranchKind,
-        data::Freeze,
         evm::{
             EvmCalldataSize, EvmCodeSize, EvmExtCodeSize, EvmMalloc, EvmMloadBytes, EvmMsize,
             EvmReturnDataSize,
@@ -439,13 +438,9 @@ pub(crate) fn fact_for_value(func: &Function, env: &RangeEnv, value: ValueId) ->
         return RangeFact::singleton(imm);
     }
 
-    match func.dfg.value(value) {
-        Value::Undef { .. } => RangeFact::full_for(ty),
-        _ => env
-            .get(&value)
-            .copied()
-            .unwrap_or_else(|| RangeFact::full_for(ty)),
-    }
+    env.get(&value)
+        .copied()
+        .unwrap_or_else(|| RangeFact::full_for(ty))
 }
 
 pub(crate) fn exact_immediate(
@@ -513,14 +508,6 @@ fn transfer_inst(
         }
         InstClassKind::Binary(kind) => {
             transfer_binary_inst(func, env, inst, kind, guarded_subs.contains(&inst))
-        }
-        // A frozen value is one of its argument's.
-        _ if let Some(freeze) = func.dfg.downcast::<&Freeze>(inst)
-            && let Some(result) = func.dfg.inst_result(inst)
-            && supports_range_facts(func.dfg.value_ty(result)) =>
-        {
-            let fact = fact_for_value(func, env, *freeze.arg());
-            set_env_fact(func, env, result, fact);
         }
         // A selected value is one of its two.
         _ if let Some(select) = func.dfg.downcast::<&Select>(inst)

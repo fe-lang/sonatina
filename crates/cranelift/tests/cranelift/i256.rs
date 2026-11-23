@@ -674,7 +674,7 @@ block1:
     v10.i256 = phi (v7 block0) (v12 block1);
     v11.i256 = phi (v6 block0) (v10 block1);
     v13.i64 = phi (0.i64 block0) (v14 block1);
-    v12.i256 = call %combine v10 v11 undef.i256;
+    v12.i256 = call %combine v10 v11 0.i256;
     v15.i256 = add v12 v11;
     v14.i64 = add v13 1.i64;
     v16.i1 = lt v14 5.i64;
@@ -708,7 +708,6 @@ block2:
             let (mut current, mut previous) = (combine(first, b, U256::from(3)), c);
             let mut sum = U256::zero();
             for _ in 0..5 {
-                // Undef reads as zero.
                 let next = combine(current, previous, U256::zero());
                 sum = next.overflowing_add(previous).0;
                 (current, previous) = (next, current);

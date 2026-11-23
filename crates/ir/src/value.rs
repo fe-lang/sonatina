@@ -36,11 +36,6 @@ impl IrWrite<FuncWriteCtx<'_>> for ValueId {
                     .ctx
                     .with_gv_store(|s| write!(w, "${}", s.gv_data(*gv).symbol)),
 
-                Value::Undef { ty } => {
-                    write!(w, "undef.")?;
-                    ty.write(w, ctx)
-                }
-
                 Value::Zero { ty } => {
                     write!(w, "zero.")?;
                     ty.write(w, ctx)
@@ -54,12 +49,7 @@ impl IrWrite<FuncWriteCtx<'_>> for ValueId {
     }
 }
 
-/// An value data definition.
-///
-/// An `Undef` object reference names no location: copying, merging, passing,
-/// returning or storing it as a value is defined, but a load, store, tag read
-/// or write, constant initialization, materialization or trusted variant
-/// assumption that needs its location has no defined behavior.
+/// A value data definition.
 #[derive(Debug, Clone)]
 pub enum Value {
     /// The value is defined by an instruction.
@@ -78,17 +68,11 @@ pub enum Value {
     /// The value is global value.
     Global { gv: GlobalVariableRef, ty: Type },
 
-    /// The unspecified value of `ty`, which any value of `ty` refines.
-    /// Operations, phis, calls and memory pass it on; using it as a branch
-    /// condition, an address or object operand, or in a trusted variant
-    /// assumption is undefined behavior. See `docs/undef.md`.
-    Undef { ty: Type },
-
     /// The value of `ty` whose bits are all zero: zero for an integer, the null
     /// pointer or object reference, the tag of variant 0, an aggregate whose
-    /// fields are each zero, the unit value. It is an ordinary constant, not an
-    /// unspecified value; a null pointer or object reference names no location,
-    /// so an access through it is undefined behavior.
+    /// fields are each zero, the unit value. It is an ordinary constant; a null
+    /// pointer or object reference names no location, so an access through it
+    /// is undefined behavior.
     Zero { ty: Type },
 }
 

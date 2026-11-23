@@ -1327,6 +1327,14 @@ block0:
         });
     }
 
+    fn make_dummy_value(func: &mut sonatina_ir::Function) -> ValueId {
+        let idx = func.dfg.values.len();
+        func.dfg.make_value(sonatina_ir::Value::Arg {
+            ty: Type::I256,
+            idx,
+        })
+    }
+
     #[test]
     fn operand_prep_query_key_ignores_irrelevant_slots_below_effective_window() {
         const SRC: &str = r#"
@@ -1346,10 +1354,10 @@ block0:
                 func.dfg.make_imm_value(Immediate::I8(1)),
                 func.dfg.make_imm_value(Immediate::I8(2)),
             ];
-            let top0 = func.dfg.make_undef_value(Type::I256);
-            let top1 = func.dfg.make_undef_value(Type::I256);
-            let ignored_a = func.dfg.make_undef_value(Type::I256);
-            let ignored_b = func.dfg.make_undef_value(Type::I256);
+            let top0 = make_dummy_value(func);
+            let top1 = make_dummy_value(func);
+            let ignored_a = make_dummy_value(func);
+            let ignored_b = make_dummy_value(func);
 
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(func);
@@ -1422,9 +1430,9 @@ block0:
         let func_ref = parsed.debug.func_order[0];
 
         parsed.module.func_store.modify(func_ref, |func| {
-            let source = func.dfg.make_undef_value(Type::I256);
-            let ignored_a = func.dfg.make_undef_value(Type::I256);
-            let ignored_b = func.dfg.make_undef_value(Type::I256);
+            let source = make_dummy_value(func);
+            let ignored_a = make_dummy_value(func);
+            let ignored_b = make_dummy_value(func);
             let args = [source];
 
             let mut cfg = ControlFlowGraph::new();
@@ -1505,7 +1513,7 @@ block0:
         parsed.module.func_store.modify(func_ref, |func| {
             let arg = func.dfg.make_imm_value(Immediate::I8(1));
             let stack_source = func.dfg.make_imm_value(Immediate::I256(I256::from(1)));
-            let ignored = func.dfg.make_undef_value(Type::I256);
+            let ignored = make_dummy_value(func);
             let args = [arg];
 
             let mut cfg = ControlFlowGraph::new();
@@ -1576,11 +1584,11 @@ block0:
         let func_ref = parsed.debug.func_order[0];
 
         parsed.module.func_store.modify(func_ref, |func| {
-            let source = func.dfg.make_undef_value(Type::I256);
+            let source = make_dummy_value(func);
             let imm = func.dfg.make_imm_value(Immediate::I8(3));
-            let top = func.dfg.make_undef_value(Type::I256);
-            let unrelated = func.dfg.make_undef_value(Type::I256);
-            let ignored = func.dfg.make_undef_value(Type::I256);
+            let top = make_dummy_value(func);
+            let unrelated = make_dummy_value(func);
+            let ignored = make_dummy_value(func);
             let args = [source, imm];
 
             let mut cfg = ControlFlowGraph::new();
@@ -1655,9 +1663,9 @@ block0:
 
         parsed.module.func_store.modify(func_ref, |func| {
             let imm = func.dfg.make_imm_value(Immediate::I8(7));
-            let source = func.dfg.make_undef_value(Type::I256);
-            let ignored_a = func.dfg.make_undef_value(Type::I256);
-            let ignored_b = func.dfg.make_undef_value(Type::I256);
+            let source = make_dummy_value(func);
+            let ignored_a = make_dummy_value(func);
+            let ignored_b = make_dummy_value(func);
             let args = [imm, source];
             let mut last_use = BitSet::default();
             last_use.insert(source);

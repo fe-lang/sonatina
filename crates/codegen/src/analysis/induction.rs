@@ -581,7 +581,6 @@ fn is_loop_invariant_value(
         Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } | Value::Zero { .. } => {
             true
         }
-        Value::Undef { .. } => false,
         Value::Inst { inst, .. } => {
             let block = func.layout.inst_block(*inst);
             if !lpt.is_in_loop(block, biv.loop_id) {

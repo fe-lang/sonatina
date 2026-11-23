@@ -64,8 +64,8 @@ impl TestCase {
             }
 
             None => {
-                if !evaluated.is_undef() {
-                    Some((EvalValue::Undef, evaluated))
+                if !evaluated.is_unknown() {
+                    Some((EvalValue::Unknown, evaluated))
                 } else {
                     None
                 }

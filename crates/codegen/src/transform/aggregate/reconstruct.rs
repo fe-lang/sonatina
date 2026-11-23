@@ -63,9 +63,6 @@ impl<'a> AggregateValueReconstructor<'a> {
         if source_slice.leaf_count == 0 || func.dfg.value_is_zero(source) {
             return Some(func.dfg.make_zero_const(result_ty));
         }
-        if is_explicit_undef(func, source) {
-            return Some(func.dfg.make_undef_value(result_ty));
-        }
         if source_slice.ty == source_ty {
             return self.cast_aggregate_view_value(func, inst, source, source_ty, result_ty);
         }
@@ -106,9 +103,6 @@ impl<'a> AggregateValueReconstructor<'a> {
         target_idx: u32,
     ) -> Option<ValueId> {
         let child_ty = shape::aggregate_child_ty(func.ctx(), aggregate_ty, target_idx)?;
-        if is_explicit_undef(func, aggregate) {
-            return Some(func.dfg.make_undef_value(child_ty));
-        }
         if func.dfg.value_is_zero(aggregate) {
             return Some(func.dfg.make_zero_const(child_ty));
         }
@@ -371,10 +365,6 @@ fn resolve_known_enum_variant(
     (idx < variant_count).then_some(EnumVariantRef::new(enum_ty, u32::try_from(idx).ok()?))
 }
 
-fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
-    matches!(func.dfg.value(value), Value::Undef { .. })
-}
-
 fn enum_child_value_from_source(
     func: &mut Function,
     inst: InstId,
@@ -405,7 +395,7 @@ fn enum_child_value_from_source(
                 return Some(None);
             };
             if *enum_make.variant() != variant {
-                return Some(Some(func.dfg.make_undef_value(child_ty)));
+                return Some(Some(func.dfg.make_zero_const(child_ty)));
             }
             // The verifier checks that `enum.make` gives every field of its variant.
             return Some(Some(enum_make.values()[field as usize]));
