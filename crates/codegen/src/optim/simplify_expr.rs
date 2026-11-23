@@ -716,7 +716,7 @@ fn fold_cast_with_facts(
     let result = match kind {
         CastInstKind::Sext => value.sext(ty),
         CastInstKind::Zext => value.zext(ty),
-        CastInstKind::Trunc => value.trunc(ty),
+        CastInstKind::Trunc | CastInstKind::TruncNuw => value.trunc(ty),
         CastInstKind::Bitcast => value.bitcast(ty),
         CastInstKind::IntToPtr | CastInstKind::PtrToInt => {
             Immediate::from_i256(value.as_i256(), ty)
@@ -1371,7 +1371,7 @@ pub(crate) fn simplify_cast(
         return SimplifiedResult::Copy(from);
     }
 
-    if matches!(kind, CastInstKind::Trunc)
+    if matches!(kind, CastInstKind::Trunc | CastInstKind::TruncNuw)
         && let Some((inst, _)) = func.dfg.value_inst_result(from)
     {
         if let Some(zext) = func.dfg.downcast::<&cast::Zext>(inst) {
@@ -1381,7 +1381,9 @@ pub(crate) fn simplify_cast(
             }
         }
 
-        if let Some(sext) = func.dfg.downcast::<&cast::Sext>(inst) {
+        if matches!(kind, CastInstKind::Trunc)
+            && let Some(sext) = func.dfg.downcast::<&cast::Sext>(inst)
+        {
             let src = *sext.from();
             if func.dfg.value_ty(src) == ty {
                 return SimplifiedResult::Copy(src);
@@ -1444,20 +1446,33 @@ pub(crate) fn canonicalize_cast_chain(
         {
             Some((kind, *inner_arg, ty))
         }
-        (CastInstKind::Trunc, CastInstKind::Trunc)
+        (CastInstKind::Trunc, CastInstKind::Trunc | CastInstKind::TruncNuw)
             if src_bits > dst_bits && inner_bits > dst_bits =>
         {
-            Some((kind, *inner_arg, ty))
+            Some((CastInstKind::Trunc, *inner_arg, ty))
+        }
+        (CastInstKind::TruncNuw, CastInstKind::TruncNuw)
+            if src_bits > dst_bits && inner_bits > dst_bits =>
+        {
+            Some((CastInstKind::TruncNuw, *inner_arg, ty))
         }
         (CastInstKind::Trunc, CastInstKind::Zext | CastInstKind::Sext)
             if src_bits < dst_bits && dst_bits < inner_bits =>
         {
             Some((inner_kind, *inner_arg, ty))
         }
+        (CastInstKind::TruncNuw, CastInstKind::Zext)
+            if src_bits < dst_bits && dst_bits < inner_bits =>
+        {
+            Some((CastInstKind::Zext, *inner_arg, ty))
+        }
         // The extension keeps the source's low bits, so truncating below the
         // source's width truncates the source.
         (CastInstKind::Trunc, CastInstKind::Zext | CastInstKind::Sext) if dst_bits < src_bits => {
             Some((kind, *inner_arg, ty))
+        }
+        (CastInstKind::TruncNuw, CastInstKind::Zext) if dst_bits < src_bits => {
+            Some((CastInstKind::TruncNuw, *inner_arg, ty))
         }
         _ => None,
     }

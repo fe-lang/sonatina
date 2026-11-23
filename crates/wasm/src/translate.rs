@@ -2641,6 +2641,9 @@ impl<'a> FunctionTranslator<'a> {
             NativeInstKind::Trunc(i) => {
                 self.convert(*wb, inst_id, op, *i.from(), *i.ty(), false)?
             }
+            NativeInstKind::TruncNuw(i) => {
+                self.convert(*wb, inst_id, op, *i.from(), *i.ty(), false)?
+            }
             NativeInstKind::Bitcast(i) => self.bitcast(wb, inst_id, op, *i.from(), *i.ty())?,
             NativeInstKind::IntToPtr(i) => {
                 let to_ty = *i.ty();

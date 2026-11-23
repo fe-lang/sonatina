@@ -858,6 +858,7 @@ impl_ext_cast_rule!(
     cast::Sext => (true, "sext"),
     cast::Zext => (true, "zext"),
     cast::Trunc => (false, "trunc"),
+    cast::TruncNuw => (false, "trunc_nuw"),
 );
 
 impl VerifyInst for cmp::IsZero {

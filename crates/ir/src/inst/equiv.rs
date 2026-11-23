@@ -6,7 +6,7 @@ use crate::{BlockId, GlobalVariableRef, Type, ValueId, module::FuncRef, types::E
 
 use super::{
     Inst,
-    cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
+    cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, TruncNuw, Zext},
     control_flow::{Call, Phi, PhiArgs},
     data::{
         ConstRef, EnumAssertVariant, EnumAssertVariantRef, EnumExtract, EnumIsVariant, EnumMake,
@@ -86,6 +86,7 @@ pub enum CastInstKind {
     Sext,
     Zext,
     Trunc,
+    TruncNuw,
     Bitcast,
     IntToPtr,
     PtrToInt,
@@ -317,6 +318,9 @@ fn cast_ty(inst: &dyn Inst) -> Option<Type> {
         return Some(*inst.ty());
     }
     if let Some(inst) = downcast_ref::<Trunc>(inst) {
+        return Some(*inst.ty());
+    }
+    if let Some(inst) = downcast_ref::<TruncNuw>(inst) {
         return Some(*inst.ty());
     }
     if let Some(inst) = downcast_ref::<Bitcast>(inst) {

@@ -71,6 +71,7 @@ pub trait Interpret {
         inst::cast::Sext,
         inst::cast::Zext,
         inst::cast::Trunc,
+        inst::cast::TruncNuw,
         inst::cast::IntToPtr,
         inst::cast::PtrToInt,
         inst::cast::Bitcast,

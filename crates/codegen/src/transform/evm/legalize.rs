@@ -308,6 +308,7 @@ fn gives_wider_word(kind: EvmInstKind<'_>, width: ScalarWidth) -> bool {
         | EvmInstKind::Sext(_)
         | EvmInstKind::Zext(_)
         | EvmInstKind::Trunc(_)
+        | EvmInstKind::TruncNuw(_)
         | EvmInstKind::Bitcast(_)
         | EvmInstKind::PtrToInt(_)
         | EvmInstKind::Not(_)
@@ -577,6 +578,7 @@ fn operand_uses(kind: EvmInstKind<'_>) -> Option<&'static [OperandUse]> {
         | EvmInstKind::Sext(_)
         | EvmInstKind::Zext(_)
         | EvmInstKind::Trunc(_)
+        | EvmInstKind::TruncNuw(_)
         | EvmInstKind::Bitcast(_)
         | EvmInstKind::IntToPtr(_)
         | EvmInstKind::PtrToInt(_)
@@ -988,6 +990,12 @@ impl<'a> FunctionLegalizer<'a> {
         if let Some(arg) = downcast::<&cast::Trunc>(is, self.func.dfg.inst(inst)).map(|i| *i.from())
         {
             self.rewrite_trunc(inst, arg);
+            return;
+        }
+        if let Some(arg) =
+            downcast::<&cast::TruncNuw>(is, self.func.dfg.inst(inst)).map(|i| *i.from())
+        {
+            self.rewrite_trunc_nuw(inst, arg);
             return;
         }
         if let Some((from, ty)) =
@@ -3148,6 +3156,25 @@ impl<'a> FunctionLegalizer<'a> {
         self.replace_with_aliases(inst, &[result]);
     }
 
+    fn rewrite_trunc_nuw(&mut self, inst: InstId, arg: ValueId) {
+        let dst = self
+            .single_result_width(inst)
+            .expect("missing trunc_nuw result width");
+        let extended = self.zero_extend_to_i256(inst, arg);
+        match dst {
+            ScalarWidth::Full256 | ScalarWidth::Narrow(_) => {
+                let result = self.retag_width(inst, extended, dst);
+                self.replace_with_aliases(inst, &[result]);
+            }
+            ScalarWidth::Bool => {
+                self.func.dfg.replace_inst(
+                    inst,
+                    Box::new(cast::TruncNuw::new(self.evm_inst_set(), extended, Type::I1)),
+                );
+            }
+        }
+    }
+
     fn rewrite_bitcast(&mut self, inst: InstId, from: ValueId, ty: Type) {
         let dst_ty = self.types.legalize_type(self.ctx, ty);
         let src_ty = self.func.dfg.value_ty(from);
@@ -3688,6 +3715,41 @@ block0:
         assert!(dumped.contains("65535.i256"), "{dumped}");
         assert!(!dumped.contains(" = trunc "), "{dumped}");
         assert!(!dumped.contains(" = sext "), "{dumped}");
+    }
+
+    #[test]
+    fn trunc_nuw_narrows_without_mask() {
+        let dumped = legalize_and_dump(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i8 {
+block0:
+    v1.i8 = trunc_nuw v0 i8;
+    return v1;
+}
+"#,
+            "entry",
+        );
+
+        assert!(!dumped.contains(" and "), "{dumped}");
+        assert!(!dumped.contains("trunc_nuw"), "{dumped}");
+        assert!(dumped.contains("return "), "{dumped}");
+
+        let bool_dumped = legalize_and_dump(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i1 {
+block0:
+    v1.i1 = trunc_nuw v0 i1;
+    return v1;
+}
+"#,
+            "entry",
+        );
+        assert!(!bool_dumped.contains(" and "), "{bool_dumped}");
+        assert!(bool_dumped.contains("trunc_nuw v0 i1"), "{bool_dumped}");
     }
 
     #[test]

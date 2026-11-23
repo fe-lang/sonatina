@@ -23,6 +23,15 @@ pub struct Trunc {
     ty: Type,
 }
 
+/// Narrowing cast whose discarded high bits are assumed zero (undefined
+/// behavior otherwise). Lowered without a mask on wide-word targets like EVM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(cast(TruncNuw)))]
+pub struct TruncNuw {
+    from: ValueId,
+    ty: Type,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(cast(Bitcast)))]
 pub struct Bitcast {

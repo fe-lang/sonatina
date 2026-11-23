@@ -31,6 +31,7 @@ pub struct EvmInstSet(
     cast::Sext,
     cast::Zext,
     cast::Trunc,
+    cast::TruncNuw,
     cast::Bitcast,
     cast::IntToPtr,
     cast::PtrToInt,

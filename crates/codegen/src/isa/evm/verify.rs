@@ -200,6 +200,15 @@ pub(crate) fn validate_supported_lowering_ir(
                         func.dfg.inst(inst).as_text()
                     ));
                 }
+                EvmInstKind::TruncNuw(cast)
+                    if !(func.dfg.value_ty(*cast.from()) == Type::I256
+                        && *cast.ty() == Type::I1) =>
+                {
+                    return Err(format!(
+                        "non-bool trunc_nuw must be eliminated before EVM lowering: {}",
+                        func.dfg.inst(inst).as_text()
+                    ));
+                }
                 EvmInstKind::Bswap(_) | EvmInstKind::Ctz(_) => {
                     return Err(format!(
                         "{} must be legalized before EVM lowering",

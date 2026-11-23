@@ -61,6 +61,7 @@ define_inst_set_base! {
         cast::Sext,
         cast::Zext,
         cast::Trunc,
+        cast::TruncNuw,
         cast::Bitcast,
         cast::IntToPtr,
         cast::PtrToInt,

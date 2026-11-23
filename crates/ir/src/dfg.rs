@@ -816,10 +816,13 @@ impl DataFlowGraph {
     /// when hoisted above a branch. Moving it only to positions its old one
     /// dominates needs [`Self::has_value_semantics`] alone.
     pub fn can_speculate(&self, inst_id: InstId) -> bool {
-        // Payload extraction is pure, but requires an active-variant proof at
-        // its use site, which hoisting above a branch or assumption can lose.
+        // Payload extraction and unchecked narrowing are pure, but require an
+        // active-variant / high-bits-zero proof at their use site, which
+        // hoisting above a branch or assumption can lose.
         self.has_value_semantics(inst_id)
             && downcast::<&EnumExtract>(self.inst_set(), self.inst(inst_id)).is_none()
+            && downcast::<&crate::inst::cast::TruncNuw>(self.inst_set(), self.inst(inst_id))
+                .is_none()
             && !self.may_fault(inst_id)
     }
 

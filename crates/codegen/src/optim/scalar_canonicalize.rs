@@ -733,6 +733,9 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
             CastInstKind::Zext => Some(Box::new(cast::Zext::new(is.has_zext()?, from, ty))),
             CastInstKind::Sext => Some(Box::new(cast::Sext::new(is.has_sext()?, from, ty))),
             CastInstKind::Trunc => Some(Box::new(cast::Trunc::new(is.has_trunc()?, from, ty))),
+            CastInstKind::TruncNuw => {
+                Some(Box::new(cast::TruncNuw::new(is.has_trunc_nuw()?, from, ty)))
+            }
             CastInstKind::Bitcast | CastInstKind::IntToPtr | CastInstKind::PtrToInt => None,
         },
     }
@@ -804,6 +807,7 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             CastInstKind::Zext => is.has_zext().is_some(),
             CastInstKind::Sext => is.has_sext().is_some(),
             CastInstKind::Trunc => is.has_trunc().is_some(),
+            CastInstKind::TruncNuw => is.has_trunc_nuw().is_some(),
             CastInstKind::Bitcast | CastInstKind::IntToPtr | CastInstKind::PtrToInt => false,
         },
     }

@@ -426,7 +426,9 @@ impl KnownBitsQuery {
                     src.known_one & src_mask,
                 )
             }
-            CastInstKind::Trunc => KnownBits::normalized(ty, src.known_zero, src.known_one),
+            CastInstKind::Trunc | CastInstKind::TruncNuw => {
+                KnownBits::normalized(ty, src.known_zero, src.known_one)
+            }
             CastInstKind::Sext => {
                 let src_mask = type_mask(src_ty);
                 let dst_mask = type_mask(ty);

@@ -1103,6 +1103,7 @@ pub(crate) fn compute_provenance(
                     | EvmInstKind::Sext(_)
                     | EvmInstKind::Zext(_)
                     | EvmInstKind::Trunc(_)
+                    | EvmInstKind::TruncNuw(_)
                     | EvmInstKind::EvmSdiv(_)
                     | EvmInstKind::EvmUdiv(_)
                     | EvmInstKind::EvmUmod(_)

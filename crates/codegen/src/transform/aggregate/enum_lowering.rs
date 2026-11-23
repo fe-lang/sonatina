@@ -352,14 +352,28 @@ fn payload_parts(ctx: &ModuleCtx, variants: &[Vec<Type>]) -> Vec<(u32, Type)> {
             })
             .min_by_key(|&ty| Reverse(words(ctx, ty)));
         let Some(part) = part else {
+            let mut split = false;
             for fields in &mut pending {
                 if let Some(&ty) = fields.last()
                     && let Some(children) = children(ctx, ty)
                 {
                     fields.pop();
                     fields.extend(children.into_iter().rev());
+                    split = true;
                 }
             }
+            if split {
+                continue;
+            }
+            // All remaining tops at `word` are single-word leaves narrower than
+            // `joined[word]` (e.g. narrow integers widened to `i256`).
+            for fields in &mut pending {
+                if fields.last().is_some() {
+                    fields.pop();
+                }
+            }
+            parts.push((word as u32, joined[word]));
+            word += 1;
             continue;
         };
         let end = word + words(ctx, part) as usize;
@@ -413,7 +427,7 @@ fn children(ctx: &ModuleCtx, ty: Type) -> Option<Vec<Type>> {
 }
 
 /// One word type that holds every single-word type in `tys`: the first
-/// pointer, else the widest integer.
+/// pointer, else `i256` so every integral payload word is uniform-width.
 fn join_words(ctx: &ModuleCtx, tys: &[Type]) -> Type {
     if let Some(&ptr) = tys
         .iter()
@@ -421,16 +435,14 @@ fn join_words(ctx: &ModuleCtx, tys: &[Type]) -> Type {
     {
         return ptr;
     }
-    tys.iter()
-        .copied()
-        .reduce(|a, b| {
-            assert!(
-                a.is_integral() && b.is_integral(),
-                "an EVM enum payload word cannot hold both {a:?} and {b:?}"
-            );
-            if a >= b { a } else { b }
-        })
-        .expect("a payload word holds a field")
+    assert!(!tys.is_empty(), "a payload word holds a field");
+    for &ty in tys {
+        assert!(
+            ty.is_integral(),
+            "an EVM enum payload word cannot hold {ty:?}"
+        );
+    }
+    Type::I256
 }
 
 /// Lowers enum instruction `inst` in `func`, whose types `rewriter` has
@@ -449,7 +461,7 @@ pub(super) fn lower_enum_inst<R: EnumWordRewrite>(
         let tag = func
             .dfg
             .make_imm_value(tag_imm(func.ctx(), *make.variant()));
-        // The parts the variant does not use stay `undef`.
+        // The parts the variant does not use are zero-initialized.
         let mut value = Part::Unset;
         value.set(func.ctx(), layout.ty, &[(0, layout.tag_ty)], tag);
         for (field, &payload) in make.values().iter().enumerate() {
@@ -579,7 +591,7 @@ impl Part {
     /// The value of type `ty` this node holds, built before `before`.
     fn build(self, func: &mut Function, before: InstId, ty: Type) -> ValueId {
         match self {
-            Self::Unset => func.dfg.make_undef_value(ty),
+            Self::Unset => func.dfg.make_zero_const(ty),
             Self::Value(value) => value,
             Self::Fields(fields) => {
                 let tys = children(func.ctx(), ty).unwrap();
@@ -772,9 +784,12 @@ fn cast_word(func: &mut Function, before: InstId, value: ValueId, to: Type) -> V
         (false, false) if from < to => {
             insert_before(func, before, cast::Zext::new_unchecked(is, value, to), to)
         }
-        (false, false) => {
-            insert_before(func, before, cast::Trunc::new_unchecked(is, value, to), to)
-        }
+        (false, false) => insert_before(
+            func,
+            before,
+            cast::TruncNuw::new_unchecked(is, value, to),
+            to,
+        ),
     }
 }
 
@@ -847,7 +862,10 @@ type @Code = enum { #A, #B, #C };
 type @Result = enum { #Err(@Code), #Ok(@Point) };
 type @Narrow = {i8, i256};
 type @Split = enum { #A(@Narrow), #B(i256, i256) };
-func public %f(v0.@Option, v1.@Mixed, v2.@Arr, v3.@RefOrNum, v4.@Zero, v5.@Outer, v6.@Result, v7.@Split) {
+type @OptNarrow = enum { #None, #Some(i8) };
+type @NarrowPair = {i8, i16};
+type @NestedNarrow = enum { #A(@NarrowPair), #B(i1) };
+func public %f(v0.@Option, v1.@Mixed, v2.@Arr, v3.@RefOrNum, v4.@Zero, v5.@Outer, v6.@Result, v7.@Split, v8.@OptNarrow, v9.@NestedNarrow) {
 block0:
     return;
 }
@@ -865,22 +883,26 @@ block0:
         let point =
             ctx.with_ty_store(|store| Type::Compound(store.lookup_struct("Point").unwrap()));
         let ptr = ctx.with_ty_store_mut(|store| store.make_ptr(Type::I256));
-        let (i1, i8, i64, i256) = (Type::I1, Type::I8, Type::I64, Type::I256);
+        let (i1, i8, i256) = (Type::I1, Type::I8, Type::I256);
         let expected = [
             // One variant with a payload keeps its fields.
             vec![i1, point],
             // `Pt`'s point holds `Narrow`'s and `Flag`'s fields.
             vec![i8, point],
-            vec![i1, i256, i64, i64],
+            vec![i1, i256, i256, i256],
             // A word holding a pointer or an integer stays a pointer.
             vec![i1, ptr],
             // `Z`'s empty array takes no word.
             vec![i1, i256],
             // `On`'s inner enum splits: `Raw` needs a wider first word.
-            vec![i8, i256, i256, i256, i64],
+            vec![i8, i256, i256, i256, i256],
             // `Ok`'s point holds `Err`'s tag.
             vec![i1, point],
             // `A`'s struct splits: its first word is narrower than `B`'s.
+            vec![i1, i256, i256],
+            // Narrow-only enum widens its payload word to `i256` without looping.
+            vec![i1, i256],
+            // Nested narrow struct splits to uniform `i256` payload words.
             vec![i1, i256, i256],
         ];
         let args = ctx.func_sig(f, |sig| sig.args().to_vec());
@@ -891,5 +913,47 @@ block0:
             assert_eq!(lowered.fields, fields, "{}", lowered.name);
             assert_eq!(ctx.size_of(arg).unwrap(), size, "{}", lowered.name);
         }
+    }
+
+    #[test]
+    fn obj_store_of_enum_make_folds_to_variant_write_and_uses_zero_for_unset() {
+        use sonatina_ir::ir_writer::FuncWriter;
+
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Opt = enum { #None, #Some(i8, i256) };
+func public %store_none(v0.objref<@Opt>) {
+block0:
+    v1.@Opt = enum.make @Opt #None ();
+    obj.store v0 v1;
+    return;
+}
+func public %ret_none() -> @Opt {
+block0:
+    v0.@Opt = enum.make @Opt #None ();
+    return v0;
+}
+"#,
+        );
+        ObjectLowerToMemory.run(&module);
+
+        let store_none = lookup_func(&module, "store_none");
+        let store_ir = module
+            .func_store
+            .view(store_none, |f| FuncWriter::new(store_none, f).dump_string());
+        assert_eq!(
+            store_ir.matches("mstore ").count(),
+            1,
+            "storing #None should only write the tag word:\n{store_ir}"
+        );
+        assert!(!store_ir.contains("undef"), "{store_ir}");
+
+        let ret_none = lookup_func(&module, "ret_none");
+        let ret_ir = module
+            .func_store
+            .view(ret_none, |f| FuncWriter::new(ret_none, f).dump_string());
+        assert!(!ret_ir.contains("undef"), "{ret_ir}");
+        assert!(ret_ir.contains("agg.make "), "{ret_ir}");
     }
 }

@@ -1586,7 +1586,7 @@ fn transfer_cast_inst(func: &Function, env: &mut RangeEnv, inst: InstId, kind: C
     let fact = match kind {
         CastInstKind::Zext => zext_fact(src, ty),
         CastInstKind::Sext => sext_fact(src, ty),
-        CastInstKind::Trunc => trunc_fact(src, ty),
+        CastInstKind::Trunc | CastInstKind::TruncNuw => trunc_fact(src, ty),
         CastInstKind::Bitcast | CastInstKind::IntToPtr | CastInstKind::PtrToInt => {
             RangeFact::full_for(ty)
         }
