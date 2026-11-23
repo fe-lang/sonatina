@@ -1,0 +1,70 @@
+#! The innermost loop exits to the latch of the outermost one (`block4` to
+#! `block7`), so `block2` reaches that latch only through the middle loop. The
+#! outermost loop has no exit test on a path through every iteration and is
+#! not proven finite: with v0 = 0, v1 = 1, v2 = 0 it runs block1, block2,
+#! block3, block4, block7 forever. ADCE must keep it.
+
+target = "evm-ethereum-london"
+
+# sameln: func private %three_deep(v0.i256, v1.i256, v2.i256, v3.i1) -> i256 {
+# nextln:    block0:
+# nextln:        jump block1;
+# nextln:
+# nextln:    block1:
+# nextln:        v4.i256 = phi (0.i256 block0) (v5 block7);
+# nextln:        v6.i1 = lt v4 v0;
+# nextln:        br v6 block7 block3;
+# nextln:
+# nextln:    block3:
+# nextln:        v7.i256 = phi (0.i256 block1) (v8 block6);
+# nextln:        v9.i1 = lt v7 v1;
+# nextln:        br v9 block4 block8;
+# nextln:
+# nextln:    block4:
+# nextln:        v10.i256 = phi (0.i256 block3) (v11 block5);
+# nextln:        v12.i1 = lt v10 v2;
+# nextln:        br v12 block5 block7;
+# nextln:
+# nextln:    block5:
+# nextln:        v11.i256 = add v10 1.i256;
+# nextln:        br v3 block4 block6;
+# nextln:
+# nextln:    block6:
+# nextln:        v8.i256 = add v7 1.i256;
+# nextln:        jump block3;
+# nextln:
+# nextln:    block7:
+# nextln:        v5.i256 = add v4 1.i256;
+# nextln:        jump block1;
+# nextln:
+# nextln:    block8:
+# nextln:        return 7.i256;
+func private %three_deep(v0.i256, v1.i256, v2.i256, v3.i1) -> i256 {
+    block0:
+        jump block1;
+    block1:
+        v4.i256 = phi (0.i256 block0) (v5 block7);
+        v6.i1 = lt v4 v0;
+        br v6 block7 block2;
+    block2:
+        jump block3;
+    block3:
+        v7.i256 = phi (0.i256 block2) (v8 block6);
+        v9.i1 = lt v7 v1;
+        br v9 block4 block8;
+    block4:
+        v10.i256 = phi (0.i256 block3) (v11 block5);
+        v12.i1 = lt v10 v2;
+        br v12 block5 block7;
+    block5:
+        v11.i256 = add v10 1.i256;
+        br v3 block4 block6;
+    block6:
+        v8.i256 = add v7 1.i256;
+        jump block3;
+    block7:
+        v5.i256 = add v4 1.i256;
+        jump block1;
+    block8:
+        return 7.i256;
+}

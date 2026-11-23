@@ -1,0 +1,46 @@
+#! Dead loops that their induction variables prove finite are removed whole.
+
+target = "evm-ethereum-london"
+
+# `v1` counts up by 1 from 0 and the loop runs while `v1 < v0`.
+# sameln: func public %counted_loop_removed(v0.i256) -> i8 {
+# nextln:     block0:
+# nextln:         return 1.i8;
+func public %counted_loop_removed(v0.i256) -> i8 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v3 block2);
+        v2.i1 = lt v1 v0;
+        br v2 block2 block3;
+
+    block2:
+        v4.i256 = mul v1 3.i256;
+        v3.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return 1.i8;
+}
+
+# `v1` counts down by 1 from `v0` and the loop runs until it is zero.
+# sameln: func public %countdown_loop_removed(v0.i64) -> i8 {
+# nextln:     block0:
+# nextln:         return 2.i8;
+func public %countdown_loop_removed(v0.i64) -> i8 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i64 = phi (v0 block0) (v3 block2);
+        v2.i1 = is_zero v1;
+        br v2 block3 block2;
+
+    block2:
+        v3.i64 = sub v1 1.i64;
+        jump block1;
+
+    block3:
+        return 2.i8;
+}

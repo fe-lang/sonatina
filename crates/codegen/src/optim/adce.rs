@@ -2,13 +2,27 @@
 
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashSet;
-use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId, inst::data::Alloca};
+use smallvec::SmallVec;
+use sonatina_ir::{
+    BlockId, ControlFlowGraph, Function, InstId, Type, U256, ValueId,
+    inst::{BinaryInstKind, control_flow::Br, data::Alloca},
+};
 
 use crate::{
+    analysis::{
+        induction::{
+            detect_basic_iv_step, is_loop_invariant_value, phi_backedge_with_outside_preds,
+            unique_latch,
+        },
+        known_bits::type_mask,
+    },
     cfg_edit::CfgEditor,
     cfg_scc::{CfgSccAnalysis, SccId},
+    domtree::DomTree,
+    loop_analysis::{Loop, LoopTree},
     optim::{call_purity::is_nonmutating_returning_call, cfg_cleanup::CfgCleanup},
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
+    range_analysis::{NormalizedCond, RangeEnv, imm_to_unsigned, normalize_condition},
 };
 
 pub struct AdceSolver {
@@ -62,7 +76,9 @@ impl AdceSolver {
 
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(func);
-        let divergent_blocks = divergent_blocks(&cfg);
+        let (sccs, reaches_real_exit) = compute_scc_reachability(&cfg);
+        let divergent_blocks = collect_divergent_blocks(&sccs, &reaches_real_exit);
+        let preserved_cycle_blocks = preserved_cycle_blocks(func, &cfg, &sccs, &reaches_real_exit);
         self.post_domtree
             .compute_with_extra_exits(func, &divergent_blocks);
         let pdf_set = self.post_domtree.compute_df();
@@ -85,6 +101,12 @@ impl AdceSolver {
             }
         }
         for block in divergent_blocks {
+            self.mark_block(block);
+            if let Some(term) = func.layout.last_inst_of(block) {
+                self.mark_inst(func, term);
+            }
+        }
+        for block in preserved_cycle_blocks {
             self.mark_block(block);
             if let Some(term) = func.layout.last_inst_of(block) {
                 self.mark_inst(func, term);
@@ -247,8 +269,7 @@ impl AdceSolver {
     }
 }
 
-/// Returns entry-reachable blocks with no path to a CFG exit.
-pub(crate) fn divergent_blocks(cfg: &ControlFlowGraph) -> Vec<BlockId> {
+fn compute_scc_reachability(cfg: &ControlFlowGraph) -> (CfgSccAnalysis, SecondaryMap<SccId, bool>) {
     let mut sccs = CfgSccAnalysis::new();
     sccs.compute(cfg);
 
@@ -262,6 +283,13 @@ pub(crate) fn divergent_blocks(cfg: &ControlFlowGraph) -> Vec<BlockId> {
             || data.succ_sccs.iter().any(|&succ| reaches_real_exit[succ]);
     }
 
+    (sccs, reaches_real_exit)
+}
+
+fn collect_divergent_blocks(
+    sccs: &CfgSccAnalysis,
+    reaches_real_exit: &SecondaryMap<SccId, bool>,
+) -> Vec<BlockId> {
     let mut blocks = Vec::new();
     for &scc in sccs.topo_order() {
         if !reaches_real_exit[scc] {
@@ -269,6 +297,237 @@ pub(crate) fn divergent_blocks(cfg: &ControlFlowGraph) -> Vec<BlockId> {
         }
     }
     blocks
+}
+
+/// Returns entry-reachable blocks with no path to a CFG exit.
+pub(crate) fn divergent_blocks(cfg: &ControlFlowGraph) -> Vec<BlockId> {
+    let (sccs, reaches_real_exit) = compute_scc_reachability(cfg);
+    collect_divergent_blocks(&sccs, &reaches_real_exit)
+}
+
+/// Returns blocks that must remain live to preserve cycles not proven finite.
+///
+/// Cycles with no path to a CFG exit are already preserved via
+/// `divergent_blocks`. For cyclic SCCs that can reach a CFG exit, ADCE may
+/// bypass a cycle only when it is a reducible natural loop proven to terminate
+/// by a basic induction variable with a non-zero constant step and a
+/// loop-invariant exit bound that cannot be wrapped past.
+fn preserved_cycle_blocks(
+    func: &Function,
+    cfg: &ControlFlowGraph,
+    sccs: &CfgSccAnalysis,
+    reaches_real_exit: &SecondaryMap<SccId, bool>,
+) -> Vec<BlockId> {
+    if !sccs
+        .topo_order()
+        .iter()
+        .any(|&scc| sccs.scc_data(scc).is_cycle && reaches_real_exit[scc])
+    {
+        return Vec::new();
+    }
+
+    let mut domtree = DomTree::new();
+    domtree.compute(cfg);
+    let mut lpt = LoopTree::new();
+    lpt.compute(cfg, &domtree);
+
+    // Without its back edges a reducible CFG is acyclic, so the cycles that
+    // remain are the irreducible ones.
+    let mut forward = cfg.clone();
+    for &block in domtree.rpo() {
+        for &succ in cfg.succs_of(block) {
+            if domtree.dominates(succ, block) {
+                forward.remove_succ_block(block, succ);
+            }
+        }
+    }
+    let mut forward_sccs = CfgSccAnalysis::new();
+    forward_sccs.compute(&forward);
+    let irreducible: FxHashSet<BlockId> = forward_sccs
+        .topo_order()
+        .iter()
+        .map(|&scc| forward_sccs.scc_data(scc))
+        .filter(|data| data.is_cycle)
+        .flat_map(|data| data.blocks_rpo.iter().copied())
+        .collect();
+
+    let mut finite_loops = SecondaryMap::<Loop, bool>::with_capacity(lpt.loop_num());
+    for lp in lpt.loops().rev() {
+        finite_loops[lp] = lpt.children(lp).iter().all(|&child| finite_loops[child])
+            && !lpt
+                .iter_blocks_post_order(cfg, lp)
+                .any(|block| irreducible.contains(&block))
+            && is_proven_finite_loop(func, cfg, &domtree, &lpt, lp);
+    }
+
+    let mut preserved: Vec<BlockId> = irreducible.into_iter().collect();
+    for lp in lpt.loops().filter(|&lp| !finite_loops[lp]) {
+        let header = lpt.loop_header(lp);
+        if sccs
+            .scc_of(header)
+            .is_some_and(|scc| reaches_real_exit[scc])
+        {
+            preserved.push(header);
+            preserved.extend(
+                cfg.preds_of(header)
+                    .copied()
+                    .filter(|&pred| domtree.is_reachable(pred) && domtree.dominates(header, pred)),
+            );
+        }
+    }
+    preserved
+}
+
+/// A basic induction variable of a loop: `phi` takes `step_value` from the
+/// latch, `phi` moved by `magnitude`, up or down modulo its width.
+struct LoopIv {
+    phi: ValueId,
+    step_value: ValueId,
+    ty: Type,
+    upward: bool,
+    magnitude: U256,
+}
+
+/// Whether `lp`, with a single latch, runs a test on every iteration that
+/// leaves the loop once a basic induction variable passes a loop-invariant
+/// bound it cannot step over without wrapping.
+fn is_proven_finite_loop(
+    func: &Function,
+    cfg: &ControlFlowGraph,
+    domtree: &DomTree,
+    lpt: &LoopTree,
+    lp: Loop,
+) -> bool {
+    let header = lpt.loop_header(lp);
+    let Some(latch) = unique_latch(cfg, lpt, lp, header) else {
+        return false;
+    };
+
+    // The step must run once on every iteration of `lp` itself.
+    let ivs: SmallVec<[LoopIv; 4]> = func
+        .layout
+        .iter_inst(header)
+        .map_while(|inst| Some((inst, func.dfg.cast_phi(inst)?)))
+        .filter_map(|(inst, phi)| {
+            let phi_value = func.dfg.inst_result(inst)?;
+            let ty = func.dfg.value_ty(phi_value);
+            let step_value = phi_backedge_with_outside_preds(phi, latch, lp, lpt)?;
+            let (step_inst, step) = detect_basic_iv_step(func, phi_value, step_value)?;
+            let (upward, magnitude) = step.direction()?;
+            let step_block = func.layout.inst_block(step_inst);
+            (ty.is_integral()
+                && lpt.loop_of_block(step_block) == Some(lp)
+                && domtree.dominates(step_block, latch))
+            .then_some(LoopIv {
+                phi: phi_value,
+                step_value,
+                ty,
+                upward,
+                magnitude,
+            })
+        })
+        .collect();
+
+    lpt.iter_blocks_post_order(cfg, lp).any(|block| {
+        if lpt.loop_of_block(block) == Some(lp)
+            && domtree.dominates(block, latch)
+            && let Some(br) = func
+                .layout
+                .last_inst_of(block)
+                .and_then(|term| func.dfg.downcast::<&Br>(term))
+        {
+            let stay_on_true = lpt.is_in_loop(*br.nz_dest(), lp);
+            stay_on_true != lpt.is_in_loop(*br.z_dest(), lp)
+                && branch_bounds_loop(func, lpt, lp, *br.cond(), stay_on_true, &ivs)
+        } else {
+            false
+        }
+    })
+}
+
+/// Whether staying in `lp` while `cond` is `stay_on_true` bounds one of `ivs`.
+fn branch_bounds_loop(
+    func: &Function,
+    lpt: &LoopTree,
+    lp: Loop,
+    cond: ValueId,
+    stay_on_true: bool,
+    ivs: &[LoopIv],
+) -> bool {
+    let is_iv = |iv: &LoopIv, value| value == iv.phi || value == iv.step_value;
+    let unit_iv = |value| {
+        ivs.iter()
+            .any(|iv| is_iv(iv, value) && iv.magnitude == U256::one())
+    };
+    let (kind, lhs, rhs, stay) = match normalize_condition(func, &RangeEnv::default(), cond) {
+        NormalizedCond::Constant(_) => return false,
+        // Staying while a unit-step variable is non-zero: it reaches zero.
+        NormalizedCond::Value { value, invert } => return stay_on_true != invert && unit_iv(value),
+        NormalizedCond::ZeroTest { value, invert } => {
+            return stay_on_true == invert && unit_iv(value);
+        }
+        NormalizedCond::Compare {
+            kind,
+            lhs,
+            rhs,
+            invert,
+        } => (kind, lhs, rhs, stay_on_true != invert),
+    };
+
+    ivs.iter().any(|iv| {
+        let (bound, iv_on_left) = if is_iv(iv, lhs) {
+            (rhs, true)
+        } else if is_iv(iv, rhs) {
+            (lhs, false)
+        } else {
+            return false;
+        };
+        if func.dfg.value_ty(bound) != iv.ty
+            || !is_loop_invariant_value(func, lpt, lp, bound, &mut FxHashSet::default())
+        {
+            return false;
+        }
+        // `normalize_condition` gives only `<`, `<=`, their signed forms, `==`
+        // and `!=`; any other kind proves nothing.
+        let (strict, signed) = match kind {
+            BinaryInstKind::Eq | BinaryInstKind::Ne => {
+                // Staying while `!=` holds: a unit step meets the bound.
+                return (kind == BinaryInstKind::Ne) == stay && iv.magnitude == U256::one();
+            }
+            BinaryInstKind::Lt => (true, false),
+            BinaryInstKind::Le => (false, false),
+            BinaryInstKind::Slt => (true, true),
+            BinaryInstKind::Sle => (false, true),
+            _ => return false,
+        };
+        // Staying while the variable is below the bound needs it to go up.
+        let (upward, strict) = if stay {
+            (iv_on_left, strict)
+        } else {
+            (!iv_on_left, !strict)
+        };
+        if upward != iv.upward {
+            return false;
+        }
+        if strict && iv.magnitude == U256::one() {
+            return true;
+        }
+        let Some(bound) = func.dfg.value_const_imm(bound) else {
+            return false;
+        };
+        // Order the bound as an unsigned value in the direction of the step:
+        // flip the sign bit for a signed compare and reflect for a downward
+        // step. The last value that stays must then step without wrapping.
+        let umax = type_mask(iv.ty);
+        let mut ordered = imm_to_unsigned(bound);
+        if signed {
+            ordered ^= umax ^ (umax >> 1usize);
+        }
+        if !upward {
+            ordered ^= umax;
+        }
+        ordered <= umax - iv.magnitude + U256::from(u8::from(strict))
+    })
 }
 
 fn erase_closed_dead_insts(func: &mut Function, insts: impl IntoIterator<Item = InstId>) -> bool {
@@ -368,6 +627,360 @@ mod tests {
             FuncWriter::new(func_ref, func).dump_string()
         });
         (changed, dumped)
+    }
+
+    /// A dead loop over the `i8` induction variable `v1`, starting at `v0`,
+    /// that stays in the loop while `v2 = test` is `stay` and steps `v3 = step`.
+    fn counted_loop(test: &str, stay: bool, step: &str) -> String {
+        let (on_true, on_false) = if stay {
+            ("block2", "block3")
+        } else {
+            ("block3", "block2")
+        };
+        format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i8) -> i256 {{
+    block0:
+        jump block1;
+
+    block1:
+        v1.i8 = phi (v0 block0) (v3 block2);
+        v2.i1 = {test};
+        br v2 {on_true} {on_false};
+
+    block2:
+        v3.i8 = {step};
+        jump block1;
+
+    block3:
+        return 7.i256;
+}}
+"#
+        )
+    }
+
+    fn assert_loop_removed(source: &str, removed: bool, what: &str) {
+        let (_, dumped) = run_default_adce(source);
+        assert_eq!(
+            !dumped.contains(" = phi "),
+            removed,
+            "{what}: expected the loop {}:\n{dumped}",
+            if removed { "removed" } else { "kept" }
+        );
+    }
+
+    #[test]
+    fn finiteness_proof_decides_single_loops() {
+        for (test, stay, step, removed) in [
+            // The comparison must point the way the step goes.
+            ("lt v1 100.i8", true, "sub v1 1.i8", false),
+            ("slt v1 100.i8", true, "add v1 -1.i8", false),
+            ("gt v1 100.i8", true, "add v1 1.i8", false),
+            ("sgt v1 100.i8", true, "add v1 1.i8", false),
+            // `>=` must leave room for the last step above the type minimum.
+            ("ge v1 1.i8", true, "sub v1 1.i8", true),
+            ("ge v1 0.i8", true, "sub v1 1.i8", false),
+            ("ge v1 v0", true, "sub v1 1.i8", false),
+            ("sge v1 -127.i8", true, "add v1 -1.i8", true),
+            ("sge v1 -128.i8", true, "add v1 -1.i8", false),
+            ("ge v1 2.i8", true, "sub v1 2.i8", true),
+            ("ge v1 1.i8", true, "sub v1 2.i8", false),
+            // `<=` must leave room below the type maximum.
+            ("le v1 -2.i8", true, "add v1 1.i8", true),
+            ("le v1 -1.i8", true, "add v1 1.i8", false),
+            // The branch polarity and the side of the induction variable.
+            ("lt v1 v0", false, "add v1 1.i8", false),
+            ("ge v1 v0", false, "add v1 1.i8", true),
+            ("gt v0 v1", true, "add v1 1.i8", true),
+            ("lt v0 v1", true, "add v1 1.i8", false),
+            // `!=` holds only for a unit step; staying on `==` is not proven.
+            ("ne v1 v0", true, "add v1 1.i8", true),
+            ("ne v1 v0", true, "sub v1 1.i8", true),
+            ("ne v1 v0", true, "add v1 2.i8", false),
+            ("eq v1 v0", true, "add v1 1.i8", false),
+            ("eq v1 v0", false, "add v1 1.i8", true),
+        ] {
+            let what = format!("`{test}` staying on {stay} with `{step}`");
+            assert_loop_removed(&counted_loop(test, stay, step), removed, &what);
+        }
+    }
+
+    #[test]
+    fn finiteness_proof_rejects_unproven_shapes() {
+        let variant_bound = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v3 block2);
+        v4.i256 = phi (v0 block0) (v5 block2);
+        v2.i1 = lt v1 v4;
+        br v2 block2 block3;
+
+    block2:
+        v3.i256 = add v1 1.i256;
+        v5.i256 = add v4 1.i256;
+        jump block1;
+
+    block3:
+        return 7.i256;
+}
+"#;
+        let two_latches = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256, v1.i1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = phi (0.i256 block0) (v4 block2) (v4 block4);
+        v3.i1 = lt v2 v0;
+        br v3 block2 block3;
+
+    block2:
+        v4.i256 = add v2 1.i256;
+        br v1 block1 block4;
+
+    block4:
+        jump block1;
+
+    block3:
+        return 7.i256;
+}
+"#;
+        let test_off_every_path = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256, v1.i1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = phi (0.i256 block0) (v4 block4);
+        br v1 block2 block4;
+
+    block2:
+        v3.i1 = lt v2 v0;
+        br v3 block4 block3;
+
+    block4:
+        v4.i256 = add v2 1.i256;
+        jump block1;
+
+    block3:
+        return 7.i256;
+}
+"#;
+        let derived_test = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v3 block2);
+        v4.i256 = mul v1 2.i256;
+        v2.i1 = lt v4 v0;
+        br v2 block2 block3;
+
+    block2:
+        v3.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return 7.i256;
+}
+"#;
+        let unproven_inner = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = phi (0.i256 block0) (v4 block5);
+        v3.i1 = lt v2 v0;
+        br v3 block2 block6;
+
+    block2:
+        v5.i256 = phi (0.i256 block1) (v7 block3);
+        v6.i1 = ne v5 v1;
+        br v6 block3 block5;
+
+    block3:
+        v7.i256 = add v5 2.i256;
+        jump block2;
+
+    block5:
+        v4.i256 = add v2 1.i256;
+        jump block1;
+
+    block6:
+        return 7.i256;
+}
+"#;
+        for (what, source) in [
+            ("a bound that is not loop-invariant", variant_bound),
+            ("two latches", two_latches),
+            (
+                "an exit test that does not dominate the latch",
+                test_off_every_path,
+            ),
+            ("a test of `i * 2`", derived_test),
+            (
+                "an outer loop around an unproven inner loop",
+                unproven_inner,
+            ),
+        ] {
+            assert_loop_removed(source, false, what);
+        }
+    }
+
+    #[test]
+    fn finiteness_proof_accepts_bound_computed_in_loop_from_invariants() {
+        // `v4` is computed in the loop, but from `v0` and a constant only.
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v3 block2);
+        v4.i256 = add v0 1.i256;
+        v2.i1 = lt v1 v4;
+        br v2 block2 block3;
+
+    block2:
+        v3.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return 7.i256;
+}
+"#;
+        assert_loop_removed(source, true, "a bound computed in the loop from invariants");
+    }
+
+    #[test]
+    fn finiteness_proof_accepts_outer_latch_at_inner_header() {
+        // `block2` heads the inner loop and is the outer loop's latch.
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = phi (0.i256 block0) (v4 block2);
+        v3.i1 = lt v2 v0;
+        br v3 block5 block4;
+
+    block5:
+        v4.i256 = add v2 1.i256;
+        jump block2;
+
+    block2:
+        v5.i256 = phi (0.i256 block5) (v7 block3);
+        v6.i1 = lt v5 v1;
+        br v6 block3 block1;
+
+    block3:
+        v7.i256 = add v5 1.i256;
+        jump block2;
+
+    block4:
+        return 7.i256;
+}
+"#;
+        assert_loop_removed(source, true, "an outer latch at an inner header");
+    }
+
+    #[test]
+    fn finite_loop_with_effects_is_kept() {
+        let store = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v3 block2);
+        v2.i1 = lt v1 v0;
+        br v2 block2 block3;
+
+    block2:
+        evm_mstore v1 v1;
+        v3.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return 7.i256;
+}
+"#;
+        let (_, dumped) = run_default_adce(store);
+        assert!(
+            dumped.contains("evm_mstore v1 v1;") && dumped.contains(" = phi "),
+            "ADCE must keep a finite loop that stores:\n{dumped}"
+        );
+
+        let call = r#"
+target = "evm-ethereum-osaka"
+
+func private %maybe_spin(v0.i256) {
+    block0:
+        v1.i1 = is_zero v0;
+        br v1 block1 block2;
+
+    block1:
+        jump block1;
+
+    block2:
+        return;
+}
+
+func public %f(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v3 block2);
+        v2.i1 = lt v1 v0;
+        br v2 block2 block3;
+
+    block2:
+        call %maybe_spin v1;
+        v3.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return 7.i256;
+}
+"#;
+        let parsed = parse_module(call);
+        func_behavior::analyze_module(&parsed.module);
+        let func_ref = find_func(&parsed.module, "f");
+        parsed.module.func_store.modify(func_ref, |func| {
+            AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects).run(func);
+        });
+        let dumped = parsed.module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        });
+        assert!(
+            dumped.contains("call %maybe_spin v1;") && dumped.contains(" = phi "),
+            "ADCE must keep a finite loop that calls a function that may not return:\n{dumped}"
+        );
     }
 
     #[test]
@@ -707,6 +1320,370 @@ func private %f(v0.i1) {
         assert!(
             dumped.contains("return;"),
             "ADCE should preserve live control flow:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn preserves_unproven_loop_with_exit_but_removes_dead_body_insts() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = phi (v0 block0) (v4 block2);
+        v3.i1 = ne v2 v1;
+        br v3 block2 block3;
+
+    block2:
+        v5.i256 = mul v2 3.i256;
+        v4.i256 = add v2 2.i256;
+        jump block1;
+
+    block3:
+        return 7.i256;
+}
+"#;
+
+        let (changed, dumped) = run_default_adce(source);
+        assert!(changed, "dead mul inside loop should be removed:\n{dumped}");
+        assert!(
+            !dumped.contains("mul "),
+            "ADCE should still remove dead pure instructions inside preserved loops:\n{dumped}"
+        );
+        assert!(
+            dumped.contains("ne v2 v1")
+                && dumped.contains("add v2 2.i256")
+                && dumped.contains("jump block1;"),
+            "ADCE must preserve loops with step 2 and dynamic != bound:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn removes_dead_proven_finite_unsigned_range_loop() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v3 block2);
+        v2.i1 = lt v1 v0;
+        br v2 block2 block3;
+
+    block2:
+        v4.i256 = mul v1 3.i256;
+        v3.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return 7.i256;
+}
+"#;
+
+        let (changed, dumped) = run_default_adce(source);
+        assert!(changed);
+        assert!(
+            !dumped.contains("phi") && !dumped.contains("lt ") && !dumped.contains("add "),
+            "ADCE should eliminate dead finite unsigned range loop:\n{dumped}"
+        );
+        assert!(dumped.contains("return 7.i256;"), "{dumped}");
+    }
+
+    #[test]
+    fn removes_dead_proven_finite_latch_tested_rotated_loop() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v2 block1);
+        v2.i256 = add v1 1.i256;
+        v3.i1 = lt v2 v0;
+        br v3 block1 block2;
+
+    block2:
+        return 9.i256;
+}
+"#;
+
+        let (changed, dumped) = run_default_adce(source);
+        assert!(changed);
+        assert!(
+            !dumped.contains("phi") && !dumped.contains("br "),
+            "ADCE should eliminate dead rotated finite loop:\n{dumped}"
+        );
+        assert!(dumped.contains("return 9.i256;"), "{dumped}");
+    }
+
+    #[test]
+    fn removes_dead_proven_finite_countdown_and_ne_unit_step_loops() {
+        let source_sub = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i64, v1.i64) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i64 = phi (v0 block0) (v4 block2);
+        v3.i1 = gt v2 v1;
+        br v3 block2 block3;
+
+    block2:
+        v4.i64 = add v2 -1.i64;
+        jump block1;
+
+    block3:
+        return 1.i256;
+}
+"#;
+        let (changed, dumped) = run_default_adce(source_sub);
+        assert!(changed);
+        assert!(
+            !dumped.contains("phi") && !dumped.contains("gt "),
+            "ADCE should eliminate countdown loop using add -1:\n{dumped}"
+        );
+
+        let source_is_zero = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i64) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i64 = phi (v0 block0) (v3 block2);
+        v2.i1 = is_zero v1;
+        br v2 block3 block2;
+
+    block2:
+        v3.i64 = sub v1 1.i64;
+        jump block1;
+
+    block3:
+        return 2.i256;
+}
+"#;
+        let (changed, dumped) = run_default_adce(source_is_zero);
+        assert!(changed);
+        assert!(
+            !dumped.contains("phi") && !dumped.contains("is_zero"),
+            "ADCE should eliminate unit-step countdown tested with is_zero:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn preserves_wrapping_hazard_loops_and_removes_safe_const_bound_loops() {
+        // Dynamic <= bound can be UMAX, wrapping i += 1 forever.
+        let dynamic_le = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i8) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i8 = phi (0.i8 block0) (v3 block2);
+        v2.i1 = le v1 v0;
+        br v2 block2 block3;
+
+    block2:
+        v3.i8 = add v1 1.i8;
+        jump block1;
+
+    block3:
+        return 0.i256;
+}
+"#;
+        let (_, dumped) = run_default_adce(dynamic_le);
+        assert!(
+            dumped.contains("le v1 v0") && dumped.contains("jump block1;"),
+            "ADCE must preserve dynamic <= loop (wrap hazard at UMAX):\n{dumped}"
+        );
+
+        // Step 2 with bound 255 on i8 can wrap (254 + 2 == 0 < 255).
+        let unsafe_step2 = r#"
+target = "evm-ethereum-osaka"
+
+func private %f() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i8 = phi (0.i8 block0) (v3 block2);
+        v2.i1 = lt v1 -1.i8;
+        br v2 block2 block3;
+
+    block2:
+        v3.i8 = add v1 2.i8;
+        jump block1;
+
+    block3:
+        return 0.i256;
+}
+"#;
+        let (_, dumped) = run_default_adce(unsafe_step2);
+        assert!(
+            dumped.contains("lt v0 -1.i8") && dumped.contains("jump block1;"),
+            "ADCE must preserve i8 loop with lt 255 and step 2:\n{dumped}"
+        );
+
+        // Step 2 with bound 254 (-2i8) on i8 cannot wrap (max 253 + 2 = 255 >= 254).
+        let safe_step2 = r#"
+target = "evm-ethereum-osaka"
+
+func private %f() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i8 = phi (0.i8 block0) (v3 block2);
+        v2.i1 = lt v1 -2.i8;
+        br v2 block2 block3;
+
+    block2:
+        v3.i8 = add v1 2.i8;
+        jump block1;
+
+    block3:
+        return 0.i256;
+}
+"#;
+        let (changed, dumped) = run_default_adce(safe_step2);
+        assert!(changed);
+        assert!(
+            !dumped.contains("phi") && !dumped.contains("lt "),
+            "ADCE should eliminate i8 loop with lt 254 and step 2:\n{dumped}"
+        );
+
+        // Signed <= 126 with step 1 on i8 is safe; <= 127 wraps.
+        let safe_sle = r#"
+target = "evm-ethereum-osaka"
+
+func private %f() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i8 = phi (-128.i8 block0) (v3 block2);
+        v2.i1 = sle v1 126.i8;
+        br v2 block2 block3;
+
+    block2:
+        v3.i8 = add v1 1.i8;
+        jump block1;
+
+    block3:
+        return 0.i256;
+}
+"#;
+        let (changed, dumped) = run_default_adce(safe_sle);
+        assert!(changed);
+        assert!(
+            !dumped.contains("phi") && !dumped.contains("sle "),
+            "ADCE should eliminate i8 loop with sle 126 and step 1:\n{dumped}"
+        );
+
+        let unsafe_sle = r#"
+target = "evm-ethereum-osaka"
+
+func private %f() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i8 = phi (-128.i8 block0) (v3 block2);
+        v2.i1 = sle v1 127.i8;
+        br v2 block2 block3;
+
+    block2:
+        v3.i8 = add v1 1.i8;
+        jump block1;
+
+    block3:
+        return 0.i256;
+}
+"#;
+        let (_, dumped) = run_default_adce(unsafe_sle);
+        assert!(
+            dumped.contains("sle v0 127.i8") && dumped.contains("jump block1;"),
+            "ADCE must preserve i8 loop with sle 127 and step 1:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn preserves_irreducible_cycle_with_exit() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1, v1.i1, v2.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        br v1 block2 block3;
+
+    block2:
+        br v2 block1 block3;
+
+    block3:
+        return 5.i256;
+}
+"#;
+
+        let (_, dumped) = run_default_adce(source);
+        assert!(
+            dumped.contains("br v1 block2 block3;") && dumped.contains("br v2 block1 block3;"),
+            "ADCE must preserve irreducible cycles with an exit:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn eliminates_finite_inner_loop_inside_preserved_outer_loop() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        br v0 block2 block5;
+
+    block2:
+        v2.i256 = phi (0.i256 block1) (v4 block3);
+        v3.i1 = lt v2 v1;
+        br v3 block3 block4;
+
+    block3:
+        v4.i256 = add v2 1.i256;
+        jump block2;
+
+    block4:
+        jump block1;
+
+    block5:
+        return 3.i256;
+}
+"#;
+
+        let (changed, dumped) = run_default_adce(source);
+        assert!(changed);
+        assert!(
+            !dumped.contains("phi") && !dumped.contains("lt ") && !dumped.contains("add "),
+            "ADCE should eliminate dead proven-finite inner loop:\n{dumped}"
+        );
+        assert!(
+            dumped.contains("br v0 "),
+            "ADCE must keep unproven outer loop:\n{dumped}"
         );
     }
 }

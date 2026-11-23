@@ -412,7 +412,7 @@ impl SignedInterval {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NormalizedCond {
+pub(crate) enum NormalizedCond {
     Constant(bool),
     Compare {
         kind: BinaryInstKind,
@@ -943,7 +943,11 @@ fn refine_br_edge(
     }
 }
 
-fn normalize_condition(func: &Function, env: &RangeEnv, mut value: ValueId) -> NormalizedCond {
+pub(crate) fn normalize_condition(
+    func: &Function,
+    env: &RangeEnv,
+    mut value: ValueId,
+) -> NormalizedCond {
     let mut invert = false;
 
     loop {
@@ -2344,7 +2348,7 @@ fn signed_to_unsigned(value: I256, ty: Type) -> U256 {
     imm_to_unsigned(Immediate::from_i256(value, ty))
 }
 
-fn imm_to_unsigned(imm: Immediate) -> U256 {
+pub(crate) fn imm_to_unsigned(imm: Immediate) -> U256 {
     imm.as_i256().to_u256() & unsigned_max(imm.ty())
 }
 
