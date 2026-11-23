@@ -101,6 +101,11 @@ impl LoopTree {
         self.loops[lp].parent.expand()
     }
 
+    /// Returns the loops directly nested in `lp`.
+    pub fn children(&self, lp: Loop) -> &[Loop] {
+        &self.loops[lp].children
+    }
+
     /// Returns the loop that the `block` belongs to.
     /// If the `block` belongs to multiple loops, then returns the innermost
     /// loop.
@@ -133,13 +138,13 @@ impl LoopTree {
                         // If outermost parent is current loop, then the block is already visited.
                         if outermost_parent == cur_lp {
                             continue;
-                        } else {
-                            self.loops[cur_lp].children.push(outermost_parent);
-                            self.loops[outermost_parent].parent = cur_lp.into();
-
-                            let lp_header_of_block = self.loop_header(lp_of_block);
-                            worklist.extend(cfg.preds_of(lp_header_of_block));
                         }
+                        self.loops[cur_lp].children.push(outermost_parent);
+                        self.loops[outermost_parent].parent = cur_lp.into();
+
+                        // Continue from the entries of the whole child nest: the
+                        // header of `lp_of_block` may lie deeper inside it.
+                        worklist.extend(cfg.preds_of(self.loop_header(outermost_parent)));
                     }
 
                     // If the block is not mapped to any loops, then map it to the loop.
@@ -259,8 +264,84 @@ mod tests {
         },
         prelude::*,
     };
+    use sonatina_parser::parse_module;
 
     use super::*;
+
+    /// A loop nest three deep whose innermost loop exits to the latch of the
+    /// outermost one: `block2` reaches the latch `block7` only through the
+    /// middle loop.
+    #[test]
+    fn three_deep_nest_exiting_to_outer_latch() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %three_deep(v0.i256, v1.i256, v2.i256, v3.i1) -> i256 {
+    block0:
+        jump block1;
+    block1:
+        v4.i256 = phi (0.i256 block0) (v5 block7);
+        v6.i1 = lt v4 v0;
+        br v6 block7 block2;
+    block2:
+        jump block3;
+    block3:
+        v7.i256 = phi (0.i256 block2) (v8 block6);
+        v9.i1 = lt v7 v1;
+        br v9 block4 block8;
+    block4:
+        v10.i256 = phi (0.i256 block3) (v11 block5);
+        v12.i1 = lt v10 v2;
+        br v12 block5 block7;
+    block5:
+        v11.i256 = add v10 1.i256;
+        br v3 block4 block6;
+    block6:
+        v8.i256 = add v7 1.i256;
+        jump block3;
+    block7:
+        v5.i256 = add v4 1.i256;
+        jump block1;
+    block8:
+        return 7.i256;
+}
+"#,
+        )
+        .unwrap();
+        let func_ref = parsed.module.funcs()[0];
+        let lpt = parsed.module.func_store.view(func_ref, compute_loop);
+
+        assert_eq!(lpt.loop_num(), 3);
+        let outer = lpt.loop_of_block(BlockId(1)).unwrap();
+        let middle = lpt.loop_of_block(BlockId(3)).unwrap();
+        let inner = lpt.loop_of_block(BlockId(4)).unwrap();
+        assert_eq!(lpt.loop_header(outer), BlockId(1));
+        assert_eq!(lpt.loop_header(middle), BlockId(3));
+        assert_eq!(lpt.loop_header(inner), BlockId(4));
+
+        let expected = [
+            None,
+            Some(outer),
+            Some(outer),
+            Some(middle),
+            Some(inner),
+            Some(inner),
+            Some(middle),
+            Some(outer),
+            None,
+        ];
+        for (n, lp) in (0..).zip(expected) {
+            assert_eq!(lpt.loop_of_block(BlockId(n)), lp, "block{n}");
+        }
+
+        assert_eq!(lpt.parent_loop(outer), None);
+        assert_eq!(lpt.parent_loop(middle), Some(outer));
+        assert_eq!(lpt.parent_loop(inner), Some(middle));
+        assert_eq!(lpt.children(outer), [middle]);
+        assert_eq!(lpt.children(middle), [inner]);
+        assert!(lpt.children(inner).is_empty());
+    }
 
     fn compute_loop(func: &Function) -> LoopTree {
         let mut cfg = ControlFlowGraph::new();

@@ -1601,6 +1601,64 @@ block2:
         }
     }
     #[test]
+    fn write_in_nested_loop_reached_only_through_middle_loop_blocks_invariance() {
+        // The innermost loop exits to the outermost loop's latch, so the store
+        // in `block5` lies in the outermost loop although `block2` reaches it
+        // only through the middle loop.
+        check_memory(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.i256, v1.i256, v2.i256, v3.i1) -> i256 {
+block0:
+    v20.objref<i256> = obj.alloc i256;
+    obj.store v20 5.i256;
+    jump block1;
+block1:
+    v4.i256 = phi (0.i256 block0) (v5 block7);
+    v6.i1 = lt v4 v0;
+    br v6 block7 block2;
+block2:
+    jump block3;
+block3:
+    v7.i256 = phi (0.i256 block2) (v8 block6);
+    v9.i1 = lt v7 v1;
+    br v9 block4 block8;
+block4:
+    v10.i256 = phi (0.i256 block3) (v11 block5);
+    v12.i1 = lt v10 v2;
+    br v12 block5 block7;
+block5:
+    v11.i256 = add v10 1.i256;
+    obj.store v20 9.i256;
+    br v3 block4 block6;
+block6:
+    v8.i256 = add v7 1.i256;
+    jump block3;
+block7:
+    v21.i256 = obj.load v20;
+    v5.i256 = add v4 v21;
+    jump block1;
+block8:
+    return 7.i256;
+}
+"#,
+            &[],
+            |func, memory, loads| {
+                let mut cfg = ControlFlowGraph::new();
+                cfg.compute(func);
+                let mut domtree = DomTree::new();
+                domtree.compute(&cfg);
+                let mut loops = LoopTree::new();
+                loops.compute(&cfg, &domtree);
+                let outer = loops.loops().next().unwrap();
+                assert!(
+                    !memory.read_is_loop_invariant(func, &cfg, &domtree, &loops, outer, loads[0])
+                );
+            },
+        );
+    }
+
+    #[test]
     fn repeating_allocation_site_does_not_supply_single_instance_read_facts() {
         check_memory(
             r#"
