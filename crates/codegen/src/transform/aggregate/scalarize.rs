@@ -440,16 +440,9 @@ impl AggregateScalarize {
                 let var = ssa.declare_var(leaf.ty);
                 promoted.leaf_vars.push(var);
                 let init = match promoted.init {
-                    // Fresh memory holds arbitrary but fixed bits, which every
-                    // read before the first store sees alike.
-                    RootInit::UndefFresh
-                        if leaf.ty.is_integral()
-                            || leaf.ty.is_enum_tag()
-                            || leaf.ty.is_pointer(func.ctx()) =>
-                    {
-                        self.insert_frozen_undef_leaf(func, promoted, leaf.ty)
-                    }
-                    RootInit::UndefFresh => func.dfg.make_undef_value(leaf.ty),
+                    // Fresh memory holds arbitrary concrete bytes chosen at
+                    // allocation time; seeding with zero refines that choice.
+                    RootInit::UndefFresh => func.dfg.make_zero_const(leaf.ty),
                     RootInit::LoadLiveIn => {
                         if promoted
                             .incoming
@@ -462,7 +455,7 @@ impl AggregateScalarize {
                         } else {
                             // No rewritten read demands this leaf. Keeping a variable
                             // slot avoids changing private-root reconstruction paths.
-                            func.dfg.make_undef_value(leaf.ty)
+                            func.dfg.make_zero_const(leaf.ty)
                         }
                     }
                 };
@@ -2082,7 +2075,7 @@ impl AggregateScalarize {
             };
             let mut leaves = LeafValues::new();
             for leaf in &shape.leaves {
-                leaves.push(func.dfg.make_undef_value(leaf.ty));
+                leaves.push(func.dfg.make_zero_const(leaf.ty));
             }
             let Some(tag_slice) = shape::enum_tag_slice(module, enum_ty) else {
                 return;
@@ -2767,28 +2760,6 @@ impl AggregateScalarize {
         shape::is_leaf_reifiable_ty(module, ty) || scalarizable[value]
     }
 
-    fn insert_frozen_undef_leaf(
-        &self,
-        func: &mut Function,
-        promoted: &PromotableRoot,
-        ty: Type,
-    ) -> ValueId {
-        let before = first_non_phi_inst(func, promoted.seed_block);
-        let loc = before
-            .and_then(|inst| func.layout.prev_inst_of(inst))
-            .map_or(
-                CursorLocation::BlockTop(promoted.seed_block),
-                CursorLocation::At,
-            );
-        let mut cursor = InstInserter::at_location(loc);
-        let undef = func.dfg.make_undef_value(ty);
-        let freeze =
-            cursor.insert_inst_data(func, data::Freeze::new_unchecked(func.inst_set(), undef));
-        let result = cursor.make_result(func, freeze, ty);
-        cursor.attach_result(func, freeze, result);
-        result
-    }
-
     fn insert_live_in_leaf_load(
         &self,
         func: &mut Function,
@@ -3412,13 +3383,9 @@ mod tests {
         }
     }
 
-    /// A fresh slot's seed: one arbitrary value, `freeze undef`.
+    /// A fresh slot's seed: zero (an immediate for scalar/tag, `zero.T` for compound).
     fn is_fresh_seed(func: &Function, value: ValueId) -> bool {
-        func.dfg.value_inst(value).is_some_and(|inst| {
-            func.dfg
-                .downcast::<&data::Freeze>(inst)
-                .is_some_and(|freeze| matches!(func.dfg.value(*freeze.arg()), Value::Undef { .. }))
-        })
+        func.dfg.value_is_zero(value) || func.dfg.value_imm(value).is_some_and(|imm| imm.is_zero())
     }
 
     #[test]
@@ -3843,7 +3810,7 @@ func private %f() -> i256 {
 "#,
         );
         assert!(!dumped.contains("obj."), "{dumped}");
-        assert!(dumped.contains("undef.i256"), "{dumped}");
+        assert!(dumped.contains("0.i256 block6"), "{dumped}");
         assert!(dumped.contains("9.i256 block2"), "{dumped}");
     }
 
@@ -4819,7 +4786,7 @@ block0:
                 let ty = module
                     .ctx
                     .with_ty_store(|types| Type::Compound(types.lookup_struct(name).unwrap()));
-                (name, func.dfg.make_undef_value(ty), expected)
+                (name, func.dfg.make_zero_const(ty), expected)
             })
             .collect();
             let mut pass = AggregateScalarize::default();

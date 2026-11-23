@@ -11,16 +11,16 @@ func public %copy_in_loop(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v29.i256 = phi (0.i256 block0) (v11 block2);
-        v23.i256 = phi (0.i256 block0) (v29 block2);
-        v8.i1 = lt v29 v0;
+        v25.i256 = phi (0.i256 block0) (v11 block2);
+        v19.i256 = phi (0.i256 block0) (v25 block2);
+        v8.i1 = lt v25 v0;
         br v8 block2 block3;
 
     block2:
-        v11.i256 = add v29 1.i256;
+        v11.i256 = add v25 1.i256;
         jump block1;
 
     block3:
-        v17.i256 = add v23 v29;
+        v17.i256 = add v19 v25;
         return v17;
 }

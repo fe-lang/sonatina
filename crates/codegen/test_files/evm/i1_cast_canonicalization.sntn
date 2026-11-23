@@ -9,7 +9,8 @@ func public %main() -> i256 {
         v0.*i256 = alloca i256;
         mstore v0 3.i256 i256;
 
-        v1.i1 = mload v0 i1;
+        v10.i256 = mload v0 i256;
+        v1.i1 = trunc v10 i1;
         v2.i256 = zext v1 i256;
         v3.i256 = sext v1 i256;
         v4.*i8 = int_to_ptr v1 *i8;

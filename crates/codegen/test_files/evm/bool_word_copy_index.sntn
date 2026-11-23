@@ -1,13 +1,13 @@
 #! evm.config: { vcode: true, opt: 0 }
-#! evm.case: dirty_index
-#!   calldata: u256(3)
+#! evm.case: valid_index
+#!   calldata: u256(1)
 #!   expect: return u256(1)
 
 target = "evm-ethereum-osaka"
 
-# An `i1` read from a slot whose word is 3 is both the index and the value of
-# an insert into `[i1; 2]`. As an index it is used as an `i1`, so the read keeps
-# the low bit: element 1 of the array is set, and reads back as 1.
+# A canonical `i1` word (1 under R3) read from a slot is both the index and the
+# value of an insert into `[i1; 2]`: element 1 of the array is set, and reads
+# back as 1.
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;

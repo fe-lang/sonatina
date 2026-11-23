@@ -3238,21 +3238,38 @@ impl<'a> FunctionLegalizer<'a> {
         };
 
         match width {
-            ScalarWidth::Full256 => {
+            ScalarWidth::Full256 | ScalarWidth::Narrow(_) => {
+                // Under R3 + U4, a typed narrow `mload` assumes the stored word already
+                // fits the destination width (non-zero upper bits are UB).
                 self.func.dfg.replace_inst(
                     inst,
                     Box::new(Mload::new(self.evm_inst_set(), addr, Type::I256)),
                 );
             }
-            ScalarWidth::Bool | ScalarWidth::Narrow(_) => {
+            ScalarWidth::Bool => {
                 let raw = self.insert_before_one(
                     inst,
                     Mload::new(self.evm_inst_set(), addr, Type::I256),
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                let result = self.word_to_width(inst, raw, width);
-                self.replace_with_aliases(inst, &[result]);
+                let result = self
+                    .func
+                    .dfg
+                    .inst_result(inst)
+                    .expect("an `i1` read has a result");
+                let narrowed = if self.bool_word_copies.contains(&result) {
+                    self.bool_word_copies.insert(raw);
+                    raw
+                } else {
+                    self.insert_before_one(
+                        inst,
+                        cast::TruncNuw::new(self.evm_inst_set(), raw, Type::I1),
+                        Type::I1,
+                        Some(ScalarWidth::Bool),
+                    )
+                };
+                self.replace_with_aliases(inst, &[narrowed]);
             }
         }
     }
@@ -3663,7 +3680,7 @@ block0:
         assert!(dumped.contains("v0.*i256 = alloca i256;"), "{dumped}");
         assert!(dumped.contains("mstore v0 7.i256 i256;"), "{dumped}");
         assert!(dumped.contains("mload v0 i256;"), "{dumped}");
-        assert!(dumped.contains("and v"), "{dumped}");
+        assert!(!dumped.contains("and v"), "{dumped}");
         assert!(dumped.contains("return v"), "{dumped}");
         assert!(!dumped.contains("bitcast"), "{dumped}");
         assert!(!dumped.contains(" = or "), "{dumped}");
@@ -3770,9 +3787,9 @@ block0:
             "entry",
         );
 
-        assert!(dumped.contains("mload v0 i256;"), "{dumped}");
-        assert!(dumped.contains("255.i256"), "{dumped}");
-        assert!(dumped.contains("248.i256"), "{dumped}");
+        assert!(dumped.contains("v1.i256 = mload v0 i256;"), "{dumped}");
+        assert!(dumped.contains("shl 248.i256 v1;"), "{dumped}");
+        assert!(!dumped.contains("and v1 "), "{dumped}");
         assert!(!dumped.contains(" = mload v0 i8;"), "{dumped}");
     }
 

@@ -152,8 +152,8 @@ func public %scalarize_promote_direct_root_scalar_view(v0.i256) -> i256 {
 # sameln: func public %scalarize_promote_aggregate_pointer_bitcast(v0.*i8) -> i256 {
 # check:     block0:
 # check:         v3.i256 = ptr_to_int v0 i256;
-# check:         v11.*i8 = bitcast v3 *i8;
-# check:         v7.i256 = ptr_to_int v11 i256;
+# check:         $(cast=v\d+).*i8 = bitcast v3 *i8;
+# check:         v7.i256 = ptr_to_int $cast i256;
 # check:         return v7;
 func public %scalarize_promote_aggregate_pointer_bitcast(v0.*i8) -> i256 {
     block0:
@@ -264,8 +264,8 @@ func public %scalarize_reject_dynamic_index(v0.i8) -> i256 {
 
 # sameln: func public %scalarize_skip_aggregate_store_from_arg(v0.@slice) -> i256 {
 # check:     block0:
-# check:         v10.i256 = extract_value v0 0.i256;
-# check:         return v10;
+# check:         $(field=v\d+).i256 = extract_value v0 0.i256;
+# check:         return $field;
 func public %scalarize_skip_aggregate_store_from_arg(v0.@slice) -> i256 {
     block0:
         v1.*@slice = alloca @slice;
