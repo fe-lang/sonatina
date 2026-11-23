@@ -218,6 +218,7 @@ above.
 There are no first-class function values, indirect calls, variadic
 definitions, floating point operations or EVM-specific runtime services in
 this slice. Division
-by zero is undefined at the IR level; callers must not rely on an EVM-style
-zero result or a uniform trap policy across widths. `i128` and `i256`
+by zero is undefined behavior in the IR (U5 in `docs/memory.md`): it traps up
+to 128 bits, and at 256 bits gives an all-ones quotient and the dividend as
+remainder. `i128` and `i256`
 divisions call a divider function local to each object.

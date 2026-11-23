@@ -383,7 +383,8 @@ native backend:
   wrapped result and an `i1` overflow flag. The saturating forms
   (`uaddsat`, `saddsat`, ...) clamp to the bound in the direction of overflow.
 - `sdiv` of the minimum value by -1 wraps to the minimum value. Division or
-  remainder by zero is undefined in the IR and traps in WebAssembly.
+  remainder by zero is undefined behavior in the IR (U5 in `docs/memory.md`)
+  and traps in WebAssembly.
 - `mload` and `mstore` access `i1`, `i8`, `i16`, `i32`, `i64`, `i128`, `i256`, pointers
   and aggregates. An access outside the memory traps. Natural alignment is only
   a hint, so unaligned addresses are valid. An `i1` load keeps the low bit of the

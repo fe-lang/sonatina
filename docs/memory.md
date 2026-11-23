@@ -104,7 +104,11 @@ frontend contract.
     inactive variant.
 - **U5.** An operand outside an instruction's domain:
   - `evm_mload_bytes` with `len > 32` (the verifier rejects a constant one;
-    EVM machine lowering yields `0` for a dynamic one).
+    EVM machine lowering yields `0` for a dynamic one);
+  - `udiv`, `sdiv`, `umod`, or `smod` with a zero divisor. Targets differ: EVM
+    lowers them to its total division and yields `0`, WebAssembly traps,
+    Cranelift traps up to 128 bits and at 256 bits yields an all-ones quotient
+    and the dividend as remainder, and the interpreter yields no value.
 
 ## Defined Operations
 
@@ -119,6 +123,9 @@ frontend contract.
   `evm_smod` and their overflow-reporting variants) are total: dividing or taking
   remainder by zero yields `0`, and signed `INT_MIN / -1` / `INT_MIN % -1`
   follow EVM semantics.
+- **Signed division overflow:** `sdiv` of the signed minimum by `-1` wraps to
+  the signed minimum, and `smod` of it by `-1` is `0`, at every width, on every
+  target and in the interpreter.
 - **Enum lowering:** `obj.store p (enum.make V ...)` folds to
   `enum.write_variant p V ...` before `ObjectLowerToMemory` at every
   optimization level. Lowered enum payload words are widened to `i256` (or
