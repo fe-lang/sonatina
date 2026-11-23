@@ -2042,7 +2042,8 @@ fn translate_function(
                     value_map.insert_parts(result, values);
                 }
                 NativeInstKind::InsertValue(insert) => {
-                    // No insert into an `agg.make` is left (`check_concrete`);
+                    // No insert into an `agg.make` is left
+                    // (`check_fresh_aggregates_folded`);
                     // an insert into a `zero` copies it like any base.
                     let Some(result) = function.dfg.inst_result(inst_id) else {
                         continue;

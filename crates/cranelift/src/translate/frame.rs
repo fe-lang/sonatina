@@ -759,7 +759,7 @@ impl Plan {
             }
         }
         // The `agg.make` of a class and the inserts continuing it, if it is
-        // one. `concretize` folded every chain on undef into an `agg.make`,
+        // one. `fold_fresh_aggregates` folded every chain into an `agg.make`,
         // but for a sparse one into a long array, which is built like an
         // update.
         let chain_of = |class: usize| -> Option<Vec<InstId>> {

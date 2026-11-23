@@ -128,8 +128,9 @@ frontend contract.
 Because every SSA value is concrete (V1), value equivalence is exact equality
 (or equality on demanded bits) rather than `undef` refinement:
 
-- `concretize` folds residual fresh `insert_value` chains into `agg.make`, and
-  `check_concrete` verifies no unfoldable fresh insert chains reach backends.
+- `fold_fresh_aggregates` folds residual fresh `insert_value` chains into
+  `agg.make` after the last IR pass of every backend, and
+  `check_fresh_aggregates_folded` verifies none reach the backends.
 - Operations with UB preconditions (`trunc_nuw`, `enum.extract`,
   `enum.assert_variant*`, memory accesses) must not be speculated above guards
   that establish their preconditions (`DataFlowGraph::can_speculate`).

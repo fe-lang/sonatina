@@ -13,9 +13,9 @@ use sonatina_ir::{
 
 use super::shape;
 
-/// The most fields that no insert of a chain on undef writes for it to fold:
-/// a sparse insert into a long array keeps its spelling rather than becoming an
-/// `agg.make` of mostly `undef` operands.
+/// The most fields that no insert of a chain writes for it to fold: a sparse
+/// insert into a long array keeps its spelling rather than becoming an
+/// `agg.make` of mostly zero operands.
 pub const MAX_UNWRITTEN_FIELDS: usize = 1024;
 
 enum ChainBase {
@@ -91,7 +91,7 @@ impl Chain {
     }
 }
 
-/// Whether `inst` is a constant-index `insert_value` into `undef` or an
+/// Whether `inst` is a constant-index `insert_value` into `zero` or an
 /// `agg.make`, directly or through more such inserts: what
 /// [`fold_fresh_aggregates`] leaves none of.
 pub fn is_fresh_insert(func: &Function, inst: InstId) -> bool {
@@ -201,10 +201,12 @@ pub(crate) fn fold_fresh_aggregates_in(func: &mut Function) -> bool {
 /// Folds the fresh insert chains of every function in `module` into
 /// `agg.make`s. `Compile::optimize` runs it before the pipeline, so passes see
 /// fresh aggregates spelled one way. Passes may make new ones by substituting
-/// `undef` or an `agg.make` for an insert's base; `concretize` folds those at
-/// the end. Afterwards no constant-index `insert_value` has an `undef` or
-/// `agg.make` base, except a sparse one into an aggregate with more than
-/// [`MAX_UNWRITTEN_FIELDS`] fields it does not write ([`is_fresh_insert`]).
+/// `zero` or an `agg.make` for an insert's base; every backend folds those
+/// again after its last IR pass. Afterwards no constant-index `insert_value`
+/// has a `zero` or `agg.make` base, except a sparse one into an aggregate with
+/// more than [`MAX_UNWRITTEN_FIELDS`] fields it does not write
+/// ([`is_fresh_insert`]). Backends check that with
+/// [`check_fresh_aggregates_folded`].
 pub fn fold_fresh_aggregates(module: &Module) {
     for func in module.funcs() {
         module.func_store.modify(func, |function| {
@@ -213,13 +215,45 @@ pub fn fold_fresh_aggregates(module: &Module) {
     }
 }
 
+/// Checks that `func` has no insert that [`fold_fresh_aggregates_in`] folds.
+pub fn check_fresh_aggregates_folded(func: &Function) -> Result<(), String> {
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            if is_fresh_insert(func, inst) {
+                return Err(format!(
+                    "inst{} ({}) is an insert into an `agg.make` or `zero` that \
+                     `fold_fresh_aggregates` folds",
+                    inst.as_u32(),
+                    func.dfg.inst(inst).as_text()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// [`check_fresh_aggregates_folded`] on every function of `module`, naming
+/// the function.
+pub fn check_module_fresh_aggregates_folded(module: &Module) -> Result<(), String> {
+    for func in module.funcs() {
+        module
+            .func_store
+            .view(func, check_fresh_aggregates_folded)
+            .map_err(|error| {
+                let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
+                format!("function %{name} has an unfolded fresh aggregate: {error}")
+            })?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use sonatina_ir::ir_writer::FuncWriter;
     use sonatina_parser::parse_module;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
-    use super::{MAX_UNWRITTEN_FIELDS, fold_fresh_aggregates_in};
+    use super::{MAX_UNWRITTEN_FIELDS, check_fresh_aggregates_folded, fold_fresh_aggregates_in};
 
     /// Folds the one function of `body`, checks the result verifies, and
     /// returns whether anything changed and the function's text.
@@ -405,5 +439,32 @@ block0:
             ),
             "{text}"
         );
+    }
+
+    const TYPES: &str = "target = \"evm-ethereum-osaka\"\ntype @pair = { i64, i64 };\n";
+
+    /// The one function of `body`, checked, then folded and checked again:
+    /// the check's verdict before, and the function's text after.
+    fn fold_and_check(body: &str) -> (Result<(), String>, String) {
+        let module = parse_module(&format!("{TYPES}{body}")).unwrap().module;
+        let func = module.funcs()[0];
+        let before = module.func_store.view(func, check_fresh_aggregates_folded);
+        module.func_store.modify(func, fold_fresh_aggregates_in);
+        module.func_store.view(func, |function| {
+            assert_eq!(check_fresh_aggregates_folded(function), Ok(()));
+            (before, FuncWriter::new(func, function).dump_string())
+        })
+    }
+
+    #[test]
+    fn fresh_chains_fold_and_an_unfolded_one_is_rejected() {
+        let body = "func private %f(v0.i64) -> @pair {\nblock0:\n    v1.@pair = agg.make @pair v0 v0;\n    v2.@pair = insert_value v1 1.i8 7.i64;\n    return v2;\n}";
+        let (before, text) = fold_and_check(body);
+        assert!(
+            before.is_err_and(|error| error.contains("insert into an `agg.make`")),
+            "{text}"
+        );
+        assert!(text.contains("agg.make @pair v0 7.i64"), "{text}");
+        assert!(!text.contains("insert_value"), "{text}");
     }
 }
