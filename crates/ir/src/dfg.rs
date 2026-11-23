@@ -667,7 +667,7 @@ impl DataFlowGraph {
         self.live_blocks[block] = false;
     }
 
-    fn delete_value(&mut self, value_id: ValueId) {
+    pub fn delete_value(&mut self, value_id: ValueId) {
         assert!(
             self.has_value(value_id),
             "cannot delete missing value {value_id:?}"

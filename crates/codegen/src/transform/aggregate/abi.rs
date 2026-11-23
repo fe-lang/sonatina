@@ -180,9 +180,7 @@ impl AggregateExpandAbi {
             if expansion.scalar_tys.is_empty() {
                 let undef = func.dfg.make_undef_value(expansion.original_ty);
                 func.dfg.change_to_alias(old_arg, undef);
-                func.dfg.values[old_arg] = Value::Undef {
-                    ty: expansion.original_ty,
-                };
+                func.dfg.delete_value(old_arg);
                 continue;
             }
 
@@ -204,9 +202,7 @@ impl AggregateExpandAbi {
                 &scalar_args,
             );
             func.dfg.change_to_alias(old_arg, rebuilt);
-            func.dfg.values[old_arg] = Value::Undef {
-                ty: expansion.original_ty,
-            };
+            func.dfg.delete_value(old_arg);
         }
 
         func.arg_values = new_args;

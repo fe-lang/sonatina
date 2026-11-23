@@ -969,9 +969,7 @@ impl ObjectAggregateAbi {
             let loaded = self.insert_entry_obj_load(function, arg.hidden_arg, arg.original_ty);
             function.dfg.change_to_alias(arg.old_arg, loaded);
         }
-        function.dfg.values[arg.old_arg] = Value::Undef {
-            ty: arg.original_ty,
-        };
+        function.dfg.delete_value(arg.old_arg);
     }
 
     fn insert_entry_obj_load(&self, function: &mut Function, object: ValueId, ty: Type) -> ValueId {
@@ -1310,9 +1308,6 @@ impl ObjectAggregateAbi {
                 RetAbiKind::OutObject => {
                     let out_root = out_roots[out_idx];
                     if function.dfg.users_num(old_result) == 0 {
-                        function.dfg.values[old_result] = Value::Undef {
-                            ty: ret_plan.original_ty,
-                        };
                         out_idx += 1;
                         continue;
                     }
