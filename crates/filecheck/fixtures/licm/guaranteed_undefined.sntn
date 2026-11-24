@@ -1,0 +1,150 @@
+#! Every instruction that cannot be speculated for its operands, a division
+#! by zero, an unchecked constant index, an address that does not fit or a
+#! narrowing or payload read whose assumption fails, is undefined for those
+#! operands (U4, U5 in `docs/memory.md`): it may trap, and nothing it would
+#! have run before matters. So it leaves the loop from the header past a
+#! store, and past `enum.assert_variant_ref`, an assumption like any other.
+#! `enum.assert_variant` refines the value that payload reads are proved
+#! against, and stops it.
+
+target = "wasm32-unknown-native"
+
+type @Choice = enum { #None, #Some(i64) };
+
+global private const [i64; 4] $table = [11, 22, 33, 44];
+
+# check:  block0:
+# nextln:      v6.i64 = udiv v1 v2;
+# nextln:      jump block1;
+# check:  block1:
+# check:       mstore v0 42.i64 i64;
+func public %store_then_divide(v0.*i64, v1.i64, v2.i64, v3.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i64 = phi (0.i64 block0) (v7 block1);
+        v5.i64 = phi (0.i64 block0) (v8 block1);
+        mstore v0 42.i64 i64;
+        v6.i64 = udiv v1 v2;
+        v7.i64 = add v4 v6;
+        v8.i64 = add v5 1.i64;
+        v9.i1 = lt v8 v3;
+        br v9 block1 block2;
+
+    block2:
+        return v7;
+}
+
+# A load through the address stays: it reads memory.
+# check:  block0:
+# nextln:      v4.constref<[i64; 4]> = const.ref
+# nextln:      v7.constref<i64> = const.index v4 v1;
+# nextln:      v8.i64 = const.load v7;
+# nextln:      v9.*i64 = gep v0 v1;
+# nextln:      v11.i8 = trunc_nuw v1 i8;
+# nextln:      v12.i64 = zext v11 i64;
+# nextln:      v13.i64 = add v8 v12;
+# nextln:      jump block1;
+# check:  block1:
+# check:       v10.i64 = mload v9 i64;
+func public %faulting_kinds(v0.*i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i64 = phi (0.i64 block0) (v14 block1);
+        v5.i64 = phi (0.i64 block0) (v15 block1);
+        v4.constref<[i64; 4]> = const.ref $table;
+        v7.constref<i64> = const.index v4 v1;
+        v8.i64 = const.load v7;
+        v9.*i64 = gep v0 v1;
+        v10.i64 = mload v9 i64;
+        v11.i8 = trunc_nuw v1 i8;
+        v12.i64 = zext v11 i64;
+        v13.i64 = add v8 v12;
+        v17.i64 = add v13 v10;
+        v14.i64 = add v3 v17;
+        v15.i64 = add v5 1.i64;
+        v16.i1 = lt v15 v2;
+        br v16 block1 block2;
+
+    block2:
+        return v14;
+}
+
+# An assertion before the loop proves the payload read in the header.
+# check:  block0:
+# nextln:      enum.assert_variant v0 #Some;
+# nextln:      v4.i64 = enum.extract v0 #Some 0.i8;
+# nextln:      jump block1;
+func private %extract_after_outer_assertion(v0.@Choice, v1.i64) -> i64 {
+    block0:
+        enum.assert_variant v0 #Some;
+        jump block1;
+
+    block1:
+        v2.i64 = phi (0.i64 block0) (v5 block1);
+        v3.i64 = phi (0.i64 block0) (v6 block1);
+        v4.i64 = enum.extract v0 #Some 0.i8;
+        v5.i64 = add v2 v4;
+        v6.i64 = add v3 1.i64;
+        v7.i1 = lt v6 v1;
+        br v7 block1 block2;
+
+    block2:
+        return v5;
+}
+
+# check:  block0:
+# nextln:      jump block1;
+# check:       enum.assert_variant v0 #Some;
+# nextln:      v4.i64 = enum.extract v0 #Some 0.i8;
+# nextln:      v5.i64 = udiv v1 v2;
+func private %after_assertion(v0.@Choice, v1.i64, v2.i64, v3.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.i64 = phi (0.i64 block0) (v8 block1);
+        v7.i64 = phi (0.i64 block0) (v9 block1);
+        enum.assert_variant v0 #Some;
+        v4.i64 = enum.extract v0 #Some 0.i8;
+        v5.i64 = udiv v1 v2;
+        v10.i64 = add v4 v5;
+        v8.i64 = add v6 v10;
+        v9.i64 = add v7 1.i64;
+        v11.i1 = lt v9 v3;
+        br v11 block1 block2;
+
+    block2:
+        return v8;
+}
+
+# The payload read through the assumption's result stays below it.
+# check:  block0:
+# nextln:      v5.i64 = udiv v1 v2;
+# nextln:      jump block1;
+# check:       v4.objref<@Choice> = enum.assert_variant_ref v0 #Some;
+# nextln:      v6.objref<i64> = enum.proj v4 #Some 0.i8;
+# nextln:      v7.i64 = obj.load v6;
+func private %after_assumption(v0.objref<@Choice>, v1.i64, v2.i64, v3.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v8.i64 = phi (0.i64 block0) (v10 block1);
+        v9.i64 = phi (0.i64 block0) (v11 block1);
+        v4.objref<@Choice> = enum.assert_variant_ref v0 #Some;
+        v5.i64 = udiv v1 v2;
+        v6.objref<i64> = enum.proj v4 #Some 0.i8;
+        v7.i64 = obj.load v6;
+        v12.i64 = add v7 v5;
+        v10.i64 = add v8 v12;
+        v11.i64 = add v9 1.i64;
+        v13.i1 = lt v11 v3;
+        br v13 block1 block2;
+
+    block2:
+        return v10;
+}

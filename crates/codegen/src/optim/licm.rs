@@ -8,8 +8,16 @@
 //! dominates every block that leaves the loop or jumps back to its header,
 //! and that the header reaches through no cycle, which may not terminate, and
 //! no instruction that may not return, nor one before it in the block. In the
-//! preheader it then runs once where it ran at least once, and a fault it
-//! raises there the loop would have raised.
+//! preheader it then runs once where it ran at least once.
+//!
+//! Such an instruction is undefined, not trapping, for the operands that keep
+//! it from being speculated (U4 and U5 in `docs/memory.md`), so an execution
+//! that reaches it with them has no required behavior, including for what it
+//! ran before. It may therefore move above a store or another undefined
+//! instruction of the loop. What may not return in a defined way is an
+//! `unreachable`, a revert or a loop, and those keep it below them, as an
+//! `enum.assert_variant` does, which refines the value a payload read is
+//! proved against.
 
 // TODO: Add control flow hoisting.
 use rustc_hash::{FxHashMap, FxHashSet};
