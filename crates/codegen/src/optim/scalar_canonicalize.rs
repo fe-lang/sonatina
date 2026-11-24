@@ -177,6 +177,41 @@ impl ScalarCanonicalize {
                 .filter(|&replacement| supports_inst_spec(func, replacement))
                 .map(|replacement| RewritePlan::ReplaceInst { inst, replacement })
             }
+            InstClassKind::Opaque if func.dfg.value_ty(*result) == Type::I256 => {
+                use sonatina_ir::inst::downcast;
+                let is = func.inst_set();
+                let (lhs, rhs, modulus, identity) =
+                    if let Some(op) = downcast::<&evm::EvmAddMod>(is, inst_data) {
+                        (
+                            *op.lhs(),
+                            *op.rhs(),
+                            *op.modulus(),
+                            Immediate::zero(Type::I256),
+                        )
+                    } else {
+                        let op = downcast::<&evm::EvmMulMod>(is, inst_data)?;
+                        (
+                            *op.lhs(),
+                            *op.rhs(),
+                            *op.modulus(),
+                            Immediate::one(Type::I256),
+                        )
+                    };
+                let value = if func.dfg.value_imm(lhs) == Some(identity) {
+                    rhs
+                } else if func.dfg.value_imm(rhs) == Some(identity) {
+                    lhs
+                } else {
+                    return None;
+                };
+                let replacement = InstSpec::Binary {
+                    kind: BinaryInstKind::EvmUmod,
+                    lhs: Operand::Value(value),
+                    rhs: Operand::Value(modulus),
+                };
+                supports_inst_spec(func, replacement)
+                    .then_some(RewritePlan::ReplaceInst { inst, replacement })
+            }
             InstClassKind::Unary(_) | InstClassKind::Phi | InstClassKind::Opaque => None,
         }
     }
@@ -722,6 +757,9 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
                     lhs,
                     rhs,
                 ))),
+                BinaryInstKind::EvmUmod => {
+                    Some(Box::new(evm::EvmUmod::new(is.has_evm_umod()?, lhs, rhs)))
+                }
                 BinaryInstKind::Udiv => Some(Box::new(arith::Udiv::new(is.has_udiv()?, lhs, rhs))),
                 BinaryInstKind::EvmUdiv => {
                     Some(Box::new(evm::EvmUdiv::new(is.has_evm_udiv()?, lhs, rhs)))
@@ -796,6 +834,7 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             BinaryInstKind::Eq => is.has_eq().is_some(),
             BinaryInstKind::EvmByte => is.has_evm_byte().is_some(),
             BinaryInstKind::EvmSignExtend => is.has_evm_sign_extend().is_some(),
+            BinaryInstKind::EvmUmod => is.has_evm_umod().is_some(),
             BinaryInstKind::Udiv => is.has_udiv().is_some(),
             BinaryInstKind::EvmUdiv => is.has_evm_udiv().is_some(),
             _ => false,

@@ -1,0 +1,29 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/modular_identities.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i256 = evm_umod v0 v1;
+        mstore 0.i256 v2 i256;
+        mstore 32.i256 v2 i256;
+        mstore 64.i256 v2 i256;
+        mstore 96.i256 v2 i256;
+        mstore 128.i256 0.i256 i256;
+        mstore 160.i256 0.i256 i256;
+        mstore 192.i256 0.i256 i256;
+        mstore 224.i256 0.i256 i256;
+        evm_return 0.i256 256.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
