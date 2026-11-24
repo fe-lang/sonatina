@@ -21,6 +21,7 @@ mod prepare;
 mod private_malloc;
 mod ptr_escape;
 mod ptr_provenance;
+pub mod stack_plan;
 pub(crate) mod static_arena_alloc;
 #[doc(hidden)]
 pub mod test_util;
