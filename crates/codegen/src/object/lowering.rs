@@ -123,9 +123,8 @@ pub struct MachineStep {
 /// `Sccp` runs `CfgCleanup`, `SccpPrune`, `SccpFold`, `CfgCleanup`, `Adce`
 /// rounds, `CfgCleanup` and `CfgCleanup`, `Gvn` runs `GvnPrune` and
 /// `GvnRewrite`, and `Adce` runs `Adce` rounds and `CfgCleanup`. A pass of
-/// `ScalarCanonicalize` or `KnownBitsSimplify` runs rounds of its step: a
-/// step of a kind that repeats is one round, the same round of each function
-/// it lists.
+/// `ScalarCanonicalize` or `KnownBitsSimplify` runs rounds of its step. A step
+/// of rounds is one round, the same round of each function it lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepKind {
     CfgCleanup,
@@ -141,16 +140,6 @@ pub enum StepKind {
     BranchConditions,
     CoalesceCopies,
     EdgeSplit,
-}
-
-impl StepKind {
-    /// Whether a pass runs steps of this kind in rounds.
-    pub fn repeats(self) -> bool {
-        matches!(
-            self,
-            Self::ScalarCanonicalize | Self::KnownBitsSimplify | Self::Adce
-        )
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

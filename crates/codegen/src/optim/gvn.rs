@@ -2647,7 +2647,7 @@ impl<'a> RedundantCodeRemover<'a> {
         // dominator tree.
         let prune_facts = facts(func, domtree, false);
         self.changed |= self.remove_unreachable_edges(func);
-        StepLog::step(&mut steps, StepKind::GvnPrune, func, prune_facts);
+        StepLog::step(&mut steps, 0, StepKind::GvnPrune, func, prune_facts);
 
         // Recompute cfg and domtree.
         cfg.compute(func);
@@ -2690,7 +2690,7 @@ impl<'a> RedundantCodeRemover<'a> {
         {
             (gvn.phis, gvn.value_phis) = inserted.facts(domtree, &self.renames);
         }
-        StepLog::step(&mut steps, StepKind::GvnRewrite, func, rewrite_facts);
+        StepLog::step(&mut steps, 1, StepKind::GvnRewrite, func, rewrite_facts);
         self.changed
     }
 

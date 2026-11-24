@@ -1064,7 +1064,7 @@ fn run_pass(
         Pass::CfgCleanup => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.cfg_cleanup").entered();
             let changed = CfgCleanup::new().run(func);
-            StepLog::step(&mut log, StepKind::CfgCleanup, func, None);
+            StepLog::step(&mut log, 0, StepKind::CfgCleanup, func, None);
             changed
         }
         Pass::AggregateCombine => {
@@ -1074,7 +1074,7 @@ fn run_pass(
         Pass::BranchCanonicalize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.branch_canonicalize").entered();
             let changed = BranchCanonicalize::new().run(func);
-            StepLog::step(&mut log, StepKind::BranchCanonicalize, func, None);
+            StepLog::step(&mut log, 0, StepKind::BranchCanonicalize, func, None);
             changed
         }
         Pass::ObjectLoadStore => {
@@ -1277,13 +1277,13 @@ fn run_pass(
                 let _span = trace_span!("sonatina.optim.pipeline.sccp.cleanup").entered();
                 CfgCleanup::new().run(func)
             };
-            StepLog::step(&mut log, StepKind::CfgCleanup, func, None);
+            StepLog::step(&mut log, 6, StepKind::CfgCleanup, func, None);
             changed || cleaned
         }
         Pass::Adce => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.adce").entered();
             AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects)
-                .run_with_steps(func, log)
+                .run_with_steps(func, log, 0)
         }
         Pass::Licm => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.licm").entered();

@@ -34,8 +34,8 @@ impl FuncSnap {
 pub(crate) struct StepLog {
     /// The function as the last step left it.
     pub(crate) snap: FuncSnap,
-    /// Each step as `(kind, group, round, step)`, with `step` only if it
-    /// changed the function. The rounds of a step that repeats share a group.
+    /// Each step as `(kind, phase, round, step)`, with `step` only if it
+    /// changed the function.
     pub(crate) steps: Vec<(StepKind, usize, usize, Option<FuncStep>)>,
 }
 
@@ -49,8 +49,13 @@ impl StepLog {
 
     /// Records, if `log` records, a step of `kind` that left `func` as it
     /// is, relying on `facts`.
+    ///
+    /// `phase` numbers the steps of a pass in the order a pass may take them,
+    /// so a function that skips some still lines up with the others; the
+    /// steps of a phase in a row are its rounds.
     pub(crate) fn step(
         log: &mut Option<&mut Self>,
+        phase: usize,
         kind: StepKind,
         func: &Function,
         facts: Option<StepFacts>,
@@ -58,10 +63,9 @@ impl StepLog {
         let Some(log) = log else {
             return;
         };
-        let (group, round) = match log.steps.last() {
-            Some(&(last, group, round, _)) if last == kind && kind.repeats() => (group, round + 1),
-            Some(&(_, group, ..)) => (group + 1, 0),
-            None => (0, 0),
+        let round = match log.steps.last() {
+            Some(&(_, last, round, _)) if last == phase => round + 1,
+            _ => 0,
         };
         let out = FuncSnap::capture(log.snap.func_ref, func);
         let step = (out != log.snap).then(|| {
@@ -71,7 +75,7 @@ impl StepLog {
                 facts: facts.unwrap_or_default(),
             }
         });
-        log.steps.push((kind, group, round, step));
+        log.steps.push((kind, phase, round, step));
     }
 }
 
@@ -133,14 +137,14 @@ impl StepRecorder {
     }
 
     /// Ends the running pass with the logs of the functions, in the
-    /// section's order: the steps of a group and round of every function
+    /// section's order: the steps of a phase and round of every function
     /// are one step.
     pub(crate) fn end_pass(&mut self, logs: Vec<StepLog>) {
         let (kind, func_behavior) = self.running.take().expect("a pass is running");
         let mut steps = BTreeMap::<_, MachineStep>::new();
         for log in logs {
-            for (step_kind, group, round, step) in log.steps {
-                let merged = steps.entry((group, round)).or_insert_with(|| MachineStep {
+            for (step_kind, phase, round, step) in log.steps {
+                let merged = steps.entry((phase, round)).or_insert_with(|| MachineStep {
                     kind: step_kind,
                     funcs: Vec::new(),
                 });
@@ -183,7 +187,7 @@ impl StepRecorder {
             .map(|mut log| {
                 module.func_store.modify(log.snap.func_ref, |function| {
                     run(function);
-                    StepLog::step(&mut Some(&mut log), step, function, None);
+                    StepLog::step(&mut Some(&mut log), 0, step, function, None);
                 });
                 log
             })
@@ -204,5 +208,56 @@ impl From<Pass> for MachinePassKind {
             Pass::Adce => Self::Adce,
             _ => unreachable!("{pass:?} reports no steps"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_parser::parse_module;
+
+    use super::StepRecorder;
+    use crate::{
+        isa::evm::LateCleanupProfile,
+        object::lowering::StepKind,
+        optim::pipeline::{Pass, run_function_pass_round},
+    };
+
+    /// SCCP returns right after its first cleanup for `%g`, which has no
+    /// body, and then `Pass::Sccp` cleans up: `%f`'s prune, and its cleanup
+    /// merging the blocks the prune left, still line up with nothing of
+    /// `%g`'s.
+    #[test]
+    fn steps_of_a_function_that_skips_phases_line_up_by_phase() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+declare external %g();
+
+func public %f(v0.i256) -> i256 {
+    block0:
+        br 1.i1 block1 block2;
+
+    block1:
+        return v0;
+
+    block2:
+        return 0.i256;
+}
+"#,
+        )
+        .unwrap();
+        let funcs = parsed.module.funcs();
+        let mut recorder = StepRecorder::new(&parsed.module, &funcs);
+        run_function_pass_round(
+            &parsed.module,
+            &[Pass::Sccp],
+            &mut true,
+            Some(&funcs),
+            Some(&mut recorder),
+        );
+        let steps = recorder.finish(LateCleanupProfile::Speed);
+        let kinds: Vec<_> = steps.passes[0].steps.iter().map(|step| step.kind).collect();
+        assert_eq!(kinds, [StepKind::SccpPrune, StepKind::CfgCleanup]);
     }
 }

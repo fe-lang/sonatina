@@ -63,13 +63,16 @@ impl AdceSolver {
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
-        self.run_with_steps(func, None)
+        self.run_with_steps(func, None, 0)
     }
 
+    /// `run`, reporting its rounds to `steps` in phase `first_phase` and its
+    /// cleanup in the next.
     pub(crate) fn run_with_steps(
         &mut self,
         func: &mut Function,
         mut steps: Option<&mut StepLog>,
+        first_phase: usize,
     ) -> bool {
         let mut changed = false;
         loop {
@@ -78,14 +81,20 @@ impl AdceSolver {
                 finite_loops,
                 ..StepFacts::default()
             };
-            StepLog::step(&mut steps, StepKind::Adce, func, Some(facts));
+            StepLog::step(&mut steps, first_phase, StepKind::Adce, func, Some(facts));
             if !round_changed {
                 break;
             }
             changed = true;
         }
         let cleaned_cfg = CfgCleanup::new().run(func);
-        StepLog::step(&mut steps, StepKind::CfgCleanup, func, None);
+        StepLog::step(
+            &mut steps,
+            first_phase + 1,
+            StepKind::CfgCleanup,
+            func,
+            None,
+        );
         changed || cleaned_cfg
     }
 
@@ -749,7 +758,7 @@ func private %f(v0.i8) -> i256 {{
             StepLog::new(FuncSnap::capture(func_ref, func))
         });
         parsed.module.func_store.modify(func_ref, |func| {
-            AdceSolver::new().run_with_steps(func, Some(&mut log))
+            AdceSolver::new().run_with_steps(func, Some(&mut log), 0)
         });
         let (kind, _, _, step) = &log.steps[0];
         assert_eq!(*kind, StepKind::Adce);

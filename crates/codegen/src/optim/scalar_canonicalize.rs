@@ -111,7 +111,7 @@ impl ScalarCanonicalize {
             }
 
             prune_dead_pure_insts(func);
-            StepLog::step(&mut steps, StepKind::ScalarCanonicalize, func, None);
+            StepLog::step(&mut steps, 0, StepKind::ScalarCanonicalize, func, None);
         }
     }
 

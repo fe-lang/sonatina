@@ -82,7 +82,9 @@ impl SccpSolver {
         self.clear();
 
         let mut changed = CfgCleanup::new().run(func);
-        StepLog::step(&mut steps, StepKind::CfgCleanup, func, None);
+        // The phases of the steps: cleanup, prune, fold, cleanup, then from 4
+        // ADCE's; `Pass::Sccp` cleans up in phase 6.
+        StepLog::step(&mut steps, 0, StepKind::CfgCleanup, func, None);
         let constref_value_tys = collect_constref_value_tys(func);
         let const_paths = analyze_const_paths(func, &constref_value_tys);
 
@@ -140,7 +142,7 @@ impl SccpSolver {
             ..StepFacts::default()
         });
         let edges_removed = self.remove_unreachable_edges(func);
-        StepLog::step(&mut steps, StepKind::SccpPrune, func, facts);
+        StepLog::step(&mut steps, 1, StepKind::SccpPrune, func, facts);
         changed |= edges_removed;
         cfg.compute(func);
         // Solving only reads the function, so its known bits still hold
@@ -156,14 +158,14 @@ impl SccpSolver {
             ..StepFacts::default()
         });
         changed |= self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
-        StepLog::step(&mut steps, StepKind::SccpFold, func, facts);
+        StepLog::step(&mut steps, 2, StepKind::SccpFold, func, facts);
 
         changed |= CfgCleanup::new().run(func);
-        StepLog::step(&mut steps, StepKind::CfgCleanup, func, None);
+        StepLog::step(&mut steps, 3, StepKind::CfgCleanup, func, None);
         cfg.compute(func);
 
         changed |= AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects)
-            .run_with_steps(func, steps);
+            .run_with_steps(func, steps, 4);
         cfg.compute(func);
         changed
     }

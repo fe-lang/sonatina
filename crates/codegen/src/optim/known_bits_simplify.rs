@@ -213,7 +213,7 @@ impl KnownBitsSimplify {
         for plan in self.plans.drain(..) {
             remove_rewritten_inst(func, plan);
         }
-        StepLog::step(&mut steps, StepKind::KnownBitsSimplify, func, facts);
+        StepLog::step(&mut steps, 0, StepKind::KnownBitsSimplify, func, facts);
 
         (changed, deferred)
     }
