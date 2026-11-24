@@ -21,11 +21,22 @@ use super::{
     InlinerConfig,
 };
 
+/// Why a call is not inlined. Of the limits, a call that exceeds several
+/// reports the narrowest: the callee's size, then its depth, then the
+/// caller's growth budget, then the module's. The size caps do not apply to
+/// a removable single-use callee or one hinted `inline`; the rest do.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum InlineSkipReason {
     NoBody,
     RecursiveScc,
-    Budget,
+    /// The callee exceeds the block or instruction cap.
+    InlineeSize,
+    /// The callee has had too many levels inlined into it this run.
+    Depth,
+    /// The caller's growth budget for the run is spent.
+    CallerGrowth,
+    /// The module's growth budget for the run is spent.
+    ModuleGrowth,
     Cost,
     NoInlineHint,
 }
@@ -220,14 +231,22 @@ pub(super) fn decide_inline(
     };
     let growth = predicted_growth.saturating_sub(removed_insts);
 
-    if exceeds_budget(request.caller_growth, growth, config.max_growth_per_caller)
-        || exceeds_budget(request.total_growth, growth, config.max_total_growth)
+    // The limits, in the order `InlineSkipReason` reports them.
+    if !removable_single_use
+        && !hints.contains(FuncHints::INLINEHINT)
+        && (exceeds_cap(summary.blocks, config.max_inlinee_blocks)
+            || exceeds_cap(summary.insts, config.max_inlinee_insts))
     {
-        return InlineDecision::Skip(InlineSkipReason::Budget);
+        return InlineDecision::Skip(InlineSkipReason::InlineeSize);
     }
-
     if config.max_inline_depth > 0 && request.callee_depth + 1 > config.max_inline_depth {
-        return InlineDecision::Skip(InlineSkipReason::Budget);
+        return InlineDecision::Skip(InlineSkipReason::Depth);
+    }
+    if exceeds_budget(request.caller_growth, growth, config.max_growth_per_caller) {
+        return InlineDecision::Skip(InlineSkipReason::CallerGrowth);
+    }
+    if exceeds_budget(request.total_growth, growth, config.max_total_growth) {
+        return InlineDecision::Skip(InlineSkipReason::ModuleGrowth);
     }
 
     if removable_single_use {
@@ -239,12 +258,6 @@ pub(super) fn decide_inline(
     // growth, and depth constraints.
     if hints.contains(FuncHints::INLINEHINT) {
         return InlineDecision::Inline(InlinePlan { removed_insts: 0 });
-    }
-
-    if exceeds_cap(summary.blocks, config.max_inlinee_blocks)
-        || exceeds_cap(summary.insts, config.max_inlinee_insts)
-    {
-        return InlineDecision::Skip(InlineSkipReason::Budget);
     }
 
     // A small leaf helper that known arguments or scalarization may shrink

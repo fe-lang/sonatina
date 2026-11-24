@@ -239,7 +239,15 @@ pub struct InlineStats {
     /// chain, which would unroll its recursion.
     pub skipped_inline_history: usize,
     pub skipped_recursive_guard: usize,
-    pub skipped_budget: usize,
+    /// Calls to a callee over the block or instruction cap. A call that
+    /// exceeds several limits counts against the first of these four.
+    pub skipped_inlinee_size: usize,
+    /// Calls to a callee at the inline depth limit.
+    pub skipped_depth: usize,
+    /// Calls whose growth the caller's budget for the run cannot afford.
+    pub skipped_caller_growth: usize,
+    /// Calls whose growth the module's budget for the run cannot afford.
+    pub skipped_module_growth: usize,
     pub skipped_cost: usize,
     pub skipped_noinline_hint: usize,
     /// Calls from a caller that is not cold to a cold callee.
@@ -681,7 +689,10 @@ fn apply_inline_skip(decision: cost::InlineDecision, stats: &mut InlineStats) {
     match reason {
         cost::InlineSkipReason::NoBody => stats.skipped_no_body += 1,
         cost::InlineSkipReason::RecursiveScc => stats.skipped_recursive_scc += 1,
-        cost::InlineSkipReason::Budget => stats.skipped_budget += 1,
+        cost::InlineSkipReason::InlineeSize => stats.skipped_inlinee_size += 1,
+        cost::InlineSkipReason::Depth => stats.skipped_depth += 1,
+        cost::InlineSkipReason::CallerGrowth => stats.skipped_caller_growth += 1,
+        cost::InlineSkipReason::ModuleGrowth => stats.skipped_module_growth += 1,
         cost::InlineSkipReason::Cost => stats.skipped_cost += 1,
         cost::InlineSkipReason::NoInlineHint => stats.skipped_noinline_hint += 1,
     }

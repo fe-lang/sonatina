@@ -283,7 +283,13 @@ func public %caller() -> i32 {
     );
     assert_eq!(stats.full_calls_inlined, 0);
     assert_eq!(stats.skipped_cost, 0);
-    assert_eq!(stats.skipped_budget, 0);
+    assert_eq!(
+        stats.skipped_inlinee_size
+            + stats.skipped_depth
+            + stats.skipped_caller_growth
+            + stats.skipped_module_growth,
+        0
+    );
     assert_eq!(stats.skipped_no_body, 0);
     assert_eq!(stats.skipped_recursive_scc, 0);
     assert_eq!(stats.skipped_sig_mismatch, 0);
@@ -1006,7 +1012,140 @@ func public %caller(v0.i1) -> i32 {
         dumped.contains("call %multi"),
         "growth budget should keep the call:\n{dumped}"
     );
-    assert!(stats.skipped_budget > 0);
+    assert!(stats.skipped_caller_growth > 0);
+}
+
+#[test]
+fn full_inliner_counts_the_narrowest_limit_that_skips_a_call() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %leaf(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i32 = add v1 1.i32;
+        return v2;
+
+    block2:
+        v3.i32 = mul v1 3.i32;
+        return v3;
+}
+
+func private %mid(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %leaf v0 v1;
+        v3.i32 = xor v2 5.i32;
+        return v3;
+}
+
+func public %top(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %mid v0 v1;
+        v3.i32 = call %leaf v0 v2;
+        return v3;
+}
+"#;
+    let base = InlinerConfig {
+        enable_noop: false,
+        enable_return_alias: false,
+        enable_wrapper_rewrite: false,
+        enable_single_block_splice: false,
+        enable_full_inliner: true,
+        max_single_use_caller_insts: 0,
+        inline_threshold: 1000,
+        inline_threshold_cold: 1000,
+        ..Default::default()
+    };
+    let stats = |config| {
+        let mut parsed = sonatina_parser::parse_module(source)
+            .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+        let stats = Inliner::new(config).run(&mut parsed.module);
+        assert_module_verified(&parsed.module);
+        [
+            stats.skipped_inlinee_size,
+            stats.skipped_depth,
+            stats.skipped_caller_growth,
+            stats.skipped_module_growth,
+        ]
+    };
+
+    // `%leaf` has three blocks and grows a caller by six instructions, with
+    // its merge phi, and `%mid` by three; once `%leaf` is inlined into
+    // `%mid`, `%mid` is at depth one and grows a caller by nine. A call that
+    // exceeds several limits counts against the narrowest.
+    let [size, depth, caller, module] = [0, 1, 2, 3];
+    for (limit, config) in [
+        (
+            caller,
+            InlinerConfig {
+                max_growth_per_caller: 4,
+                ..base
+            },
+        ),
+        (
+            module,
+            InlinerConfig {
+                max_total_growth: 4,
+                ..base
+            },
+        ),
+        (
+            depth,
+            InlinerConfig {
+                max_inline_depth: 1,
+                ..base
+            },
+        ),
+        (
+            size,
+            InlinerConfig {
+                max_inlinee_insts: 4,
+                ..base
+            },
+        ),
+        (
+            size,
+            InlinerConfig {
+                max_inlinee_blocks: 2,
+                ..base
+            },
+        ),
+        (
+            size,
+            InlinerConfig {
+                max_inlinee_insts: 4,
+                max_growth_per_caller: 4,
+                ..base
+            },
+        ),
+        (
+            depth,
+            InlinerConfig {
+                max_inline_depth: 1,
+                max_growth_per_caller: 7,
+                ..base
+            },
+        ),
+        (
+            caller,
+            InlinerConfig {
+                max_growth_per_caller: 4,
+                max_total_growth: 4,
+                ..base
+            },
+        ),
+    ] {
+        let counts = stats(config);
+        assert!(
+            counts
+                .iter()
+                .enumerate()
+                .all(|(reason, &count)| (count > 0) == (reason == limit)),
+            "limit {limit}: {counts:?}"
+        );
+    }
 }
 
 #[test]
@@ -1074,7 +1213,13 @@ func public %caller(v0.i1, v1.i32) -> i32 {
         !dumped.contains("call %forced") && !dumped.contains("call %multi"),
         "the forced inline should leave the budget for %multi:\n{dumped}"
     );
-    assert_eq!(stats.skipped_budget, 0);
+    assert_eq!(
+        stats.skipped_inlinee_size
+            + stats.skipped_depth
+            + stats.skipped_caller_growth
+            + stats.skipped_module_growth,
+        0
+    );
 }
 
 #[test]
@@ -1130,7 +1275,7 @@ func public %caller(v0.i1, v1.i1, v2.i1) -> i32 {
         !dumped.contains("call %multi"),
         "a call-sized callee should not spend the budget:\n{dumped}"
     );
-    assert_eq!(stats.skipped_budget, 0);
+    assert_eq!(stats.skipped_caller_growth + stats.skipped_module_growth, 0);
 }
 
 #[test]
@@ -1189,7 +1334,13 @@ func public %caller{index}(v0.i1, v1.i32) -> i32 {{
     let speed = Pipeline::speed().inliner_config;
     let (calls, stats) = inline(speed);
     assert_eq!(calls, 0);
-    assert_eq!(stats.skipped_budget, 0);
+    assert_eq!(
+        stats.skipped_inlinee_size
+            + stats.skipped_depth
+            + stats.skipped_caller_growth
+            + stats.skipped_module_growth,
+        0
+    );
 
     // A 256-instruction module cap would leave the later callers' calls.
     let (calls, _) = inline(InlinerConfig {
@@ -1712,7 +1863,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
         "inline hint should still respect hard growth budgets:\n{budgeted_dumped}"
     );
     assert_eq!(budgeted_stats.full_calls_inlined, 0);
-    assert!(budgeted_stats.skipped_budget > 0);
+    assert!(budgeted_stats.skipped_caller_growth > 0);
 }
 
 #[test]
@@ -1806,7 +1957,8 @@ func public %caller(v0.i1, v1.i32) -> i32 {
         "single-use multi-block callee should respect the caller size cap:\n{dumped}"
     );
     assert_eq!(stats.full_calls_inlined, 0);
-    assert!(stats.skipped_budget > 0);
+    // Not inlined as a single use, the callee is over the size caps.
+    assert!(stats.skipped_inlinee_size > 0);
 }
 
 #[test]
@@ -2142,7 +2294,6 @@ func private %caller(v0.objref<@triple>, v1.i256, v2.i256, v3.i256) {
     let module = &mut parsed.module;
 
     let mut cfg = object_aware_full_inliner_test_config();
-    cfg.max_growth_per_caller = 1;
     cfg.max_total_growth = 1;
     let mut inliner = Inliner::new(cfg);
     let stats = inliner.run(module);
@@ -2154,7 +2305,7 @@ func private %caller(v0.objref<@triple>, v1.i256, v2.i256, v3.i256) {
         "widely shared helper should stay outlined once the global growth budget trips:\n{dumped}"
     );
     assert_eq!(stats.full_calls_inlined, 0);
-    assert!(stats.skipped_budget > 0);
+    assert!(stats.skipped_module_growth > 0);
 }
 
 #[test]
@@ -2222,7 +2373,7 @@ func private %leaf(v0.i1, v1.i32) -> i32 {
         caller_dump.contains("call %mid") || caller_dump.contains("call %leaf"),
         "caller growth cap should prevent full flattening:\n{dumped}"
     );
-    assert!(stats.skipped_budget > 0);
+    assert!(stats.skipped_caller_growth > 0);
 }
 
 #[test]
@@ -2270,7 +2421,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
         "merge-phi growth should be budgeted and block this inline:\n{dumped}"
     );
     assert_eq!(stats.full_calls_inlined, 0);
-    assert!(stats.skipped_budget > 0);
+    assert!(stats.skipped_caller_growth > 0);
 }
 
 #[test]
@@ -2318,7 +2469,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
         "split jump growth should be budgeted and block this inline:\n{dumped}"
     );
     assert_eq!(stats.full_calls_inlined, 0);
-    assert!(stats.skipped_budget > 0);
+    assert!(stats.skipped_caller_growth > 0);
 }
 
 #[test]
@@ -2380,7 +2531,7 @@ func public %caller(v0.i1, v1.i32, v2.i32) -> i32 {
         dumped.contains("call %left") ^ dumped.contains("call %right"),
         "one call should remain once the caller growth cap is reached:\n{dumped}"
     );
-    assert!(stats.skipped_budget > 0);
+    assert!(stats.skipped_caller_growth > 0);
 }
 
 #[test]
@@ -2806,7 +2957,7 @@ fn loaded_aggregate_reconstruction_preserves_full_growth_limits() {
     let stats = Inliner::new(config).run(&mut parsed.module);
     assert_module_verified(&parsed.module);
     assert_eq!(stats.full_calls_inlined, 0);
-    assert_eq!(stats.skipped_budget, 7);
+    assert_eq!(stats.skipped_caller_growth, 7);
     assert_eq!(dump_module(&parsed.module).matches("call %read").count(), 7);
 }
 
