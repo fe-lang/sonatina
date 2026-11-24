@@ -4,6 +4,7 @@ use sonatina_ir::{
     isa::{Isa, evm::EvmMachine},
     module::FuncRef,
 };
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_function};
 
 pub(crate) fn verify_machine_module(module: &Module, funcs: &[FuncRef]) -> Result<(), String> {
     for &func in funcs {
@@ -103,6 +104,22 @@ pub(crate) fn verify_machine_function(
                 _ => {}
             }
         }
+    }
+
+    // The IR verifier's fast level checks SSA structure without the high-level type rules,
+    // which the word checks above replace; it also checks that each definition dominates its
+    // uses, a phi operand's at the end of its predecessor, and is in the layout.
+    let config = VerifierConfig {
+        check_dominance: true,
+        allow_detached_entities: false,
+        ..VerifierConfig::for_level(VerificationLevel::Fast)
+    };
+    let report = verify_function(function.ctx(), func_ref, function, &config);
+    if report.has_errors() {
+        return Err(format!(
+            "EVM machine IR in func {} is not valid SSA:\n{report}",
+            func_ref.as_u32()
+        ));
     }
 
     Ok(())
