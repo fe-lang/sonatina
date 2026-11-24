@@ -3788,3 +3788,37 @@ func public %entry() {
         assert_eq!(result, Ok(IrU256::from(0xffu64)), "{level:?}");
     }
 }
+
+/// `not (zext (is_zero (lt a b)))` is never zero, so the branch always takes `block1`, which
+/// returns `zext (lt a b) - 1`: `2**256 - 1` for `a = 5, b = 3`. The machine round's GVN must not
+/// peel the word `not` and assume `lt a b` is 1 there.
+#[test]
+fn word_not_branch_keeps_compare_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i1 = lt v0 v1;
+        v3.i1 = is_zero v2;
+        v4.i256 = zext v3 i256;
+        v5.i256 = not v4;
+        v6.i1 = ne v5 0.i256;
+        br v6 block1 block2;
+
+    block1:
+        v7.i256 = zext v2 i256;
+        v8.i256 = sub v7 1.i256;
+        mstore 0.i256 v8 i256;
+        evm_return 0.i256 32.i256;
+
+    block2:
+        mstore 0.i256 7.i256 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &calldata_words(&[5, 3]));
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::MAX), "{level:?}");
+    }
+}
