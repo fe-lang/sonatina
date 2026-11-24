@@ -470,8 +470,9 @@ fn check_steps(lowering: &SectionLowering) {
             for func in &step.funcs {
                 let name = func.out.func.as_str();
                 let input = current.get_mut(name).expect("a function of the section");
+                // A step that only renumbers instructions is a change too.
                 assert_ne!(
-                    input.text, func.out.text,
+                    **input, func.out,
                     "{name}: {:?} lists it unchanged",
                     step.kind
                 );
