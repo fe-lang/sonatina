@@ -525,3 +525,93 @@ fn lowering_record_lists_phi_edge_stores_and_reloads() {
     }
     assert_eq!(spills.len(), 22, "{spills:#?}");
 }
+
+/// `evm_return_code`, `evm_mload_bytes` and `trunc_nuw` reach the record
+/// only in the source IR. Machine lowering makes `evm_return_code` an
+/// `evm_code_copy` to address 0 and an `evm_return` of it, which ends the
+/// init section, makes `evm_mload_bytes` an `evm_mload` and a shift, behind a
+/// branch on a dynamic length, and replaces the boolean `trunc_nuw` with its
+/// operand. The three blocks the dynamic-length load adds have no source
+/// block.
+#[test]
+fn lowering_record_of_return_code_mload_bytes_and_trunc_nuw() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func public %init() {
+    block0:
+        v0.i256 = sym_addr &runtime;
+        v1.i256 = sym_size &runtime;
+        evm_return_code v0 v1;
+}
+
+func public %runtime() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i1 = lt v1 33.i256;
+        br v2 block1 block2;
+
+    block1:
+        v3.i256 = evm_mload_bytes v0 v1;
+        v4.i256 = evm_mload_bytes v0 4.i256;
+        v5.i256 = and v0 1.i256;
+        v6.i1 = trunc_nuw v5 i1;
+        v7.i256 = zext v6 i256;
+        v8.i256 = add v3 v4;
+        v9.i256 = add v8 v7;
+        mstore 0.i256 v9 i256;
+        evm_return 0.i256 32.i256;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+}
+
+object @Contract {
+  section init {
+    entry %init;
+    embed .runtime as &runtime;
+  }
+  section runtime {
+    entry %runtime;
+  }
+}
+"#;
+    let levels = [OptLevel::O0, OptLevel::O1, OptLevel::Os];
+    check_fixture(source, &levels);
+    for opt in levels {
+        let artifacts = compile(source, opt, true);
+        let lowering = |section: &str| {
+            artifacts[0]
+                .sections
+                .iter()
+                .find(|(name, _)| name.0.as_str() == section)
+                .and_then(|(_, section)| section.lowering.clone())
+                .expect("a lowering record")
+        };
+        let init = lowering("init");
+        assert!(init.source_ir.contains("evm_return_code v0 v1;"), "{opt:?}");
+        assert!(
+            init.machine_ir
+                .contains("evm_code_copy 0.i256 v0 v1;\n        evm_return 0.i256 v1;\n}"),
+            "{opt:?}: {}",
+            init.machine_ir
+        );
+        let runtime = lowering("runtime");
+        for inst in ["evm_mload_bytes", "trunc_nuw"] {
+            assert!(runtime.source_ir.contains(inst), "{opt:?}: {inst}");
+        }
+        for inst in ["evm_return_code", "evm_mload_bytes", "trunc_nuw"] {
+            assert!(
+                !init.machine_ir.contains(inst) && !runtime.machine_ir.contains(inst),
+                "{opt:?}: {inst} in the machine IR"
+            );
+        }
+        let sourceless = runtime.funcs[0]
+            .blocks
+            .iter()
+            .filter(|block| block.sources.is_empty())
+            .count();
+        assert_eq!(sourceless, 3, "{opt:?}: {}", runtime.machine_ir);
+    }
+}
