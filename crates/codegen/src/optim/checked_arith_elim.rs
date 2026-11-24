@@ -115,7 +115,8 @@ impl CheckedArithElim {
 }
 
 /// A checked operation the range facts prove cannot overflow, or an unsigned
-/// subtraction a dominating comparison guards.
+/// subtraction a dominating comparison guards or whose subtrahend is a
+/// remainder of its minuend or an `and` with it.
 fn plan_inst(
     func: &Function,
     analysis: &RangeAnalysis,

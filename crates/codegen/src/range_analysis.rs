@@ -218,7 +218,8 @@ impl RangeAnalysis {
     }
 
     /// Whether `inst` is a `sub` or `usubo` that cannot wrap because a
-    /// dominating unsigned comparison orders its operands.
+    /// dominating unsigned comparison orders its operands, or because its
+    /// subtrahend is a remainder of its minuend or an `and` with it.
     pub fn is_guarded_sub(&self, inst: InstId) -> bool {
         self.guarded_subs.contains(&inst)
     }
@@ -229,8 +230,9 @@ impl RangeAnalysis {
 }
 
 /// The `sub` and `usubo` instructions whose `lhs >= rhs` a dominating unsigned
-/// comparison proves, walking each dominator subtree once. Reference counts
-/// retain repeated facts established by both an ancestor and a nested branch.
+/// comparison or `rhs`'s definition proves, walking each dominator subtree
+/// once. Reference counts retain repeated facts established by both an
+/// ancestor and a nested branch.
 fn guarded_subtractions(
     func: &Function,
     cfg: &ControlFlowGraph,
@@ -270,19 +272,33 @@ fn guarded_subtractions(
         pending.push((block, Some(relations)));
         pending.extend(tree.children_of(block).iter().map(|&child| (child, None)));
 
-        if guards.is_empty() {
-            continue;
-        }
         for inst in func.layout.iter_inst(block) {
             if is_sub(func, inst)
                 && let [lhs, rhs] = func.dfg.inst(inst).collect_values().as_slice()
-                && guards.contains_key(&(*lhs, *rhs))
+                && (guards.contains_key(&(*lhs, *rhs)) || is_bounded_by(func, *rhs, *lhs))
             {
                 guarded.insert(inst);
             }
         }
     }
     guarded
+}
+
+/// Whether `value` is at most `bound` by its definition, unsigned: `x % y`
+/// is at most `x`, also for a zero `y`, and `x & y` is at most either
+/// operand. The divisor bounds a remainder only when it is nonzero, so it
+/// bounds nothing here.
+fn is_bounded_by(func: &Function, value: ValueId, bound: ValueId) -> bool {
+    func.dfg.value_inst(value).is_some_and(|inst| {
+        let args = func.dfg.inst(inst).collect_values();
+        match func.dfg.inst(inst).kind() {
+            InstClassKind::Binary(BinaryInstKind::Umod | BinaryInstKind::EvmUmod) => {
+                args.first() == Some(&bound)
+            }
+            InstClassKind::Binary(BinaryInstKind::And) => args.contains(&bound),
+            _ => false,
+        }
+    })
 }
 
 fn is_sub(func: &Function, inst: InstId) -> bool {

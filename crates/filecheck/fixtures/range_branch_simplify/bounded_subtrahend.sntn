@@ -1,0 +1,48 @@
+#! A subtraction of a remainder or an `and` from its operand cannot wrap,
+#! so its difference is bounded by its minuend.
+
+target = "evm-ethereum-osaka"
+
+#! Below 100, `x - x % 10` is below 100 too.
+# sameln: func public %guarded_difference_keeps_the_minuend_bound(v0.i64) -> i64 {
+# not:         br v4
+func public %guarded_difference_keeps_the_minuend_bound(v0.i64) -> i64 {
+block0:
+    v1.i1 = lt v0 100.i64;
+    br v1 block1 block3;
+block1:
+    v2.i64 = umod v0 10.i64;
+    v3.i64 = sub v0 v2;
+    v4.i1 = lt v3 100.i64;
+    br v4 block2 block3;
+block2:
+    return v3;
+block3:
+    return 999.i64;
+}
+
+#! Between 200 and 250, `x - x % y` is at most 250, read unsigned; read
+#! signed, `x` is negative and the difference may be either sign.
+# sameln: func public %guarded_difference_above_the_signed_maximum(v0.i8, v1.i8) -> i8 {
+# not:         br v6
+# check:       br v7 block4 block5;
+func public %guarded_difference_above_the_signed_maximum(v0.i8, v1.i8) -> i8 {
+block0:
+    v2.i1 = gt v0 199.i8;
+    br v2 block1 block5;
+block1:
+    v3.i1 = lt v0 251.i8;
+    br v3 block2 block5;
+block2:
+    v4.i8 = umod v0 v1;
+    v5.i8 = sub v0 v4;
+    v6.i1 = lt v5 251.i8;
+    br v6 block3 block5;
+block3:
+    v7.i1 = slt v5 0.i8;
+    br v7 block4 block5;
+block4:
+    return v5;
+block5:
+    return 0.i8;
+}
