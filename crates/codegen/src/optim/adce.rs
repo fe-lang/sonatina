@@ -76,12 +76,12 @@ impl AdceSolver {
     ) -> bool {
         let mut changed = false;
         loop {
-            let (round_changed, finite_loops) = self.run_dce(func);
-            let facts = StepFacts {
+            let (round_changed, finite_loops) = self.run_dce(func, steps.is_some());
+            let facts = finite_loops.map(|finite_loops| StepFacts {
                 finite_loops,
                 ..StepFacts::default()
-            };
-            StepLog::step(&mut steps, first_phase, StepKind::Adce, func, Some(facts));
+            });
+            StepLog::step(&mut steps, first_phase, StepKind::Adce, func, facts);
             if !round_changed {
                 break;
             }
@@ -98,9 +98,9 @@ impl AdceSolver {
         changed || cleaned_cfg
     }
 
-    /// Returns `true` if dead code elimination changed the function, and the
-    /// loops it may remove, which it proved finite.
-    fn run_dce(&mut self, func: &mut Function) -> (bool, Vec<FiniteLoop>) {
+    /// Returns `true` if dead code elimination changed the function, and, if
+    /// `record`, the loops it may remove, which it proved finite.
+    fn run_dce(&mut self, func: &mut Function, record: bool) -> (bool, Option<Vec<FiniteLoop>>) {
         self.clear();
 
         let mut cfg = ControlFlowGraph::new();
@@ -108,7 +108,7 @@ impl AdceSolver {
         let (sccs, reaches_real_exit) = compute_scc_reachability(&cfg);
         let divergent_blocks = collect_divergent_blocks(&sccs, &reaches_real_exit);
         let (preserved_cycle_blocks, finite_loops) =
-            preserved_cycle_blocks(func, &cfg, &sccs, &reaches_real_exit);
+            preserved_cycle_blocks(func, &cfg, &sccs, &reaches_real_exit, record);
         self.post_domtree
             .compute_with_extra_exits(func, &divergent_blocks);
         let pdf_set = self.post_domtree.compute_df();
@@ -336,7 +336,7 @@ pub(crate) fn divergent_blocks(cfg: &ControlFlowGraph) -> Vec<BlockId> {
 }
 
 /// Returns blocks that must remain live to preserve cycles not proven finite,
-/// and the loops proven finite.
+/// and, if `record`, the loops proven finite.
 ///
 /// Cycles with no path to a CFG exit are already preserved via
 /// `divergent_blocks`. For cyclic SCCs that can reach a CFG exit, ADCE may
@@ -348,13 +348,14 @@ fn preserved_cycle_blocks(
     cfg: &ControlFlowGraph,
     sccs: &CfgSccAnalysis,
     reaches_real_exit: &SecondaryMap<SccId, bool>,
-) -> (Vec<BlockId>, Vec<FiniteLoop>) {
+    record: bool,
+) -> (Vec<BlockId>, Option<Vec<FiniteLoop>>) {
     if !sccs
         .topo_order()
         .iter()
         .any(|&scc| sccs.scc_data(scc).is_cycle && reaches_real_exit[scc])
     {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), record.then(Vec::new));
     }
 
     let mut domtree = DomTree::new();
@@ -410,7 +411,7 @@ fn preserved_cycle_blocks(
             );
         }
     }
-    let finite = lpt.loops().filter_map(|lp| finite_loops[lp]).collect();
+    let finite = record.then(|| lpt.loops().filter_map(|lp| finite_loops[lp]).collect());
     (preserved, finite)
 }
 
