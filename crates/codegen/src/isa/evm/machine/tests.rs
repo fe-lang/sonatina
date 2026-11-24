@@ -1017,3 +1017,72 @@ fn machine_pipeline_keeps_compare_under_word_not_branch() {
         assert!(dumped.contains(" sub "), "{dumped}");
     });
 }
+
+/// `block1` defines `v` and jumps to `block3`, which `block2` also reaches. `block3` returns
+/// `v` itself, which `block1` does not dominate, or a phi of `v` from `block1`.
+fn build_join_of_branch_value(
+    name: &str,
+    through_phi: bool,
+) -> (sonatina_ir::Module, sonatina_ir::module::FuncRef) {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            name,
+            Linkage::Public,
+            &[Type::I256],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let entry = builder.append_block();
+    let then_block = builder.append_block();
+    let else_block = builder.append_block();
+    let join = builder.append_block();
+    let arg = builder.func.arg_values[0];
+    let one = builder.make_imm_value(Immediate::one(Type::I256));
+
+    builder.switch_to_block(entry);
+    builder.insert_inst_no_result(Br::new(is, arg, then_block, else_block));
+    builder.switch_to_block(then_block);
+    let value = builder.insert_inst(Add::new(is, arg, one), Type::I256);
+    builder.insert_inst_no_result(Jump::new(is, join));
+    builder.switch_to_block(else_block);
+    builder.insert_inst_no_result(Jump::new(is, join));
+    builder.switch_to_block(join);
+    let result = if through_phi {
+        builder.insert_inst(
+            Phi::new(is, vec![(value, then_block), (arg, else_block)].into()),
+            Type::I256,
+        )
+    } else {
+        value
+    };
+    builder.insert_inst_no_result(Return::new_single(is, result));
+    builder.seal_all();
+    builder.finish();
+    (mb.build(), func_ref)
+}
+
+#[test]
+fn machine_verify_accepts_phi_of_branch_value() {
+    let (module, func_ref) = build_join_of_branch_value("machine_phi_join", true);
+    module.func_store.view(func_ref, |function| {
+        verify_machine_function(func_ref, function).expect("valid machine IR should verify");
+    });
+}
+
+#[test]
+fn machine_verify_rejects_use_not_dominated_by_its_definition() {
+    let (module, func_ref) = build_join_of_branch_value("machine_bad_join", false);
+    module.func_store.view(func_ref, |function| {
+        let err = verify_machine_function(func_ref, function)
+            .expect_err("a use outside its definition's dominance should be rejected");
+        assert!(
+            err.contains("value definition does not dominate its use"),
+            "{err}"
+        );
+    });
+}
