@@ -61,6 +61,7 @@ use self::{
     phi::Edges,
     prediction::{BranchPrediction, propagate_cold_blocks},
     scalar::*,
+    sha256::Sha256Words,
     tail::{TailCalls, tail_call_args},
     values::*,
 };
@@ -561,7 +562,21 @@ fn translate_function(
         ownership,
         arg_writes,
     };
-    let frame = FrameSlots::new(function, &cfg, &block_order, sret_ptr, &calls, &mut builder)?;
+    let hardware_sha = clif_module
+        .isa()
+        .isa_flags()
+        .iter()
+        .any(|flag| flag.name == "has_sha" && flag.as_bool() == Some(true));
+    let mut sha256_words = Sha256Words::new(function, hardware_sha);
+    let frame = FrameSlots::new(
+        function,
+        &cfg,
+        &block_order,
+        sret_ptr,
+        &calls,
+        &sha256_words,
+        &mut builder,
+    )?;
     // Objects this function builds in the storage of arguments it owns.
     let owned_objects: HashMap<ValueId, ValueId> = ownership
         .owned(func_ref)
@@ -878,34 +893,14 @@ fn translate_function(
                         value_map.insert(result, result_val);
                     }
                 }
-                NativeInstKind::Sha256Compress(op) => {
-                    let result = function
-                        .dfg
-                        .inst_result(inst_id)
-                        .ok_or("sha256_compress has no result")?;
-                    let state = resolve_operand(
-                        function,
-                        *op.state(),
-                        &value_map,
-                        target_config,
-                        &mut builder,
-                    )?;
-                    let block = resolve_operand(
-                        function,
-                        *op.block(),
-                        &value_map,
-                        target_config,
-                        &mut builder,
-                    )?;
-                    let dst = frame.address(result, &mut builder)?;
-                    let hardware = clif_module
-                        .isa()
-                        .isa_flags()
-                        .iter()
-                        .any(|flag| flag.name == "has_sha" && flag.as_bool() == Some(true));
-                    sha256::compress(state, block, dst, hardware, &mut builder);
-                    value_map.insert(result, dst);
-                }
+                NativeInstKind::Sha256Compress(op) => sha256_words.compress(
+                    function,
+                    inst_id,
+                    op,
+                    &mut value_map,
+                    &frame,
+                    &mut builder,
+                )?,
                 NativeInstKind::BlackBox(op) => {
                     let arg = *op.arg();
                     let result = function
@@ -1957,6 +1952,22 @@ fn translate_function(
                             )?;
                         }
                     }
+                }
+                NativeInstKind::ExtractValue(extract) if sha256_words.holds(*extract.dest()) => {
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        let word = sha256_words.extract(function, extract, &mut builder)?;
+                        value_map.insert(result, word);
+                    }
+                }
+                NativeInstKind::InsertValue(_)
+                | NativeInstKind::AggMake(_)
+                | NativeInstKind::ConstLoad(_)
+                    if function
+                        .dfg
+                        .inst_result(inst_id)
+                        .is_some_and(|result| sha256_words.holds(result)) =>
+                {
+                    sha256_words.build(function, inst_id, &value_map, &mut builder)?
                 }
                 NativeInstKind::ExtractValue(extract)
                     if let Some(parts) =

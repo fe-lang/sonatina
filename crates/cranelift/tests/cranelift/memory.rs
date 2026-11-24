@@ -2707,6 +2707,365 @@ block0:
     }
 }
 
+/// The initial state of SHA-256 and the padding block of a 64-byte message.
+const SHA256_GLOBALS: &str = "global private const [i32; 8] $iv = [1779033703, -1150833019, 1013904242, -1521486534, 1359893119, -1694144372, 528734635, 1541459225];
+global private const [i32; 16] $after64 = [-2147483648, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 512];
+";
+
+const SHA256_IV: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+];
+
+const SHA256_PADDING: [u32; 16] = [0x8000_0000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 512];
+
+/// The digest of 64 zero bytes.
+const SHA256_ZEROS: [u32; 8] = [
+    0xf5a5fd42, 0xd16a2030, 0x2798ef6e, 0xd309979b, 0x43003d23, 0x20d9f0e8, 0xea9831a9, 0x2759fb4b,
+];
+
+/// One SHA-256 compression of `state` by `block`, as FIPS 180-4 defines it.
+fn sha256_reference(state: [u32; 8], block: [u32; 16]) -> [u32; 8] {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+    let mut w = [0u32; 64];
+    w[..16].copy_from_slice(&block);
+    for t in 16..64 {
+        let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3);
+        let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10);
+        w[t] = w[t - 16]
+            .wrapping_add(s0)
+            .wrapping_add(w[t - 7])
+            .wrapping_add(s1);
+    }
+    let mut v = state;
+    for (k, w) in K.iter().zip(w) {
+        let [a, b, c, d, e, f, g, h] = v;
+        let t1 = h
+            .wrapping_add(e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25))
+            .wrapping_add((e & f) ^ (!e & g))
+            .wrapping_add(*k)
+            .wrapping_add(w);
+        let t2 = (a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22))
+            .wrapping_add((a & b) ^ (a & c) ^ (b & c));
+        v = [t1.wrapping_add(t2), a, b, c, d.wrapping_add(t1), e, f, g];
+    }
+    std::array::from_fn(|index| state[index].wrapping_add(v[index]))
+}
+
+/// IR extracting the `count` words of `v{source}` as `v{first}` on, and
+/// making them into `v{first + count}`, an `[i32; count]`.
+fn sha256_words_ir(source: usize, first: usize, count: usize) -> String {
+    let words: Vec<_> = (first..first + count)
+        .map(|value| format!("v{value}"))
+        .collect();
+    let extracts: String = words
+        .iter()
+        .enumerate()
+        .map(|(index, word)| format!("    {word}.i32 = extract_value v{source} {index}.i64;\n"))
+        .collect();
+    format!(
+        "{extracts}    v{}.[i32; {count}] = agg.make [i32; {count}] {};\n",
+        first + count,
+        words.join(" ")
+    )
+}
+
+/// Pseudorandom words.
+fn sha256_inputs() -> impl FnMut() -> u32 {
+    let mut seed = 0x9e37_79b9_u32;
+    move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    }
+}
+
+#[test]
+fn sha256_compress_chains_into_a_constant_padding_block() {
+    // A two-block message: its first block built word by word, compressed
+    // from the initial state, then its padding, a constant block; the
+    // digest is read word by word. `%hash64` pads a 64-byte message, and
+    // `%hash56` the 56-byte message of FIPS 180-4.
+    let hash = |name: &str, padding: &str| {
+        format!(
+            r#"
+func public %{name}(v0.*i8, v1.*i8) {{
+block0:
+    v2.*[i32; 16] = bitcast v0 *[i32; 16];
+    v3.*[i32; 8] = bitcast v1 *[i32; 8];
+    v4.[i32; 16] = mload v2 [i32; 16];
+{block}    v22.constref<[i32; 8]> = const.ref $iv;
+    v23.[i32; 8] = const.load v22;
+    v24.[i32; 8] = sha256_compress v23 v21;
+    v25.constref<[i32; 16]> = const.ref ${padding};
+    v26.[i32; 16] = const.load v25;
+    v27.[i32; 8] = sha256_compress v24 v26;
+{digest}    mstore v3 v36 [i32; 8];
+    return;
+}}
+"#,
+            block = sha256_words_ir(4, 5, 16),
+            digest = sha256_words_ir(27, 28, 8),
+        )
+    };
+    let source = format!(
+        "{SHA256_GLOBALS}global private const [i32; 16] $after56 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 448];
+{}{}",
+        hash("hash64", "after64"),
+        hash("hash56", "after56"),
+    );
+    let words = |bytes: &[u8]| -> [u32; 16] {
+        std::array::from_fn(|index| {
+            u32::from_be_bytes(bytes[4 * index..4 * index + 4].try_into().unwrap())
+        })
+    };
+    let counting: Vec<u8> = (0..64).collect();
+    let cases = [
+        ("hash64", [0; 16], SHA256_ZEROS),
+        (
+            "hash64",
+            words(&counting),
+            [
+                0xfdeab9ac, 0xf3710362, 0xbd2658cd, 0xc9a29e8f, 0x9c757fcf, 0x9811603a, 0x8c447cd1,
+                0xd9151108,
+            ],
+        ),
+        (
+            "hash56",
+            words(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq\x80\0\0\0\0\0\0\0"),
+            [
+                0x248d6a61, 0xd20638b8, 0xe5c02693, 0x0c3e6039, 0xa33ce459, 0x64ff2167, 0xf6ecedd4,
+                0x19db06c1,
+            ],
+        ),
+    ];
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        for (name, block, digest) in cases {
+            let hash: unsafe extern "C" fn(*const u32, *mut u32) =
+                unsafe { std::mem::transmute(artifact.function_address(name).unwrap()) };
+            let mut out = [0u32; 8];
+            unsafe { hash(block.as_ptr(), out.as_mut_ptr()) };
+            assert_eq!(out, digest, "{level:?} {name}");
+        }
+    }
+}
+
+#[test]
+fn sha256_compress_words_take_inserts_at_run_time() {
+    // A word inserted into a compression's result and one into a constant
+    // block, both at run time, and a word with the high bit set extracted
+    // from the constant state. The block lacks its length word, which the
+    // insert supplies.
+    let source = format!(
+        r#"{SHA256_GLOBALS}global private const [i32; 16] $unsized = [-2147483648, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+func public %hash(v0.*i8, v1.*i8, v2.i32, v3.i32) -> i32 {{
+block0:
+    v4.*[i32; 16] = bitcast v0 *[i32; 16];
+    v5.*[i32; 8] = bitcast v1 *[i32; 8];
+    v6.[i32; 16] = mload v4 [i32; 16];
+{block}    v24.constref<[i32; 8]> = const.ref $iv;
+    v25.[i32; 8] = const.load v24;
+    v26.[i32; 8] = sha256_compress v25 v23;
+    v27.[i32; 8] = insert_value v26 3.i64 v3;
+    v28.constref<[i32; 16]> = const.ref $unsized;
+    v29.[i32; 16] = const.load v28;
+    v30.[i32; 16] = insert_value v29 15.i64 v2;
+    v31.[i32; 8] = sha256_compress v27 v30;
+{digest}    mstore v5 v40 [i32; 8];
+    v41.i32 = extract_value v25 1.i64;
+    return v41;
+}}
+"#,
+        block = sha256_words_ir(6, 7, 16),
+        digest = sha256_words_ir(31, 32, 8),
+    );
+    let mut next = sha256_inputs();
+    let middle = sha256_reference(SHA256_IV, [0; 16]);
+    let mut cases = vec![([0; 16], 512, middle[3])];
+    cases.extend((0..8).map(|_| (std::array::from_fn(|_| next()), next(), next())));
+    let expected = |(block, length, word): ([u32; 16], u32, u32)| {
+        let mut middle = sha256_reference(SHA256_IV, block);
+        middle[3] = word;
+        let mut padding = SHA256_PADDING;
+        padding[15] = length;
+        sha256_reference(middle, padding)
+    };
+    assert_eq!(expected(cases[0]), SHA256_ZEROS);
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let hash: unsafe extern "C" fn(*const u32, *mut u32, u32, u32) -> u32 =
+            unsafe { std::mem::transmute(artifact.function_address("hash").unwrap()) };
+        for &case in &cases {
+            let (block, length, word) = case;
+            let mut out = [0u32; 8];
+            let extracted = unsafe { hash(block.as_ptr(), out.as_mut_ptr(), length, word) };
+            assert_eq!(out, expected(case), "{level:?}");
+            assert_eq!(extracted, SHA256_IV[1], "{level:?}");
+        }
+    }
+}
+
+#[test]
+fn sha256_compress_words_cross_blocks_loops_calls_and_phis() {
+    // The first block's state lives across a call and into a loop, which
+    // compresses it with a constant block on each iteration and sums a word;
+    // a phi carries another state around the loop, compressing it on each
+    // iteration too.
+    let source = format!(
+        r#"{SHA256_GLOBALS}
+func inline(never) private %touch(v0.i32) -> i32 {{
+block0:
+    v1.i32 = add v0 1.i32;
+    return v1;
+}}
+func public %iterate(v0.*i8, v1.i64) -> i32 {{
+block0:
+    v2.*[i32; 16] = bitcast v0 *[i32; 16];
+    v3.[i32; 16] = mload v2 [i32; 16];
+{block}    v21.constref<[i32; 8]> = const.ref $iv;
+    v22.[i32; 8] = const.load v21;
+    v23.[i32; 8] = sha256_compress v22 v20;
+    v24.i32 = call %touch 0.i32;
+    v25.[i32; 8] = sha256_compress v22 zero.[i32; 16];
+    jump block1;
+block1:
+    v26.i64 = phi (0.i64 block0) (v34 block1);
+    v27.i32 = phi (v24 block0) (v33 block1);
+    v28.[i32; 8] = phi (v25 block0) (v31 block1);
+    v29.constref<[i32; 16]> = const.ref $after64;
+    v30.[i32; 16] = const.load v29;
+    v31.[i32; 8] = sha256_compress v28 v30;
+    v32.[i32; 8] = sha256_compress v23 v30;
+    v35.i32 = extract_value v32 0.i64;
+    v33.i32 = add v27 v35;
+    v34.i64 = add v26 1.i64;
+    v36.i1 = lt v34 v1;
+    br v36 block1 block2;
+block2:
+    v37.i32 = extract_value v31 7.i64;
+    v38.i32 = xor v33 v37;
+    return v38;
+}}
+"#,
+        block = sha256_words_ir(3, 4, 16),
+    );
+    let mut next = sha256_inputs();
+    let blocks = [[0; 16], std::array::from_fn(|_| next())];
+    let expected = |block: [u32; 16], iterations: u32| {
+        let digest = sha256_reference(sha256_reference(SHA256_IV, block), SHA256_PADDING);
+        let mut state = sha256_reference(SHA256_IV, [0; 16]);
+        for _ in 0..iterations {
+            state = sha256_reference(state, SHA256_PADDING);
+        }
+        digest[0].wrapping_mul(iterations).wrapping_add(1) ^ state[7]
+    };
+    assert_eq!(
+        expected([0; 16], 1),
+        SHA256_ZEROS[0].wrapping_add(1) ^ SHA256_ZEROS[7]
+    );
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let iterate: unsafe extern "C" fn(*const u32, i64) -> u32 =
+            unsafe { std::mem::transmute(artifact.function_address("iterate").unwrap()) };
+        for block in blocks {
+            for iterations in [1, 2, 5] {
+                assert_eq!(
+                    unsafe { iterate(block.as_ptr(), i64::from(iterations)) },
+                    expected(block, iterations),
+                    "{level:?} {iterations}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn sha256_compress_values_that_escape_stay_in_memory() {
+    // A state passed to a call, a result put in an outer array and another
+    // returned, and a block loaded through an index of a constant: each is
+    // in memory, and the digests are those of their messages.
+    let source = format!(
+        r#"{SHA256_GLOBALS}global private const [[i32; 16]; 2] $blocks = [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [-2147483648, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 512]];
+func inline(never) private %first(v0.[i32; 8]) -> i32 {{
+block0:
+    v1.i32 = extract_value v0 0.i64;
+    return v1;
+}}
+func inline(never) private %again(v0.[i32; 8]) -> [i32; 8] {{
+block0:
+    v1.[i32; 8] = sha256_compress v0 zero.[i32; 16];
+    return v1;
+}}
+func public %escape(v0.*i8, v1.*i8) -> i32 {{
+block0:
+    v2.constref<[[i32; 16]; 2]> = const.ref $blocks;
+    v3.constref<[i32; 16]> = const.index v2 1.i64;
+    v4.[i32; 16] = const.load v3;
+    v5.constref<[i32; 8]> = const.ref $iv;
+    v6.[i32; 8] = const.load v5;
+    v7.[i32; 8] = sha256_compress v6 zero.[i32; 16];
+    v8.i32 = call %first v7;
+    v9.[i32; 8] = sha256_compress v7 v4;
+    v10.[[i32; 8]; 2] = agg.make [[i32; 8]; 2] v9 v7;
+    v11.*[[i32; 8]; 2] = bitcast v1 *[[i32; 8]; 2];
+    mstore v11 v10 [[i32; 8]; 2];
+    v12.[i32; 8] = call %again v9;
+    v13.*[i32; 8] = bitcast v0 *[i32; 8];
+    mstore v13 v12 [i32; 8];
+    return v8;
+}}
+"#
+    );
+    let middle = sha256_reference(SHA256_IV, [0; 16]);
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let escape: unsafe extern "C" fn(*mut u32, *mut u32) -> u32 =
+            unsafe { std::mem::transmute(artifact.function_address("escape").unwrap()) };
+        let (mut again, mut outer) = ([0u32; 8], [0u32; 16]);
+        let first = unsafe { escape(again.as_mut_ptr(), outer.as_mut_ptr()) };
+        assert_eq!(first, middle[0], "{level:?}");
+        assert_eq!(outer[..8], SHA256_ZEROS, "{level:?}");
+        assert_eq!(outer[8..], middle, "{level:?}");
+        assert_eq!(again, sha256_reference(SHA256_ZEROS, [0; 16]), "{level:?}");
+    }
+}
+
 #[test]
 fn nested_aggregates_build_in_their_destination_object() {
     // The inner array's chain starts before the outer one's, and both are
