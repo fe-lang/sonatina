@@ -14,7 +14,8 @@ use sonatina_codegen::{
     object::{
         ObjectArtifact,
         lowering::{
-            FuncSnap, GvnOperand, MachinePassKind, MachineSteps, SectionLowering, StepFacts,
+            FuncSnap, GvnOperand, GvnTerm, MachinePassKind, MachineSteps, SectionLowering,
+            StepFacts,
         },
     },
 };
@@ -175,16 +176,36 @@ fn check_facts(input: &FuncSnap, output: &FuncSnap, facts: &StepFacts, machine: 
         );
     }
     let output_blocks = block_lines(&output.text);
-    for &(value, block, phi) in gvn.clone().flat_map(|gvn| &gvn.value_phis) {
-        assert!(values.contains(&value.as_u32()));
-        let phi = format!("v{}.", phi.as_u32());
+    let insts: BTreeSet<_> = input.insts.iter().flatten().collect();
+    for inserted in gvn.clone().flat_map(|gvn| &gvn.phis) {
+        let phi = format!("v{}.", inserted.phi.as_u32());
         assert!(
-            output_blocks.iter().any(|(id, lines)| *id == block.0
-                && lines
-                    .iter()
-                    .any(|line| line.starts_with(&phi) && line.contains(" = phi "))),
+            output_blocks
+                .iter()
+                .any(|(id, lines)| *id == inserted.block.0
+                    && lines
+                        .iter()
+                        .any(|line| line.starts_with(&phi) && line.contains(" = phi "))),
             "{name}: no inserted phi {phi} in block{}",
-            block.0
+            inserted.block.0
+        );
+        let mut terms: Vec<_> = inserted.term.iter().collect();
+        while let Some(term) = terms.pop() {
+            match term {
+                GvnTerm::Value(value) => assert!(values.contains(&value.as_u32())),
+                GvnTerm::Imm(_) => {}
+                GvnTerm::Inst { inst, args } => {
+                    assert!(insts.contains(inst));
+                    terms.extend(args);
+                }
+            }
+        }
+    }
+    for &(value, phi) in gvn.clone().flat_map(|gvn| &gvn.value_phis) {
+        assert!(values.contains(&value.as_u32()));
+        assert!(
+            gvn.clone()
+                .any(|gvn| gvn.phis.iter().any(|inserted| inserted.phi == phi))
         );
     }
     let demanded = facts.demanded_bits.iter().flatten();

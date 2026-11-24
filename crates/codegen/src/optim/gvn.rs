@@ -28,7 +28,7 @@ use crate::{
     cfg_edit::CfgEditor,
     cfg_scc::CfgSccAnalysis,
     domtree::{DomTree, DominatorTreeTraversable},
-    object::lowering::{GvnFacts, GvnOperand, StepFacts, StepKind},
+    object::lowering::{GvnFacts, GvnOperand, GvnTerm, InsertedPhi, StepFacts, StepKind},
     optim::{
         adce::divergent_blocks,
         aggregate::{CarrierSource, ObjectMemoryAnalysis, ObjectReadGvnKey},
@@ -2399,12 +2399,151 @@ struct RedundantCodeRemover<'a> {
     /// name, any result the solver numbered.
     replaced: Vec<InstId>,
     changed: bool,
+
+    /// When recording steps, the function value phis are resolved in.
+    inserted: Option<InsertedPhis>,
+}
+
+/// The phis `RedundantCodeRemover` inserted into `input`, a copy of the
+/// function before it inserted any.
+struct InsertedPhis {
+    input: Function,
+    /// Each phi as `(phi, block, args)`, in the order inserted.
+    phis: Vec<(ValueId, BlockId, PhiArgs)>,
+}
+
+type PhiArgs = Vec<(ValueId, BlockId)>;
+
+/// The unfoldings of a term through instructions in `InsertedPhi` terms.
+const TERM_DEPTH: usize = 4;
+
+impl InsertedPhis {
+    /// The phis, with what each stands for, and each value `renames` replaced
+    /// with one of them, whose dominator tree is `domtree`.
+    fn facts(
+        self,
+        domtree: &DomTree,
+        renames: &FxHashMap<ValueId, ValueId>,
+    ) -> (Vec<InsertedPhi>, Vec<(ValueId, ValueId)>) {
+        let blocks: FxHashMap<_, _> = self
+            .phis
+            .iter()
+            .map(|&(phi, block, _)| (phi, block))
+            .collect();
+        let mut value_phis: Vec<_> = renames
+            .iter()
+            .filter(|(_, phi)| blocks.contains_key(phi))
+            .map(|(&value, &phi)| (value, phi))
+            .collect();
+        value_phis.sort_unstable();
+        let mut terms = FxHashMap::default();
+        for &(value, phi) in &value_phis {
+            terms
+                .entry(phi)
+                .or_insert_with(|| self.term(domtree, value, blocks[&phi], TERM_DEPTH));
+        }
+        // A phi's incoming phis were inserted before it.
+        for (phi, block, args) in self.phis.iter().rev() {
+            let Some(Some(term)) = terms.get(phi).cloned() else {
+                continue;
+            };
+            for &(arg, pred) in args {
+                if let Some(&arg_block) = blocks.get(&arg) {
+                    terms
+                        .entry(arg)
+                        .or_insert_with(|| self.rebase(domtree, &term, *block, pred, arg_block));
+                }
+            }
+        }
+        let phis = self
+            .phis
+            .iter()
+            .map(|&(phi, block, _)| InsertedPhi {
+                phi,
+                block,
+                term: terms.remove(&phi).flatten(),
+            })
+            .collect();
+        (phis, value_phis)
+    }
+
+    /// What `value` computes at `block`: a term whose leaves are phis of
+    /// `block`, immediates and values that strictly dominate `block`,
+    /// unfolding at most `depth` pure instructions on a path.
+    fn term(
+        &self,
+        domtree: &DomTree,
+        value: ValueId,
+        block: BlockId,
+        depth: usize,
+    ) -> Option<GvnTerm> {
+        let func = &self.input;
+        if let Some(imm) = func.dfg.value_imm(value) {
+            return Some(GvnTerm::Imm(imm));
+        }
+        let Some(inst) = func.dfg.value_inst(value) else {
+            return Some(GvnTerm::Value(value));
+        };
+        let def_block = func.layout.inst_block(inst);
+        if (def_block == block && func.dfg.is_phi(inst))
+            || (def_block != block && domtree.dominates(def_block, block))
+        {
+            return Some(GvnTerm::Value(value));
+        }
+        (depth > 0
+            && !func.dfg.is_phi(inst)
+            && func.dfg.has_value_semantics(inst)
+            && func.dfg.inst_results(inst) == [value])
+        .then_some(())?;
+        let args = func.dfg.inst(inst).collect_values().into_iter();
+        let args = args.map(|arg| self.term(domtree, arg, block, depth - 1));
+        Some(GvnTerm::Inst {
+            inst,
+            args: args.collect::<Option<_>>()?,
+        })
+    }
+
+    /// `term`, of a phi of `block`, on the edge from `pred`, as a term at
+    /// `to`.
+    fn rebase(
+        &self,
+        domtree: &DomTree,
+        term: &GvnTerm,
+        block: BlockId,
+        pred: BlockId,
+        to: BlockId,
+    ) -> Option<GvnTerm> {
+        let func = &self.input;
+        match term {
+            GvnTerm::Imm(imm) => Some(GvnTerm::Imm(*imm)),
+            GvnTerm::Value(value) => {
+                let phi = func
+                    .dfg
+                    .value_inst(*value)
+                    .filter(|&inst| func.layout.inst_block(inst) == block)
+                    .and_then(|inst| func.dfg.cast_phi(inst));
+                let value = match phi {
+                    Some(phi) => phi.args().iter().find(|(_, from)| *from == pred)?.0,
+                    None => *value,
+                };
+                self.term(domtree, value, to, TERM_DEPTH)
+            }
+            GvnTerm::Inst { inst, args } => Some(GvnTerm::Inst {
+                inst: *inst,
+                args: args
+                    .iter()
+                    .map(|arg| self.rebase(domtree, arg, block, pred, to))
+                    .collect::<Option<_>>()?,
+            }),
+        }
+    }
 }
 
 impl<'a> RedundantCodeRemover<'a> {
     fn new(solver: &'a GvnSolver) -> Self {
         Self {
             solver,
+            inserted: None,
             avail_set: SecondaryMap::default(),
             resolved_value_phis: FxHashMap::default(),
             post_domtree: OnceCell::new(),
@@ -2514,6 +2653,10 @@ impl<'a> RedundantCodeRemover<'a> {
         cfg.compute(func);
         domtree.compute(cfg);
         let mut rewrite_facts = facts(func, domtree, true);
+        self.inserted = recording.then(|| InsertedPhis {
+            input: func.clone(),
+            phis: Vec::new(),
+        });
 
         // Compute domtree traversable.
         let mut domtree_traversable = DominatorTreeTraversable::default();
@@ -2542,21 +2685,10 @@ impl<'a> RedundantCodeRemover<'a> {
                 self.changed = true;
             }
         }
-        if let Some(gvn) = rewrite_facts.as_mut().and_then(|facts| facts.gvn.as_mut()) {
-            let phis: FxHashSet<_> = self.resolved_value_phis.values().collect();
-            gvn.value_phis = self
-                .renames
-                .iter()
-                .filter(|(_, phi)| phis.contains(phi))
-                .map(|(&value, &phi)| {
-                    (
-                        value,
-                        func.layout.inst_block(func.dfg.value_inst(phi).unwrap()),
-                        phi,
-                    )
-                })
-                .collect();
-            gvn.value_phis.sort_unstable();
+        if let Some(gvn) = rewrite_facts.as_mut().and_then(|facts| facts.gvn.as_mut())
+            && let Some(inserted) = self.inserted.take()
+        {
+            (gvn.phis, gvn.value_phis) = inserted.facts(domtree, &self.renames);
         }
         StepLog::step(&mut steps, StepKind::GvnRewrite, func, rewrite_facts);
         self.changed
@@ -2869,6 +3001,7 @@ impl<'a> RedundantCodeRemover<'a> {
                     }));
                     phi_args.push((resolved, *phi_block));
                 }
+                let args = self.inserted.is_some().then(|| phi_args.to_vec());
                 let phi = func.dfg.make_phi(phi_args);
 
                 // Insert new phi insn to top of the phi_insn block.
@@ -2877,6 +3010,9 @@ impl<'a> RedundantCodeRemover<'a> {
                 let result = inserter.make_result(func, insn, ty);
                 inserter.attach_result(func, insn, result);
                 self.changed = true;
+                if let (Some(inserted), Some(args)) = (&mut self.inserted, args) {
+                    inserted.phis.push((result, phi_insn.block, args));
+                }
 
                 // Restore the inserter loc.
                 inserter.set_location(current_inserter_loc);
@@ -2971,7 +3107,7 @@ mod tests {
     use crate::{
         analysis::known_bits::{KnownBitsQuery, count_query_news_for_test},
         domtree::DomTree,
-        object::lowering::{FuncSnap, GvnOperand, StepKind},
+        object::lowering::{FuncSnap, GvnOperand, GvnTerm, StepKind},
         optim::{aggregate::ObjectMemoryAnalysis, steps::StepLog},
     };
     use sonatina_ir::{
@@ -3087,6 +3223,71 @@ func public %f(v0.i256) -> i256 {
                     block == BlockId(4) && slot < 2 && !names_phi(lhs) && !names_phi(rhs)
                 })
         );
+    }
+
+    /// `v11 = add v10 1` is `add v5 1` from `block1` and, from `block5`,
+    /// `add v9 1`, which is `add v2 1` from `block3` and `add v3 1` from
+    /// `block4`: the rewrite inserts a phi in `block5` and one in `block6`.
+    #[test]
+    fn gvn_rewrite_lists_nested_value_phis_with_their_terms() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
+    block0:
+        v4.i1 = lt v0 v1;
+        br v4 block1 block2;
+
+    block1:
+        v5.i256 = add v1 1.i256;
+        jump block6;
+
+    block2:
+        v6.i1 = lt v0 v2;
+        br v6 block3 block4;
+
+    block3:
+        v7.i256 = add v2 1.i256;
+        jump block5;
+
+    block4:
+        v8.i256 = add v3 1.i256;
+        jump block5;
+
+    block5:
+        v9.i256 = phi (v2 block3) (v3 block4);
+        jump block6;
+
+    block6:
+        v10.i256 = phi (v1 block1) (v9 block5);
+        v11.i256 = add v10 1.i256;
+        return v11;
+}
+"#;
+        let (parsed, log) = gvn_steps(source);
+        let func = parsed.module.funcs()[0];
+        let value = |name| parsed.debug.value(func, name).unwrap();
+        // GVN deletes `v11`; a second parse has it with the same ids.
+        let input = parse_module(source).unwrap().module;
+        let add = input.func_store.view(func, |function| {
+            function.dfg.value_inst(value("v11")).unwrap()
+        });
+        let (kind, .., step) = log.steps.last().unwrap();
+        assert_eq!(*kind, StepKind::GvnRewrite);
+        let gvn = step.as_ref().unwrap().facts.gvn.clone().unwrap();
+        let term = |phi| GvnTerm::Inst {
+            inst: add,
+            args: vec![
+                GvnTerm::Value(value(phi)),
+                GvnTerm::Imm(Immediate::I256(1.into())),
+            ],
+        };
+        let [inner, outer] = &gvn.phis[..] else {
+            panic!("two inserted phis: {:?}", gvn.phis);
+        };
+        assert_eq!((inner.block, &inner.term), (BlockId(5), &Some(term("v9"))));
+        assert_eq!((outer.block, &outer.term), (BlockId(6), &Some(term("v10"))));
+        assert_eq!(gvn.value_phis, [(value("v11"), outer.phi)]);
     }
 
     #[test]

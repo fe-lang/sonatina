@@ -219,10 +219,40 @@ pub struct GvnFacts {
     pub class: Vec<(ValueId, GvnOperand)>,
     /// `(block, slot, lhs, rhs)`: `lhs` equals `rhs` once the edge is taken.
     pub preds: Vec<(BlockId, u32, GvnOperand, GvnOperand)>,
-    /// For `GvnRewrite`, of the function after it: `(value, block, phi)`,
-    /// where the step replaced `value` with `phi`, a phi it inserted at the
-    /// top of `block`.
-    pub value_phis: Vec<(ValueId, BlockId, ValueId)>,
+    /// For `GvnRewrite`: each phi the step inserted, of the function after
+    /// it, in the order inserted, which lists a phi before the phis that
+    /// take it as an incoming value.
+    pub phis: Vec<InsertedPhi>,
+    /// For `GvnRewrite`: `(value, phi)`, where the step replaced `value` with
+    /// `phi`, one of `phis`.
+    pub value_phis: Vec<(ValueId, ValueId)>,
+}
+
+/// A phi a `GvnRewrite` step inserted at the top of `block`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InsertedPhi {
+    pub phi: ValueId,
+    pub block: BlockId,
+    /// What the phi stands for at `block`, if GVN's reasoning reduces to a
+    /// term of the step input whose leaves are phis of `block`,
+    /// immediates and values that strictly dominate `block`: the phi's
+    /// incoming value from each predecessor is the term with each phi of
+    /// `block` replaced by its incoming value from it. For a phi in
+    /// `value_phis`, its value's definition unfolds to the term; for another,
+    /// the term is that of a phi taking it as an incoming value, on that edge.
+    pub term: Option<GvnTerm>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GvnTerm {
+    Value(ValueId),
+    Imm(Immediate),
+    /// The operation of `inst`, an instruction of the step input, on `args`
+    /// in place of its operands.
+    Inst {
+        inst: InstId,
+        args: Vec<GvnTerm>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
