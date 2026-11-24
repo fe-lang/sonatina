@@ -108,9 +108,10 @@ pub(crate) fn verify_machine_function(
 
     // The IR verifier's fast level checks SSA structure without the high-level type rules,
     // which the word checks above replace; it also checks that each definition dominates its
-    // uses, a phi operand's at the end of its predecessor.
+    // uses, a phi operand's at the end of its predecessor, and is in the layout.
     let config = VerifierConfig {
         check_dominance: true,
+        allow_detached_entities: false,
         ..VerifierConfig::for_level(VerificationLevel::Fast)
     };
     let report = verify_function(function.ctx(), func_ref, function, &config);
