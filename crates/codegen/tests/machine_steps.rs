@@ -13,7 +13,9 @@ use sonatina_codegen::{
     analysis::known_bits::KnownBitsQuery,
     object::{
         ObjectArtifact,
-        lowering::{FuncSnap, MachinePassKind, MachineSteps, SectionLowering, StepFacts},
+        lowering::{
+            FuncSnap, GvnOperand, MachinePassKind, MachineSteps, SectionLowering, StepFacts,
+        },
     },
 };
 use sonatina_parser::parse_module;
@@ -109,11 +111,19 @@ fn check_snap(snap: &FuncSnap, defs: &mut BTreeMap<u32, u32>) {
     }
 }
 
-/// The values instruction lines of a function's text define.
+/// The arguments of a function's text and the values its instruction lines
+/// define.
 fn func_values(text: &str) -> BTreeSet<u32> {
+    let header = text.lines().next().unwrap();
+    let args = header.split_once('(').unwrap().1.split(')').next().unwrap();
+    let args = args.split(", ").filter_map(|arg| {
+        let arg = arg.rsplit(' ').next()?.strip_prefix('v')?;
+        arg.split('.').next()?.parse().ok()
+    });
     block_lines(text)
         .iter()
         .flat_map(|(_, lines)| lines.iter().flat_map(|line| defined_values(line)))
+        .chain(args)
         .collect()
 }
 
@@ -133,12 +143,46 @@ fn block_dests(text: &str) -> BTreeMap<u32, u32> {
 }
 
 /// The facts of a step name values and edges of its input,
-/// and its known bits are no more than the
+/// or for value phis of its output, and its known bits are no more than the
 /// analysis finds of the input, parsed in the section's machine IR
 /// (`machine`) in place of the function's final text (`last`).
-fn check_facts(input: &FuncSnap, facts: &StepFacts, machine: &str, last: &str) {
+fn check_facts(input: &FuncSnap, output: &FuncSnap, facts: &StepFacts, machine: &str, last: &str) {
     let name = input.func.as_str();
     let values = func_values(&input.text);
+    let gvn = facts.gvn.iter();
+    let operands = gvn
+        .clone()
+        .flat_map(|gvn| {
+            let preds = gvn.preds.iter().flat_map(|(_, _, lhs, rhs)| [lhs, rhs]);
+            gvn.class.iter().map(|(_, rep)| rep).chain(preds)
+        })
+        .filter_map(|operand| match operand {
+            GvnOperand::Value(value) => Some(value),
+            GvnOperand::Imm(_) => None,
+        });
+    let classes = gvn
+        .clone()
+        .flat_map(|gvn| gvn.class.iter().map(|(value, _)| value));
+    for value in operands.chain(classes) {
+        assert!(
+            values.contains(&value.as_u32()),
+            "{name}: a GVN fact of v{} not in the step input",
+            value.as_u32()
+        );
+    }
+    let output_blocks = block_lines(&output.text);
+    for &(value, block, phi) in gvn.clone().flat_map(|gvn| &gvn.value_phis) {
+        assert!(values.contains(&value.as_u32()));
+        let phi = format!("v{}.", phi.as_u32());
+        assert!(
+            output_blocks.iter().any(|(id, lines)| *id == block.0
+                && lines
+                    .iter()
+                    .any(|line| line.starts_with(&phi) && line.contains(" = phi "))),
+            "{name}: no inserted phi {phi} in block{}",
+            block.0
+        );
+    }
     let demanded = facts.demanded_bits.iter().flatten();
     let consts = facts.sccp.iter().flat_map(|sccp| &sccp.consts);
     for value in facts
@@ -155,11 +199,15 @@ fn check_facts(input: &FuncSnap, facts: &StepFacts, machine: &str, last: &str) {
         );
     }
     let dests = block_dests(&input.text);
+    let gvn_edges = gvn.flat_map(|gvn| {
+        let preds = gvn.preds.iter().map(|&(block, slot, ..)| (block, slot));
+        gvn.dead_edges.iter().copied().chain(preds)
+    });
     let sccp_edges = facts
         .sccp
         .iter()
         .flat_map(|sccp| sccp.dead_edges.iter().copied());
-    for (block, slot) in sccp_edges {
+    for (block, slot) in sccp_edges.chain(gvn_edges) {
         assert!(
             dests.get(&block.0).is_some_and(|&dests| slot < dests),
             "{name}: an edge from slot {slot} of block{}, which the step input lacks",
@@ -266,7 +314,13 @@ fn check_steps(lowering: &SectionLowering) {
                     "{name}: {:?} lists it unchanged",
                     step.kind
                 );
-                check_facts(input, &func.facts, &lowering.machine_ir, &machine[name]);
+                check_facts(
+                    input,
+                    &func.out,
+                    &func.facts,
+                    &lowering.machine_ir,
+                    &machine[name],
+                );
                 *input = &func.out;
                 check_snap(&func.out, defs.get_mut(name).unwrap());
             }

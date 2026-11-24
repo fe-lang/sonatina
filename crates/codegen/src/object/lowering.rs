@@ -177,6 +177,8 @@ pub struct StepFacts {
     pub sccp: Option<SccpFacts>,
     /// For `Adce`: the loops it may remove, which it proved finite.
     pub finite_loops: Vec<FiniteLoop>,
+    /// For `GvnPrune` and `GvnRewrite`.
+    pub gvn: Option<GvnFacts>,
 }
 
 /// The solution of SCCP. A value without a constant may be anything.
@@ -203,6 +205,28 @@ pub struct FiniteLoop {
     pub step: ValueId,
     /// The block whose `br` tests `iv` or `step` against the bound.
     pub exit: BlockId,
+}
+
+/// The solution of GVN. A value without a class is in a class of its own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GvnFacts {
+    /// The edges of the blocks that may run that never run, numbered as in
+    /// `SccpFacts::dead_edges`.
+    pub dead_edges: Vec<(BlockId, u32)>,
+    /// Each value whose class has another representative, with it.
+    pub class: Vec<(ValueId, GvnOperand)>,
+    /// `(block, slot, lhs, rhs)`: `lhs` equals `rhs` once the edge is taken.
+    pub preds: Vec<(BlockId, u32, GvnOperand, GvnOperand)>,
+    /// For `GvnRewrite`, of the function after it: `(value, block, phi)`,
+    /// where the step replaced `value` with `phi`, a phi it inserted at the
+    /// top of `block`.
+    pub value_phis: Vec<(ValueId, BlockId, ValueId)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GvnOperand {
+    Value(ValueId),
+    Imm(Immediate),
 }
 
 /// A function of the machine module at one point of the machine stage.
