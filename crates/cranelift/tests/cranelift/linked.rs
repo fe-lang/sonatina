@@ -10,7 +10,7 @@ use sonatina_ir::isa::Isa;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 use tempfile::Builder;
 
-use super::{host_architecture, imports, native_isa};
+use super::{defined_functions, host_architecture, imports, native_isa};
 
 #[test]
 fn private_functions_leave_external_globals_their_names() {
@@ -352,7 +352,8 @@ int main(void) {
 #[test]
 fn linked_tail_call_switches_relocate_their_tables() {
     // An interpreter whose dispatch tail-calls through a table of handler
-    // addresses, which the linker relocates in an executable.
+    // addresses, which the linker relocates in an executable. `inc_again` is
+    // `inc`, so its entry is `inc`'s.
     let triple = native_isa(host_architecture()).triple();
     let source = r#"
 func private %dispatch(v0.*i8, v1.i64, v2.i64) -> i64 {
@@ -362,7 +363,7 @@ block0:
     v5.*i8 = int_to_ptr v4 *i8;
     v6.i8 = mload v5 i8;
     v7.i32 = zext v6 i32;
-    br_table v7 block4 (0.i32 block1) (1.i32 block2) (2.i32 block3);
+    br_table v7 block4 (0.i32 block1) (1.i32 block2) (2.i32 block3) (3.i32 block5);
 block1:
     v8.i64 = call %halt v0 v1 v2;
     return v8;
@@ -375,6 +376,9 @@ block3:
 block4:
     v11.i64 = call %invalid v0 v1 v2;
     return v11;
+block5:
+    v12.i64 = call %inc_again v0 v1 v2;
+    return v12;
 }
 
 func private %halt(v0.*i8, v1.i64, v2.i64) -> i64 {
@@ -383,6 +387,14 @@ block0:
 }
 
 func private %inc(v0.*i8, v1.i64, v2.i64) -> i64 {
+block0:
+    v3.i64 = add v1 1.i64;
+    v4.i64 = add v2 1.i64;
+    v5.i64 = call %dispatch v0 v3 v4;
+    return v5;
+}
+
+func private %inc_again(v0.*i8, v1.i64, v2.i64) -> i64 {
 block0:
     v3.i64 = add v1 1.i64;
     v4.i64 = add v2 1.i64;
@@ -419,6 +431,7 @@ int main(void) {
     uint8_t *code = malloc(n);
     if (!code) return 2;
     memset(code, 1, n);
+    memset(code + n / 4, 3, n / 4);
     code[n - 2] = 2;
     code[n - 1] = 0;
     if (run(code) != (int64_t)(n - 2) * 2) return 3;
@@ -438,6 +451,12 @@ int main(void) {
             .with_opt_level(level)
             .compile()
             .unwrap();
+        // An unoptimized build keeps every function.
+        assert_eq!(
+            defined_functions(artifact.as_bytes()).contains(&"inc_again".to_string()),
+            level == OptLevel::O0,
+            "{level:?}"
+        );
         let directory = Builder::new()
             .prefix("sonatina-native-tail-switch-")
             .tempdir()

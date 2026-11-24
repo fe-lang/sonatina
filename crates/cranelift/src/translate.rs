@@ -3,6 +3,7 @@ mod black_box;
 mod carry;
 mod division;
 mod enums;
+mod fold;
 mod frame;
 mod globals;
 mod i256;
@@ -132,8 +133,6 @@ pub(super) fn translate_module(
     module: &Module,
     clif_module: &mut impl ClifModule,
 ) -> Result<HashMap<String, FuncId>, String> {
-    let mut defined_func_map: HashMap<String, FuncId> = HashMap::new();
-    let mut func_id_map: HashMap<FuncRef, FuncId> = HashMap::new();
     let mut symbols = ObjectSymbols::new(module);
     let data_ids = define_globals(&module.ctx, &mut symbols, clif_module)?;
 
@@ -144,18 +143,12 @@ pub(super) fn translate_module(
     let ownership = Ownership::new(module, &tail_calls);
     let arg_writes = ArgWrites::new(module);
     let mut function_tables = HashMap::new();
-
-    for &func_ref in &funcs {
-        let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
-        let sig = clif_signature(module, func_ref, &tail_calls, clif_module)?;
-
-        let linkage = translate_linkage(module.ctx.func_linkage(func_ref));
-        let func_id = clif_module
-            .declare_function(&symbols.symbol(&name, linkage), linkage, &sig)
-            .map_err(|e| format!("failed to declare function {name}: {e}"))?;
-
-        func_id_map.insert(func_ref, func_id);
-    }
+    let signatures = funcs
+        .iter()
+        .map(|&func_ref| {
+            clif_signature(module, func_ref, &tail_calls, clif_module).map(|sig| (func_ref, sig))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
 
     let mut translated = Vec::new();
     let mut cold = Vec::new();
@@ -181,7 +174,7 @@ pub(super) fn translate_module(
                         &ownership,
                         &arg_writes,
                         &mut function_tables,
-                        &func_id_map,
+                        &signatures,
                         &data_ids,
                         &mut divider,
                         &mut black_box,
@@ -191,13 +184,11 @@ pub(super) fn translate_module(
                 });
         match ctx {
             Some(Ok(Some(ctx))) => {
-                let func_id = func_id_map[&func_ref];
-                // A tail-convention function has no platform ABI to call
-                // its address with.
-                if !tail_calls.uses_tail_convention(func_ref) {
-                    defined_func_map.insert(name.clone(), func_id);
-                }
-                let function = (format!("function {name}"), func_id, ctx);
+                let function = (
+                    format!("function {name}"),
+                    Definition::Function(func_ref),
+                    ctx,
+                );
                 if module.ctx.func_hints(func_ref).contains(FuncHints::COLD) {
                     cold.push(function);
                 } else {
@@ -214,13 +205,19 @@ pub(super) fn translate_module(
         divider
             .finish(clif_module)
             .into_iter()
-            .map(|(func_id, ctx)| ("the divider".to_string(), func_id, ctx)),
+            .map(|(func_id, ctx)| ("the divider".to_string(), Definition::Helper(func_id), ctx)),
     );
     translated.extend(
         black_box
             .finish(clif_module)
             .into_iter()
-            .map(|(func_id, ctx)| ("the black box".to_string(), func_id, ctx)),
+            .map(|(func_id, ctx)| {
+                (
+                    "the black box".to_string(),
+                    Definition::Helper(func_id),
+                    ctx,
+                )
+            }),
     );
     // Cold functions go last, so the rest of the code stays together.
     translated.extend(cold);
@@ -240,18 +237,100 @@ pub(super) fn translate_module(
     let compiled = parallel::map_owned(
         &module.func_store,
         translated,
-        |(name, func_id, mut ctx)| {
+        |(name, definition, mut ctx)| {
             let compiled = ctx
                 .compile(isa, &mut ControlPlane::default())
                 .map(|_| ())
                 .map_err(|error| error.inner.to_string());
-            (name, func_id, ctx, compiled)
+            (name, definition, ctx, compiled)
         },
     );
-    for (name, func_id, ctx, compiled) in compiled {
+    let mut definitions = Vec::with_capacity(compiled.len());
+    for (name, definition, ctx, compiled) in compiled {
         if let Err(error) = compiled {
             eprintln!("[cranelift] CLIF IR (error):\n{}", ctx.func.display());
             return Err(format!("cranelift failed to compile {name}: {error}"));
+        }
+        definitions.push((name, definition, ctx));
+    }
+
+    // A private function with the machine code of an earlier one is that one:
+    // it takes no symbol, and its callers and table entries take the earlier
+    // one's. Cold functions come last, so a group's body is a hot one if any
+    // is. An unoptimized build keeps every function, and so its name in
+    // profiles and backtraces.
+    let duplicates =
+        if isa.flags().opt_level() == settings::OptLevel::None {
+            HashMap::new()
+        } else {
+            fold::duplicates(definitions.iter().filter_map(
+                |(_, definition, ctx)| match *definition {
+                    Definition::Function(func_ref)
+                        if module.ctx.func_linkage(func_ref).is_private() =>
+                    {
+                        Some((func_ref, ctx))
+                    }
+                    Definition::Function(_) | Definition::Helper(_) => None,
+                },
+            ))
+        };
+    let mut func_ids = HashMap::new();
+    for &func_ref in &funcs {
+        if duplicates.contains_key(&func_ref) {
+            continue;
+        }
+        let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
+        let linkage = translate_linkage(module.ctx.func_linkage(func_ref));
+        let func_id = clif_module
+            .declare_function(
+                &symbols.symbol(&name, linkage),
+                linkage,
+                &signatures[&func_ref],
+            )
+            .map_err(|e| format!("failed to declare function {name}: {e}"))?;
+        func_ids.insert(func_ref, func_id);
+    }
+    for (&duplicate, representative) in &duplicates {
+        let func_id = func_ids[representative];
+        func_ids.insert(duplicate, func_id);
+    }
+    define_function_tables(
+        function_tables,
+        &func_ids,
+        clif_module.target_config().pointer_type(),
+        clif_module,
+    )?;
+
+    let mut defined_func_map = HashMap::new();
+    for (name, definition, mut ctx) in definitions {
+        let func_id = match definition {
+            Definition::Function(func_ref) => {
+                // A tail-convention function has no platform ABI to call
+                // its address with.
+                if !tail_calls.uses_tail_convention(func_ref) {
+                    let symbol = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
+                    defined_func_map.insert(symbol, func_ids[&func_ref]);
+                }
+                if duplicates.contains_key(&func_ref) {
+                    continue;
+                }
+                func_ids[&func_ref]
+            }
+            Definition::Helper(func_id) => func_id,
+        };
+        let callees: Vec<_> = ctx
+            .func
+            .params
+            .user_named_funcs()
+            .iter()
+            .filter(|(_, name)| name.namespace == FUNC_NAMESPACE)
+            .map(|(name_ref, name)| (name_ref, FuncRef::from_u32(name.index)))
+            .collect();
+        for (name_ref, callee) in callees {
+            ctx.func.params.reset_user_func_name(
+                name_ref,
+                clif::UserExternalName::new(0, func_ids[&callee].as_u32()),
+            );
         }
         let code = ctx
             .compiled_code()
@@ -280,11 +359,47 @@ pub(super) fn translate_module(
     Ok(defined_func_map)
 }
 
-/// The table of function addresses `entries`, defined once per module.
+/// What a compiled body defines: a function of the module, or a helper the
+/// translation adds, which has its symbol already.
+enum Definition {
+    Function(FuncRef),
+    Helper(FuncId),
+}
+
+/// The namespace of the names Cranelift functions call the module's
+/// functions by, `FuncRef` indices, until folding (`fold`) gives the
+/// functions their symbols. Cranelift's module names its functions in
+/// namespace 0 and its data in namespace 1.
+pub(super) const FUNC_NAMESPACE: u32 = 2;
+
+/// Imports the module's function `callee` into `func`.
+fn import_callee(
+    module: &Module,
+    callee: FuncRef,
+    signature: &clif::Signature,
+    func: &mut clif::Function,
+) -> clif::FuncRef {
+    let signature = func.import_signature(signature.clone());
+    let name = func.declare_imported_user_function(callee_name(callee));
+    func.import_function(clif::ExtFuncData {
+        name: clif::ExternalName::user(name),
+        signature,
+        // A definition in the object is not preempted.
+        colocated: translate_linkage(module.ctx.func_linkage(callee)).is_final(),
+        patchable: false,
+    })
+}
+
+/// The name Cranelift functions call the module's function `callee` by.
+fn callee_name(callee: FuncRef) -> clif::UserExternalName {
+    clif::UserExternalName::new(FUNC_NAMESPACE, callee.as_u32())
+}
+
+/// The table of function addresses `entries`, declared once per module and
+/// defined, by `define_function_tables`, once the functions have symbols.
 fn function_table(
-    entries: Vec<FuncId>,
-    pointer_type: clif::Type,
-    function_tables: &mut HashMap<Vec<FuncId>, DataId>,
+    entries: Vec<FuncRef>,
+    function_tables: &mut HashMap<Vec<FuncRef>, DataId>,
     clif_module: &mut impl ClifModule,
 ) -> Result<DataId, String> {
     if let Some(&table) = function_tables.get(&entries) {
@@ -293,20 +408,34 @@ fn function_table(
     let table = clif_module
         .declare_anonymous_data(false, false)
         .map_err(|error| format!("failed to declare a function table: {error}"))?;
-    let entry_size = pointer_type.bytes() as usize;
-    let mut description = DataDescription::new();
-    // Zero-initialized data goes to `.bss`, which keeps no relocations.
-    description.define(vec![0; entries.len() * entry_size].into_boxed_slice());
-    description.set_align(entry_size as u64);
-    for (index, &entry) in entries.iter().enumerate() {
-        let entry = clif_module.declare_func_in_data(entry, &mut description);
-        description.write_function_addr((index * entry_size) as u32, entry);
-    }
-    clif_module
-        .define_data(table, &description)
-        .map_err(|error| format!("failed to define a function table: {error}"))?;
     function_tables.insert(entries, table);
     Ok(table)
+}
+
+fn define_function_tables(
+    function_tables: HashMap<Vec<FuncRef>, DataId>,
+    func_ids: &HashMap<FuncRef, FuncId>,
+    pointer_type: clif::Type,
+    clif_module: &mut impl ClifModule,
+) -> Result<(), String> {
+    // In declaration order, which is deterministic.
+    let mut function_tables: Vec<_> = function_tables.into_iter().collect();
+    function_tables.sort_by_key(|&(_, table)| table);
+    let entry_size = pointer_type.bytes() as usize;
+    for (entries, table) in function_tables {
+        let mut description = DataDescription::new();
+        // Zero-initialized data goes to `.bss`, which keeps no relocations.
+        description.define(vec![0; entries.len() * entry_size].into_boxed_slice());
+        description.set_align(entry_size as u64);
+        for (index, entry) in entries.iter().enumerate() {
+            let entry = clif_module.declare_func_in_data(func_ids[entry], &mut description);
+            description.write_function_addr((index * entry_size) as u32, entry);
+        }
+        clif_module
+            .define_data(table, &description)
+            .map_err(|error| format!("failed to define a function table: {error}"))?;
+    }
+    Ok(())
 }
 
 /// Whether a shift's count is always below its operand's width, which its
@@ -454,8 +583,8 @@ fn translate_function(
     tail_calls: &TailCalls,
     ownership: &Ownership,
     arg_writes: &ArgWrites,
-    function_tables: &mut HashMap<Vec<FuncId>, DataId>,
-    func_id_map: &HashMap<FuncRef, FuncId>,
+    function_tables: &mut HashMap<Vec<FuncRef>, DataId>,
+    signatures: &HashMap<FuncRef, clif::Signature>,
     data_ids: &GlobalDataMap,
     divider: &mut Divider,
     black_box: &mut BlackBoxBarrier,
@@ -464,7 +593,7 @@ fn translate_function(
     let target_config = clif_module.target_config();
     let pointer_type = target_config.pointer_type();
     let mut ctx = clif_module.make_context();
-    ctx.func.signature = clif_signature(module, func_ref, tail_calls, clif_module)?;
+    ctx.func.signature = signatures[&func_ref].clone();
     let readonly_args: Vec<usize> = module
         .ctx
         .func_sig(func_ref, |sig| sig.readonly_args().collect());
@@ -1342,12 +1471,11 @@ fn translate_function(
                         // Every destination tail-calls with the same
                         // arguments: index a table of the callees and
                         // tail-call the entry.
-                        let mut entries = vec![func_id_map[&switch.default]; 1 << switch.bits];
+                        let mut entries = vec![switch.default; 1 << switch.bits];
                         for &(key, callee) in &switch.keys {
-                            entries[key as usize] = func_id_map[&callee];
+                            entries[key as usize] = callee;
                         }
-                        let table =
-                            function_table(entries, pointer_type, function_tables, clif_module)?;
+                        let table = function_table(entries, function_tables, clif_module)?;
                         let table = clif_module.declare_data_in_func(table, builder.func);
                         let base = builder.ins().symbol_value(pointer_type, table);
                         let scrutinee = resolve_scalar_value(
@@ -1597,12 +1725,11 @@ fn translate_function(
                 }
                 NativeInstKind::Call(call) => {
                     let callee = *call.callee();
-                    let clif_func_id = *func_id_map
+                    let signature = signatures
                         .get(&callee)
                         .ok_or_else(|| format!("unknown callee {callee:?}"))?;
                     if tail_calls.is_tail_call(func_ref, inst_id) {
-                        let clif_func_ref =
-                            clif_module.declare_func_in_func(clif_func_id, builder.func);
+                        let clif_func_ref = import_callee(module, callee, signature, builder.func);
                         // An indirect result goes to the caller's own buffer.
                         let mut call_args: Vec<_> = sret_ptr.into_iter().collect();
                         call_args.extend(tail_call_args(
@@ -1697,12 +1824,12 @@ fn translate_function(
                         Some(sig) => variadic_callee(
                             &module.ctx,
                             &sig,
-                            clif_func_id,
+                            callee_name(callee),
                             &mut call_args,
                             clif_module,
                             &mut builder,
                         ),
-                        None => clif_module.declare_func_in_func(clif_func_id, builder.func),
+                        None => import_callee(module, callee, signature, builder.func),
                     };
                     let clif_call = builder.ins().call(clif_func_ref, &call_args);
                     if let Some(sret_addr) = sret_slot {

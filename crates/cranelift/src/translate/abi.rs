@@ -5,7 +5,7 @@ use cranelift_codegen::{
     isa::CallConv,
 };
 use cranelift_frontend::FunctionBuilder;
-use cranelift_module::{FuncId, Module as ClifModule};
+use cranelift_module::Module as ClifModule;
 use sonatina_ir::{Linkage, Signature, Type, module::ModuleCtx};
 use sonatina_triple::TargetTriple;
 
@@ -64,8 +64,8 @@ pub(super) fn validate_cranelift_signature(ctx: &ModuleCtx, sig: &Signature) -> 
     Ok(())
 }
 
-/// The function a call to the variadic `sig`, `func_id` in the object,
-/// calls: its symbol, with a signature of the call's own that passes the
+/// The function a call to the variadic `sig`, named `name`, calls: its
+/// symbol, with a signature of the call's own that passes the
 /// fixed arguments as `sig` does and the call's extra arguments after them.
 /// `args` are the call's arguments, which this arranges for that signature.
 ///
@@ -79,7 +79,7 @@ pub(super) fn validate_cranelift_signature(ctx: &ModuleCtx, sig: &Signature) -> 
 pub(super) fn variadic_callee(
     ctx: &ModuleCtx,
     sig: &Signature,
-    func_id: FuncId,
+    name: clif::UserExternalName,
     args: &mut Vec<clif::Value>,
     clif_module: &impl ClifModule,
     builder: &mut FunctionBuilder,
@@ -103,12 +103,7 @@ pub(super) fn variadic_callee(
             .map(|&arg| clif::AbiParam::new(builder.func.dfg.value_type(arg))),
     );
     let signature = builder.import_signature(clif_sig);
-    let name = builder
-        .func
-        .declare_imported_user_function(clif::UserExternalName {
-            namespace: 0,
-            index: func_id.as_u32(),
-        });
+    let name = builder.func.declare_imported_user_function(name);
     builder.import_function(clif::ExtFuncData {
         name: clif::ExternalName::user(name),
         signature,
