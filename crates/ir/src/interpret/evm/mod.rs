@@ -117,8 +117,11 @@ fn evm_byte(pos: U256, value: U256, value_bytes: usize) -> U256 {
     (value >> (shift_bytes * 8)) & U256::from(0xffu16)
 }
 
-fn evm_signextend(byte: U256, value: U256) -> U256 {
-    if byte >= U256::from(32u8) {
+/// EVM `SIGNEXTEND`: extends the sign of byte `byte`, counted from the least significant, over
+/// the word.
+pub fn evm_signextend(byte: U256, value: U256) -> U256 {
+    // From byte 31 on, the sign bit is bit 255 or above, and the word is left as it is.
+    if byte >= U256::from(31u8) {
         return value;
     }
 
@@ -530,6 +533,30 @@ mod tests {
             EvmKeccak256Words::new(&hi, smallvec![known, unknown]).interpret(&mut state),
             single_result(EvalValue::Unknown)
         );
+    }
+
+    /// Byte 30 extends bit 247; byte 31 would extend bit 255, which is the top bit already.
+    #[test]
+    fn signextend_of_top_bytes() {
+        let hi = TestHasInst;
+        let word = |value: U256| EvalValue::Imm(u256_to_imm(value, Type::I256));
+        let (byte, value) = (crate::ValueId::from_u32(0), crate::ValueId::from_u32(1));
+        let top = U256::one() << 255;
+        let five = U256::from(5u8);
+        for (index, input, expected) in [
+            (30u8, top | five, five),
+            (30, U256::one() << 247, !U256::zero() << 247),
+            (31, U256::zero(), U256::zero()),
+            (31, five, five),
+            (31, top | five, top | five),
+        ] {
+            let mut state = TestState::new([(byte, word(U256::from(index))), (value, word(input))]);
+            assert_eq!(
+                EvmSignExtend::new(&hi, byte, value).interpret(&mut state),
+                single_result(word(expected)),
+                "signextend {index} {input:#x}"
+            );
+        }
     }
 
     #[test]

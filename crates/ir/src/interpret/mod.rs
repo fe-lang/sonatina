@@ -19,6 +19,8 @@ mod logic;
 #[cfg(test)]
 mod test_state;
 
+pub use evm::evm_signextend;
+
 pub type EvalResults = SmallVec<[EvalValue; 1]>;
 
 pub(crate) fn no_result() -> EvalResults {

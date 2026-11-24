@@ -6,6 +6,7 @@ use sonatina_ir::{
         BinaryInstKind, CastInstKind, InstClassKind, InstKeyExt, OwnedInstKey, UnaryInstKind, cast,
         evm::EvmKeccak256Words, logic::Select,
     },
+    interpret::evm_signextend,
 };
 
 use crate::{
@@ -355,28 +356,13 @@ pub(crate) fn simplify_evm_byte_known(
     fold_evm_byte(pos?, value?)
 }
 
-fn fold_evm_signextend_raw(byte: U256, value: U256, ty: Type) -> U256 {
-    let mask = type_mask(ty);
-    if byte >= U256::from(32u8) {
-        return value & mask;
-    }
-
-    let sign_bit = (byte.as_usize() + 1) * 8 - 1;
-    let result = if value.bit(sign_bit) {
-        value | (!U256::zero() << (sign_bit + 1))
-    } else {
-        value & ((U256::one() << (sign_bit + 1)) - U256::one())
-    };
-    result & mask
-}
-
 pub(crate) fn fold_evm_signextend(byte: Immediate, value: Immediate) -> Option<Immediate> {
     let ty = value.ty();
     if ty != byte.ty() || !ty.is_integral() {
         return None;
     }
 
-    let result = fold_evm_signextend_raw(imm_to_u256(byte), imm_to_u256(value), ty);
+    let result = evm_signextend(imm_to_u256(byte), imm_to_u256(value)) & type_mask(ty);
     Some(Immediate::from_i256(I256::from(result), ty))
 }
 
@@ -1903,6 +1889,28 @@ func private %entry(v0.i256) {
             ),
             Some(Immediate::from_i256(I256::from(0x80u16), ty))
         );
+    }
+
+    /// Byte 30 extends bit 247; byte 31 would extend bit 255, which is the top bit already.
+    #[test]
+    fn fold_evm_signextend_of_top_bytes() {
+        let word = |value: U256| Immediate::from_i256(I256::from(value), Type::I256);
+        let byte = |byte: u8| word(U256::from(byte));
+        let top = U256::one() << 255;
+        let five = U256::from(5u8);
+        let cases = [
+            (30, top | five, five),
+            (30, U256::one() << 247, !U256::zero() << 247),
+            (31, five, five),
+            (31, top | five, top | five),
+        ];
+        for (index, value, expected) in cases {
+            assert_eq!(
+                fold_evm_signextend(byte(index), word(value)),
+                Some(word(expected)),
+                "signextend {index} {value:#x}"
+            );
+        }
     }
 
     #[test]
