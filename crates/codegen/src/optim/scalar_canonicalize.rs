@@ -230,6 +230,9 @@ fn canonicalize_binary_inst(
     lhs: ValueId,
     rhs: ValueId,
 ) -> Option<InstSpec> {
+    if let Some(rewrite) = cancel_common_operand(func, inst, kind, lhs, rhs) {
+        return Some(rewrite);
+    }
     if let Some(rewrite) = fold_bitwise_pair(func, inst, kind, lhs, rhs) {
         return Some(rewrite);
     }
@@ -343,11 +346,62 @@ fn canonicalize_binary_inst(
 
 // Keep matched intermediates local and single-use so rewriting removes work
 // without extending dependencies across block boundaries.
-fn local_bitwise_producer(func: &Function, root: InstId, value: ValueId) -> Option<InstId> {
+fn local_single_use_producer(func: &Function, root: InstId, value: ValueId) -> Option<InstId> {
     let producer = func.dfg.value_inst(value)?;
     (func.dfg.users_num(value) == 1
         && func.layout.inst_block(producer) == func.layout.inst_block(root))
     .then_some(producer)
+}
+
+/// Cancel identical injective operations on both sides of an equality test.
+fn cancel_common_operand(
+    func: &Function,
+    inst: InstId,
+    kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<InstSpec> {
+    use BinaryInstKind::{Add, Eq, Mul, Ne, Sub, Xor};
+    if !matches!(kind, Eq | Ne) || !func.dfg.value_ty(lhs).is_integral() {
+        return None;
+    }
+    let left = func.dfg.inst(local_single_use_producer(func, inst, lhs)?);
+    let right = func.dfg.inst(local_single_use_producer(func, inst, rhs)?);
+    let InstClassKind::Binary(op) = left.kind() else {
+        return None;
+    };
+    if right.kind() != left.kind() || !matches!(op, Add | Sub | Xor | Mul) {
+        return None;
+    }
+    let [a, b] = left.collect_values()[..] else {
+        return None;
+    };
+    let [c, d] = right.collect_values()[..] else {
+        return None;
+    };
+    let (key, x, y) = if a == c {
+        (a, b, d)
+    } else if b == d {
+        (b, a, c)
+    } else if op != Sub && a == d {
+        (a, b, c)
+    } else if op != Sub && b == c {
+        (b, a, d)
+    } else {
+        return None;
+    };
+    if op == Mul {
+        // Only odd factors are invertible modulo 2^width.
+        let k = func.dfg.value_imm(key)?;
+        if (k & Immediate::one(k.ty())).is_zero() {
+            return None;
+        }
+    }
+    Some(InstSpec::Binary {
+        kind,
+        lhs: Operand::Value(x),
+        rhs: Operand::Value(y),
+    })
 }
 
 fn fold_bitwise_pair(
@@ -361,8 +415,8 @@ fn fold_bitwise_pair(
     if !matches!(outer, And | Or | Xor) || !func.dfg.value_ty(lhs).is_integral() {
         return None;
     }
-    let left = local_bitwise_producer(func, inst, lhs)?;
-    let right = local_bitwise_producer(func, inst, rhs)?;
+    let left = local_single_use_producer(func, inst, lhs)?;
+    let right = local_single_use_producer(func, inst, rhs)?;
     let InstClassKind::Binary(a) = func.dfg.inst(left).kind() else {
         return None;
     };
@@ -1611,6 +1665,58 @@ block0:
             });
             let dumped = dump_func(&module, f);
             assert!(dumped.contains(retained), "{dumped}");
+        }
+    }
+
+    #[test]
+    fn equality_cancels_common_operands_only_for_injective_operations() {
+        for ty in ["i8", "i256"] {
+            let odd = format!("-3.{ty}");
+            let even = format!("6.{ty}");
+            for (op, common, left_first, right_first, cancels) in [
+                ("add", "v2", true, true, true),
+                ("add", "v2", false, true, true),
+                ("xor", "v2", true, false, true),
+                ("sub", "v2", true, true, true),
+                ("sub", "v2", false, false, true),
+                ("sub", "v2", true, false, false),
+                ("mul", odd.as_str(), false, true, true),
+                ("mul", even.as_str(), false, true, false),
+                ("mul", "v2", false, false, false),
+            ] {
+                let operands = |input: &str, first| {
+                    if first {
+                        format!("{common} {input}")
+                    } else {
+                        format!("{input} {common}")
+                    }
+                };
+                let left = operands("v0", left_first);
+                let right = operands("v1", right_first);
+                for comparison in ["eq", "ne", "lt"] {
+                    let source = format!(
+                        r#"target = "evm-ethereum-osaka"
+func public %f(v0.{ty}, v1.{ty}, v2.{ty}) -> i1 {{
+block0:
+ v3.{ty} = {op} {left};
+ v4.{ty} = {op} {right};
+ v5.i1 = {comparison} v3 v4;
+ return v5;
+}}"#
+                    );
+                    let (module, f) = parse_test_module(&source);
+                    module.func_store.modify(f, |func| {
+                        ScalarCanonicalize::new().run(func);
+                    });
+                    let dumped = dump_func(&module, f);
+                    if cancels && comparison != "lt" {
+                        assert!(dumped.contains(&format!("{comparison} v0 v1;")), "{dumped}");
+                        assert!(!dumped.contains(&format!(" = {op} ")), "{dumped}");
+                    } else {
+                        assert_eq!(dumped.matches(&format!(" = {op} ")).count(), 2, "{dumped}");
+                    }
+                }
+            }
         }
     }
 
