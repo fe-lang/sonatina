@@ -38,47 +38,114 @@ pub(super) fn duplicates<'a>(
         .enumerate()
         .map(|(index, &func_ref)| (func_ref, index))
         .collect();
-
-    // Each function's class is its first member. Functions start in one class
-    // per shape and split while their callees' classes differ, so recursive
-    // functions alike throughout stay together.
-    let mut first = HashMap::new();
-    let mut classes: Vec<usize> = shapes
-        .iter()
-        .enumerate()
-        .map(|(index, shape)| *first.entry(&shape.code).or_insert(index))
-        .collect();
-    loop {
-        let mut first = HashMap::new();
-        let next: Vec<usize> = shapes
-            .iter()
-            .enumerate()
-            .map(|(index, shape)| {
-                // A callee outside `functions` is only itself.
-                let callees: Vec<_> = shape
-                    .callees
-                    .iter()
-                    .map(|callee| {
-                        positions
-                            .get(callee)
-                            .map(|&callee| classes[callee])
-                            .ok_or(*callee)
-                    })
-                    .collect();
-                *first.entry((classes[index], callees)).or_insert(index)
-            })
-            .collect();
-        if next == classes {
-            break;
+    let mut callers = vec![Vec::new(); funcs.len()];
+    for (caller, shape) in shapes.iter().enumerate() {
+        for (slot, callee) in shape.callees.iter().enumerate() {
+            if let Some(&callee) = positions.get(callee) {
+                callers[callee].push((caller, slot));
+            }
         }
-        classes = next;
     }
 
-    classes
+    // Functions start in one class per shape and callees outside `functions`,
+    // which are only themselves, and split while the classes of their other
+    // callees differ, so recursive functions alike throughout stay together.
+    // Each round compares only the callers of the functions that changed
+    // class in the previous one, all of them at first, by those callees' new
+    // classes: the members of a class agreed before those changes, so callers
+    // alike in them stay together, and apart from the members not compared,
+    // which call older classes there. The largest part of a class keeps it,
+    // so a function changes class at most 1 + log2 n times, and the
+    // refinement takes O((n + m) log² n) for n functions and m calls between
+    // them.
+    let mut ids = HashMap::new();
+    let mut classes: Vec<usize> = shapes
+        .iter()
+        .map(|shape| {
+            let outside: Vec<_> = shape
+                .callees
+                .iter()
+                .map(|callee| (!positions.contains_key(callee)).then_some(*callee))
+                .collect();
+            let id = ids.len();
+            *ids.entry((&shape.code, outside)).or_insert(id)
+        })
+        .collect();
+    let mut members = vec![Vec::new(); ids.len()];
+    let mut places: Vec<usize> = classes
         .iter()
         .enumerate()
-        .filter(|&(index, &class)| index != class)
-        .map(|(index, &class)| (funcs[index], funcs[class]))
+        .map(|(index, &class)| {
+            members[class].push(index);
+            members[class].len() - 1
+        })
+        .collect();
+    let mut changes = vec![Vec::new(); funcs.len()];
+    let mut moved: Vec<usize> = (0..funcs.len()).collect();
+    loop {
+        let mut compared = Vec::new();
+        for callee in moved.drain(..) {
+            for &(caller, slot) in &callers[callee] {
+                if changes[caller].is_empty() {
+                    compared.push(caller);
+                }
+                changes[caller].push((slot, classes[callee]));
+            }
+        }
+        if compared.is_empty() {
+            break;
+        }
+        let mut keys: Vec<_> = compared
+            .into_iter()
+            .map(|index| {
+                let mut slots = mem::take(&mut changes[index]);
+                slots.sort_unstable();
+                (classes[index], slots, index)
+            })
+            .collect();
+        keys.sort_unstable();
+        for split in keys.chunk_by(|a, b| a.0 == b.0) {
+            // Each group of alike callers leaves for a part of its own.
+            let class = split[0].0;
+            let mut parts = Vec::new();
+            for group in split.chunk_by(|a, b| a.1 == b.1) {
+                let part = members.len();
+                members.push(Vec::new());
+                for &(_, _, index) in group {
+                    let place = places[index];
+                    members[class].swap_remove(place);
+                    if let Some(&other) = members[class].get(place) {
+                        places[other] = place;
+                    }
+                    places[index] = members[part].len();
+                    members[part].push(index);
+                    classes[index] = part;
+                }
+                parts.push(part);
+            }
+            if let Some(&largest) = parts.iter().max_by_key(|&&part| members[part].len())
+                && members[largest].len() > members[class].len()
+            {
+                members.swap(class, largest);
+                for &index in &members[class] {
+                    classes[index] = class;
+                }
+                for &index in &members[largest] {
+                    classes[index] = largest;
+                }
+            }
+            moved.extend(parts.iter().flat_map(|&part| &members[part]));
+        }
+    }
+
+    let mut first = HashMap::new();
+    funcs
+        .iter()
+        .zip(&classes)
+        .filter_map(|(&func_ref, &class)| {
+            let first = *first.entry(class).or_insert(func_ref);
+            (first != func_ref).then_some((func_ref, first))
+        })
         .collect()
 }
 
@@ -216,6 +283,105 @@ mod tests {
             });
             builder.ins().symbol_value(types::I64, symbol)
         })
+    }
+
+    /// What the function of index `callee` returns, plus `addend`.
+    fn call(callee: u32, addend: i64) -> Context {
+        compile(types::I64, |builder| {
+            let signature = builder.func.signature.clone();
+            let signature = builder.import_signature(signature);
+            let name = builder
+                .func
+                .declare_imported_user_function(UserExternalName::new(FUNC_NAMESPACE, callee));
+            let callee = builder.import_function(clif::ExtFuncData {
+                name: ExternalName::user(name),
+                signature,
+                colocated: true,
+                patchable: false,
+            });
+            let call = builder.ins().call(callee, &[]);
+            let value = builder.inst_results(call)[0];
+            builder.ins().iadd_imm_s(value, addend)
+        })
+    }
+
+    /// The duplicates of `functions`, each the function of its index, by
+    /// index.
+    fn duplicate_indices(functions: &[Context]) -> Vec<(u32, u32)> {
+        let mut duplicates: Vec<_> = duplicates(
+            functions
+                .iter()
+                .zip(0..)
+                .map(|(ctx, index)| (FuncRef::from_u32(index), ctx)),
+        )
+        .into_iter()
+        .map(|(duplicate, first)| (duplicate.as_u32(), first.as_u32()))
+        .collect();
+        duplicates.sort_unstable();
+        duplicates
+    }
+
+    #[test]
+    fn chains_of_calls_fold_where_their_ends_do() {
+        // Three chains of calls alike but for the callee: the last two end
+        // in the same constant and fold link by link, the first ends in
+        // another and stays apart all the way up. The last function has the
+        // links' code and calls itself, so it is like none of them.
+        const LINKS: u32 = 8;
+        let chain = LINKS + 1;
+        let mut functions: Vec<_> = [1, 2, 2]
+            .into_iter()
+            .zip((0..).step_by(chain as usize))
+            .flat_map(|(end, start)| {
+                (start + 1..=start + LINKS)
+                    .map(|callee| call(callee, 1))
+                    .chain([compile(types::I64, |builder| {
+                        builder.ins().iconst(types::I64, end)
+                    })])
+            })
+            .collect();
+        functions.push(call(3 * chain, 1));
+        assert_eq!(
+            duplicate_indices(&functions),
+            (2 * chain..3 * chain)
+                .map(|index| (index, index - chain))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn recursive_functions_alike_throughout_fold() {
+        // A cycle of three calls alike throughout is one function, as are a
+        // pair and a function calling into the cycle. In a cycle of three
+        // with one member adding another number the members differ, and its
+        // twin folds into it member by member.
+        let functions = [
+            call(1, 1),
+            call(2, 1),
+            call(0, 1),
+            call(4, 1),
+            call(3, 1),
+            call(6, 1),
+            call(7, 1),
+            call(5, 2),
+            call(9, 1),
+            call(10, 1),
+            call(8, 2),
+            call(0, 1),
+        ];
+        assert_eq!(
+            duplicate_indices(&functions),
+            [
+                (1, 0),
+                (2, 0),
+                (3, 0),
+                (4, 0),
+                (8, 5),
+                (9, 6),
+                (10, 7),
+                (11, 0)
+            ]
+        );
     }
 
     #[test]
