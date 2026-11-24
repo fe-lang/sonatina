@@ -28,7 +28,7 @@ use crate::{
     cfg_edit::CfgEditor,
     cfg_scc::CfgSccAnalysis,
     domtree::{DomTree, DominatorTreeTraversable},
-    object::lowering::StepKind,
+    object::lowering::{StepFacts, StepKind},
     optim::{
         adce::divergent_blocks,
         aggregate::{CarrierSource, ObjectMemoryAnalysis, ObjectReadGvnKey},
@@ -444,7 +444,7 @@ impl GvnSolver {
 
         // Remove redundant insn and unreachable block.
         let mut remover = RedundantCodeRemover::new(self);
-        remover.remove_redundant_code(func, cfg, domtree, object_memory, steps)
+        remover.remove_redundant_code(func, cfg, domtree, object_memory, &known_bits, steps)
     }
 
     /// Clear all internal data of the solver.
@@ -2384,12 +2384,24 @@ impl<'a> RedundantCodeRemover<'a> {
         cfg: &mut ControlFlowGraph,
         domtree: &mut DomTree,
         object_memory: Option<&ObjectMemoryAnalysis>,
+        known_bits: &KnownBitsQuery,
         mut steps: Option<&mut StepLog>,
     ) -> bool {
+        // The solver's facts, of the function it solved and still of the
+        // function edge removal leaves.
+        let recording = steps.is_some();
+        let facts = |func: &Function| {
+            recording.then(|| StepFacts {
+                known_bits: known_bits.export(func),
+                ..StepFacts::default()
+            })
+        };
         // Remove unreachable edges and blocks before redundant code removal to calculate precise
         // dominator tree.
+        let prune_facts = facts(func);
         self.changed |= self.remove_unreachable_edges(func);
-        StepLog::step(&mut steps, StepKind::GvnPrune, func, None);
+        StepLog::step(&mut steps, StepKind::GvnPrune, func, prune_facts);
+        let rewrite_facts = facts(func);
 
         // Recompute cfg and domtree.
         cfg.compute(func);
@@ -2422,7 +2434,7 @@ impl<'a> RedundantCodeRemover<'a> {
                 self.changed = true;
             }
         }
-        StepLog::step(&mut steps, StepKind::GvnRewrite, func, None);
+        StepLog::step(&mut steps, StepKind::GvnRewrite, func, rewrite_facts);
         self.changed
     }
 

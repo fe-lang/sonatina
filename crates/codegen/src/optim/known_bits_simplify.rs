@@ -17,7 +17,7 @@ use crate::{
     },
     domtree::DomTree,
     loop_analysis::LoopTree,
-    object::lowering::StepKind,
+    object::lowering::{StepFacts, StepKind},
     range_analysis::{RangeAnalysis, RangeEnv, RangeFact, fact_for_value},
 };
 
@@ -101,8 +101,7 @@ impl KnownBitsSimplify {
     ) -> bool {
         let mut changed = false;
         loop {
-            let (round_changed, deferred) = self.run_round(func);
-            StepLog::step(&mut steps, StepKind::KnownBitsSimplify, func, None);
+            let (round_changed, deferred) = self.run_round(func, steps.as_deref_mut());
             changed |= round_changed;
             if !deferred {
                 return changed;
@@ -113,7 +112,7 @@ impl KnownBitsSimplify {
     /// One round of rewrites from the same facts. Returns whether it changed
     /// `func`, and whether it left rewrites from demanded bits for a round
     /// with fresh facts.
-    fn run_round(&mut self, func: &mut Function) -> (bool, bool) {
+    fn run_round(&mut self, func: &mut Function, mut steps: Option<&mut StepLog>) -> (bool, bool) {
         self.plans.clear();
         self.demand_plans.clear();
 
@@ -172,6 +171,17 @@ impl KnownBitsSimplify {
             }
         }
 
+        let deferred = !self.plans.is_empty() && !self.demand_plans.is_empty();
+        // Rewrites from demanded bits apply only in a round without others.
+        let from_demand = self.plans.is_empty() && !self.demand_plans.is_empty();
+        if self.plans.is_empty() {
+            std::mem::swap(&mut self.plans, &mut self.demand_plans);
+        }
+        let facts = steps.is_some().then(|| StepFacts {
+            known_bits: scalar_facts.known_bits.export(func),
+            demanded_bits: from_demand.then(|| scalar_facts.demanded_bits.export()),
+        });
+
         // These replacements retain the dividend and its full value semantics.
         // Later aliases therefore update their operands just like other users.
         let divided = !divisions.is_empty();
@@ -190,14 +200,7 @@ impl KnownBitsSimplify {
             mask_shift_count(func, inst, count, mask);
         }
 
-        let deferred = !self.plans.is_empty() && !self.demand_plans.is_empty();
-        if self.plans.is_empty() {
-            std::mem::swap(&mut self.plans, &mut self.demand_plans);
-        }
-        if self.plans.is_empty() {
-            return (masked || divided, false);
-        }
-
+        let changed = masked || divided || !self.plans.is_empty();
         let resolved = resolve_replacements(&self.plans);
         for &plan in &self.plans {
             apply_plan(func, plan, &resolved);
@@ -206,8 +209,9 @@ impl KnownBitsSimplify {
         for plan in self.plans.drain(..) {
             remove_rewritten_inst(func, plan);
         }
+        StepLog::step(&mut steps, StepKind::KnownBitsSimplify, func, facts);
 
-        (true, deferred)
+        (changed, deferred)
     }
 
     fn plan_inst(

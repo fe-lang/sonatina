@@ -136,6 +136,24 @@ impl KnownBitsQuery {
         self.known_of(func, value)
     }
 
+    /// The known bits of each instruction result in the layout of `func` of
+    /// which any are known, as `(value, known_zero, known_one)`.
+    pub(crate) fn export(&self, func: &Function) -> Vec<(ValueId, U256, U256)> {
+        func.layout
+            .iter_block()
+            .flat_map(|block| func.layout.iter_inst(block))
+            .flat_map(|inst| func.dfg.inst_results(inst))
+            .filter_map(|&value| {
+                let known = self.for_value(func, value);
+                (known != KnownBits::unknown(func.dfg.value_ty(value))).then_some((
+                    value,
+                    known.known_zero,
+                    known.known_one,
+                ))
+            })
+            .collect()
+    }
+
     pub fn is_known_zero(&self, func: &Function, value: ValueId) -> bool {
         let ty = self.value_ty(func, value);
         supports_known_bits(ty) && self.for_value(func, value).all_zero_in(type_mask(ty))

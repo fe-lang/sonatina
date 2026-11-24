@@ -1,7 +1,8 @@
 //! The record of the machine stage (`SectionLowering::machine_steps`): the
 //! steps compose to the machine IR the code is emitted from, every snapshot
 //! names each instruction once and keeps the instruction of each value, the
-//! record is the same in every compilation, and recording it changes no byte.
+//! facts of a step name values of its input and hold of it, the record is the
+//! same in every compilation, and recording it changes no byte.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,9 +10,10 @@ use dir_test::{Fixture, dir_test};
 use rayon::ThreadPoolBuilder;
 use sonatina_codegen::{
     EvmCompile, OptLevel,
+    analysis::known_bits::KnownBitsQuery,
     object::{
         ObjectArtifact,
-        lowering::{FuncSnap, MachinePassKind, MachineSteps, SectionLowering},
+        lowering::{FuncSnap, MachinePassKind, MachineSteps, SectionLowering, StepFacts},
     },
 };
 use sonatina_parser::parse_module;
@@ -107,15 +109,74 @@ fn check_snap(snap: &FuncSnap, defs: &mut BTreeMap<u32, u32>) {
     }
 }
 
+/// The values instruction lines of a function's text define.
+fn func_values(text: &str) -> BTreeSet<u32> {
+    block_lines(text)
+        .iter()
+        .flat_map(|(_, lines)| lines.iter().flat_map(|line| defined_values(line)))
+        .collect()
+}
+
+/// The facts of a step name values of its input,
+/// and its known bits are no more than the
+/// analysis finds of the input, parsed in the section's machine IR
+/// (`machine`) in place of the function's final text (`last`).
+fn check_facts(input: &FuncSnap, facts: &StepFacts, machine: &str, last: &str) {
+    let name = input.func.as_str();
+    let values = func_values(&input.text);
+    let demanded = facts.demanded_bits.iter().flatten();
+    for value in facts
+        .known_bits
+        .iter()
+        .map(|(value, ..)| value)
+        .chain(demanded.map(|(value, _)| value))
+    {
+        assert!(
+            values.contains(&value.as_u32()),
+            "{name}: a fact of v{} not defined in the step input",
+            value.as_u32()
+        );
+    }
+    if facts.known_bits.is_empty() {
+        return;
+    }
+    let parsed = parse_module(&machine.replace(last, &input.text)).expect("a step input parses");
+    let func = parsed
+        .module
+        .funcs()
+        .into_iter()
+        .find(|&func| parsed.module.ctx.func_sig(func, |sig| sig.name() == name))
+        .unwrap();
+    parsed.module.func_store.view(func, |function| {
+        let known = KnownBitsQuery::new(function);
+        for &(value, known_zero, known_one) in &facts.known_bits {
+            let parsed_value = parsed
+                .debug
+                .value(func, &format!("v{}", value.as_u32()))
+                .unwrap();
+            let bits = known.for_value(function, parsed_value);
+            assert!(
+                bits.known_zero & known_zero == known_zero
+                    && bits.known_one & known_one == known_one,
+                "{name}: v{} is claimed {known_zero:#x}/{known_one:#x}, analysis finds {:#x}/{:#x}",
+                value.as_u32(),
+                bits.known_zero,
+                bits.known_one
+            );
+        }
+    });
+}
+
 /// Composing `lowered` with the steps gives the functions of `machine_ir`,
-/// every snapshot passes `check_snap`, and the passes that read function
-/// behavior list it for every function of the section.
+/// every snapshot passes `check_snap`, the facts of each step pass
+/// `check_facts`, and the passes that read function behavior list it for
+/// every function of the section.
 fn check_steps(lowering: &SectionLowering) {
     let steps = &lowering.machine_steps;
     let mut current: BTreeMap<_, _> = steps
         .lowered
         .iter()
-        .map(|snap| (snap.func.as_str(), &snap.text))
+        .map(|snap| (snap.func.as_str(), snap))
         .collect();
     let mut defs: BTreeMap<_, BTreeMap<_, _>> = BTreeMap::new();
     for snap in &steps.lowered {
@@ -153,13 +214,14 @@ fn check_steps(lowering: &SectionLowering) {
             assert!(!step.funcs.is_empty(), "{:?}: an empty step", pass.kind);
             for func in &step.funcs {
                 let name = func.out.func.as_str();
-                let text = current.get_mut(name).expect("a function of the section");
+                let input = current.get_mut(name).expect("a function of the section");
                 assert_ne!(
-                    *text, &func.out.text,
+                    input.text, func.out.text,
                     "{name}: {:?} lists it unchanged",
                     step.kind
                 );
-                *text = &func.out.text;
+                check_facts(input, &func.facts, &lowering.machine_ir, &machine[name]);
+                *input = &func.out;
                 check_snap(&func.out, defs.get_mut(name).unwrap());
             }
         }
@@ -168,8 +230,8 @@ fn check_steps(lowering: &SectionLowering) {
         current.keys().collect::<Vec<_>>(),
         machine.keys().collect::<Vec<_>>()
     );
-    for (name, text) in current {
-        assert_eq!(text, &machine[name], "{name}: the composed steps");
+    for (name, snap) in current {
+        assert_eq!(snap.text, machine[name], "{name}: the composed steps");
     }
 }
 

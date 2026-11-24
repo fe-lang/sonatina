@@ -32,6 +32,21 @@ impl<'a> DemandedBitsQuery<'a> {
         self.demanded[value] & type_mask(ty)
     }
 
+    /// The demanded bits of each instruction result in the function's
+    /// layout of which any are demanded.
+    pub(crate) fn export(&self) -> Vec<(ValueId, U256)> {
+        let layout = &self.func.layout;
+        layout
+            .iter_block()
+            .flat_map(|block| layout.iter_inst(block))
+            .flat_map(|inst| self.func.dfg.inst_results(inst))
+            .filter_map(|&value| {
+                let demanded = self.for_value(value);
+                (!demanded.is_zero()).then_some((value, demanded))
+            })
+            .collect()
+    }
+
     pub fn all_uses_within_mask(&self, value: ValueId, mask: U256) -> bool {
         self.for_value(value) & !mask == U256::zero()
     }

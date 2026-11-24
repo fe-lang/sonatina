@@ -18,7 +18,7 @@
 //! names them, values and blocks by their ids in the text of their module
 //! (`v12`, `block3`).
 
-use sonatina_ir::{BlockId, Immediate, InstId, ValueId, module::FuncRef};
+use sonatina_ir::{BlockId, Immediate, InstId, U256, ValueId, module::FuncRef};
 
 use super::SymbolDef;
 use crate::isa::evm::LateCleanupProfile;
@@ -161,8 +161,19 @@ pub struct FuncStep {
     pub facts: StepFacts,
 }
 
+/// The facts of a step, of the function before it. A value without a fact
+/// is unknown, except as `demanded_bits` says.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct StepFacts {}
+pub struct StepFacts {
+    /// `(value, known_zero, known_one)`: the bits of the value known to be
+    /// zero and known to be one, for `KnownBitsSimplify`, `SccpPrune`,
+    /// `SccpFold`, `GvnPrune` and `GvnRewrite`.
+    pub known_bits: Vec<(ValueId, U256, U256)>,
+    /// The bits of each value its uses read, for a `KnownBitsSimplify` round
+    /// that rewrote values whose uses read only bits the rewrite keeps. A
+    /// value not listed has no bit read.
+    pub demanded_bits: Option<Vec<(ValueId, U256)>>,
+}
 
 /// A function of the machine module at one point of the machine stage.
 #[derive(Debug, Clone, PartialEq, Eq)]

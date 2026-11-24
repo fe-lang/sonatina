@@ -29,8 +29,11 @@ use super::{
     sccp_simplify::{AuxDeps, SimplifyAction, SimplifyCtx, simplify_inst},
 };
 use crate::{
-    analysis::known_bits::KnownBitsQuery, cfg_edit::CfgEditor, object::lowering::StepKind,
-    optim::steps::StepLog, transform::aggregate::fresh::fold_fresh_insert,
+    analysis::known_bits::KnownBitsQuery,
+    cfg_edit::CfgEditor,
+    object::lowering::{StepFacts, StepKind},
+    optim::steps::StepLog,
+    transform::aggregate::fresh::fold_fresh_insert,
 };
 
 #[derive(Debug)]
@@ -131,8 +134,12 @@ impl SccpSolver {
         #[cfg(debug_assertions)]
         self.assert_no_executable_inst_results_are_bot(func);
 
+        let facts = steps.is_some().then(|| StepFacts {
+            known_bits: solve_known_bits.export(func),
+            ..StepFacts::default()
+        });
         let edges_removed = self.remove_unreachable_edges(func);
-        StepLog::step(&mut steps, StepKind::SccpPrune, func, None);
+        StepLog::step(&mut steps, StepKind::SccpPrune, func, facts);
         changed |= edges_removed;
         cfg.compute(func);
         // Solving only reads the function, so its known bits still hold
@@ -142,8 +149,12 @@ impl SccpSolver {
         } else {
             solve_known_bits
         };
+        let facts = steps.is_some().then(|| StepFacts {
+            known_bits: fold_known_bits.export(func),
+            ..StepFacts::default()
+        });
         changed |= self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
-        StepLog::step(&mut steps, StepKind::SccpFold, func, None);
+        StepLog::step(&mut steps, StepKind::SccpFold, func, facts);
 
         changed |= CfgCleanup::new().run(func);
         StepLog::step(&mut steps, StepKind::CfgCleanup, func, None);

@@ -4,11 +4,12 @@ use crate::{
     domtree::DomTree,
     isa::evm::test_util::osaka_triple,
     loop_analysis::LoopTree,
+    object::lowering::MachinePassKind,
     optim::{gvn::GvnSolver, known_bits_simplify::KnownBitsSimplify},
     range_analysis::{RangeAnalysis, RangeFact},
 };
 use sonatina_ir::{
-    ControlFlowGraph, I256, Immediate, Linkage, Signature, Type,
+    ControlFlowGraph, I256, Immediate, Linkage, Module, Signature, Type, U256, ValueId,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
@@ -24,7 +25,7 @@ use sonatina_ir::{
         Isa,
         evm::{Evm, EvmMachine},
     },
-    module::ModuleCtx,
+    module::{FuncRef, ModuleCtx},
 };
 use sonatina_parser::parse_module;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_function};
@@ -33,6 +34,7 @@ use super::{
     super::{LateCleanupProfile, SwitchLoweringStrategy},
     branch::canonicalize_machine_branch_conditions,
     pipeline::run_machine_opt_pipeline,
+    record::MachineRecorder,
     switch::lower_switches,
     verify::verify_machine_function,
 };
@@ -458,8 +460,8 @@ fn machine_gvn_folds_word_bool_constant_without_zext() {
     });
 }
 
-#[test]
-fn machine_known_bits_drops_mask_on_mstore8_value() {
+/// `mstore8 addr (and value 255)`, of the arguments `addr` and `value`.
+fn mstore8_mask_module() -> (Module, FuncRef) {
     let mb = machine_builder();
     let func_ref = mb
         .declare_function(Signature::new(
@@ -483,8 +485,12 @@ fn machine_known_bits_drops_mask_on_mstore8_value() {
     builder.insert_inst_no_result(Return::new_unit(is));
     builder.seal_all();
     builder.finish();
+    (mb.build(), func_ref)
+}
 
-    let module = mb.build();
+#[test]
+fn machine_known_bits_drops_mask_on_mstore8_value() {
+    let (module, func_ref) = mstore8_mask_module();
     run_machine_opt_pipeline(
         &module,
         &[func_ref],
@@ -498,6 +504,50 @@ fn machine_known_bits_drops_mask_on_mstore8_value() {
         let dumped = FuncWriter::new(func_ref, function).dump_string();
         assert!(!dumped.contains(" and "), "{dumped}");
     });
+}
+
+/// The round that drops the mask relies on `mstore8` reading only the low
+/// byte of the mask.
+#[test]
+fn machine_steps_record_demanded_bits_of_dropped_mask() {
+    let (module, func_ref) = mstore8_mask_module();
+    let mut recorder = MachineRecorder::new(&module, &[func_ref], LateCleanupProfile::Speed);
+    run_machine_opt_pipeline(
+        &module,
+        &[func_ref],
+        LateCleanupProfile::Speed,
+        SwitchLoweringStrategy::Auto,
+        16,
+        Some(&mut recorder),
+    )
+    .expect("machine pipeline should run");
+    let steps = recorder.finish();
+    let pass = steps
+        .passes
+        .iter()
+        .find(|pass| pass.kind == MachinePassKind::KnownBitsSimplify)
+        .unwrap();
+    let [step] = &pass.steps[..] else {
+        panic!("one round drops the mask: {:?}", pass.steps);
+    };
+    let [func] = &step.funcs[..] else {
+        panic!("the round changes the function");
+    };
+    let masked = steps.lowered[0]
+        .text
+        .lines()
+        .find(|line| line.contains(" = and "));
+    let masked = masked.unwrap().trim().strip_prefix('v').unwrap();
+    let masked = ValueId(masked.split('.').next().unwrap().parse().unwrap());
+    let demanded = func
+        .facts
+        .demanded_bits
+        .as_ref()
+        .expect("a round from demanded bits");
+    assert!(
+        demanded.contains(&(masked, U256::from(255))),
+        "{demanded:?}"
+    );
 }
 
 #[test]
