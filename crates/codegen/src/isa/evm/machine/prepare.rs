@@ -21,7 +21,7 @@ use super::{
         memory_plan::MachineStackifyAnalysis,
     },
     placement::EvmMemoryPlacementPlan,
-    verify::verify_machine_module,
+    verify::verify_machine_function,
 };
 
 const SECTION_SEARCH_PLAN_CACHE_CAP: usize = 16_384;
@@ -73,7 +73,6 @@ pub(crate) fn prepare_machine_stackify_analyses(
     allocation_addrs: &FxHashMap<FuncRef, BitSet<ValueId>>,
     search_caches: &Mutex<SectionStackifySearchCaches>,
 ) -> Result<FxHashMap<FuncRef, MachineStackifyAnalysis>, String> {
-    verify_machine_module(module, schedule.funcs())?;
     let _span = debug_span!("sonatina.codegen.evm.machine.prepare_stackify").entered();
     let fixed_slots =
         FixedSlotSummaries::compute(module, schedule, placement.arena_base, allocation_addrs);
@@ -94,31 +93,33 @@ pub(crate) fn prepare_machine_stackify_analyses(
             .as_ref()
             .unwrap_or(&scratch_arena_effects);
 
-        let mut scc_results: Vec<_> =
-            sonatina_ir::parallel::map(&module.func_store, components, |&func| {
-                let mut search_cache = search_caches.lock().unwrap().take(func);
-                let analysis = module.func_store.modify(func, |function| {
-                    prepare_machine_stackify_analysis(
-                        function,
-                        func,
-                        backend,
-                        &fixed_slots,
-                        &slot_writes,
-                        analysis_scratch_arena_effects,
-                        &mut search_cache,
-                    )
-                });
-                search_caches.lock().unwrap().retain(func, search_cache);
-                let local_slot_writes = fixed_slots.local_writes(func, &analysis.alloc);
-                // Optional final spills may be assigned to the shared arena after
-                // stackification. Account for them before analyzing callers, even on
-                // the first placement iteration when no reserve exists yet.
-                let may_use_arena_spills = analysis
-                    .alloc
-                    .object_spills()
-                    .any(|(value, _)| !analysis.stable_final_spill_values.contains(value));
-                (func, analysis, local_slot_writes, may_use_arena_spills)
+        let mut scc_results = sonatina_ir::parallel::map(&module.func_store, components, |&func| {
+            let mut search_cache = search_caches.lock().unwrap().take(func);
+            let analysis = module.func_store.modify(func, |function| {
+                prepare_machine_stackify_analysis(
+                    function,
+                    func,
+                    backend,
+                    &fixed_slots,
+                    &slot_writes,
+                    analysis_scratch_arena_effects,
+                    &mut search_cache,
+                )
             });
+            search_caches.lock().unwrap().retain(func, search_cache);
+            let analysis = analysis?;
+            let local_slot_writes = fixed_slots.local_writes(func, &analysis.alloc);
+            // Optional final spills may be assigned to the shared arena after
+            // stackification. Account for them before analyzing callers, even on
+            // the first placement iteration when no reserve exists yet.
+            let may_use_arena_spills = analysis
+                .alloc
+                .object_spills()
+                .any(|(value, _)| !analysis.stable_final_spill_values.contains(value));
+            Ok((func, analysis, local_slot_writes, may_use_arena_spills))
+        })
+        .into_iter()
+        .collect::<Result<Vec<_>, String>>()?;
         scc_results.sort_unstable_by_key(|(func, ..)| func.as_u32());
 
         // Callees in this SCC are its members; the rest are analyzed already.
@@ -162,7 +163,7 @@ fn prepare_machine_stackify_analysis(
     slot_writes: &FxHashMap<FuncRef, SlotBytes>,
     scratch_arena_effects: &FxHashSet<FuncRef>,
     search_cache: &mut StackifySearchCache,
-) -> MachineStackifyAnalysis {
+) -> Result<MachineStackifyAnalysis, String> {
     let _span = trace_span!("sonatina.codegen.evm.machine.prepare_stackify_func").entered();
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
@@ -171,6 +172,8 @@ fn prepare_machine_stackify_analysis(
     // multiway edges, establishing stackify's edge preconditions (see `stackalloc::stackify`).
     // Split first, then compute domtree/liveness over the post-split CFG below.
     StackifyEdgeSplitter::run(function, &mut cfg);
+    // The split is the last change to the function before emission, which verifies it again.
+    verify_machine_function(func, function)?;
 
     let mut dom = DomTree::new();
     dom.compute(&cfg);
@@ -222,9 +225,9 @@ fn prepare_machine_stackify_analysis(
         (builder.compute_with_search_cache(search_cache), None)
     };
 
-    MachineStackifyAnalysis {
+    Ok(MachineStackifyAnalysis {
         alloc,
         stable_final_spill_values,
         trace,
-    }
+    })
 }
