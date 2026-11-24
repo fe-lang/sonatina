@@ -1206,7 +1206,8 @@ impl GvnSolver {
         let mut gvn_insn = GvnInsn::expr(inst_to_gvn_key(func, inst), result_idx);
         let mut expected_true = edge_truth;
 
-        // Canonicalize predicates by peeling `not` and mapping `ne == false` to `eq`.
+        // Canonicalize predicates by peeling `not` and mapping `ne == false` to `eq`. Only an
+        // `i1` `not` is a logical not: a word `not` is zero only when its operand is all ones.
         for _ in 0..16 {
             let (insn_expr, result_idx) = gvn_insn.expr_parts()?;
 
@@ -1221,6 +1222,7 @@ impl GvnSolver {
 
             if matches!(insn_expr.kind(), InstClassKind::Unary(UnaryInstKind::Not))
                 && let Some(arg) = insn_expr.unary_arg()
+                && func.dfg.value_ty(arg) == Type::I1
                 && let Some((inner_inst, inner_result_idx)) = func.dfg.value_inst_result(arg)
             {
                 gvn_insn = GvnInsn::expr(inst_to_gvn_key(func, inner_inst), inner_result_idx);
