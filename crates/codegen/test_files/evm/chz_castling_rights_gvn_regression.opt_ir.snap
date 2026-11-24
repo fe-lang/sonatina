@@ -53,9 +53,9 @@ func private %main_root() {
         mstore v152 v160 i256;
         v161.i8 = mload v150 i8;
         (v162.i8, v163.i1) = umulo v161 8.i8;
-        br v163 block38 block41;
+        br v163 block38 block40;
 
-    block41:
+    block40:
         v169.i256 = zext v162 i256;
         v170.i256 = shl 2.i256 v169;
         v171.i256 = shr v170 24736182426257386421843701014581903457152858201991735900572260061420060676.i256;
@@ -158,9 +158,9 @@ func private %main_root() {
         jump block83;
 
     block83:
-        v399.i256 = phi (0.i256 block81) (512.i256 block82) (0.i256 block84);
+        v400.i256 = phi (0.i256 block81) (512.i256 block82) (0.i256 block84);
         v328.i256 = and v307 -130561.i256;
-        v332.i256 = or v328 v399;
+        v332.i256 = or v328 v400;
         v333.i256 = and v332 -8589803521.i256;
         v336.i256 = or v333 262144.i256;
         v338.i256 = and v336 -2.i256;
