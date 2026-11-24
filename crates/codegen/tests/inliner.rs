@@ -1077,6 +1077,222 @@ func public %caller(v0.i1, v1.i32) -> i32 {
     assert_eq!(stats.skipped_budget, 0);
 }
 
+/// `%forced` is inlined into `%mid`, then `%mid` into `%top`; with
+/// `%forced` calling `%leaf`, `%leaf` is inlined into `%forced` first.
+fn forced_depth_module(forced_calls_leaf: bool) -> String {
+    let forced_body = if forced_calls_leaf {
+        "v1.i32 = call %leaf v0;"
+    } else {
+        "v1.i32 = add v0 1.i32;"
+    };
+    format!(
+        r#"
+target = "evm-ethereum-london"
+
+func private %leaf(v0.i32) -> i32 {{
+    block0:
+        v1.i32 = add v0 1.i32;
+        return v1;
+}}
+
+func inline(always) private %forced(v0.i32) -> i32 {{
+    block0:
+        {forced_body}
+        return v1;
+}}
+
+func private %mid(v0.i32) -> i32 {{
+    block0:
+        v1.i32 = call %forced v0;
+        v2.i32 = mul v1 3.i32;
+        return v2;
+}}
+
+func public %top(v0.i32) -> i32 {{
+    block0:
+        v1.i32 = call %mid v0;
+        return v1;
+}}
+"#
+    )
+}
+
+#[test]
+fn full_inliner_forced_inlines_add_no_inline_depth() {
+    let mut parsed = sonatina_parser::parse_module(&forced_depth_module(false))
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let cfg = InlinerConfig {
+        max_inline_depth: 1,
+        ..full_only_inliner_test_config()
+    };
+    Inliner::new(cfg).run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %forced") && !dumped.contains("call %mid"),
+        "inlining %forced should leave %mid within the depth limit:\n{dumped}"
+    );
+}
+
+#[test]
+fn full_inliner_forced_inlines_carry_their_callees_depth() {
+    let mut parsed = sonatina_parser::parse_module(&forced_depth_module(true))
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let cfg = InlinerConfig {
+        max_inline_depth: 1,
+        ..full_only_inliner_test_config()
+    };
+    Inliner::new(cfg).run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %leaf") && !dumped.contains("call %forced"),
+        "%leaf and %forced should be inlined:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("call %mid"),
+        "%mid holds %leaf's level through %forced, at the depth limit:\n{dumped}"
+    );
+}
+
+#[test]
+fn full_inliner_forced_inlines_between_ordinary_ones_keep_the_cap() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %leaf(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 1.i32;
+        return v1;
+}
+
+func inline(always) private %f2(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %leaf v0;
+        return v1;
+}
+
+func private %m2(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %f2 v0;
+        v2.i32 = mul v1 3.i32;
+        return v2;
+}
+
+func inline(always) private %f1(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %m2 v0;
+        return v1;
+}
+
+func private %m1(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %f1 v0;
+        v2.i32 = mul v1 5.i32;
+        return v2;
+}
+
+func public %top(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %m1 v0;
+        return v1;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let cfg = InlinerConfig {
+        max_inline_depth: 2,
+        ..full_only_inliner_test_config()
+    };
+    Inliner::new(cfg).run(module);
+    assert_module_verified(module);
+
+    // `%leaf` and `%m2` are the two ordinary levels the limit allows; `%m1`
+    // would be a third.
+    let dumped = dump_module(module);
+    assert!(
+        ["leaf", "f2", "m2", "f1"]
+            .iter()
+            .all(|name| !dumped.contains(&format!("call %{name} "))),
+        "every call below %m1 should be inlined:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("call %m1"),
+        "%m1 holds two ordinary levels, at the depth limit:\n{dumped}"
+    );
+}
+
+#[test]
+fn full_inliner_forced_inlines_keep_a_deeper_callers_depth() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %leaf(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 1.i32;
+        return v1;
+}
+
+func private %deep(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %leaf v0;
+        v2.i32 = mul v1 3.i32;
+        return v2;
+}
+
+func inline(always) private %forced(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 7.i32;
+        return v1;
+}
+
+func private %mid(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %deep v0;
+        v2.i32 = call %forced v1;
+        return v2;
+}
+
+func public %top(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %mid v0;
+        return v1;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let cfg = InlinerConfig {
+        max_inline_depth: 2,
+        ..full_only_inliner_test_config()
+    };
+    Inliner::new(cfg).run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %leaf")
+            && !dumped.contains("call %deep")
+            && !dumped.contains("call %forced"),
+        "%leaf, %deep and %forced should be inlined:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("call %mid"),
+        "inlining the shallower %forced after %deep should leave %mid at the limit:\n{dumped}"
+    );
+}
+
 #[test]
 fn full_inliner_credits_the_call_sequence_against_growth() {
     let source = r#"
