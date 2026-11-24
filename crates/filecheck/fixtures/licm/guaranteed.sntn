@@ -1,0 +1,222 @@
+#! A call, or an instruction that may fault, leaves its loop only from a block
+#! that runs in the first iteration of every entry: one that dominates every
+#! block that leaves the loop or jumps back to the header, reached from the
+#! header through no cycle and no instruction that may not return. `%quotient`
+#! traps on a zero divisor, so a call to it may not run where its block did not.
+
+target = "x86_64-unknown-native"
+
+func private %quotient(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.i64 = udiv v0 v1;
+        return v2;
+}
+
+func private %check(v0.i64) {
+    block0:
+        v1.i1 = eq v0 0.i64;
+        br v1 block1 block2;
+
+    block1:
+        unreachable;
+
+    block2:
+        return;
+}
+
+# check:  block0:
+# nextln:      v5.i1 = ne v1 0.i64;
+# nextln:      jump block1;
+# check:  block2:
+# nextln:      v6.i64 = call %quotient v0 v1;
+func public %guarded_call(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i64 = phi (0.i64 block0) (v8 block3);
+        v4.i64 = phi (0.i64 block0) (v9 block3);
+        v5.i1 = ne v1 0.i64;
+        br v5 block2 block3;
+
+    block2:
+        v6.i64 = call %quotient v0 v1;
+        v7.i64 = add v3 v6;
+        jump block3;
+
+    block3:
+        v8.i64 = phi (v3 block1) (v7 block2);
+        v9.i64 = add v4 1.i64;
+        v10.i1 = lt v9 v2;
+        br v10 block1 block4;
+
+    block4:
+        return v8;
+}
+
+# The body of a loop that may run zero times.
+# check:  block0:
+# nextln:      jump block1;
+# check:  block2:
+# nextln:      v6.i64 = call %quotient v0 v1;
+func public %zero_trip_call(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i64 = phi (0.i64 block0) (v7 block2);
+        v4.i64 = phi (0.i64 block0) (v8 block2);
+        v5.i1 = lt v4 v2;
+        br v5 block2 block3;
+
+    block2:
+        v6.i64 = call %quotient v0 v1;
+        v7.i64 = add v3 v6;
+        v8.i64 = add v4 1.i64;
+        jump block1;
+
+    block3:
+        return v3;
+}
+
+# check:  block0:
+# nextln:      v5.i64 = call %quotient v0 v1;
+# nextln:      v6.i64 = udiv v0 v2;
+# nextln:      jump block1;
+func public %header_call(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i64 = phi (0.i64 block0) (v8 block1);
+        v4.i64 = phi (0.i64 block0) (v9 block1);
+        v5.i64 = call %quotient v0 v1;
+        v6.i64 = udiv v0 v2;
+        v7.i64 = add v3 v5;
+        v8.i64 = add v7 v6;
+        v9.i64 = add v4 1.i64;
+        v10.i1 = lt v9 v2;
+        br v10 block1 block2;
+
+    block2:
+        return v8;
+}
+
+# The join of a branch inside the loop runs in every iteration.
+# check:  block0:
+# nextln:      v8.i64 = call %quotient v0 v1;
+# nextln:      jump block1;
+func public %after_branch(v0.i64, v1.i64, v2.i64, v3.i1) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i64 = phi (0.i64 block0) (v9 block4);
+        v5.i64 = phi (0.i64 block0) (v10 block4);
+        br v3 block2 block3;
+
+    block2:
+        v6.i64 = add v4 1.i64;
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v7.i64 = phi (v6 block2) (v4 block3);
+        v8.i64 = call %quotient v0 v1;
+        v9.i64 = add v7 v8;
+        v10.i64 = add v5 1.i64;
+        v11.i1 = lt v10 v2;
+        br v11 block1 block5;
+
+    block5:
+        return v9;
+}
+
+# A call that may not return comes first in the iteration.
+# check:  block0:
+# nextln:      jump block1;
+# check:      call %check v1;
+# nextln:      v6.i64 = call %quotient v0 v1;
+func public %after_check(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i64 = phi (0.i64 block0) (v7 block1);
+        v4.i64 = phi (0.i64 block0) (v8 block1);
+        call %check v1;
+        v6.i64 = call %quotient v0 v1;
+        v7.i64 = add v3 v6;
+        v8.i64 = add v4 1.i64;
+        v9.i1 = lt v8 v2;
+        br v9 block1 block2;
+
+    block2:
+        return v7;
+}
+
+# ...or comes first on one of the paths to the call.
+# check:  block0:
+# nextln:      jump block1;
+# check:      v8.i64 = call %quotient v0 v1;
+func public %after_checked_arm(v0.i64, v1.i64, v2.i64, v3.i1) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i64 = phi (0.i64 block0) (v9 block4);
+        v5.i64 = phi (0.i64 block0) (v10 block4);
+        br v3 block2 block3;
+
+    block2:
+        call %check v1;
+        v6.i64 = add v4 1.i64;
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v7.i64 = phi (v6 block2) (v4 block3);
+        v8.i64 = call %quotient v0 v1;
+        v9.i64 = add v7 v8;
+        v10.i64 = add v5 1.i64;
+        v11.i1 = lt v10 v2;
+        br v11 block1 block5;
+
+    block5:
+        return v9;
+}
+
+# An inner loop before the call may not terminate.
+# check:  block0:
+# nextln:      jump block1;
+# check:  block3:
+# nextln:      v8.i64 = call %quotient v0 v1;
+func public %after_inner_loop(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i64 = phi (0.i64 block0) (v9 block3);
+        v4.i64 = phi (0.i64 block0) (v10 block3);
+        jump block2;
+
+    block2:
+        v5.i64 = phi (0.i64 block1) (v6 block2);
+        v6.i64 = add v5 1.i64;
+        v7.i1 = lt v6 v4;
+        br v7 block2 block3;
+
+    block3:
+        v8.i64 = call %quotient v0 v1;
+        v9.i64 = add v3 v8;
+        v10.i64 = add v4 1.i64;
+        v11.i1 = lt v10 v2;
+        br v11 block1 block4;
+
+    block4:
+        return v9;
+}

@@ -1,5 +1,18 @@
+//! Loop-invariant code motion: moves an instruction whose operands the loop
+//! does not compute to the loop's preheader, which runs once each time the
+//! loop is entered.
+//!
+//! An instruction that can be speculated moves from any block of the loop.
+//! One that cannot, such as a call or an instruction that may fault, moves
+//! only from where the first iteration of every entry runs it: a block that
+//! dominates every block that leaves the loop or jumps back to its header,
+//! and that the header reaches through no cycle, which may not terminate, and
+//! no instruction that may not return, nor one before it in the block. In the
+//! preheader it then runs once where it ran at least once, and a fault it
+//! raises there the loop would have raised.
+
 // TODO: Add control flow hoisting.
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId, ValueId};
 
 use crate::{
@@ -89,14 +102,46 @@ impl LicmSolver {
             ctx.lpt.iter_blocks_post_order(ctx.cfg, ctx.lp).collect();
         block_in_loop_rpo.reverse();
 
+        let header = ctx.lpt.loop_header(ctx.lp);
+        let order: FxHashMap<_, _> = block_in_loop_rpo
+            .iter()
+            .enumerate()
+            .map(|(index, &block)| (block, index))
+            .collect();
+        // The blocks that leave the loop or jump back to its header.
+        let ends: Vec<_> = block_in_loop_rpo
+            .iter()
+            .copied()
+            .filter(|&block| {
+                ctx.cfg
+                    .succs_of(block)
+                    .any(|&succ| succ == header || !ctx.lpt.is_in_loop(succ, ctx.lp))
+            })
+            .collect();
+        // The blocks whose end an iteration may not reach: through a cycle,
+        // which may not terminate, or an instruction that may not return.
+        let mut may_stall = FxHashSet::default();
+
         let mut loop_var = FxHashSet::default();
         for block in block_in_loop_rpo {
+            // A predecessor later in reverse post order closes a cycle.
+            let mut reached = block == header
+                || !ctx.cfg.preds_of(block).any(|pred| {
+                    order
+                        .get(pred)
+                        .is_some_and(|&index| index >= order[&block] || may_stall.contains(pred))
+                });
+            let runs = ends.iter().all(|&end| ctx.domtree.dominates(block, end));
             for inst in func.layout.iter_inst(block) {
-                if self.is_invariant(func, ctx, &loop_var, inst) {
+                if self.is_invariant(func, ctx, &loop_var, inst, reached && runs) {
                     self.invariants.push(inst);
                 } else {
                     loop_var.extend(func.dfg.inst_results(inst).iter().copied());
                 }
+                reached &= !func.dfg.may_transfer_control(inst);
+            }
+            if !reached {
+                may_stall.insert(block);
             }
         }
     }
@@ -108,8 +153,9 @@ impl LicmSolver {
         ctx: LoopInvariantCtx<'_>,
         loop_var: &FxHashSet<ValueId>,
         inst_id: InstId,
+        guaranteed: bool,
     ) -> bool {
-        if !self.is_safe_to_hoist(func, ctx, inst_id) {
+        if !self.is_safe_to_hoist(func, ctx, inst_id, guaranteed) {
             return false;
         }
 
@@ -119,12 +165,14 @@ impl LicmSolver {
         invariant
     }
 
-    /// Returns `true` if the `inst` is safe to hoist.
+    /// Returns `true` if the `inst` is safe to hoist, given whether the first
+    /// iteration of every entry runs it.
     fn is_safe_to_hoist(
         &self,
         func: &Function,
         ctx: LoopInvariantCtx<'_>,
         inst_id: InstId,
+        guaranteed: bool,
     ) -> bool {
         if ctx.object_memory.is_some_and(|object_memory| {
             object_memory.read_is_loop_invariant(
@@ -139,7 +187,7 @@ impl LicmSolver {
             return true;
         }
 
-        func.dfg.can_speculate(inst_id)
+        func.dfg.can_speculate(inst_id) || guaranteed && func.dfg.has_value_semantics(inst_id)
     }
 
     /// Returns preheader of the loop, if one can be used/created.

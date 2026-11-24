@@ -3444,14 +3444,11 @@ func private %entry(v0.i1, v1.*i32, v2.i32) -> i32 {
         jump block1;
 
     block1:
-        br v0 block2 block3;
-
-    block2:
         v3.i32 = call %pure_after_cleanup v0 v1 v2;
         v4.i32 = add v3 1.i32;
-        jump block1;
+        br v0 block1 block2;
 
-    block3:
+    block2:
         return 0.i32;
 }
 "#;
@@ -3481,17 +3478,17 @@ func private %entry(v0.i1, v1.*i32, v2.i32) -> i32 {
             .nth(1)
             .and_then(|tail| tail.split("block1:").next())
             .expect("block0 section should exist");
-        let block2 = dumped
-            .split("block2:")
+        let block1 = dumped
+            .split("block1:")
             .nth(1)
-            .and_then(|tail| tail.split("block3:").next())
-            .expect("block2 section should exist");
+            .and_then(|tail| tail.split("block2:").next())
+            .expect("block1 section should exist");
         assert!(
             block0.contains("call %pure_after_cleanup"),
             "LICM-only step should see refreshed callee effects and hoist the invariant call:\n{dumped}"
         );
         assert!(
-            !block2.contains("call %pure_after_cleanup"),
+            !block1.contains("call %pure_after_cleanup"),
             "loop body should no longer contain the hoisted call after LICM:\n{dumped}"
         );
     }

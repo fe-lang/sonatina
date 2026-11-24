@@ -811,8 +811,11 @@ impl DataFlowGraph {
     pub fn can_speculate(&self, inst_id: InstId) -> bool {
         // Payload extraction and unchecked narrowing are pure, but require an
         // active-variant / high-bits-zero proof at their use site, which
-        // hoisting above a branch or assumption can lose.
+        // hoisting above a branch or assumption can lose. A call to a pure
+        // function runs its callee, which may fault on the arguments a guard
+        // excluded, and costs what the callee does.
         self.has_value_semantics(inst_id)
+            && !self.is_call(inst_id)
             && downcast::<&EnumExtract>(self.inst_set(), self.inst(inst_id)).is_none()
             && downcast::<&crate::inst::cast::TruncNuw>(self.inst_set(), self.inst(inst_id))
                 .is_none()
