@@ -48,7 +48,7 @@ pub use object::{
 };
 pub use trace_view::{CfgEdge, CfgEdgeKind, InstKindView, SonatinaTraceView};
 pub use types::Type;
-pub use value::{Immediate, Value, ValueId};
+pub use value::{Immediate, Value, ValueId, ValueLabel};
 
 pub mod prelude {
     pub use crate::{

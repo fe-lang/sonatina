@@ -7,7 +7,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use vec_collections::VecSet;
 
-use super::{Immediate, Type, Value, ValueId};
+use super::{Immediate, Type, Value, ValueId, ValueLabel};
 use crate::{
     EffectCostClass, GlobalVariableRef, Inst, InstDowncast, InstDowncastMut, InstEffectSummary,
     InstEffects, InstSetBase,
@@ -76,6 +76,11 @@ pub struct DataFlowGraph {
     #[doc(hidden)]
     pub zeros: FxHashMap<Type, ValueId>,
     users: SecondaryMap<ValueId, ValueUsers>,
+    /// Front-end labels per value, each list sorted and without duplicates. Only
+    /// labelled values have an entry. The table lives in the graph, not beside the
+    /// instruction attribution of a `Function`, because `change_to_alias` is the
+    /// place where passes replace one value by another.
+    value_labels: FxHashMap<ValueId, SmallVec<[ValueLabel; 1]>>,
 }
 
 /// An instruction with its concrete type, which downcasts compare instead of
@@ -115,6 +120,7 @@ impl Clone for DataFlowGraph {
             globals: self.globals.clone(),
             zeros: self.zeros.clone(),
             users: self.users.clone(),
+            value_labels: self.value_labels.clone(),
         }
     }
 }
@@ -134,6 +140,7 @@ impl DataFlowGraph {
             globals: FxHashMap::default(),
             zeros: FxHashMap::default(),
             users: SecondaryMap::default(),
+            value_labels: FxHashMap::default(),
         }
     }
 
@@ -637,8 +644,80 @@ impl DataFlowGraph {
         Jump::new(self.inst_set().jump(), to)
     }
 
+    /// Attaches a front-end `label` to `value`.
+    ///
+    /// Labels are opaque to Sonatina, which stores and merges them but never
+    /// reads one to make a decision, so a label cannot change generated code. A
+    /// value keeps a set of labels: adding a label it already has does nothing.
+    ///
+    /// When [`Self::change_to_alias`] replaces a value, the labels of the
+    /// replaced value are added to the surviving one. A value that is deleted
+    /// loses its labels. Immediate, global and `zero.ty` values are shared by every use, so
+    /// they take no labels: labelling one does nothing, and replacing a value by
+    /// one drops the labels of the replaced value. A value with no label has no
+    /// claim made about it; a label that is missing means "unknown", not "none".
+    ///
+    /// The IR text format neither prints nor parses labels, so a module that is printed and
+    /// parsed again has none.
+    pub fn add_value_label(&mut self, value: ValueId, label: ValueLabel) {
+        debug_assert!(self.has_value(value));
+        if self.is_shared_value(value) {
+            return;
+        }
+        let labels = self.value_labels.entry(value).or_default();
+        if let Err(idx) = labels.binary_search(&label) {
+            labels.insert(idx, label);
+        }
+    }
+
+    /// The labels attached to `value`, in ascending order. Empty when unlabelled.
+    pub fn value_labels(&self, value: ValueId) -> &[ValueLabel] {
+        self.value_labels
+            .get(&value)
+            .map_or(&[], SmallVec::as_slice)
+    }
+
+    /// Adds the labels that `source` has in `from` to `value`, where `from` is
+    /// the graph that `value` was derived from, such as the source function of
+    /// a lowering. Does nothing for a shared value (see [`Self::add_value_label`]).
+    pub fn import_value_labels_from(
+        &mut self,
+        from: &DataFlowGraph,
+        source: ValueId,
+        value: ValueId,
+    ) {
+        for &label in from.value_labels(source) {
+            self.add_value_label(value, label);
+        }
+    }
+
+    /// Whether `value` is one that every use of an immediate, a global or an interned
+    /// `zero.ty` constant shares.
+    fn is_shared_value(&self, value: ValueId) -> bool {
+        matches!(
+            self.values[value],
+            Value::Immediate { .. } | Value::Global { .. } | Value::Zero { .. }
+        )
+    }
+
+    /// Moves the labels of `from` onto `to`, which stands in for `from` from now on.
+    fn merge_value_labels(&mut self, from: ValueId, to: ValueId) {
+        if from == to {
+            return;
+        }
+        let Some(labels) = self.value_labels.remove(&from) else {
+            return;
+        };
+        for label in labels {
+            self.add_value_label(to, label);
+        }
+    }
+
     /// Rewrites every use of `value` to `alias` and returns the rewritten instructions.
+    ///
+    /// The labels of `value` are added to `alias` (see [`Self::add_value_label`]).
     pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) -> SmallVec<[InstId; 4]> {
+        self.merge_value_labels(value, alias);
         let users = std::mem::take(&mut self.users[value]);
         let mut modified = SmallVec::new();
         for &inst in users.iter() {
@@ -718,6 +797,7 @@ impl DataFlowGraph {
             _ => {}
         }
 
+        self.value_labels.remove(&value_id);
         self.live_values[value_id] = false;
     }
 
@@ -1294,5 +1374,126 @@ mod tests {
         assert_eq!(dfg.make_zero_value(Type::I8), z1);
         assert!(dfg.users(z1).any(|&inst| inst == user));
         assert_eq!(dfg.inst(user).collect_values().as_slice(), &[z1, z1]);
+    }
+
+    /// Makes `add lhs, rhs` and returns its result.
+    fn make_add(dfg: &mut DataFlowGraph, lhs: ValueId, rhs: ValueId) -> ValueId {
+        let inst = dfg.make_inst(Add::new(dfg.inst_set().has_add().unwrap(), lhs, rhs));
+        let value = dfg.make_value(Value::Inst {
+            inst,
+            result_idx: 0,
+            ty: Type::I32,
+        });
+        dfg.attach_result(inst, value);
+        value
+    }
+
+    #[test]
+    fn value_labels_are_sorted_and_deduplicated() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let one = dfg.make_imm_value(Immediate::I32(1));
+        let value = make_add(&mut dfg, one, one);
+
+        assert!(dfg.value_labels(value).is_empty());
+
+        dfg.add_value_label(value, ValueLabel(20));
+        dfg.add_value_label(value, ValueLabel(19));
+        dfg.add_value_label(value, ValueLabel(20));
+
+        assert_eq!(dfg.value_labels(value), &[ValueLabel(19), ValueLabel(20)]);
+    }
+
+    #[test]
+    fn change_to_alias_merges_labels_onto_the_surviving_value() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let one = dfg.make_imm_value(Immediate::I32(1));
+        let replaced = make_add(&mut dfg, one, one);
+        let survivor = make_add(&mut dfg, one, one);
+        let user = make_add(&mut dfg, replaced, one);
+        dfg.add_value_label(replaced, ValueLabel(11));
+        dfg.add_value_label(replaced, ValueLabel(33));
+        dfg.add_value_label(survivor, ValueLabel(22));
+        dfg.add_value_label(survivor, ValueLabel(33));
+
+        let modified = dfg.change_to_alias(replaced, survivor);
+
+        assert_eq!(modified.as_slice(), &[dfg.value_inst(user).unwrap()]);
+        assert_eq!(
+            dfg.value_labels(survivor),
+            &[ValueLabel(11), ValueLabel(22), ValueLabel(33)]
+        );
+        assert!(dfg.value_labels(replaced).is_empty());
+    }
+
+    #[test]
+    fn change_to_alias_keeps_labels_when_the_replacement_is_unlabelled() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let one = dfg.make_imm_value(Immediate::I32(1));
+        let replaced = make_add(&mut dfg, one, one);
+        let survivor = make_add(&mut dfg, one, one);
+        dfg.add_value_label(replaced, ValueLabel(11));
+
+        dfg.change_to_alias(replaced, survivor);
+        // Replacing a value by itself must not lose its labels.
+        dfg.change_to_alias(survivor, survivor);
+
+        assert_eq!(dfg.value_labels(survivor), &[ValueLabel(11)]);
+    }
+
+    #[test]
+    fn shared_values_take_no_labels() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let one = dfg.make_imm_value(Immediate::I32(1));
+        let labelled = make_add(&mut dfg, one, one);
+        dfg.add_value_label(labelled, ValueLabel(11));
+
+        dfg.add_value_label(one, ValueLabel(77));
+        assert!(dfg.value_labels(one).is_empty());
+
+        // A value folded to an immediate loses its labels; the immediate stays unlabelled.
+        dfg.change_to_alias(labelled, one);
+        assert!(dfg.value_labels(labelled).is_empty());
+        assert!(dfg.value_labels(one).is_empty());
+
+        // An interned `zero.ty` constant is shared too.
+        let zero = dfg.make_zero_value(Type::I8);
+        dfg.add_value_label(zero, ValueLabel(77));
+        assert!(dfg.value_labels(zero).is_empty());
+    }
+
+    #[test]
+    fn deleted_values_lose_labels_and_clones_keep_them() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let one = dfg.make_imm_value(Immediate::I32(1));
+        let value = make_add(&mut dfg, one, one);
+        dfg.add_value_label(value, ValueLabel(56));
+
+        let cloned = dfg.clone();
+        dfg.delete_inst(dfg.value_inst(value).unwrap());
+
+        assert!(dfg.value_labels(value).is_empty());
+        assert_eq!(cloned.value_labels(value), &[ValueLabel(56)]);
+    }
+
+    #[test]
+    fn import_value_labels_from_adds_labels_of_the_source_value() {
+        let isa = test_isa();
+        let mut source = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let mut target = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let one = source.make_imm_value(Immediate::I32(1));
+        let from = make_add(&mut source, one, one);
+        source.add_value_label(from, ValueLabel(44));
+        let one = target.make_imm_value(Immediate::I32(1));
+        let to = make_add(&mut target, one, one);
+        target.add_value_label(to, ValueLabel(88));
+
+        target.import_value_labels_from(&source, from, to);
+
+        assert_eq!(target.value_labels(to), &[ValueLabel(44), ValueLabel(88)]);
     }
 }
