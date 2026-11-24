@@ -18,7 +18,7 @@
 //! names them, values and blocks by their ids in the text of their module
 //! (`v12`, `block3`).
 
-use sonatina_ir::{BlockId, Immediate, InstId, U256, ValueId, module::FuncRef};
+use sonatina_ir::{BlockId, I256, Immediate, InstId, U256, ValueId, module::FuncRef};
 
 use super::SymbolDef;
 use crate::isa::evm::LateCleanupProfile;
@@ -179,6 +179,8 @@ pub struct StepFacts {
     pub finite_loops: Vec<FiniteLoop>,
     /// For `GvnPrune` and `GvnRewrite`.
     pub gvn: Option<GvnFacts>,
+    /// For a `KnownBitsSimplify` round that ran range analysis.
+    pub ranges: Option<RangeFacts>,
 }
 
 /// The solution of SCCP. A value without a constant may be anything.
@@ -227,6 +229,27 @@ pub struct GvnFacts {
 pub enum GvnOperand {
     Value(ValueId),
     Imm(Immediate),
+}
+
+/// The value is in both intervals, bounds included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValueRange {
+    pub value: ValueId,
+    pub unsigned: (U256, U256),
+    pub signed: (I256, I256),
+}
+
+/// The solution of range analysis.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RangeFacts {
+    /// The blocks that never run.
+    pub unreachable: Vec<BlockId>,
+    /// The facts at the entry of each other block. A value not listed may be
+    /// anything.
+    pub entry: Vec<(BlockId, Vec<ValueRange>)>,
+    /// The `sub` and `usubo` instructions that cannot wrap, as a dominating
+    /// unsigned comparison of their operands proves.
+    pub guarded_subs: Vec<InstId>,
 }
 
 /// A function of the machine module at one point of the machine stage.

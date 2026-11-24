@@ -23,6 +23,7 @@ use crate::{
     domtree::{DomTree, DominatorTreeTraversable},
     liveness::Liveness,
     loop_analysis::LoopTree,
+    object::lowering::{RangeFacts, ValueRange},
 };
 
 pub type RangeEnv = FxHashMap<ValueId, RangeFact>;
@@ -198,6 +199,30 @@ impl RangeAnalysis {
                 break;
             }
         }
+    }
+
+    /// The solution, of the blocks of `func`.
+    pub(crate) fn export(&self, func: &Function) -> RangeFacts {
+        let mut facts = RangeFacts::default();
+        for block in func.layout.iter_block() {
+            if !self.reachable[block] {
+                facts.unreachable.push(block);
+                continue;
+            }
+            let mut env: Vec<_> = self.entry_envs[block]
+                .iter()
+                .map(|(&value, fact)| ValueRange {
+                    value,
+                    unsigned: (fact.unsigned.lo, fact.unsigned.hi),
+                    signed: (fact.signed.lo, fact.signed.hi),
+                })
+                .collect();
+            env.sort_unstable_by_key(|range| range.value);
+            facts.entry.push((block, env));
+        }
+        facts.guarded_subs = self.guarded_subs.iter().copied().collect();
+        facts.guarded_subs.sort_unstable();
+        facts
     }
 
     pub fn entry_env(&self, block: BlockId) -> &RangeEnv {

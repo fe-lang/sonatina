@@ -142,7 +142,7 @@ fn block_dests(text: &str) -> BTreeMap<u32, u32> {
         .collect()
 }
 
-/// The facts of a step name values and edges of its input,
+/// The facts of a step name values, edges and instructions of its input,
 /// or for value phis of its output, and its known bits are no more than the
 /// analysis finds of the input, parsed in the section's machine IR
 /// (`machine`) in place of the function's final text (`last`).
@@ -199,6 +199,28 @@ fn check_facts(input: &FuncSnap, output: &FuncSnap, facts: &StepFacts, machine: 
         );
     }
     let dests = block_dests(&input.text);
+    if let Some(ranges) = &facts.ranges {
+        let mut entry_values = ranges
+            .entry
+            .iter()
+            .flat_map(|(_, env)| env.iter().map(|range| range.value));
+        assert!(
+            entry_values.all(|value| values.contains(&value.as_u32())),
+            "{name}: a range fact of a value not in the step input"
+        );
+        let blocks: BTreeSet<_> = ranges
+            .unreachable
+            .iter()
+            .chain(ranges.entry.iter().map(|(block, _)| block))
+            .map(|block| block.0)
+            .collect();
+        assert!(
+            blocks.iter().eq(dests.keys()),
+            "{name}: range facts are not of the blocks of the step input"
+        );
+        let insts: BTreeSet<_> = input.insts.iter().flatten().collect();
+        assert!(ranges.guarded_subs.iter().all(|inst| insts.contains(inst)));
+    }
     let gvn_edges = gvn.flat_map(|gvn| {
         let preds = gvn.preds.iter().map(|&(block, slot, ..)| (block, slot));
         gvn.dead_edges.iter().copied().chain(preds)
