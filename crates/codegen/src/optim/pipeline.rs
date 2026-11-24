@@ -557,7 +557,15 @@ fn native_inliner_config() -> InlinerConfig {
         max_inlinee_blocks: 32,
         max_inlinee_insts: 128,
         max_growth_per_caller: 4096,
-        max_total_growth: 65536,
+        // No module cap, as in the speed config: a native build is one
+        // module, so a fixed cap is spent partway through a large one and
+        // its later callers, identical or not, keep their calls. The
+        // per-caller cap bounds growth instead. It holds for one inliner
+        // run, and the pipeline starts a run for each inline round (four at
+        // O2, two at O1), so a caller grows by at most 4096 instructions a
+        // round and the module by that much for each caller, besides forced
+        // inlines and single-block splices, which spend no budget.
+        max_total_growth: 0,
         // The EVM call sequence the speed config credits differs from a
         // native call's.
         call_site_insts: 0,
@@ -2891,8 +2899,15 @@ func private %entry(v0.i32, v1.i32) -> i32 {
             assert!(native.max_inlinee_insts > speed.max_inlinee_insts);
             assert!(native.inline_threshold > speed.inline_threshold);
             assert!(native.max_growth_per_caller > speed.max_growth_per_caller);
-            assert!(native.max_total_growth > speed.max_total_growth);
+            assert_eq!(native.max_total_growth, 0);
         }
+        // Os inlines as the size pipeline does, within a module cap.
+        let os = Pipeline::native(OptLevel::Os).inliner_config;
+        assert_eq!(
+            os.max_total_growth,
+            Pipeline::size().inliner_config.max_total_growth
+        );
+        assert!(os.max_total_growth > 0);
     }
 
     #[test]

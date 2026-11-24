@@ -2,6 +2,7 @@ mod common;
 
 use dir_test::{Fixture, dir_test};
 use sonatina_codegen::{
+    OptLevel,
     analysis::func_behavior,
     optim::{
         Pass, Pipeline, Step,
@@ -1131,6 +1132,41 @@ func public %caller(v0.i1, v1.i1, v2.i1) -> i32 {
         "a call-sized callee should not spend the budget:\n{dumped}"
     );
     assert_eq!(stats.skipped_budget, 0);
+}
+
+#[test]
+fn native_inliner_caps_growth_per_caller_not_per_module() {
+    // Each inline grows its caller by 201 instructions.
+    let body: String = (0..200)
+        .map(|index| format!("        v{}.i32 = add v{index} 1.i32;\n", index + 1))
+        .collect();
+    let remaining_calls = |callers: usize, call_count: usize| {
+        let mut source = format!(
+            "target = \"evm-ethereum-london\"\n\nfunc private %grow(v0.i32) -> i32 {{\n    block0:\n{body}        return v200;\n}}\n"
+        );
+        let calls: String = (0..call_count)
+            .map(|index| format!("        v{}.i32 = call %grow v{index};\n", index + 1))
+            .collect();
+        for caller in 0..callers {
+            source.push_str(&format!(
+                "\nfunc public %caller{caller}(v0.i32) -> i32 {{\n    block0:\n{calls}        return v{call_count};\n}}\n"
+            ));
+        }
+        let mut parsed = sonatina_parser::parse_module(&source)
+            .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+        let module = &mut parsed.module;
+        let grow = find_func(module, "grow");
+        module.ctx.set_inline_hint(grow, InlineHint::Inline);
+        Inliner::new(Pipeline::native(OptLevel::O2).inliner_config).run(module);
+        assert_module_verified(module);
+        dump_module(module).matches("call %grow").count()
+    };
+
+    // 80,400 instructions in all: a module cap would leave the later
+    // callers' calls.
+    assert_eq!(remaining_calls(400, 1), 0);
+    // One caller's 4,096-instruction cap affords 20 of its 32 calls.
+    assert_eq!(remaining_calls(1, 32), 12);
 }
 
 #[test]
