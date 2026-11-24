@@ -2507,7 +2507,20 @@ impl<'a> RedundantCodeRemover<'a> {
                         let class = self.solver.value_class(inst_result);
                         if let Some(value_phi) = &self.solver.classes[class].value_phi {
                             let ty = func.dfg.value_ty(inst_result);
+                            // Avail sets hold what is available at the end of a block, where
+                            // phi operands are used. A value replacing `inst_result` must also
+                            // come before it; a phi is inserted at the top of its block.
+                            let precedes = match value_phi {
+                                ValuePhi::Value(value) => self
+                                    .lookup_avail_from(Some(block), self.solver.value_class(*value))
+                                    .and_then(|avail| {
+                                        func.dfg.value_inst(self.resolve_alias(avail))
+                                    })
+                                    .is_none_or(|def| dominates(func, domtree, def, insn)),
+                                ValuePhi::PhiInsn(_) => true,
+                            };
                             if self.is_value_phi_resolvable(value_phi, block)
+                                && precedes
                                 && self
                                     .pushes_constants_only_where_used(func, cfg, value_phi, block)
                             {
@@ -3029,6 +3042,84 @@ func public %f(v0.i1, v1.i1, v2.i1, v3.i32, v4.i32) -> i32 {
             2,
             "{dumped}"
         );
+    }
+
+    /// `v8` is `v1 + 1` on both edges, a value phi of `v2`'s class, which in `block3` only `v9`
+    /// has, defined after `v8`. `v8` must stay: the store reads it before `v9` exists.
+    #[test]
+    fn value_phi_of_value_defined_later_in_block_is_not_resolved() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i32 = add v1 1.i32;
+        v3.i32 = add v2 2.i32;
+        jump block3;
+
+    block2:
+        v4.i32 = add v1 1.i32;
+        v5.i32 = add v4 3.i32;
+        jump block3;
+
+    block3:
+        v6.i32 = phi (v3 block1) (v5 block2);
+        v7.i32 = phi (2.i32 block1) (3.i32 block2);
+        v8.i32 = sub v6 v7;
+        mstore 0.i256 v8 i32;
+        v9.i32 = add v1 1.i32;
+        return v9;
+}
+"#,
+        )
+        .expect("module parses")
+        .module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            GvnSolver::new().run(func, &mut cfg, &mut domtree);
+        });
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        let dumped = module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        });
+        assert!(dumped.contains("mstore 0.i256 v8 i32"), "{dumped}");
+    }
+
+    /// Two phis of one block with the same incoming values are one value.
+    #[test]
+    fn equal_phis_in_one_block_share_a_class() {
+        let dumped = run_gvn(
+            r#"
+target = "evm-ethereum-london"
+
+func public %f(v0.i1, v1.i32, v2.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.i32 = phi (v1 block1) (v2 block2);
+        v4.i32 = phi (v1 block1) (v2 block2);
+        v5.i32 = add v3 v4;
+        return v5;
+}
+"#,
+        );
+        assert_eq!(dumped.matches(" phi ").count(), 1, "{dumped}");
+        assert!(dumped.contains("add v3 v3"), "{dumped}");
     }
 
     #[test]
