@@ -1,26 +1,31 @@
 //! Value labels and operand stack plans, driven as an external front end drives them: through
-//! `EvmBackend` and the prepared section.
+//! `EvmCompile`, `EvmBackend` and the observability data.
 //!
-//! One test follows labels from the IR through the optimization and lowering of a small function.
-//! A test per fixture of `test_files/evm` checks the stack plan of every machine instruction
-//! against the opcodes that the backend emits for it. That check is structural: it does not run
-//! the code, and it cannot see a wrong order of the words that an instruction consumes. The
-//! comparison with executed code is in `tests/evm.rs`.
+//! One test follows labels from the IR through the optimization and lowering of a small function,
+//! and one checks the exported plan of it. The corpus tests compile every fixture of
+//! `test_files/evm` and show two things. First, that attaching labels, and attaching labels and
+//! capturing stack plans, change neither the section bytes nor the PC map, at every optimization
+//! level. Second, that the stack plan of every machine instruction is structurally consistent with
+//! the opcodes that the backend emits for it at level 0. That second check does not run the code
+//! and cannot see a wrong order of the words that an instruction consumes. The comparison with
+//! executed code is in `tests/evm.rs`.
 
 use dir_test::{Fixture, dir_test};
 
 use sonatina_codegen::{
-    Compile, EvmCompiler, OptLevel,
+    Compile, EvmCompile, EvmCompiler, OptLevel,
     isa::evm::{
         EvmBackend, ImmediateMaterializationMode, LateCleanupProfile,
         opcode::OpCode,
         stack_plan::{InstStack, StackEntry},
     },
-    machinst::lower::SectionWorkModule,
-    object::MachineInstId,
+    machinst::{lower::SectionWorkModule, vcode::SectionCodeUnitId},
+    object::{MachineInstId, ObjectArtifact, PcMapUnit, SectionArtifact, SectionObservability},
     stackalloc::StackifySearchProfile,
 };
-use sonatina_ir::{Module, ValueId, ValueLabel, isa::evm::Evm, module::FuncRef};
+use sonatina_ir::{
+    Module, ObjectName, SectionName, ValueId, ValueLabel, isa::evm::Evm, module::FuncRef,
+};
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
@@ -115,6 +120,45 @@ fn func_named(module: &Module, name: &str) -> FuncRef {
         .unwrap_or_else(|| panic!("function `{name}` not found"))
 }
 
+/// Gives every value of every function the label `function * 100000 + value`.
+fn label_every_value(module: &Module) {
+    for func in module.funcs() {
+        module.func_store.modify(func, |function| {
+            let values: Vec<ValueId> = function.dfg.value_ids().collect();
+            for value in values {
+                function
+                    .dfg
+                    .add_value_label(value, ValueLabel(func.as_u32() * 100_000 + value.as_u32()));
+            }
+        });
+    }
+}
+
+fn compile(module: Module, opt: OptLevel, plans: bool) -> Result<Vec<ObjectArtifact>, String> {
+    EvmCompile::new(module)
+        .with_opt_level(opt)
+        .with_observability(true)
+        .with_stack_plans(plans)
+        .compile()
+        .map_err(|errors| format!("{errors:?}"))
+}
+
+fn section_artifact<'a>(artifacts: &'a [ObjectArtifact], name: &str) -> &'a SectionArtifact {
+    artifacts[0]
+        .sections
+        .iter()
+        .find(|(section, _)| section.0.as_str() == name)
+        .map(|(_, artifact)| artifact)
+        .expect("section artifact")
+}
+
+fn section_obs<'a>(artifacts: &'a [ObjectArtifact], name: &str) -> &'a SectionObservability {
+    section_artifact(artifacts, name)
+        .observability
+        .as_ref()
+        .expect("section observability")
+}
+
 // ---- labels survive the pipeline -------------------------------------------
 
 /// Labels attached to the source function of `COMBINE`, by source value.
@@ -203,6 +247,257 @@ fn labels_survive_machine_lowering_and_merge_when_equal_values_are_merged() {
             .all(|value| function.dfg.value_labels(value).is_empty())
     });
     assert!(unlabelled);
+}
+
+// ---- the exported plan ---------------------------------------------------
+
+/// The machine instruction whose first emitted opcode in `func_name` is `opcode`, with the unit
+/// of its PC map entry.
+fn first_inst_emitting(
+    obs: &SectionObservability,
+    bytes: &[u8],
+    func_name: &str,
+    opcode: OpCode,
+) -> (PcMapUnit, MachineInstId) {
+    obs.pc_map
+        .iter()
+        .filter(|entry| entry.func_name == func_name)
+        .filter(|entry| bytes[entry.pc_start as usize] == opcode as u8)
+        .find_map(|entry| Some((entry.unit.clone(), entry.attribution.machine_inst()?)))
+        .unwrap_or_else(|| panic!("no instruction of `{func_name}` emits {opcode:?}"))
+}
+
+fn value_labels(entry: &StackEntry) -> &[ValueLabel] {
+    match entry {
+        StackEntry::Value(value) => &value.labels,
+        other => panic!("expected a value, found {other:?}"),
+    }
+}
+
+#[test]
+fn exported_plan_shows_labelled_values_at_the_planned_positions() {
+    let artifacts = compile(labelled_combine(), OptLevel::O0, true).expect("compiles");
+    let section = section_artifact(&artifacts, "runtime");
+    let obs = section.observability.as_ref().expect("observability");
+    assert_eq!(obs.schema_version, "0.4.0");
+
+    // `add` reads both arguments from the top of the stack, above the return address.
+    let (unit, add) = first_inst_emitting(obs, &section.bytes, "combine", OpCode::ADD);
+    let stack = &obs.stack_before(&unit, add).expect("plan for add").stack;
+    assert_eq!(stack.len(), 3);
+    assert_eq!(value_labels(&stack[0]), &[LABEL_A]);
+    assert_eq!(value_labels(&stack[1]), &[LABEL_B]);
+    assert_eq!(stack[2], StackEntry::ReturnAddress);
+
+    // The merged sum is the only value below the return address when `mul` starts, and it
+    // carries the labels of both source additions. The arguments are gone: no label, no position.
+    let (unit, mul) = first_inst_emitting(obs, &section.bytes, "combine", OpCode::MUL);
+    let stack = &obs.stack_before(&unit, mul).expect("plan for mul").stack;
+    assert_eq!(stack.len(), 2);
+    assert_eq!(value_labels(&stack[0]), &[LABEL_SUM, LABEL_SUM_AGAIN]);
+    assert_eq!(stack[1], StackEntry::ReturnAddress);
+    let StackEntry::Value(sum) = &stack[0] else {
+        unreachable!()
+    };
+    assert!(!sum.dead && !sum.constant);
+
+    // The return reads the product, which has its own label.
+    let (unit, ret) = first_inst_emitting(obs, &section.bytes, "combine", OpCode::JUMP);
+    let stack = &obs.stack_before(&unit, ret).expect("plan for return").stack;
+    assert_eq!(value_labels(&stack[0]), &[LABEL_PRODUCT]);
+
+    // Values of an unlabelled function carry no labels, and a synthetic unit has no plan.
+    let (unit, mstore) = first_inst_emitting(obs, &section.bytes, "runtime", OpCode::MSTORE);
+    let stack = &obs
+        .stack_before(&unit, mstore)
+        .expect("plan for mstore")
+        .stack;
+    assert!(stack.iter().all(|entry| value_labels(entry).is_empty()));
+    assert!(
+        obs.stack_before(
+            &PcMapUnit::Synthetic {
+                object: ObjectName("Contract".into()),
+                section: SectionName("runtime".into()),
+                unit: SectionCodeUnitId(0),
+            },
+            mstore
+        )
+        .is_none()
+    );
+
+    // The renderings carry the plan.
+    let text = obs.to_text();
+    assert!(text.contains("stack_plan func=combine"), "{text}");
+    assert!(text.contains("@12@13, <RET>]"), "{text}");
+    assert!(!text.contains("spill"), "{text}");
+    let json = obs.to_json();
+    assert!(json.contains("\"stack_plans\":[{"), "{json}");
+    assert!(json.contains("\"labels\":[12,13]"), "{json}");
+    assert!(!json.contains("spill"), "{json}");
+}
+
+#[test]
+fn plans_are_absent_unless_requested() {
+    let off = compile(labelled_combine(), OptLevel::O0, false).expect("compiles");
+    let obs = section_obs(&off, "runtime");
+    assert!(obs.stack_plans.is_empty());
+    assert!(!obs.to_text().contains("stack_plan"));
+    assert!(obs.to_json().contains("\"stack_plans\":[]"));
+}
+
+// ---- byte identity over the corpus ---------------------------------------
+
+/// Checks that brackets and braces of `json` nest and close outside strings, and that no comma
+/// dangles. The crate has no JSON parser to check more.
+fn assert_json_nests(name: &str, json: &str) {
+    let mut open = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for (idx, ch) in json.char_indices() {
+        if in_string {
+            match (escaped, ch) {
+                (true, _) => escaped = false,
+                (false, '\\') => escaped = true,
+                (false, '"') => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' | '[' => open.push(ch),
+            '}' => assert_eq!(open.pop(), Some('{'), "{name}: unbalanced `}}` at {idx}"),
+            ']' => assert_eq!(open.pop(), Some('['), "{name}: unbalanced `]` at {idx}"),
+            ',' => {
+                let next = json[idx + 1..].chars().next();
+                assert!(
+                    next.is_some_and(|next| !matches!(next, ',' | ']' | '}')),
+                    "{name}: dangling comma at {idx}"
+                );
+            }
+            _ => {}
+        }
+    }
+    assert!(open.is_empty() && !in_string, "{name}: JSON does not close");
+}
+
+/// Asserts that `other` has the bytes, the PC map and the byte totals of `plain`.
+fn assert_same_code(
+    name: &str,
+    what: &str,
+    plain: &[ObjectArtifact],
+    other: &[ObjectArtifact],
+) -> usize {
+    assert_eq!(plain.len(), other.len(), "{name}: {what}");
+    let mut planned_insts = 0;
+    for (plain, other) in plain.iter().zip(other) {
+        assert_eq!(plain.object, other.object, "{name}: {what}");
+        assert_eq!(plain.sections.len(), other.sections.len(), "{name}: {what}");
+        for ((plain_name, plain), (other_name, other)) in plain.sections.iter().zip(&other.sections)
+        {
+            assert_eq!(plain_name, other_name, "{name}: {what}");
+            assert_eq!(
+                plain.bytes, other.bytes,
+                "{name}: {what}: bytes of {plain_name:?}"
+            );
+            let plain = plain.observability.as_ref().expect("observability");
+            let other = other.observability.as_ref().expect("observability");
+            assert_eq!(
+                plain.pc_map, other.pc_map,
+                "{name}: {what}: PC map of {plain_name:?}"
+            );
+            assert_eq!(
+                (plain.code_bytes, plain.data_bytes, plain.embed_bytes),
+                (other.code_bytes, other.data_bytes, other.embed_bytes),
+                "{name}: {what}"
+            );
+            assert_eq!(
+                (plain.mapped_code_bytes, plain.unmapped_code_bytes),
+                (other.mapped_code_bytes, other.unmapped_code_bytes),
+                "{name}: {what}"
+            );
+            assert!(
+                plain.stack_plans.is_empty(),
+                "{name}: plans were not requested"
+            );
+            planned_insts += other
+                .stack_plans
+                .iter()
+                .map(|function| function.plan.insts.len())
+                .sum::<usize>();
+        }
+    }
+    planned_insts
+}
+
+/// Compiles `source` three times: with no labels and no plans, with every value labelled and no
+/// plans, and with every value labelled and plans on. Section bytes and PC maps of the second
+/// and the third must equal the first, so labels alone and labels with plans are each shown not
+/// to change generated code. With plans off no plan may appear, and with them on some must.
+/// Returns whether the fixture compiled.
+fn assert_byte_identity(name: &str, source: &str, opt: OptLevel) -> bool {
+    let parsed = parse_module(source).unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    let plain = match compile(parsed.module, opt, false) {
+        Ok(plain) => plain,
+        Err(error) => {
+            assert_expected_error(name, source, &error);
+            return false;
+        }
+    };
+
+    let labelled_module = parse_module(source).expect("parses again").module;
+    label_every_value(&labelled_module);
+    let labelled = compile(labelled_module, opt, false)
+        .unwrap_or_else(|error| panic!("{name}: fails with labels only: {error}"));
+    let unplanned = assert_same_code(name, "labels, plans off", &plain, &labelled);
+    assert_eq!(unplanned, 0, "{name}: plans were not requested");
+
+    let planned_module = parse_module(source).expect("parses again").module;
+    label_every_value(&planned_module);
+    let planned = compile(planned_module, opt, true)
+        .unwrap_or_else(|error| panic!("{name}: fails with labels and plans: {error}"));
+    let planned_insts = assert_same_code(name, "labels, plans on", &plain, &planned);
+    // The comparison is not vacuous: the third compile did export plans.
+    assert!(planned_insts > 0, "{name}: no plan was exported");
+    for artifact in &planned {
+        for section in artifact.sections.values() {
+            let obs = section.observability.as_ref().expect("observability");
+            assert_json_nests(name, &obs.to_json());
+        }
+    }
+    true
+}
+
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/test_files/evm",
+    glob: "*.sntn"
+)]
+fn labels_and_plans_keep_bytes_and_pc_map_at_o0(fixture: Fixture<&str>) {
+    assert_byte_identity(fixture.path(), fixture.content(), OptLevel::O0);
+}
+
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/test_files/evm",
+    glob: "*.sntn"
+)]
+fn labels_and_plans_keep_bytes_and_pc_map_at_o1(fixture: Fixture<&str>) {
+    assert_byte_identity(fixture.path(), fixture.content(), OptLevel::O1);
+}
+
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/test_files/evm",
+    glob: "*.sntn"
+)]
+fn labels_and_plans_keep_bytes_and_pc_map_at_os(fixture: Fixture<&str>) {
+    assert_byte_identity(fixture.path(), fixture.content(), OptLevel::Os);
+}
+
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/test_files/evm",
+    glob: "*.sntn"
+)]
+fn labels_and_plans_keep_bytes_and_pc_map_at_o2(fixture: Fixture<&str>) {
+    assert_byte_identity(fixture.path(), fixture.content(), OptLevel::O2);
 }
 
 // ---- the plan against the emitted opcodes --------------------------------

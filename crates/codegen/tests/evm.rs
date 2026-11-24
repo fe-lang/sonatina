@@ -1,6 +1,7 @@
 mod alias_execution;
 mod evm_directives;
 mod evm_switch;
+mod stack_plan_execution;
 mod zero_values;
 
 use dir_test::{Fixture, dir_test};
@@ -2742,6 +2743,53 @@ impl EvmHarness {
         }
     }
 
+    /// Runs a deployment of `init_code` with `inspector` attached and returns the inspector.
+    fn deploy_with_inspector<I: revm::Inspector<revm::InMemoryDB>>(
+        init_code: &[u8],
+        inspector: I,
+    ) -> (ExecutionResult, I, Self) {
+        let mut env = Env::default();
+        env.tx.clear();
+        env.tx.transact_to = TransactTo::Create;
+        env.tx.data = Bytes::copy_from_slice(init_code);
+
+        let (res, inspector, db) =
+            Self::run_tx_with_inspector(revm::InMemoryDB::default(), env, inspector);
+        let deployed = match &res {
+            ExecutionResult::Success {
+                output: Output::Create(_, Some(addr)),
+                ..
+            } => *addr,
+            _ => panic!("unexpected deployment result: {res:?}"),
+        };
+
+        (
+            res,
+            inspector,
+            Self {
+                db,
+                contract: deployed,
+            },
+        )
+    }
+
+    /// Runs a call with `inspector` attached and returns the inspector.
+    fn call_with_inspector<I: revm::Inspector<revm::InMemoryDB>>(
+        &mut self,
+        calldata: &[u8],
+        inspector: I,
+    ) -> (ExecutionResult, I) {
+        let mut env = Env::default();
+        env.tx.clear();
+        env.tx.transact_to = TransactTo::Call(self.contract);
+        env.tx.data = Bytes::copy_from_slice(calldata);
+
+        let db = std::mem::take(&mut self.db);
+        let (res, inspector, db) = Self::run_tx_with_inspector(db, env, inspector);
+        self.db = db;
+        (res, inspector)
+    }
+
     /// Osaka's handler, with the `CLZ` opcode (EIP-7939), which revm 18
     /// predates.
     fn osaka_handler<'a, EXT, DB: revm::Database>() -> EvmHandler<'a, EXT, DB> {
@@ -2780,6 +2828,29 @@ impl EvmHarness {
 
         match res {
             Ok(r) => (r, db),
+            Err(e) => panic!("evm failure: {e}"),
+        }
+    }
+
+    fn run_tx_with_inspector<I: revm::Inspector<revm::InMemoryDB>>(
+        mut db: revm::InMemoryDB,
+        env: Env,
+        inspector: I,
+    ) -> (ExecutionResult, I, revm::InMemoryDB) {
+        let context = Context::new(EvmContext::new_with_env(db, Box::new(env)), inspector);
+
+        let mut evm = revm::Evm::new(context, Self::osaka_handler());
+        evm = evm
+            .modify()
+            .append_handler_register(inspector_handle_register)
+            .build();
+
+        let res = evm.transact_commit();
+        db = std::mem::take(&mut evm.context.evm.inner.db);
+        let inspector = evm.context.external;
+
+        match res {
+            Ok(r) => (r, inspector, db),
             Err(e) => panic!("evm failure: {e}"),
         }
     }

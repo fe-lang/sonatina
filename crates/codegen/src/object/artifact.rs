@@ -1,15 +1,22 @@
-use crate::machinst::vcode::{SectionCodeUnitId, VCodeInst};
+use crate::{
+    isa::evm::stack_plan::{StackEntry, StackPlan},
+    machinst::vcode::{SectionCodeUnitId, VCodeInst},
+};
 use cranelift_entity::EntityRef;
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    BlockId, GlobalVariableRef, InstId,
+    BlockId, GlobalVariableRef, InstId, ValueLabel,
     module::FuncRef,
     object::{EmbedSymbol, ObjectName, SectionName},
 };
 use std::fmt::Write as _;
 
-pub const OBSERVABILITY_SCHEMA_VERSION: &str = "0.3.0";
+/// The version of the observability text and JSON schema.
+///
+/// - 0.4.0 adds [`SectionObservability::stack_plans`] and the matching `stack_plan` text lines and
+///   `stack_plans` JSON field.
+pub const OBSERVABILITY_SCHEMA_VERSION: &str = "0.4.0";
 
 /// The owner of a PC-map range.
 ///
@@ -210,6 +217,105 @@ pub struct PcMapEntry {
     pub attribution: PcAttribution,
 }
 
+/// The operand stack plan of one function unit of a section.
+///
+/// It is keyed like [`PcMapEntry::attribution`]: `func` is the function of a
+/// [`PcMapUnit::Function`] and the [`MachineInstId`]s inside [`Self::plan`] are local to that
+/// function. Together they join an emitted PC range to the planned stack of its instruction with
+/// [`SectionObservability::stack_before`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionStackPlan {
+    pub func: FuncRef,
+    pub func_name: String,
+    pub plan: StackPlan,
+}
+
+impl FunctionStackPlan {
+    /// One `stack_plan` line per function, then a line per planned instruction. An entry is
+    /// `v<id>`, `<RET>` or `<CALLRET>`; a value has `:dead` and `:const` when flagged and
+    /// `@<label>` for each label.
+    fn write_text(&self, out: &mut String) {
+        writeln!(
+            out,
+            "stack_plan func={} insts={}",
+            self.func_name,
+            self.plan.insts.len()
+        )
+        .expect("in-memory write should not fail");
+        for record in &self.plan.insts {
+            write!(out, "  inst {} stack=[", record.inst.raw().0)
+                .expect("in-memory write should not fail");
+            for (idx, entry) in record.stack.iter().enumerate() {
+                if idx > 0 {
+                    out.push_str(", ");
+                }
+                match entry {
+                    StackEntry::Value(value) => {
+                        write!(out, "v{}", value.value.index())
+                            .expect("in-memory write should not fail");
+                        if value.dead {
+                            out.push_str(":dead");
+                        }
+                        if value.constant {
+                            out.push_str(":const");
+                        }
+                        write_text_labels(out, &value.labels);
+                    }
+                    StackEntry::ReturnAddress => out.push_str("<RET>"),
+                    StackEntry::CallContinuation => out.push_str("<CALLRET>"),
+                }
+            }
+            out.push_str("]\n");
+        }
+    }
+
+    fn write_json(&self, out: &mut String) {
+        write!(
+            out,
+            "{{\"unit\":{{\"kind\":\"function\",\"func\":{}}},\"func_name\":\"{}\",\"insts\":[",
+            self.func.index(),
+            json_escape(&self.func_name)
+        )
+        .expect("in-memory write should not fail");
+        for (idx, record) in self.plan.insts.iter().enumerate() {
+            if idx > 0 {
+                out.push(',');
+            }
+            write!(
+                out,
+                "{{\"machine_inst\":{},\"stack\":[",
+                record.inst.raw().0
+            )
+            .expect("in-memory write should not fail");
+            for (idx, entry) in record.stack.iter().enumerate() {
+                if idx > 0 {
+                    out.push(',');
+                }
+                match entry {
+                    StackEntry::Value(value) => {
+                        write!(
+                            out,
+                            "{{\"kind\":\"value\",\"value\":{},\"dead\":{},\"constant\":{},\"labels\":",
+                            value.value.index(),
+                            value.dead,
+                            value.constant
+                        )
+                        .expect("in-memory write should not fail");
+                        write_json_labels(out, &value.labels);
+                        out.push('}');
+                    }
+                    StackEntry::ReturnAddress => out.push_str("{\"kind\":\"return_address\"}"),
+                    StackEntry::CallContinuation => {
+                        out.push_str("{\"kind\":\"call_continuation\"}")
+                    }
+                }
+            }
+            out.push_str("]}");
+        }
+        out.push_str("]}");
+    }
+}
+
 /// Observability captured while linking one section.
 ///
 /// This schema describes EVM object-section bytes and program-counter ranges;
@@ -229,9 +335,38 @@ pub struct SectionObservability {
     pub unmapped_code_bytes: u32,
     pub unmapped_reason_coverage: UnmappedReasonCoverage,
     pub pc_map: Vec<PcMapEntry>,
+    /// The planned operand stack of each function unit that the section lays out, in the order of
+    /// the section's layout of its functions. Empty unless the compiler was asked to capture stack
+    /// plans (`EvmCompiler::with_stack_plans`), which does not change the generated code. Code
+    /// that belongs to no function has no plan. See [`StackPlan`] for what a plan means and for
+    /// its scope.
+    pub stack_plans: Vec<FunctionStackPlan>,
 }
 
 impl SectionObservability {
+    /// The operand stack planned for `inst` of the function unit `unit`, when this section
+    /// captured stack plans and the plan has a record for it.
+    ///
+    /// This is the join from a PC map entry to its stack: pass the entry's `unit` and the
+    /// [`MachineInstId`] of its attribution. Every PC map entry of one instruction maps to the
+    /// same record. The record describes the stack before the first opcode of the instruction,
+    /// which is the entry of the instruction with the lowest `pc_start`; see
+    /// [`InstStack`](crate::isa::evm::stack_plan::InstStack) for the later opcodes. The lookup
+    /// scans the list of functions, so a consumer that visits every PC map entry should index
+    /// [`Self::stack_plans`] by function once.
+    pub fn stack_before(
+        &self,
+        unit: &PcMapUnit,
+        inst: MachineInstId,
+    ) -> Option<&crate::isa::evm::stack_plan::InstStack> {
+        let func = unit.function()?;
+        self.stack_plans
+            .iter()
+            .find(|function| function.func == func)?
+            .plan
+            .stack_before(inst)
+    }
+
     pub fn to_text(&self) -> String {
         let mut out = String::new();
         writeln!(
@@ -290,6 +425,10 @@ impl SectionObservability {
                 post_opt
             )
             .expect("in-memory write should not fail");
+        }
+
+        for function in &self.stack_plans {
+            function.write_text(&mut out);
         }
 
         out
@@ -416,6 +555,14 @@ impl SectionObservability {
             .expect("in-memory write should not fail");
 
             write!(&mut out, "}}").expect("in-memory write should not fail");
+        }
+        write!(&mut out, "]").expect("in-memory write should not fail");
+        write!(&mut out, ",\"stack_plans\":[").expect("in-memory write should not fail");
+        for (idx, function) in self.stack_plans.iter().enumerate() {
+            if idx > 0 {
+                write!(&mut out, ",").expect("in-memory write should not fail");
+            }
+            function.write_json(&mut out);
         }
         write!(&mut out, "]").expect("in-memory write should not fail");
         write!(&mut out, "}}").expect("in-memory write should not fail");
@@ -595,4 +742,23 @@ fn json_escape(s: &str) -> String {
         }
     }
     out
+}
+
+/// Appends `@<label>` for each label.
+fn write_text_labels(out: &mut String, labels: &[ValueLabel]) {
+    for label in labels {
+        write!(out, "@{}", label.0).expect("in-memory write should not fail");
+    }
+}
+
+/// Appends a JSON array of label numbers.
+fn write_json_labels(out: &mut String, labels: &[ValueLabel]) {
+    out.push('[');
+    for (idx, label) in labels.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
+        write!(out, "{}", label.0).expect("in-memory write should not fail");
+    }
+    out.push(']');
 }
