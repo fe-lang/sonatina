@@ -2,10 +2,17 @@
 //! enum of a few integer and pointer fields as one value per scalar field, an
 //! enum's tag first, rather than as the address of its storage, and private
 //! functions pass and return it so. The Cranelift backend translates such
-//! values; tail-call analysis passes them as it passes scalars.
+//! values; tail-call analysis passes them as it passes scalars. This module
+//! also says which casts native code lowers to nothing, for the inliner.
 
 use smallvec::SmallVec;
-use sonatina_ir::{Type, module::ModuleCtx, types::CompoundType};
+use sonatina_ir::{
+    Function, InstId, Type,
+    inst::{CastInstKind, InstClassKind},
+    module::ModuleCtx,
+    types::CompoundType,
+};
+use sonatina_triple::Architecture;
 
 /// Values held in registers have at most this many parts. Cranelift's
 /// `tail` convention passes six integer arguments in registers on both
@@ -45,6 +52,61 @@ pub fn is_aggregate(ctx: &ModuleCtx, ty: Type) -> bool {
 /// storage: an aggregate not held in registers.
 pub fn uses_indirect_value_representation(ctx: &ModuleCtx, ty: Type) -> bool {
     is_aggregate(ctx, ty) && register_parts(ctx, ty).is_none()
+}
+
+/// Whether native code for the module's target lowers the cast `inst` to no
+/// instruction. On the Cranelift targets, with 64-bit registers, those casts
+/// are the truncations, the integer-pointer casts that do not widen and the
+/// bitcasts between scalars in the same registers, whose result is the
+/// operand's registers or the low ones of them; `zext i1 -> i8`, both a
+/// byte; and `zext i64 -> i128`, whose zero high word the carry chains and
+/// products it feeds fold away. Every other extension emits an instruction,
+/// and one to i256 fills limbs; a bitcast to or from an aggregate, or
+/// between i256 and another type, goes through memory; and a cast to i1 is
+/// masked to its low bit.
+///
+/// wasm32 holds a pointer or an integer of at most 32 bits in an `i32`, its
+/// bits above the width clear, an i64 in an `i64` and a wider integer in
+/// `i64` limbs. A truncation to i32 is an `i32.wrap_i64` and one to fewer
+/// bits a mask, so only truncations to 64 bits or more are free; a zero
+/// extension is free within an `i32`, and from i64 to i128 as above; an
+/// `int_to_ptr` from more than 32 bits checks that the address fits; and a
+/// `ptr_to_int` is free only to i32.
+pub fn is_free_cast(func: &Function, inst: InstId) -> bool {
+    let data = func.dfg.inst(inst);
+    let InstClassKind::Cast(kind) = data.kind() else {
+        return false;
+    };
+    let values = data.collect_values();
+    let ([from], Some(result)) = (values.as_slice(), func.dfg.inst_result(inst)) else {
+        return false;
+    };
+    let ctx = func.ctx();
+    let (from, to) = (func.dfg.value_ty(*from), func.dfg.value_ty(result));
+    let pointer = ctx.type_layout.pointer_repl();
+    let wasm = ctx.triple.architecture == Architecture::Wasm32;
+    to != Type::I1
+        && match kind {
+            CastInstKind::Trunc | CastInstKind::TruncNuw => !wasm || to >= Type::I64,
+            CastInstKind::Zext => {
+                (from, to) == (Type::I64, Type::I128)
+                    || if wasm {
+                        to <= Type::I32
+                    } else {
+                        (from, to) == (Type::I1, Type::I8)
+                    }
+            }
+            CastInstKind::Sext => false,
+            CastInstKind::IntToPtr if wasm => from <= pointer,
+            CastInstKind::IntToPtr => from >= pointer,
+            CastInstKind::PtrToInt if wasm => to == pointer,
+            CastInstKind::PtrToInt => to <= pointer,
+            CastInstKind::Bitcast => {
+                !is_aggregate(ctx, from)
+                    && !is_aggregate(ctx, to)
+                    && (from == Type::I256) == (to == Type::I256)
+            }
+        }
 }
 
 fn collect_parts(ctx: &ModuleCtx, ty: Type, base: u32, parts: &mut Parts) -> bool {
@@ -110,7 +172,7 @@ mod tests {
     use sonatina_ir::Type;
     use sonatina_parser::parse_module;
 
-    use super::register_parts;
+    use super::{is_free_cast, register_parts};
 
     #[test]
     fn values_of_five_scalars_are_held_in_registers() {
@@ -204,5 +266,78 @@ func private %f(v0.@UnitOk, v1.@WordErr, v2.@Three, v3.@AllEmpty, v4.@PayloadFir
             None,
         ];
         assert_eq!(args.into_iter().map(parts).collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn casts_that_lower_to_nothing_are_free() {
+        // Free on a 64-bit Cranelift target and on wasm32; `word` is an
+        // integer of pointer width.
+        let casts = [
+            ("v10.i64 = trunc v1 i64", [true, true]),
+            ("v11.i128 = trunc v2 i128", [true, true]),
+            ("v12.i8 = trunc_nuw v0 i8", [true, false]),
+            ("v13.i1 = trunc v0 i1", [false, false]),
+            ("v14.i128 = zext v0 i128", [true, true]),
+            ("v15.i8 = zext v4 i8", [true, true]),
+            ("v16.i64 = zext v5 i64", [false, false]),
+            ("v17.i128 = zext v5 i128", [false, false]),
+            ("v18.i256 = zext v0 i256", [false, false]),
+            ("v19.i64 = sext v5 i64", [false, false]),
+            ("v20.i8 = sext v4 i8", [false, false]),
+            ("v21.i128 = sext v0 i128", [false, false]),
+            ("v22.*i64 = bitcast v3 *i64", [true, true]),
+            ("v23.word = bitcast v3 word", [true, true]),
+            ("v24.[i8; 32] = bitcast v2 [i8; 32]", [false, false]),
+            ("v25.i256 = bitcast v7 i256", [false, false]),
+            ("v26.@Word = bitcast v0 @Word", [false, false]),
+            ("v27.i64 = bitcast v6 i64", [false, false]),
+            ("v28.*i8 = int_to_ptr v0 *i8", [true, false]),
+            ("v29.*i8 = int_to_ptr v2 *i8", [true, false]),
+            ("v30.*i8 = int_to_ptr v5 *i8", [false, true]),
+            ("v31.i64 = ptr_to_int v3 i64", [true, false]),
+            ("v32.i32 = ptr_to_int v3 i32", [true, true]),
+            ("v33.i256 = ptr_to_int v3 i256", [false, false]),
+            ("v34.i8 = ptr_to_int v3 i8", [true, false]),
+            ("v35.i32 = trunc v0 i32", [true, false]),
+            ("v36.i32 = zext v4 i32", [false, true]),
+            // Not a cast, and of two results.
+            ("(v37.i64, v38.i1) = call %pair", [false, false]),
+        ];
+        for (column, (triple, word)) in [
+            ("x86_64-unknown-native", "i64"),
+            ("wasm32-unknown-native", "i32"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let body: String = casts
+                .iter()
+                .map(|(inst, _)| format!("        {};\n", inst.replace("word", word)))
+                .collect();
+            let module = parse_module(&format!(
+                r#"target = "{triple}"
+type @Word = {{i64}};
+declare external %pair() -> (i64, i1);
+func private %f(v0.i64, v1.i128, v2.i256, v3.*i8, v4.i1, v5.i32, v6.@Word, v7.[i8; 32]) {{
+    block0:
+{body}        return;
+}}
+"#
+            ))
+            .expect("parse should succeed")
+            .module;
+            let f = module
+                .funcs()
+                .into_iter()
+                .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == "f"))
+                .unwrap();
+            module.func_store.view(f, |func| {
+                let insts: Vec<_> = func.layout.iter_all_insts().collect();
+                assert_eq!(insts.len(), casts.len() + 1);
+                for ((inst, free), &id) in casts.iter().zip(&insts) {
+                    assert_eq!(is_free_cast(func, id), free[column], "{triple}: {inst}");
+                }
+            });
+        }
     }
 }
