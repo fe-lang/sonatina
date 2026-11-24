@@ -419,6 +419,13 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
 ];
 
+/// The function passes after the second and third inline rounds. Code they
+/// inline into loops gets the first round's `Gvn`, `Licm`, `Gvn`, so the round
+/// costs a little less than the first, which also runs `KnownBitsSimplify` and
+/// another `Sccp`. Each of these passes reanalyzes call behavior and object
+/// facts across the module when the pass before it changed a function. O1 runs
+/// this list once, after its last inline round: its builds are quicker for
+/// having half the rounds, and each round optimizes as at O2.
 const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
     Pass::AggregateCombine,
@@ -433,6 +440,8 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::LoopUnroll,
     Pass::Sccp,
     Pass::ScalarCanonicalize,
+    Pass::Gvn,
+    Pass::Licm,
     Pass::Gvn,
     Pass::BranchCanonicalize,
     Pass::CodeSink,
@@ -733,6 +742,9 @@ impl Pipeline {
     ///    - `Sccp`
     ///    - `ScalarCanonicalize`
     ///    - `Gvn`
+    ///    - `Licm` — hoist the invariants of callees this round inlined into loops
+    ///    - `Gvn` — fold what hoisting exposes, such as a callee's bounds check
+    ///      that the loop's own test decides
     ///    - `BranchCanonicalize`
     ///    - `CfgCleanup`
     /// 5. `DeadArgElim` — remove dead private formals and rewrite direct calls
@@ -1316,8 +1328,9 @@ mod tests {
         Type,
         builder::test_util::*,
         inst::{
-            arith::Add,
+            arith::{Add, Mul},
             control_flow::{Call, Return},
+            data::ObjLoad,
         },
         ir_writer::FuncWriter,
         module::{FuncHints, InlineHint},
@@ -1551,6 +1564,135 @@ block0:
         assert!(!text.contains("insert_value"), "{text}");
         assert!(!text.contains("obj.alloc"), "{text}");
         assert_eq!(text.matches("obj.load").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn secondary_passes_hoist_loop_invariant_loads_of_inlined_helpers() {
+        // `%bump_all` is a vector update loop just after a later inline round
+        // spliced the helper that bounds-checks and indexes the vector into
+        // its body: the helper reloads the vector's length and pointer on
+        // every iteration, and its bounds check repeats the loop's own test.
+        // In `%store_either`, both arms multiply by a header phi of equal
+        // values: only GVN shows the products invariant, and they become one
+        // only once LICM has moved both to the preheader, so LICM must run
+        // between the two GVNs.
+        let mut module = parse_module(
+            r#"
+target = "x86_64-unknown-native"
+type @vec = {*i8, i64, i64};
+declare external %panic(i64);
+func private %bump_all(noalias nocapture v0.objref<@vec>) {
+block0:
+    v1.objref<i64> = obj.proj v0 1.i256;
+    v2.i64 = obj.load v1;
+    jump block1;
+block1:
+    v3.i64 = phi (0.i64 block0) (v16 block6);
+    v4.i1 = lt v3 v2;
+    br v4 block2 block7;
+block2:
+    v5.objref<i64> = obj.proj v0 1.i256;
+    v6.i64 = obj.load v5;
+    v7.i1 = lt v3 v6;
+    br v7 block4 block3;
+block3:
+    call %panic 50.i64;
+    unreachable;
+block4:
+    v8.objref<*i8> = obj.proj v0 0.i256;
+    v9.*i8 = obj.load v8;
+    v10.i64 = shl 3.i64 v3;
+    v11.*i8 = gep v9 v10;
+    v12.i64 = mload v11 i64;
+    (v13.i64, v14.i1) = uaddo v12 1.i64;
+    br v14 block5 block6;
+block5:
+    call %panic 17.i64;
+    unreachable;
+block6:
+    mstore v11 v13 i64;
+    v16.i64 = add v3 1.i64;
+    jump block1;
+block7:
+    return;
+}
+func private %store_either(v0.*i64, v1.i64, v2.i64) {
+block0:
+    v3.i64 = add v2 1.i64;
+    jump block1;
+block1:
+    v4.i64 = phi (0.i64 block0) (v12 block5);
+    v5.i64 = phi (v3 block0) (v13 block5);
+    v6.i1 = lt v4 v1;
+    br v6 block2 block6;
+block2:
+    v7.i64 = and v4 1.i64;
+    v8.i1 = is_zero v7;
+    br v8 block3 block4;
+block3:
+    v9.i64 = mul v5 v2;
+    mstore v0 v9 i64;
+    jump block5;
+block4:
+    v10.i64 = mul v5 v2;
+    v11.*i64 = gep v0 1.i64;
+    mstore v11 v10 i64;
+    jump block5;
+block5:
+    v12.i64 = add v4 1.i64;
+    v13.i64 = add v2 1.i64;
+    jump block1;
+block6:
+    return;
+}
+"#,
+        )
+        .unwrap()
+        .module;
+        run_test_func_passes(&mut module, SECONDARY_FUNC_PASSES);
+        let config = VerifierConfig::for_level(VerificationLevel::Full);
+        let report = verify_module(&module, &config);
+        assert!(report.is_ok(), "{report:?}");
+        // The loads and products each function must leave outside its loop.
+        for (name, loads, products) in [("bump_all", 2, 0), ("store_either", 0, 1)] {
+            let func_ref = module
+                .funcs()
+                .into_iter()
+                .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == name))
+                .unwrap();
+            module.func_store.view(func_ref, |func| {
+                let text = FuncWriter::new(func_ref, func).dump_string();
+                let mut cfg = ControlFlowGraph::new();
+                cfg.compute(func);
+                let mut domtree = DomTree::new();
+                domtree.compute(&cfg);
+                let mut lpt = LoopTree::new();
+                lpt.compute(&cfg, &domtree);
+                assert_eq!(lpt.loop_num(), 1, "{text}");
+                let hoisted: Vec<_> = func
+                    .layout
+                    .iter_all_insts()
+                    .filter(|&inst| {
+                        func.dfg.downcast::<&ObjLoad>(inst).is_some()
+                            || func.dfg.downcast::<&Mul>(inst).is_some()
+                    })
+                    .collect();
+                let count = |is_load: bool| {
+                    hoisted
+                        .iter()
+                        .filter(|&&inst| func.dfg.downcast::<&ObjLoad>(inst).is_some() == is_load)
+                        .count()
+                };
+                assert_eq!((count(true), count(false)), (loads, products), "{text}");
+                assert!(
+                    hoisted
+                        .iter()
+                        .all(|&inst| lpt.loop_of_block(func.layout.inst_block(inst)).is_none()),
+                    "{text}"
+                );
+                assert!(!text.contains("call %panic 50"), "{text}");
+            });
+        }
     }
 
     #[test]
