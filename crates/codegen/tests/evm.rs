@@ -3822,3 +3822,88 @@ func public %entry() {
         assert_eq!(result, Ok(IrU256::MAX), "{level:?}");
     }
 }
+
+/// `block3` and `block4` both have predecessors `block1` and `block2`, so their phis are equal,
+/// and so are the `add`s of them. Each `add` must resolve to a phi in its own block.
+#[test]
+fn sibling_phi_adds_run_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i256 = evm_calldata_load 64.i256;
+        v3.i256 = evm_calldata_load 96.i256;
+        v4.i256 = evm_calldata_load 128.i256;
+        v5.i1 = ne v0 0.i256;
+        br v5 block1 block2;
+
+    block1:
+        v6.i256 = add v3 1.i256;
+        mstore 32.i256 v6 i256;
+        v7.i1 = ne v1 0.i256;
+        br v7 block3 block4;
+
+    block2:
+        v8.i256 = add v4 1.i256;
+        mstore 32.i256 v8 i256;
+        v9.i1 = ne v2 0.i256;
+        br v9 block3 block4;
+
+    block3:
+        v10.i256 = phi (v3 block1) (v4 block2);
+        v11.i256 = add v10 1.i256;
+        mstore 0.i256 v11 i256;
+        evm_return 0.i256 32.i256;
+
+    block4:
+        v12.i256 = phi (v3 block1) (v4 block2);
+        v13.i256 = add v12 1.i256;
+        mstore 0.i256 v13 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    // block0 -> block1 -> block4 returns `v3 + 1`.
+    let results = word_results_at_all_levels(body, &calldata_words(&[1, 0, 0, 10, 20]));
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::from(11u64)), "{level:?}");
+    }
+}
+
+/// `v8` is `v1 + 1` on both edges into `block3`, where only `v9`, defined after the store of
+/// `v8`, has that value. GVN must not replace `v8` with `v9`.
+#[test]
+fn value_phi_of_later_value_keeps_store_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v10.i1 = ne v0 0.i256;
+        br v10 block1 block2;
+
+    block1:
+        v2.i256 = add v1 1.i256;
+        v3.i256 = add v2 2.i256;
+        jump block3;
+
+    block2:
+        v4.i256 = add v1 1.i256;
+        v5.i256 = add v4 3.i256;
+        jump block3;
+
+    block3:
+        v6.i256 = phi (v3 block1) (v5 block2);
+        v7.i256 = phi (2.i256 block1) (3.i256 block2);
+        v8.i256 = sub v6 v7;
+        mstore 0.i256 v8 i256;
+        v9.i256 = add v1 1.i256;
+        mstore 32.i256 v9 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &calldata_words(&[1, 41]));
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::from(42u64)), "{level:?}");
+    }
+}

@@ -31,6 +31,7 @@ use crate::{
     optim::{
         adce::divergent_blocks,
         aggregate::{CarrierSource, ObjectMemoryAnalysis, ObjectReadGvnKey},
+        compare_sub_fusion::dominates,
         simplify_expr::{
             ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_key_with_facts,
         },
@@ -956,6 +957,11 @@ impl GvnSolver {
         if let Some(result) = self.perform_simplification(func, known_bits, &insn_expr, result_idx)
         {
             result
+        } else if insn_expr.phi_args().is_some() {
+            GvnInsn::Phi {
+                key: insn_expr,
+                block,
+            }
         } else {
             GvnInsn::expr(insn_expr, result_idx)
         }
@@ -1703,6 +1709,11 @@ enum GvnInsn {
         key: OwnedInstKey,
         result_idx: usize,
     },
+    /// A canonicalized phi key and the phi's block. Phis in two blocks with the same incoming
+    /// values are equal, but neither block dominates the other, so neither phi can replace the
+    /// other. In one class, an expression over one of them would get a value phi in the other's
+    /// block.
+    Phi { key: OwnedInstKey, block: BlockId },
 }
 
 impl From<ValueId> for GvnInsn {
@@ -1728,7 +1739,7 @@ impl GvnInsn {
     fn expr_parts(&self) -> Option<(&OwnedInstKey, usize)> {
         match self {
             Self::Expr { key, result_idx } => Some((key, *result_idx)),
-            Self::Value(..) | Self::ObjectRead(..) => None,
+            Self::Value(..) | Self::ObjectRead(..) | Self::Phi { .. } => None,
         }
     }
 }
@@ -2134,8 +2145,8 @@ impl<'a, 'b> ValuePhiFinder<'a, 'b> {
             let phi_block = func.layout.inst_block(func.dfg.value_inst(value)?);
 
             // if the gvn_insn of the value class is phi, then create `ValuePhi::PhiInsn` from its args.
-            if let GvnInsn::Expr { key: insn_expr, .. } = &self.solver.classes[class].gvn_insn
-                && let Some(phi_args) = insn_expr.phi_args()
+            if let GvnInsn::Phi { key, .. } = &self.solver.classes[class].gvn_insn
+                && let Some(phi_args) = key.phi_args()
             {
                 let mut result = ValuePhiInsn::with_capacity(phi_block, phi_args.len());
                 let in_edges = &self.solver.blocks[phi_block].in_edges;
@@ -2262,6 +2273,11 @@ struct RedundantCodeRemover<'a> {
     post_domtree: OnceCell<PostDomTree>,
 
     renames: FxHashMap<ValueId, ValueId>,
+
+    /// Instructions with a replaced result, in visit order, erased once value phis are resolved
+    /// if their results are still dead. Until then lookups may hand out, and value phis may
+    /// name, any result the solver numbered.
+    replaced: Vec<InstId>,
     changed: bool,
 }
 
@@ -2273,11 +2289,27 @@ impl<'a> RedundantCodeRemover<'a> {
             resolved_value_phis: FxHashMap::default(),
             post_domtree: OnceCell::new(),
             renames: FxHashMap::default(),
+            replaced: Vec::new(),
             changed: false,
         }
     }
 
-    fn change_to_alias(&mut self, func: &mut Function, value: ValueId, target: ValueId) {
+    fn change_to_alias(
+        &mut self,
+        func: &mut Function,
+        domtree: &DomTree,
+        value: ValueId,
+        target: ValueId,
+    ) {
+        debug_assert!(
+            func.dfg.value_inst(target).is_none_or(|def| dominates(
+                func,
+                domtree,
+                def,
+                func.dfg.value_inst(value).unwrap()
+            )),
+            "GVN aliases {value:?} to {target:?}, whose definition does not dominate it"
+        );
         func.dfg.change_to_alias(value, target);
         self.renames.insert(value, target);
         self.changed = true;
@@ -2332,6 +2364,7 @@ impl<'a> RedundantCodeRemover<'a> {
     /// 3. Removes redundant code.
     /// 4. Resolves value phis and insert phi insns to the appropriate blocks. If value phi
     ///    resolution fails, then the value and its defining insn is left as is.
+    /// 5. Erases the instructions whose results were all replaced.
     fn remove_redundant_code(
         &mut self,
         func: &mut Function,
@@ -2361,8 +2394,18 @@ impl<'a> RedundantCodeRemover<'a> {
         // Resolve value phis in the function.
         let mut next_block = Some(entry);
         while let Some(block) = next_block {
-            self.resolve_value_phi_in_block(func, cfg, block);
+            self.resolve_value_phi_in_block(func, cfg, domtree, block);
             next_block = func.layout.next_block_of(block);
+        }
+
+        for inst in std::mem::take(&mut self.replaced) {
+            if self.inst_results_are_dead(func, inst) {
+                if func.layout.is_inst_inserted(inst) {
+                    func.layout.remove_inst(inst);
+                }
+                func.erase_inst(inst);
+                self.changed = true;
+            }
         }
         self.changed
     }
@@ -2417,16 +2460,18 @@ impl<'a> RedundantCodeRemover<'a> {
                             if let Some(value) =
                                 self.lookup_avail_in_block(class, &local_avails, parent)
                             {
-                                self.change_to_alias(func, inst_result, value);
+                                self.change_to_alias(func, domtree, inst_result, value);
                                 aliased_results.insert(inst_result);
                                 changed = true;
                             }
                         }
                     }
 
+                    // Only out of the layout for now: see `replaced`.
                     if changed && self.inst_results_are_dead(func, insn) {
-                        self.changed = true;
-                        inserter.remove_inst(func);
+                        inserter.proceed(func);
+                        func.layout.remove_inst(insn);
+                        self.replaced.push(insn);
                         continue;
                     }
 
@@ -2458,6 +2503,7 @@ impl<'a> RedundantCodeRemover<'a> {
         &mut self,
         func: &mut Function,
         cfg: &ControlFlowGraph,
+        domtree: &DomTree,
         block: BlockId,
     ) {
         let mut inserter = InstInserter::at_location(CursorLocation::BlockTop(block));
@@ -2482,30 +2528,42 @@ impl<'a> RedundantCodeRemover<'a> {
                         let class = self.solver.value_class(inst_result);
                         if let Some(value_phi) = &self.solver.classes[class].value_phi {
                             let ty = func.dfg.value_ty(inst_result);
-                            if self.is_value_phi_resolvable(value_phi, block)
+                            // Avail sets hold what is available at the end of a block, where
+                            // phi operands are used. A value replacing `inst_result` must also
+                            // come before it; a phi is inserted at the top of its block.
+                            let precedes = match value_phi {
+                                ValuePhi::Value(value) => self
+                                    .lookup_avail_from(Some(block), self.solver.value_class(*value))
+                                    .and_then(|avail| {
+                                        func.dfg.value_inst(self.resolve_alias(avail))
+                                    })
+                                    .is_none_or(|def| dominates(func, domtree, def, insn)),
+                                ValuePhi::PhiInsn(_) => true,
+                            };
+                            if self.is_value_phi_resolvable(domtree, value_phi, block)
+                                && precedes
                                 && self
                                     .pushes_constants_only_where_used(func, cfg, value_phi, block)
                             {
                                 let value = self.resolve_value_phi(
                                     func,
+                                    domtree,
                                     &mut inserter,
                                     value_phi,
                                     ty,
                                     block,
                                 );
 
-                                self.change_to_alias(func, inst_result, value);
+                                self.change_to_alias(func, domtree, inst_result, value);
                                 changed = true;
                             }
                         }
                     }
 
-                    if changed && self.inst_results_are_dead(func, insn) {
-                        self.changed = true;
-                        inserter.remove_inst(func);
-                        continue;
+                    // A result left unreplaced may still be looked up: see `replaced`.
+                    if changed {
+                        self.replaced.push(insn);
                     }
-
                     inserter.proceed(func);
                 }
             }
@@ -2529,26 +2587,27 @@ impl<'a> RedundantCodeRemover<'a> {
             .is_some()
     }
 
-    /// Returns `true` if the `value_phi` can be resolved, i.e. all phi args are dominated by
-    /// in the `block`.
-    fn is_value_phi_resolvable(&self, value_phi: &ValuePhi, block: BlockId) -> bool {
-        if self.resolved_value_phis.contains_key(value_phi) {
-            return true;
-        }
-
+    /// Returns `true` if the `value_phi` can be resolved for a use in `block`: at its end for a
+    /// phi operand, or at an instruction of it at the top level. A value must be available
+    /// there, and a phi, inserted at the top of its own block, must be in a block that
+    /// dominates `block`.
+    fn is_value_phi_resolvable(
+        &self,
+        domtree: &DomTree,
+        value_phi: &ValuePhi,
+        block: BlockId,
+    ) -> bool {
         match value_phi {
-            ValuePhi::Value(value) => {
-                let class = self.solver.value_class(*value);
-                self.lookup_avail_from(Some(block), class).is_some()
-            }
+            ValuePhi::Value(value) => self
+                .lookup_avail_from(Some(block), self.solver.value_class(*value))
+                .is_some(),
             ValuePhi::PhiInsn(phi_insn) => {
-                for (value_phi, phi_block) in &phi_insn.args {
-                    if !self.is_value_phi_resolvable(value_phi, *phi_block) {
-                        return false;
-                    }
-                }
-
-                true
+                domtree.dominates(phi_insn.block, block)
+                    && (self.resolved_value_phis.contains_key(value_phi)
+                        || phi_insn
+                            .args
+                            .iter()
+                            .all(|(arg, pred)| self.is_value_phi_resolvable(domtree, arg, *pred)))
             }
         }
     }
@@ -2624,12 +2683,13 @@ impl<'a> RedundantCodeRemover<'a> {
     fn resolve_value_phi(
         &mut self,
         func: &mut Function,
+        domtree: &DomTree,
         inserter: &mut InstInserter,
         value_phi: &ValuePhi,
         ty: Type,
         block: BlockId,
     ) -> ValueId {
-        debug_assert!(self.is_value_phi_resolvable(value_phi, block));
+        debug_assert!(self.is_value_phi_resolvable(domtree, value_phi, block));
 
         if let Some(value) = self.resolved_value_phis.get(value_phi) {
             return *value;
@@ -2650,8 +2710,12 @@ impl<'a> RedundantCodeRemover<'a> {
                 let mut phi_args = SmallVec::with_capacity(phi_insn.args.len());
                 for (value_phi, phi_block) in &phi_insn.args {
                     let resolved =
-                        self.resolve_value_phi(func, inserter, value_phi, ty, *phi_block);
-                    phi_args.push((self.resolve_alias(resolved), *phi_block));
+                        self.resolve_value_phi(func, domtree, inserter, value_phi, ty, *phi_block);
+                    let resolved = self.resolve_alias(resolved);
+                    debug_assert!(func.dfg.value_inst(resolved).is_none_or(|def| {
+                        domtree.dominates(func.layout.inst_block(def), *phi_block)
+                    }));
+                    phi_args.push((resolved, *phi_block));
                 }
                 let phi = func.dfg.make_phi(phi_args);
 
@@ -2953,6 +3017,286 @@ func private %promo_piece(v0.i1, v1.i256) -> i256 {
         assert!(dumped.contains("(11.i256 block7)"), "{dumped}");
     }
 
+    /// `block3` and `block4` have the same predecessors, so `v7` and `v9` are equal, but neither
+    /// block dominates the other. Each `add` resolves to a phi of `v5` and `v6` in its own block.
+    #[test]
+    fn value_phi_of_sibling_phi_class_stays_in_its_block() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func public %f(v0.i1, v1.i1, v2.i1, v3.i32, v4.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v5.i32 = add v3 1.i32;
+        br v1 block3 block4;
+
+    block2:
+        v6.i32 = add v4 1.i32;
+        br v2 block3 block4;
+
+    block3:
+        v7.i32 = phi (v3 block1) (v4 block2);
+        v8.i32 = add v7 1.i32;
+        return v8;
+
+    block4:
+        v9.i32 = phi (v3 block1) (v4 block2);
+        v10.i32 = add v9 1.i32;
+        return v10;
+}
+"#,
+        )
+        .expect("module parses")
+        .module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            GvnSolver::new().run(func, &mut cfg, &mut domtree);
+        });
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        let dumped = module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        });
+        assert_eq!(
+            dumped.matches("phi (v5 block1) (v6 block2)").count(),
+            2,
+            "{dumped}"
+        );
+    }
+
+    /// `v8` is `v1 + 1` on both edges, a value phi of `v2`'s class, which in `block3` only `v9`
+    /// has, defined after `v8`. `v8` must stay: the store reads it before `v9` exists.
+    #[test]
+    fn value_phi_of_value_defined_later_in_block_is_not_resolved() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i32 = add v1 1.i32;
+        v3.i32 = add v2 2.i32;
+        jump block3;
+
+    block2:
+        v4.i32 = add v1 1.i32;
+        v5.i32 = add v4 3.i32;
+        jump block3;
+
+    block3:
+        v6.i32 = phi (v3 block1) (v5 block2);
+        v7.i32 = phi (2.i32 block1) (3.i32 block2);
+        v8.i32 = sub v6 v7;
+        mstore 0.i256 v8 i32;
+        v9.i32 = add v1 1.i32;
+        return v9;
+}
+"#,
+        )
+        .expect("module parses")
+        .module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            GvnSolver::new().run(func, &mut cfg, &mut domtree);
+        });
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        let dumped = module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        });
+        assert!(dumped.contains("mstore 0.i256 v8 i32"), "{dumped}");
+    }
+
+    /// `block4`'s `uaddo` resolves its sum to a value phi and is erased; its overflow flag, which
+    /// nothing uses, stays unresolved. `v13` in `block8` is that flag's value and must not be
+    /// replaced by the erased `v9`.
+    #[test]
+    fn erased_multi_result_inst_is_not_available() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i1, v2.i1, v3.i32, v4.i32) -> i32 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    (v5.i32, v6.i1) = uaddo v3 v4;
+    jump block3;
+
+block3:
+    v7.i32 = phi (0.i32 block1) (v4 block2);
+    br v1 block4 block7;
+
+block7:
+    return 0.i32;
+
+block4:
+    (v8.i32, v9.i1) = uaddo v3 v7;
+    br v2 block5 block6;
+
+block5:
+    jump block8;
+
+block6:
+    jump block8;
+
+block8:
+    v10.i32 = phi (v3 block5) (v7 block6);
+    v11.i32 = phi (v7 block5) (v3 block6);
+    (v12.i32, v13.i1) = uaddo v10 v11;
+    v14.i32 = zext v13 i32;
+    v15.i32 = add v8 v14;
+    return v15;
+}
+"#,
+        )
+        .expect("module parses")
+        .module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            GvnSolver::new().run(func, &mut cfg, &mut domtree);
+        });
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        let dumped = module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        });
+        assert!(dumped.contains("uaddo v3 v7"), "{dumped}");
+        assert!(dumped.contains("zext v9 i32"), "{dumped}");
+    }
+
+    const NESTED_PHI_OUTSIDE_PREDECESSOR: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i1, v2.i32, v3.i32, v4.i32) -> i32 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v5.i32 = phi (v2 block1) (0.i32 block2);
+    br v1 block4 block5;
+
+block4:
+    v6.i32 = sub v2 v3;
+    jump block6;
+
+block5:
+    v7.i32 = sub v2 v4;
+    jump block6;
+
+block6:
+    v8.i32 = phi (v3 block4) (v4 block5);
+    v9.i32 = neg v8;
+    v10.i32 = add v5 v9;
+    return v10;
+}
+"#;
+
+    /// On the edge from `block1`, `add v5 v9` is `sub v2 v8`, a phi of `v6` and `v7` in
+    /// `block6`, which does not dominate `block1`; the value phi of `v10` in `block3` must not
+    /// be resolved through it.
+    #[test]
+    fn nested_value_phi_outside_its_predecessor_is_not_resolved() {
+        let module = parse_module(NESTED_PHI_OUTSIDE_PREDECESSOR)
+            .expect("module parses")
+            .module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            GvnSolver::new().run(func, &mut cfg, &mut domtree);
+        });
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+    }
+
+    /// A phi resolved in `block6` is not available at the end of `block1` or `block2`, which
+    /// `block6` does not dominate, even once it exists.
+    #[test]
+    fn resolved_phi_is_resolvable_only_where_its_block_dominates() {
+        let module = parse_module(NESTED_PHI_OUTSIDE_PREDECESSOR)
+            .expect("module parses")
+            .module;
+        module.func_store.view(module.funcs()[0], |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            let solver = GvnSolver::new();
+            let mut remover = RedundantCodeRemover::new(&solver);
+            let nested = ValuePhi::PhiInsn(ValuePhiInsn {
+                block: BlockId(6),
+                args: vec![
+                    (ValuePhi::Value(ValueId(6)), BlockId(4)),
+                    (ValuePhi::Value(ValueId(7)), BlockId(5)),
+                ],
+            });
+            remover
+                .resolved_value_phis
+                .insert(nested.clone(), ValueId(11));
+            let outer = ValuePhi::PhiInsn(ValuePhiInsn {
+                block: BlockId(3),
+                args: vec![(nested.clone(), BlockId(1)), (nested, BlockId(2))],
+            });
+            assert!(!remover.is_value_phi_resolvable(&domtree, &outer, BlockId(3)));
+        });
+    }
+
+    /// Two phis of one block with the same incoming values are one value.
+    #[test]
+    fn equal_phis_in_one_block_share_a_class() {
+        let dumped = run_gvn(
+            r#"
+target = "evm-ethereum-london"
+
+func public %f(v0.i1, v1.i32, v2.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.i32 = phi (v1 block1) (v2 block2);
+        v4.i32 = phi (v1 block1) (v2 block2);
+        v5.i32 = add v3 v4;
+        return v5;
+}
+"#,
+        );
+        assert_eq!(dumped.matches(" phi ").count(), 1, "{dumped}");
+        assert!(dumped.contains("add v3 v3"), "{dumped}");
+    }
+
     #[test]
     fn equal_value_phis_do_not_permanently_alias_expression_classes() {
         let mut solver = GvnSolver::new();
@@ -3164,7 +3508,13 @@ func private %entry(v0.i1) -> i32 {
                 solver.edges[edge].reachable = true;
             }
             let input = func.dfg.inst_result(phis[0]).unwrap();
-            let input_class = solver.make_class(GvnInsn::expr(phi_key, 0), None);
+            let input_class = solver.make_class(
+                GvnInsn::Phi {
+                    key: phi_key,
+                    block: join,
+                },
+                None,
+            );
             solver.assign_class(input, input_class);
             let add = func
                 .layout
@@ -3188,9 +3538,13 @@ func private %entry(v0.i1) -> i32 {
             // whose canonical expression is the add, then revisit the phi member.
             let alias = func.dfg.inst_result(phis[1]).unwrap();
             solver.assign_class(alias, class);
-            solver
-                .insn_table
-                .insert(GvnInsn::expr(inst_to_gvn_key(func, phis[1]), 0), class);
+            solver.insn_table.insert(
+                GvnInsn::Phi {
+                    key: inst_to_gvn_key(func, phis[1]),
+                    block: join,
+                },
+                class,
+            );
             let changed =
                 solver.reassign_congruence(func, &domtree, &known_bits, None, phis[1], alias);
             assert!(!changed.changed());
@@ -3253,7 +3607,13 @@ func private %entry(v0.i1) -> i32 {
                 solver.edges[edge].reachable = true;
             }
 
-            let class = solver.make_class(GvnInsn::expr(phi_key, 0), None);
+            let class = solver.make_class(
+                GvnInsn::Phi {
+                    key: phi_key,
+                    block: phi_block,
+                },
+                None,
+            );
             solver.assign_class(phi_value, class);
 
             let known_bits = KnownBitsQuery::new(func);
@@ -3315,7 +3675,13 @@ func private %entry(v0.i1) -> i32 {
                 solver.add_edge_info(from, phi_block, None, None, None);
             }
 
-            let class = solver.make_class(GvnInsn::expr(phi_key, 0), None);
+            let class = solver.make_class(
+                GvnInsn::Phi {
+                    key: phi_key,
+                    block: phi_block,
+                },
+                None,
+            );
             solver.assign_class(phi_value, class);
 
             let known_bits = KnownBitsQuery::new(func);
