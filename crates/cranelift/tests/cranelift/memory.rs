@@ -3067,6 +3067,46 @@ block0:
 }
 
 #[test]
+fn sha256_compress_constant_block_also_stored_stays_in_memory() {
+    // A constant block both compressed and stored is in memory.
+    let source = format!(
+        r#"{SHA256_GLOBALS}func public %store(v0.*i8, v1.*i8) {{
+block0:
+    v2.constref<[i32; 8]> = const.ref $iv;
+    v3.[i32; 8] = const.load v2;
+    v4.constref<[i32; 16]> = const.ref $after64;
+    v5.[i32; 16] = const.load v4;
+    v6.[i32; 8] = sha256_compress v3 v5;
+    v7.*[i32; 8] = bitcast v0 *[i32; 8];
+    mstore v7 v6 [i32; 8];
+    v8.*[i32; 16] = bitcast v1 *[i32; 16];
+    mstore v8 v5 [i32; 16];
+    return;
+}}
+"#
+    );
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let store: unsafe extern "C" fn(*mut u32, *mut u32) =
+            unsafe { std::mem::transmute(artifact.function_address("store").unwrap()) };
+        let (mut digest, mut block) = ([0u32; 8], [0u32; 16]);
+        unsafe { store(digest.as_mut_ptr(), block.as_mut_ptr()) };
+        assert_eq!(
+            digest,
+            sha256_reference(SHA256_IV, SHA256_PADDING),
+            "{level:?}"
+        );
+        assert_eq!(block, SHA256_PADDING, "{level:?}");
+    }
+}
+
+#[test]
 fn nested_aggregates_build_in_their_destination_object() {
     // The inner array's chain starts before the outer one's, and both are
     // built in the object the outer value is stored into.

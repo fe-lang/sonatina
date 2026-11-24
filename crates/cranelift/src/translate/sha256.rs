@@ -81,36 +81,28 @@ pub(super) struct Sha256Words {
 impl Sha256Words {
     pub fn new(function: &Function, hardware: bool) -> Self {
         let dfg = &function.dfg;
-        let insts = || {
-            function
-                .layout
-                .iter_block()
-                .flat_map(|block| function.layout.iter_inst(block))
-        };
-        let mut words: FxHashMap<ValueId, Words> = insts()
-            .filter_map(|inst| {
-                let words = constant_words(function, inst)?;
-                Some((dfg.inst_result(inst)?, words))
-            })
-            .collect();
-        let takes_words = |value: ValueId| {
-            let made = dfg.value_inst(value).is_some_and(|inst| {
-                match native_inst_set().resolve_inst(dfg.inst(inst)) {
-                    NativeInstKind::Sha256Compress(_)
-                    | NativeInstKind::InsertValue(_)
-                    | NativeInstKind::AggMake(_) => true,
-                    NativeInstKind::ConstLoad(_) => words.contains_key(&value),
-                    _ => false,
-                }
-            });
-            made && word_count(function, value).is_some()
-                && dfg.users(value).all(|&user| {
+        // Whether `value` can be held, with its words if it is a constant:
+        // only the constants reached from compressions are decoded.
+        let takes_words = |value: ValueId| -> Option<Option<Words>> {
+            let inst = dfg.value_inst(value)?;
+            if word_count(function, value).is_none()
+                || !dfg.users(value).all(|&user| {
                     match native_inst_set().resolve_inst(dfg.inst(user)) {
                         NativeInstKind::Sha256Compress(_) | NativeInstKind::ExtractValue(_) => true,
                         NativeInstKind::InsertValue(insert) => *insert.dest() == value,
                         _ => false,
                     }
                 })
+            {
+                return None;
+            }
+            match native_inst_set().resolve_inst(dfg.inst(inst)) {
+                NativeInstKind::Sha256Compress(_)
+                | NativeInstKind::InsertValue(_)
+                | NativeInstKind::AggMake(_) => Some(None),
+                NativeInstKind::ConstLoad(_) => constant_words(function, inst).map(Some),
+                _ => None,
+            }
         };
         // The source of `value` if it is an insert, unless `zero`, and the
         // inserts into it.
@@ -128,7 +120,11 @@ impl Sha256Words {
             source.into_iter().chain(inserts).collect()
         };
         let mut held = FxHashSet::default();
-        let mut pending: Vec<_> = insts()
+        let mut words = FxHashMap::default();
+        let mut pending: Vec<_> = function
+            .layout
+            .iter_block()
+            .flat_map(|block| function.layout.iter_inst(block))
             .filter_map(|inst| {
                 let compress = dfg.downcast::<&Sha256Compress>(inst)?;
                 Some(
@@ -140,8 +136,11 @@ impl Sha256Words {
             .flatten()
             .collect();
         while let Some(value) = pending.pop() {
-            if !held.contains(&value) && takes_words(value) {
+            if !held.contains(&value)
+                && let Some(constant) = takes_words(value)
+            {
                 held.insert(value);
+                words.extend(constant.map(|constant| (value, constant)));
                 pending.extend(neighbours(value));
             }
         }
