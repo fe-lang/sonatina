@@ -1013,3 +1013,23 @@ fn machine_verify_rejects_use_not_dominated_by_its_definition() {
         );
     });
 }
+
+#[test]
+fn machine_verify_rejects_use_of_detached_definition() {
+    let (module, func_ref) = build_join_of_branch_value("machine_detached_def", true);
+    module.func_store.modify(func_ref, |function| {
+        // Take the `add` out of the layout; the phi still uses its result.
+        let add = function
+            .layout
+            .iter_block()
+            .flat_map(|block| function.layout.iter_inst(block))
+            .find(|&inst| {
+                function.dfg.cast_phi(inst).is_none() && function.dfg.inst_result(inst).is_some()
+            })
+            .unwrap();
+        function.layout.remove_inst(add);
+        let err = verify_machine_function(func_ref, function)
+            .expect_err("a use of a definition outside the layout should be rejected");
+        assert!(err.contains("detached value definition"), "{err}");
+    });
+}
