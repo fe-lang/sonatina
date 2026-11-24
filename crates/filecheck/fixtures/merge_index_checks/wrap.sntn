@@ -1,0 +1,153 @@
+#! A merged check is exact only when no member of a passing run wraps. A run
+#! that checks `b < n` itself and has `n - 1 + k_max` in range cannot wrap;
+#! otherwise its checks stay.
+
+target = "evm-ethereum-osaka"
+
+# `b < 252` and `b + 3 < 252` in `i8` (`-4.i8` is 252): `b + 3` reaches at
+# most 254, so the run is `b < 249` (`-7.i8`).
+# regex: VALUE=\bv\d+\b
+# sameln: func private %fits(v0.i8) -> i8 {
+# nextln: block0:
+# nextln: $(cond=$VALUE).i1 = lt v0 -7.i8;
+# nextln: br $cond block2 block1;
+# not: br
+# check: return v2;
+func private %fits(v0.i8) -> i8 {
+block0:
+    v1.i1 = lt v0 -4.i8;
+    br v1 block2 block1;
+
+block1:
+    return 0.i8;
+
+block2:
+    v2.i8 = add v0 3.i8;
+    v3.i1 = lt v2 -4.i8;
+    br v3 block3 block1;
+
+block3:
+    return v2;
+}
+
+# `b < 254` and `b + 3 < 254` (`-2.i8` is 254): `b = 253` passes both, as
+# `b + 3` wraps to 0, where `b < 251` would fail.
+# sameln: func private %wraps(v0.i8) -> i8 {
+# check: v1.i1 = lt v0 -2.i8;
+# check: br v1 block2 block1;
+# check: br v3 block3 block1;
+func private %wraps(v0.i8) -> i8 {
+block0:
+    v1.i1 = lt v0 -2.i8;
+    br v1 block2 block1;
+
+block1:
+    return 0.i8;
+
+block2:
+    v2.i8 = add v0 3.i8;
+    v3.i1 = lt v2 -2.i8;
+    br v3 block3 block1;
+
+block3:
+    return v2;
+}
+
+# No check of `b` itself: `b = 255` passes `b + 1 < 32` and `b + 2 < 32`,
+# where `b < 30` would fail.
+# sameln: func private %offsets_only(v0.i8) -> i8 {
+# check: v2.i1 = lt v1 32.i8;
+# check: br v2 block2 block1;
+# check: br v4 block3 block1;
+func private %offsets_only(v0.i8) -> i8 {
+block0:
+    v1.i8 = add v0 1.i8;
+    v2.i1 = lt v1 32.i8;
+    br v2 block2 block1;
+
+block1:
+    return 0.i8;
+
+block2:
+    v3.i8 = add v0 2.i8;
+    v4.i1 = lt v3 32.i8;
+    br v4 block3 block1;
+
+block3:
+    v5.i8 = xor v1 v3;
+    return v5;
+}
+
+# `(b + 200) + 60` is `b + 4` in `i8` (`-56.i8` is 200): with `b < 32` the
+# run is `b < 28`. Range analysis loses `b + 4` where `b + 200` wraps, so the
+# second check stays, now redundant.
+# regex: VALUE=\bv\d+\b
+# sameln: func private %wrapping_chain(v0.i8) -> i8 {
+# nextln: block0:
+# nextln: $(cond=$VALUE).i1 = lt v0 28.i8;
+# nextln: br $cond block2 block1;
+# check: br v4 block3 block1;
+func private %wrapping_chain(v0.i8) -> i8 {
+block0:
+    v1.i1 = lt v0 32.i8;
+    br v1 block2 block1;
+
+block1:
+    return 0.i8;
+
+block2:
+    v2.i8 = add v0 -56.i8;
+    v3.i8 = add v2 60.i8;
+    v4.i1 = lt v3 32.i8;
+    br v4 block3 block1;
+
+block3:
+    return v3;
+}
+
+# `b + 255` (`-1.i8`) wraps for every `b` but 0: `b = 1` passes `b < 10`
+# and `b + 255 < 10`.
+# sameln: func private %negative_offset(v0.i8) -> i8 {
+# check: v1.i1 = lt v0 10.i8;
+# check: br v1 block2 block1;
+# check: br v3 block3 block1;
+func private %negative_offset(v0.i8) -> i8 {
+block0:
+    v1.i1 = lt v0 10.i8;
+    br v1 block2 block1;
+
+block1:
+    return 0.i8;
+
+block2:
+    v2.i8 = add v0 -1.i8;
+    v3.i1 = lt v2 10.i8;
+    br v3 block3 block1;
+
+block3:
+    return v2;
+}
+
+# `b + 255 < 1` passes only for `b = 1`, which fails `b < 1`: the run always
+# fails, and its first check becomes `lt b 0`.
+# sameln: func private %negative_offset_always_fails(v0.i8) -> i8 {
+# nextln: block0:
+# not: br
+# check: return 0.i8;
+# not: block
+func private %negative_offset_always_fails(v0.i8) -> i8 {
+block0:
+    v1.i8 = add v0 -1.i8;
+    v2.i1 = lt v1 1.i8;
+    br v2 block2 block1;
+
+block1:
+    return 0.i8;
+
+block2:
+    v3.i1 = lt v0 1.i8;
+    br v3 block3 block1;
+
+block3:
+    return v1;
+}

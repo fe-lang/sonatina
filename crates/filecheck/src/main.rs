@@ -22,6 +22,7 @@ use sonatina_filecheck::{
     loop_rotate::LoopRotateTransform,
     loop_strength_reduce::LoopStrengthReduceTransform,
     loop_unroll::{LoopUnrollSmallTransform, LoopUnrollTransform},
+    merge_index_checks::MergeIndexChecksTransform,
     narrow_object_loads::NarrowObjectLoadsTransform,
     range_branch_simplify::RangeBranchSimplifyTransform,
     return_thread::ReturnThreadTransform,
@@ -67,6 +68,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(RangeBranchSimplifyTransform::default());
+    runner.run();
+
+    runner.attach_transformer(MergeIndexChecksTransform::default());
     runner.run();
 
     runner.attach_transformer(BoolPhiFoldTransform);

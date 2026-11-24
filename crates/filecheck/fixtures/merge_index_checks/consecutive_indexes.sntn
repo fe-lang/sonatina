@@ -1,0 +1,159 @@
+#! A run of bounds checks of `b + k` against one constant length, failing to
+#! one block, checks `b < n - k_max` at its first check: the later checks fold
+#! and their blocks join the first one's successor.
+
+target = "evm-ethereum-osaka"
+
+declare external %report_panic(i256);
+
+# Four bytes read as a big-endian word: one check, one block of loads.
+# regex: VALUE=\bv\d+\b
+# sameln: func private %big_endian_word(v0.objref<[i8; 32]>, v1.i64) -> i32 {
+# nextln: block0:
+# nextln: $(cond=$VALUE).i1 = lt v1 29.i64;
+# nextln: br $cond block3 block2;
+# check: block3:
+# nextln: v8.objref<i8> = obj.index v0 v1;
+# not: br
+# not: block
+# check: v50.i8 = obj.load v49;
+# not: br
+# not: block
+# check: return v53;
+func private %big_endian_word(v0.objref<[i8; 32]>, v1.i64) -> i32 {
+block0:
+    v4.i1 = lt v1 32.i64;
+    br v4 block3 block2;
+
+block2:
+    call %report_panic 50.i256;
+    unreachable;
+
+block3:
+    v8.objref<i8> = obj.index v0 v1;
+    v9.i8 = obj.load v8;
+    v10.i32 = zext v9 i32;
+    v12.i32 = shl 24.i32 v10;
+    v55.i64 = add v1 1.i64;
+    v18.i1 = lt v55 32.i64;
+    br v18 block6 block2;
+
+block6:
+    v21.objref<i8> = obj.index v0 v55;
+    v22.i8 = obj.load v21;
+    v23.i32 = zext v22 i32;
+    v25.i32 = shl 16.i32 v23;
+    v27.i32 = or v12 v25;
+    v56.i64 = add v1 2.i64;
+    v32.i1 = lt v56 32.i64;
+    br v32 block8 block2;
+
+block8:
+    v35.objref<i8> = obj.index v0 v56;
+    v36.i8 = obj.load v35;
+    v37.i32 = zext v36 i32;
+    v39.i32 = shl 8.i32 v37;
+    v41.i32 = or v27 v39;
+    v57.i64 = add v1 3.i64;
+    v46.i1 = lt v57 32.i64;
+    br v46 block10 block2;
+
+block10:
+    v49.objref<i8> = obj.index v0 v57;
+    v50.i8 = obj.load v49;
+    v51.i32 = zext v50 i32;
+    v53.i32 = or v41 v51;
+    return v53;
+}
+
+# The checks come out of order, and `b + 2` is `(b + 1) + 1`: the first check,
+# of `b + 3`, becomes the check of `b` that covers them all.
+# regex: VALUE=\bv\d+\b
+# sameln: func private %out_of_order(v0.objref<[i8; 32]>, v1.i64) -> i8 {
+# nextln: block0:
+# nextln: v2.i64 = add v1 3.i64;
+# nextln: $(cond=$VALUE).i1 = lt v1 29.i64;
+# nextln: br $cond block2 block1;
+# check: block2:
+# not: br
+# not: block
+# check: return v19;
+func private %out_of_order(v0.objref<[i8; 32]>, v1.i64) -> i8 {
+block0:
+    v2.i64 = add v1 3.i64;
+    v3.i1 = lt v2 32.i64;
+    br v3 block2 block1;
+
+block1:
+    call %report_panic 50.i256;
+    unreachable;
+
+block2:
+    v4.objref<i8> = obj.index v0 v2;
+    v5.i8 = obj.load v4;
+    v6.i1 = lt v1 32.i64;
+    br v6 block3 block1;
+
+block3:
+    v7.objref<i8> = obj.index v0 v1;
+    v8.i8 = obj.load v7;
+    v9.i8 = xor v5 v8;
+    v10.i64 = add v1 1.i64;
+    v11.i64 = add v10 1.i64;
+    v12.i1 = lt v11 32.i64;
+    br v12 block4 block1;
+
+block4:
+    v13.objref<i8> = obj.index v0 v11;
+    v14.i8 = obj.load v13;
+    v15.i8 = xor v9 v14;
+    v16.i1 = lt v10 32.i64;
+    br v16 block5 block1;
+
+block5:
+    v17.objref<i8> = obj.index v0 v10;
+    v18.i8 = obj.load v17;
+    v19.i8 = xor v15 v18;
+    return v19;
+}
+
+# A check of another index that fails the same way lies between two of the
+# run: the run merges across it, and it stays.
+# regex: VALUE=\bv\d+\b
+# sameln: func private %across_other_check(v0.objref<[i8; 32]>, v1.objref<[i8; 16]>, v2.i64, v3.i64) -> i8 {
+# nextln: block0:
+# nextln: $(cond=$VALUE).i1 = lt v2 31.i64;
+# nextln: br $cond block2 block1;
+# check: br v7 block3 block1;
+# check: block3:
+# not: br
+# not: block
+# check: return v14;
+func private %across_other_check(v0.objref<[i8; 32]>, v1.objref<[i8; 16]>, v2.i64, v3.i64) -> i8 {
+block0:
+    v4.i1 = lt v2 32.i64;
+    br v4 block2 block1;
+
+block1:
+    call %report_panic 50.i256;
+    unreachable;
+
+block2:
+    v5.objref<i8> = obj.index v0 v2;
+    v6.i8 = obj.load v5;
+    v7.i1 = lt v3 16.i64;
+    br v7 block3 block1;
+
+block3:
+    v8.objref<i8> = obj.index v1 v3;
+    v9.i8 = obj.load v8;
+    v10.i64 = add v2 1.i64;
+    v11.i1 = lt v10 32.i64;
+    br v11 block4 block1;
+
+block4:
+    v12.objref<i8> = obj.index v0 v10;
+    v13.i8 = obj.load v12;
+    v14.i8 = xor v9 v13;
+    return v14;
+}

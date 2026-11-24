@@ -1,0 +1,144 @@
+#! A run follows jumps and branches on constants, ends at a block entered
+#! from elsewhere, and never steps into the entry block, which the
+#! function's callers also enter.
+
+target = "evm-ethereum-osaka"
+
+declare external %report_panic(i256);
+
+# regex: VALUE=\bv\d+\b
+# sameln: func private %through_jump_and_constant_branch(v0.objref<[i8; 32]>, v1.i64) -> i8 {
+# nextln: block0:
+# nextln: $(cond=$VALUE).i1 = lt v1 31.i64;
+# nextln: br $cond block2 block1;
+# check: block2:
+# not: br
+# not: block
+# check: return v9;
+func private %through_jump_and_constant_branch(v0.objref<[i8; 32]>, v1.i64) -> i8 {
+block0:
+    v2.i1 = lt v1 32.i64;
+    br v2 block2 block1;
+
+block1:
+    call %report_panic 50.i256;
+    unreachable;
+
+block2:
+    v3.objref<i8> = obj.index v0 v1;
+    v4.i8 = obj.load v3;
+    jump block3;
+
+block3:
+    br 1.i1 block4 block6;
+
+block4:
+    v6.i64 = add v1 1.i64;
+    v7.i1 = lt v6 32.i64;
+    br v7 block5 block1;
+
+block5:
+    v8.objref<i8> = obj.index v0 v6;
+    v5.i8 = obj.load v8;
+    v9.i8 = xor v4 v5;
+    return v9;
+
+block6:
+    return 0.i8;
+}
+
+# The second check's block is also entered from a block that skips the
+# first check.
+# sameln: func private %joined_second_check(v0.objref<[i8; 32]>, v1.i64, v2.i1) -> i8 {
+# check: v3.i1 = lt v1 32.i64;
+# check: br v3 block2 block1;
+# check: br v6 block3 block1;
+func private %joined_second_check(v0.objref<[i8; 32]>, v1.i64, v2.i1) -> i8 {
+block0:
+    br v2 block4 block2;
+
+block4:
+    v3.i1 = lt v1 32.i64;
+    br v3 block2 block1;
+
+block1:
+    call %report_panic 50.i256;
+    unreachable;
+
+block2:
+    v5.i64 = add v1 1.i64;
+    v6.i1 = lt v5 32.i64;
+    br v6 block3 block1;
+
+block3:
+    v7.objref<i8> = obj.index v0 v5;
+    v8.i8 = obj.load v7;
+    return v8;
+}
+
+# A run in a loop body whose index grows without bound merges; the walk ends
+# at the latch's branch back to the header.
+# regex: VALUE=\bv\d+\b
+# sameln: func private %loop_body(v0.objref<[i8; 32]>) -> i8 {
+# check: $(cond=$VALUE).i1 = lt v2 31.i64;
+# nextln: br $cond block2 block5;
+# not: br v8
+# check: br v14 block1 block4;
+func private %loop_body(v0.objref<[i8; 32]>) -> i8 {
+block0:
+    jump block1;
+
+block1:
+    v2.i64 = phi (0.i64 block0) (v9 block3);
+    v3.i8 = phi (0.i8 block0) (v10 block3);
+    v4.i1 = lt v2 32.i64;
+    br v4 block2 block5;
+
+block2:
+    v5.objref<i8> = obj.index v0 v2;
+    v6.i8 = obj.load v5;
+    v7.i64 = add v2 1.i64;
+    v8.i1 = lt v7 32.i64;
+    br v8 block3 block5;
+
+block3:
+    v11.objref<i8> = obj.index v0 v7;
+    v12.i8 = obj.load v11;
+    v13.i8 = xor v6 v12;
+    v10.i8 = xor v3 v13;
+    v9.i64 = add v2 2.i64;
+    v14.i1 = lt v10 100.i8;
+    br v14 block1 block4;
+
+block4:
+    return v10;
+
+block5:
+    call %report_panic 50.i256;
+    unreachable;
+}
+
+# The entry block's only predecessor is the latch, whose check would merge
+# with the entry's: the entry is also entered by the call, so the run stops
+# before it. (The entry's own run ends at the store.)
+# sameln: func private %entry_loop(v0.objref<[i8; 32]>, v1.i64, v2.i8) {
+# check: v3.i1 = lt v1 32.i64;
+# check: br v3 block1 block2;
+# check: v6.i1 = lt v5 32.i64;
+# check: br v6 block0 block2;
+func private %entry_loop(v0.objref<[i8; 32]>, v1.i64, v2.i8) {
+block0:
+    v3.i1 = lt v1 32.i64;
+    br v3 block1 block2;
+
+block1:
+    v4.objref<i8> = obj.index v0 v1;
+    obj.store v4 v2;
+    v5.i64 = add v1 1.i64;
+    v6.i1 = lt v5 32.i64;
+    br v6 block0 block2;
+
+block2:
+    call %report_panic 50.i256;
+    unreachable;
+}

@@ -271,7 +271,7 @@ fn i1_literal(func: &Function, value: ValueId) -> Option<bool> {
     }
 }
 
-fn insert_compare_before(
+pub(crate) fn insert_compare_before(
     func: &mut Function,
     before: InstId,
     anchor: InstId,

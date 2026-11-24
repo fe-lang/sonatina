@@ -21,6 +21,7 @@ pub mod load_store;
 pub mod loop_rotate;
 pub mod loop_strength_reduce;
 pub mod loop_unroll;
+pub mod merge_index_checks;
 pub mod narrow_object_loads;
 pub mod range_branch_simplify;
 pub mod return_thread;
