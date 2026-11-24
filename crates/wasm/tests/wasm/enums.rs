@@ -429,3 +429,162 @@ block0:
         assert_eq!(got[0].unwrap_i64(), (2 << 32) | 1, "{level:?}");
     }
 }
+
+#[test]
+fn enums_with_zero_sized_payloads_are_held_in_parts() {
+    // `@UnitOk` and `@WordErr` are results with a unit `#Ok`, and `@Three`
+    // has two variants of zero-sized fields beside `#B`: each is held as its
+    // tag and its one payload's parts. Private functions make, pass, merge in
+    // a phi and take apart every variant, including the zero-sized fields,
+    // and `%run` stores the values for the host to read.
+    let source = r#"
+type @Empty = {};
+type @Fieldless = enum { #Overflow, #OutOfRange };
+type @UnitOk = enum { #Ok(@Empty), #Err(@Fieldless) };
+type @WordErr = enum { #Ok(@Empty), #Err(i64) };
+type @Three = enum { #A(@Empty), #B(i64, i32), #C(@Empty, [i8; 0]) };
+func inline(never) private %unit_ok(v0.i64, v1.i64) -> @UnitOk {
+block0:
+    v2.i1 = gt v0 v1;
+    br v2 block1 block2;
+block1:
+    v3.@Fieldless = enum.make @Fieldless #OutOfRange ();
+    v4.@UnitOk = enum.make @UnitOk #Err (v3);
+    jump block3;
+block2:
+    v5.@UnitOk = enum.make @UnitOk #Ok (zero.@Empty);
+    jump block3;
+block3:
+    v6.@UnitOk = phi (v4 block1) (v5 block2);
+    return v6;
+}
+func inline(never) private %word_err(v0.i64, v1.i64) -> @WordErr {
+block0:
+    v2.i1 = gt v0 v1;
+    br v2 block1 block2;
+block1:
+    v3.@WordErr = enum.make @WordErr #Err (v1);
+    return v3;
+block2:
+    v4.@WordErr = enum.make @WordErr #Ok (zero.@Empty);
+    return v4;
+}
+func inline(never) private %three(v0.i64) -> @Three {
+block0:
+    br_table v0 block3 (0.i64 block1) (1.i64 block2);
+block1:
+    v1.@Three = enum.make @Three #A (zero.@Empty);
+    return v1;
+block2:
+    v2.@Three = enum.make @Three #C (zero.@Empty, zero.[i8; 0]);
+    return v2;
+block3:
+    v3.i32 = trunc v0 i32;
+    v4.@Three = enum.make @Three #B (v0, v3);
+    return v4;
+}
+func inline(never) private %rewrap(v0.@Three) -> @Three {
+block0:
+    v1.i1 = enum.is_variant v0 #A;
+    br v1 block1 block2;
+block1:
+    enum.assert_variant v0 #A;
+    v2.@Empty = enum.extract v0 #A 0.i8;
+    v3.@Three = enum.make @Three #C (v2, zero.[i8; 0]);
+    return v3;
+block2:
+    v4.i1 = enum.is_variant v0 #C;
+    br v4 block3 block4;
+block3:
+    enum.assert_variant v0 #C;
+    v5.@Empty = enum.extract v0 #C 0.i8;
+    v6.@Three = enum.make @Three #A (v5);
+    return v6;
+block4:
+    enum.assert_variant v0 #B;
+    v7.i64 = enum.extract v0 #B 0.i8;
+    v8.i32 = enum.extract v0 #B 1.i8;
+    v9.i64 = add v7 1.i64;
+    v10.i32 = add v8 2.i32;
+    v11.@Three = enum.make @Three #B (v9, v10);
+    return v11;
+}
+func inline(never) private %err_word(v0.@WordErr) -> i64 {
+block0:
+    v1.i1 = enum.is_variant v0 #Err;
+    br v1 block1 block2;
+block1:
+    enum.assert_variant v0 #Err;
+    v2.i64 = enum.extract v0 #Err 0.i8;
+    return v2;
+block2:
+    return -1.i64;
+}
+func public %run(v0.i64, v1.i64, v2.*i8) -> i64 {
+block0:
+    v3.@UnitOk = call %unit_ok v0 v1;
+    v4.*@UnitOk = bitcast v2 *@UnitOk;
+    mstore v4 v3 @UnitOk;
+    v5.@WordErr = call %word_err v0 v1;
+    v6.*i8 = gep v2 8.i64;
+    v7.*@WordErr = bitcast v6 *@WordErr;
+    mstore v7 v5 @WordErr;
+    v8.@Three = call %three v0;
+    v9.@Three = call %rewrap v8;
+    v10.*i8 = gep v2 24.i64;
+    v11.*@Three = bitcast v10 *@Three;
+    mstore v11 v9 @Three;
+    v12.i64 = call %err_word v5;
+    return v12;
+}
+"#;
+    for level in LEVELS {
+        let mut machine = Machine::new(&build_at(source, level));
+        let buffer = host_buffer(&mut machine);
+        let run = machine.func("run");
+        for (a, b) in [(0i64, 7i64), (1, 0), (5, 7), (9, 3)] {
+            machine.write(buffer, &[0xa5; 48]);
+            let got = machine.call(&run, &[Val::I64(a), Val::I64(b), Val::I32(buffer as i32)]);
+            let failed = a > b;
+            assert_eq!(
+                got[0].unwrap_i64(),
+                if failed { b } else { -1 },
+                "{level:?} {a} {b}"
+            );
+            let mut out = machine.read(buffer, 48);
+            let mut expected = vec![0u8; 48];
+            // `@UnitOk`: the tag, then `#Err`'s `#OutOfRange` tag at 1;
+            // `@WordErr` at 8: the tag, then `#Err`'s i64 at 16; `@Three` at
+            // 24: the tag, then `#B`'s i64 at 32 and i32 at 40. `%rewrap`
+            // turns `#A` into `#C`, `#C` into `#A` and adds to `#B`.
+            expected[0] = u8::from(failed);
+            expected[1] = u8::from(failed);
+            expected[8] = u8::from(failed);
+            expected[16..24].copy_from_slice(&b.to_le_bytes());
+            let (tag, fields) = match a {
+                0 => (2, None),
+                1 => (0, None),
+                _ => (1, Some((a + 1, a as i32 + 2))),
+            };
+            expected[24] = tag;
+            if let Some((word, small)) = fields {
+                expected[32..40].copy_from_slice(&word.to_le_bytes());
+                expected[40..44].copy_from_slice(&small.to_le_bytes());
+            }
+            // Padding, and the payloads of `#Ok`, `#A` and `#C`, are not part
+            // of the values.
+            let mut padding = vec![2..8, 9..16, 25..32, 44..48];
+            if !failed {
+                padding.extend([1..2, 16..24]);
+            }
+            if fields.is_none() {
+                padding.push(32..44);
+            }
+            for range in padding {
+                out[range.clone()].fill(0);
+                expected[range].fill(0);
+            }
+            assert_eq!(out, expected, "{level:?} {a} {b}");
+        }
+    }
+}

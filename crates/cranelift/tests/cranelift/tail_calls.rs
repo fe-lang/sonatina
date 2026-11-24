@@ -64,6 +64,65 @@ block0:
 }
 
 #[test]
+fn tail_calls_pass_enums_with_zero_sized_payloads_in_registers() {
+    // `@WordErr`, a result with a unit `#Ok`, is held in registers; each
+    // call flips it and passes it on to the next, which returns it.
+    let source = r#"
+type @Empty = {};
+type @WordErr = enum { #Ok(@Empty), #Err(i64) };
+func private %flip(v0.@WordErr, v1.i64) -> @WordErr {
+block0:
+    v2.i1 = eq v1 0.i64;
+    br v2 block1 block2;
+block1:
+    return v0;
+block2:
+    v3.i1 = enum.is_variant v0 #Err;
+    br v3 block3 block4;
+block3:
+    v4.@WordErr = enum.make @WordErr #Ok (zero.@Empty);
+    jump block5;
+block4:
+    v5.@WordErr = enum.make @WordErr #Err (v1);
+    jump block5;
+block5:
+    v6.@WordErr = phi (v4 block3) (v5 block4);
+    v7.i64 = sub v1 1.i64;
+    v8.@WordErr = call %flip v6 v7;
+    return v8;
+}
+func public %flips(v0.i64) -> i64 {
+block0:
+    v1.@WordErr = call %flip zero.@WordErr v0;
+    v2.i1 = enum.is_variant v1 #Err;
+    br v2 block1 block2;
+block1:
+    enum.assert_variant v1 #Err;
+    v3.i64 = enum.extract v1 #Err 0.i8;
+    return v3;
+block2:
+    return -1.i64;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
+        let flips: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("flips").unwrap()) };
+        // An even number of flips ends at `#Ok`, an odd one at the last
+        // call's `#Err(1)`.
+        assert_eq!(unsafe { flips(DEPTH) }, -1, "{level:?}");
+        assert_eq!(unsafe { flips(DEPTH + 1) }, 1, "{level:?}");
+        assert!(artifact.function_address("flip").is_none(), "{level:?}");
+    }
+}
+
+#[test]
 fn tail_calls_pass_the_result_buffer_on() {
     // An i256 result is written through the caller's buffer, which each
     // tail call hands to its callee.
