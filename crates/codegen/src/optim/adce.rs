@@ -20,7 +20,7 @@ use crate::{
     cfg_scc::{CfgSccAnalysis, SccId},
     domtree::DomTree,
     loop_analysis::{Loop, LoopTree},
-    object::lowering::StepKind,
+    object::lowering::{FiniteLoop, StepFacts, StepKind},
     optim::{call_purity::is_nonmutating_returning_call, cfg_cleanup::CfgCleanup, steps::StepLog},
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
     range_analysis::{NormalizedCond, RangeEnv, imm_to_unsigned, normalize_condition},
@@ -73,8 +73,12 @@ impl AdceSolver {
     ) -> bool {
         let mut changed = false;
         loop {
-            let round_changed = self.run_dce(func);
-            StepLog::step(&mut steps, StepKind::Adce, func, None);
+            let (round_changed, finite_loops) = self.run_dce(func);
+            let facts = StepFacts {
+                finite_loops,
+                ..StepFacts::default()
+            };
+            StepLog::step(&mut steps, StepKind::Adce, func, Some(facts));
             if !round_changed {
                 break;
             }
@@ -85,15 +89,17 @@ impl AdceSolver {
         changed || cleaned_cfg
     }
 
-    /// Returns `true` if dead code elimination changed the function.
-    fn run_dce(&mut self, func: &mut Function) -> bool {
+    /// Returns `true` if dead code elimination changed the function, and the
+    /// loops it may remove, which it proved finite.
+    fn run_dce(&mut self, func: &mut Function) -> (bool, Vec<FiniteLoop>) {
         self.clear();
 
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(func);
         let (sccs, reaches_real_exit) = compute_scc_reachability(&cfg);
         let divergent_blocks = collect_divergent_blocks(&sccs, &reaches_real_exit);
-        let preserved_cycle_blocks = preserved_cycle_blocks(func, &cfg, &sccs, &reaches_real_exit);
+        let (preserved_cycle_blocks, finite_loops) =
+            preserved_cycle_blocks(func, &cfg, &sccs, &reaches_real_exit);
         self.post_domtree
             .compute_with_extra_exits(func, &divergent_blocks);
         let pdf_set = self.post_domtree.compute_df();
@@ -132,7 +138,7 @@ impl AdceSolver {
             self.mark_by_inst(func, inst, &pdf_set);
         }
 
-        self.eliminate_dead_code(func)
+        (self.eliminate_dead_code(func), finite_loops)
     }
 
     fn mark_inst(&mut self, func: &Function, inst: InstId) {
@@ -320,7 +326,8 @@ pub(crate) fn divergent_blocks(cfg: &ControlFlowGraph) -> Vec<BlockId> {
     collect_divergent_blocks(&sccs, &reaches_real_exit)
 }
 
-/// Returns blocks that must remain live to preserve cycles not proven finite.
+/// Returns blocks that must remain live to preserve cycles not proven finite,
+/// and the loops proven finite.
 ///
 /// Cycles with no path to a CFG exit are already preserved via
 /// `divergent_blocks`. For cyclic SCCs that can reach a CFG exit, ADCE may
@@ -332,13 +339,13 @@ fn preserved_cycle_blocks(
     cfg: &ControlFlowGraph,
     sccs: &CfgSccAnalysis,
     reaches_real_exit: &SecondaryMap<SccId, bool>,
-) -> Vec<BlockId> {
+) -> (Vec<BlockId>, Vec<FiniteLoop>) {
     if !sccs
         .topo_order()
         .iter()
         .any(|&scc| sccs.scc_data(scc).is_cycle && reaches_real_exit[scc])
     {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     let mut domtree = DomTree::new();
@@ -366,17 +373,21 @@ fn preserved_cycle_blocks(
         .flat_map(|data| data.blocks_rpo.iter().copied())
         .collect();
 
-    let mut finite_loops = SecondaryMap::<Loop, bool>::with_capacity(lpt.loop_num());
+    let mut finite_loops = SecondaryMap::<Loop, Option<FiniteLoop>>::with_capacity(lpt.loop_num());
     for lp in lpt.loops().rev() {
-        finite_loops[lp] = lpt.children(lp).iter().all(|&child| finite_loops[child])
+        finite_loops[lp] = (lpt
+            .children(lp)
+            .iter()
+            .all(|&child| finite_loops[child].is_some())
             && !lpt
                 .iter_blocks_post_order(cfg, lp)
-                .any(|block| irreducible.contains(&block))
-            && is_proven_finite_loop(func, cfg, &domtree, &lpt, lp);
+                .any(|block| irreducible.contains(&block)))
+        .then(|| proven_finite_loop(func, cfg, &domtree, &lpt, lp))
+        .flatten();
     }
 
     let mut preserved: Vec<BlockId> = irreducible.into_iter().collect();
-    for lp in lpt.loops().filter(|&lp| !finite_loops[lp]) {
+    for lp in lpt.loops().filter(|&lp| finite_loops[lp].is_none()) {
         let header = lpt.loop_header(lp);
         if sccs
             .scc_of(header)
@@ -390,7 +401,8 @@ fn preserved_cycle_blocks(
             );
         }
     }
-    preserved
+    let finite = lpt.loops().filter_map(|lp| finite_loops[lp]).collect();
+    (preserved, finite)
 }
 
 /// A basic induction variable of a loop: `phi` takes `step_value` from the
@@ -403,20 +415,18 @@ struct LoopIv {
     magnitude: U256,
 }
 
-/// Whether `lp`, with a single latch, runs a test on every iteration that
+/// `lp`, if it has a single latch and runs a test on every iteration that
 /// leaves the loop once a basic induction variable passes a loop-invariant
 /// bound it cannot step over without wrapping.
-fn is_proven_finite_loop(
+fn proven_finite_loop(
     func: &Function,
     cfg: &ControlFlowGraph,
     domtree: &DomTree,
     lpt: &LoopTree,
     lp: Loop,
-) -> bool {
+) -> Option<FiniteLoop> {
     let header = lpt.loop_header(lp);
-    let Some(latch) = unique_latch(cfg, lpt, lp, header) else {
-        return false;
-    };
+    let latch = unique_latch(cfg, lpt, lp, header)?;
 
     // The step must run once on every iteration of `lp` itself.
     let ivs: SmallVec<[LoopIv; 4]> = func
@@ -443,43 +453,47 @@ fn is_proven_finite_loop(
         })
         .collect();
 
-    lpt.iter_blocks_post_order(cfg, lp).any(|block| {
-        if lpt.loop_of_block(block) == Some(lp)
-            && domtree.dominates(block, latch)
-            && let Some(br) = func
-                .layout
-                .last_inst_of(block)
-                .and_then(|term| func.dfg.downcast::<&Br>(term))
-        {
-            let stay_on_true = lpt.is_in_loop(*br.nz_dest(), lp);
-            stay_on_true != lpt.is_in_loop(*br.z_dest(), lp)
-                && branch_bounds_loop(func, lpt, lp, *br.cond(), stay_on_true, &ivs)
-        } else {
-            false
+    lpt.iter_blocks_post_order(cfg, lp).find_map(|block| {
+        if lpt.loop_of_block(block) != Some(lp) || !domtree.dominates(block, latch) {
+            return None;
         }
+        let br = func.dfg.downcast::<&Br>(func.layout.last_inst_of(block)?)?;
+        let stay_on_true = lpt.is_in_loop(*br.nz_dest(), lp);
+        let iv = (stay_on_true != lpt.is_in_loop(*br.z_dest(), lp))
+            .then(|| branch_bounds_loop(func, lpt, lp, *br.cond(), stay_on_true, &ivs))??;
+        Some(FiniteLoop {
+            header,
+            latch,
+            iv: iv.phi,
+            step: iv.step_value,
+            exit: block,
+        })
     })
 }
 
-/// Whether staying in `lp` while `cond` is `stay_on_true` bounds one of `ivs`.
-fn branch_bounds_loop(
+/// The one of `ivs` that staying in `lp` while `cond` is `stay_on_true`
+/// bounds, if any does.
+fn branch_bounds_loop<'a>(
     func: &Function,
     lpt: &LoopTree,
     lp: Loop,
     cond: ValueId,
     stay_on_true: bool,
-    ivs: &[LoopIv],
-) -> bool {
+    ivs: &'a [LoopIv],
+) -> Option<&'a LoopIv> {
     let is_iv = |iv: &LoopIv, value| value == iv.phi || value == iv.step_value;
     let unit_iv = |value| {
         ivs.iter()
-            .any(|iv| is_iv(iv, value) && iv.magnitude == U256::one())
+            .find(|iv| is_iv(iv, value) && iv.magnitude == U256::one())
     };
     let (kind, lhs, rhs, stay) = match normalize_condition(func, &RangeEnv::default(), cond) {
-        NormalizedCond::Constant(_) => return false,
+        NormalizedCond::Constant(_) => return None,
         // Staying while a unit-step variable is non-zero: it reaches zero.
-        NormalizedCond::Value { value, invert } => return stay_on_true != invert && unit_iv(value),
+        NormalizedCond::Value { value, invert } => {
+            return unit_iv(value).filter(|_| stay_on_true != invert);
+        }
         NormalizedCond::ZeroTest { value, invert } => {
-            return stay_on_true == invert && unit_iv(value);
+            return unit_iv(value).filter(|_| stay_on_true == invert);
         }
         NormalizedCond::Compare {
             kind,
@@ -489,7 +503,7 @@ fn branch_bounds_loop(
         } => (kind, lhs, rhs, stay_on_true != invert),
     };
 
-    ivs.iter().any(|iv| {
+    ivs.iter().find(|iv| {
         let (bound, iv_on_left) = if is_iv(iv, lhs) {
             (rhs, true)
         } else if is_iv(iv, rhs) {
@@ -607,9 +621,13 @@ fn is_live_root_inst(func: &Function, inst_id: InstId, call_policy: AdceCallPoli
 
 #[cfg(test)]
 mod tests {
-    use sonatina_ir::{FuncEffectSummary, Module, ir_writer::FuncWriter};
+    use sonatina_ir::{BlockId, FuncEffectSummary, Module, ir_writer::FuncWriter};
 
-    use crate::analysis::func_behavior;
+    use crate::{
+        analysis::func_behavior,
+        object::lowering::{FiniteLoop, FuncSnap, StepKind},
+        optim::steps::StepLog,
+    };
 
     use super::{AdceCallPolicy, AdceSolver};
 
@@ -720,6 +738,34 @@ func private %f(v0.i8) -> i256 {{
             let what = format!("`{test}` staying on {stay} with `{step}`");
             assert_loop_removed(&counted_loop(test, stay, step), removed, &what);
         }
+    }
+
+    #[test]
+    fn steps_list_the_finite_loops_a_round_may_remove() {
+        let parsed = parse_module(&counted_loop("le v1 -2.i8", true, "add v1 1.i8"));
+        let func_ref = only_func_ref(&parsed.module);
+        let value = |name| parsed.debug.value(func_ref, name).unwrap();
+        let mut log = parsed.module.func_store.view(func_ref, |func| {
+            StepLog::new(FuncSnap::capture(func_ref, func))
+        });
+        parsed.module.func_store.modify(func_ref, |func| {
+            AdceSolver::new().run_with_steps(func, Some(&mut log))
+        });
+        let (kind, _, _, step) = &log.steps[0];
+        assert_eq!(*kind, StepKind::Adce);
+        assert_eq!(
+            step.as_ref()
+                .expect("the loop is removed")
+                .facts
+                .finite_loops,
+            [FiniteLoop {
+                header: BlockId(1),
+                latch: BlockId(2),
+                iv: value("v1"),
+                step: value("v3"),
+                exit: BlockId(1),
+            }]
+        );
     }
 
     #[test]

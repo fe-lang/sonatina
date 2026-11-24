@@ -166,6 +166,23 @@ fn check_facts(input: &FuncSnap, facts: &StepFacts, machine: &str, last: &str) {
             block.0
         );
     }
+    for finite in &facts.finite_loops {
+        let blocks = block_lines(&input.text);
+        let header = blocks.iter().find(|(block, _)| *block == finite.header.0);
+        let iv = format!("v{}.", finite.iv.as_u32());
+        assert!(
+            header.is_some_and(|(_, lines)| lines
+                .iter()
+                .any(|line| line.starts_with(&iv) && line.contains(" = phi "))),
+            "{name}: v{} is not a phi of block{}",
+            finite.iv.as_u32(),
+            finite.header.0
+        );
+        assert!(values.contains(&finite.step.as_u32()));
+        for block in [finite.latch, finite.exit] {
+            assert!(dests.contains_key(&block.0), "{name}: no block{}", block.0);
+        }
+    }
     if facts.known_bits.is_empty() {
         return;
     }

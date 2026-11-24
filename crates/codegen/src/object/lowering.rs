@@ -175,6 +175,8 @@ pub struct StepFacts {
     pub demanded_bits: Option<Vec<(ValueId, U256)>>,
     /// For `SccpPrune` and `SccpFold`.
     pub sccp: Option<SccpFacts>,
+    /// For `Adce`: the loops it may remove, which it proved finite.
+    pub finite_loops: Vec<FiniteLoop>,
 }
 
 /// The solution of SCCP. A value without a constant may be anything.
@@ -187,6 +189,20 @@ pub struct SccpFacts {
     /// destinations: `br`'s nonzero then zero destination, `br_table`'s
     /// default then its cases.
     pub dead_edges: Vec<(BlockId, u32)>,
+}
+
+/// A natural loop with one latch whose test leaves it once the basic
+/// induction variable `iv` passes a loop-invariant bound it cannot step over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FiniteLoop {
+    pub header: BlockId,
+    pub latch: BlockId,
+    /// A phi of `header` that takes `step` from `latch`.
+    pub iv: ValueId,
+    /// `iv` plus or minus a nonzero constant.
+    pub step: ValueId,
+    /// The block whose `br` tests `iv` or `step` against the bound.
+    pub exit: BlockId,
 }
 
 /// A function of the machine module at one point of the machine stage.
