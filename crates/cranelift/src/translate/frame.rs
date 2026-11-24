@@ -84,7 +84,9 @@ use super::{
 /// when no write of it can come between the load and a read of the loaded
 /// value or of a view of it: no store into it, no call that may write
 /// through one of its addresses (`ArgWrites`), and no call that may be given
-/// its storage, as below, runs after the load and before or at such a read.
+/// its storage, as below, runs after the load and before or at such a read
+/// without the load running again in between, as it does in a loop that
+/// writes the object before loading it.
 ///
 /// A callee may own a by-reference argument (`Ownership`), building an
 /// object in its storage. The caller then passes storage it does not use
@@ -993,7 +995,7 @@ fn object_used_after(
     object: ValueId,
     call: InstId,
 ) -> bool {
-    object_uses(function, local, object).any(runs_after(function, cfg, position, call))
+    object_uses(function, local, object).any(runs_after(function, cfg, position, call, None))
 }
 
 /// The by-reference argument whose storage holds `value`, with `value`'s
@@ -1036,12 +1038,14 @@ fn object_written_after(
     calls: &impl CallFacts,
 ) -> bool {
     object_writes(function, cfg, position, local, object, calls)
-        .any(runs_after(function, cfg, position, inst))
+        .any(runs_after(function, cfg, position, inst, None))
 }
 
 /// Whether something may write the local object `object` after the load
 /// `inst` of it and before, or at, a read of its result `result` or of a
-/// view of that result, which reads the object in place.
+/// view of that result, which reads the object in place. Only a path on
+/// which the load does not run again counts: a read after the load runs
+/// again reads that run's result.
 #[allow(clippy::too_many_arguments)]
 fn object_written_while_read(
     function: &Function,
@@ -1054,10 +1058,10 @@ fn object_written_while_read(
     calls: &impl CallFacts,
 ) -> bool {
     let reads = value_reads(function, result);
-    let after_load = runs_after(function, cfg, position, inst);
+    let after_load = runs_after(function, cfg, position, inst, Some(inst));
     object_writes(function, cfg, position, local, object, calls).any(|write| {
         after_load(write) && {
-            let after_write = runs_after(function, cfg, position, write);
+            let after_write = runs_after(function, cfg, position, write, Some(inst));
             reads.iter().any(|&read| read == write || after_write(read))
         }
     })
@@ -1161,25 +1165,44 @@ fn object_uses<'a>(
         .flat_map(move |(&address, _)| function.dfg.users(address).copied())
 }
 
-/// Whether an instruction may run after `inst`: later in its block, or in a
-/// block it reaches, which includes its own block when that is in a loop.
+/// Whether an instruction may run after `inst`, and before `until` runs
+/// if given: later in its block, or in a block it reaches, which includes
+/// its own block when that is in a loop. A path into the block of `until`
+/// runs it before what follows it there, and leaves the block only past it.
 fn runs_after<'a>(
     function: &'a Function,
     cfg: &ControlFlowGraph,
     position: &'a SecondaryMap<InstId, u32>,
     inst: InstId,
+    until: Option<InstId>,
 ) -> impl Fn(InstId) -> bool + 'a {
-    let block = function.layout.inst_block(inst);
+    let layout = &function.layout;
+    let stop = until.map(|until| (layout.inst_block(until), position[until]));
+    // Whether a path through `block` from position `from`, or its start, to
+    // position `to`, or its end, runs `until`.
+    let passes = move |block: BlockId, from: Option<u32>, to: Option<u32>| {
+        stop.is_some_and(|(stop_block, at)| {
+            stop_block == block && from.is_none_or(|from| from < at) && to.is_none_or(|to| at < to)
+        })
+    };
+    let block = layout.inst_block(inst);
+    let start = position[inst];
     let mut reached = FxHashSet::default();
-    let mut pending: Vec<_> = cfg.succs_of(block).copied().collect();
+    let mut pending: Vec<_> = if passes(block, Some(start), None) {
+        Vec::new()
+    } else {
+        cfg.succs_of(block).copied().collect()
+    };
     while let Some(next) = pending.pop() {
-        if reached.insert(next) {
+        if reached.insert(next) && !passes(next, None, None) {
             pending.extend(cfg.succs_of(next).copied());
         }
     }
     move |other| {
-        let other_block = function.layout.inst_block(other);
-        reached.contains(&other_block) || other_block == block && position[other] > position[inst]
+        let other_block = layout.inst_block(other);
+        let at = Some(position[other]);
+        reached.contains(&other_block) && !passes(other_block, None, at)
+            || other_block == block && position[other] > start && !passes(block, Some(start), at)
     }
 }
 
@@ -1892,5 +1915,408 @@ block2:
 "#,
         );
         assert_eq!(sizes, [256, 128, 128]);
+    }
+
+    #[test]
+    fn loads_in_loops_read_objects_written_before_them_in_place() {
+        // Each iteration writes the object, then loads and reads it: the
+        // next iteration's writes come after the read, and before the load
+        // runs again, so the load reads the object in place.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block1);
+    v3.i64 = add v2 1.i64;
+    v4.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v4 zero.[i64; 32];
+    v5.objref<i64> = obj.index v4 0.i64;
+    obj.store v5 v2;
+    v6.[i64; 32] = obj.load v4;
+    v7.i64 = extract_value v6 0.i64;
+    mstore v1 v7 i64;
+    v8.i1 = lt v3 v0;
+    br v8 block1 block2;
+block2:
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, []);
+    }
+
+    #[test]
+    fn loads_in_loops_keep_copies_when_written_between_load_and_read() {
+        // A write between the load and the read keeps a copy.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block1);
+    v3.i64 = add v2 1.i64;
+    v4.objref<[i64; 32]> = obj.alloc [i64; 32];
+    obj.store v4 zero.[i64; 32];
+    v5.objref<i64> = obj.index v4 0.i64;
+    obj.store v5 v2;
+    v6.[i64; 32] = obj.load v4;
+    obj.store v5 v3;
+    v7.i64 = extract_value v6 0.i64;
+    mstore v1 v7 i64;
+    v8.i1 = lt v3 v0;
+    br v8 block1 block2;
+block2:
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [256]);
+    }
+
+    #[test]
+    fn loads_in_multi_block_loops_read_objects_written_before_them_in_place() {
+        // The writes are in one block of the loop and the load and its read
+        // in the next, which branches back to the first: the load reads the
+        // object in place.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    v4.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v5.objref<i64> = obj.index v4 0.i64;
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block2);
+    v3.i64 = add v2 1.i64;
+    obj.store v4 zero.[i64; 32];
+    obj.store v5 v2;
+    jump block2;
+block2:
+    v6.[i64; 32] = obj.load v4;
+    v7.i64 = extract_value v6 0.i64;
+    mstore v1 v7 i64;
+    v8.i1 = lt v3 v0;
+    br v8 block1 block3;
+block3:
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, []);
+    }
+
+    #[test]
+    fn loads_in_multi_block_loops_keep_copies_when_written_before_the_read() {
+        // A write in a later block of the same iteration, before the read,
+        // keeps a copy.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    v4.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v5.objref<i64> = obj.index v4 0.i64;
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block2);
+    v3.i64 = add v2 1.i64;
+    v6.[i64; 32] = obj.load v4;
+    jump block2;
+block2:
+    obj.store v5 v3;
+    v7.i64 = extract_value v6 0.i64;
+    mstore v1 v7 i64;
+    v8.i1 = lt v3 v0;
+    br v8 block1 block3;
+block3:
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [256]);
+    }
+
+    #[test]
+    fn loads_before_loops_that_write_keep_copies() {
+        // The load is before the loop, which reads it and then writes the
+        // object: the next iteration reads it again without the load running.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    v4.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v5.objref<i64> = obj.index v4 0.i64;
+    obj.store v4 zero.[i64; 32];
+    v6.[i64; 32] = obj.load v4;
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block1);
+    v3.i64 = add v2 1.i64;
+    v7.i64 = extract_value v6 0.i64;
+    mstore v1 v7 i64;
+    obj.store v5 v3;
+    v8.i1 = lt v3 v0;
+    br v8 block1 block2;
+block2:
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [256]);
+    }
+
+    #[test]
+    fn phis_of_loads_keep_copies_when_written_before_the_back_edge() {
+        // The phi takes the load on the back edge, after a write in the
+        // loop's second block: the load keeps a copy, beside the phi's slot.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    v4.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v5.objref<i64> = obj.index v4 0.i64;
+    obj.store v4 zero.[i64; 32];
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block2);
+    v6.[i64; 32] = phi (zero.[i64; 32] block0) (v7 block2);
+    v7.[i64; 32] = obj.load v4;
+    jump block2;
+block2:
+    v3.i64 = add v2 1.i64;
+    obj.store v5 v3;
+    v8.i1 = lt v3 v0;
+    br v8 block1 block3;
+block3:
+    v9.i64 = extract_value v6 0.i64;
+    mstore v1 v9 i64;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [256, 256]);
+    }
+
+    #[test]
+    fn phis_of_loads_written_before_them_read_in_place() {
+        // With the write before the load, the back edge takes the load before
+        // the next write: only the phi has a slot.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    v4.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v5.objref<i64> = obj.index v4 0.i64;
+    obj.store v4 zero.[i64; 32];
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block2);
+    v6.[i64; 32] = phi (zero.[i64; 32] block0) (v7 block2);
+    obj.store v5 v2;
+    v7.[i64; 32] = obj.load v4;
+    jump block2;
+block2:
+    v3.i64 = add v2 1.i64;
+    v8.i1 = lt v3 v0;
+    br v8 block1 block3;
+block3:
+    v9.i64 = extract_value v6 0.i64;
+    mstore v1 v9 i64;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [256]);
+    }
+
+    #[test]
+    fn loads_in_nested_loops_read_in_place_when_only_the_outer_loop_writes() {
+        // The outer loop writes, then loads; the inner loop only reads.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    v4.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v5.objref<i64> = obj.index v4 0.i64;
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block3);
+    v3.i64 = add v2 1.i64;
+    obj.store v4 zero.[i64; 32];
+    obj.store v5 v2;
+    v6.[i64; 32] = obj.load v4;
+    jump block2;
+block2:
+    v7.i64 = phi (0.i64 block1) (v8 block2);
+    v8.i64 = add v7 1.i64;
+    v9.i64 = extract_value v6 0.i64;
+    mstore v1 v9 i64;
+    v10.i1 = lt v8 v0;
+    br v10 block2 block3;
+block3:
+    v11.i1 = lt v3 v0;
+    br v11 block1 block4;
+block4:
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, []);
+    }
+
+    #[test]
+    fn loads_in_nested_loops_keep_copies_when_the_inner_loop_writes() {
+        // An inner loop that reads, then writes, reads the object again on
+        // its next iteration: a copy.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    v4.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v5.objref<i64> = obj.index v4 0.i64;
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block3);
+    v3.i64 = add v2 1.i64;
+    obj.store v4 zero.[i64; 32];
+    v6.[i64; 32] = obj.load v4;
+    jump block2;
+block2:
+    v7.i64 = phi (0.i64 block1) (v8 block2);
+    v8.i64 = add v7 1.i64;
+    v9.i64 = extract_value v6 0.i64;
+    mstore v1 v9 i64;
+    obj.store v5 v8;
+    v10.i1 = lt v8 v0;
+    br v10 block2 block3;
+block3:
+    v11.i1 = lt v3 v0;
+    br v11 block1 block4;
+block4:
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [256]);
+    }
+
+    #[test]
+    fn loads_read_after_loops_in_place_when_written_before_them() {
+        // The loop writes, then loads; the read is after the loop.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    v4.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v5.objref<i64> = obj.index v4 0.i64;
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block1);
+    v3.i64 = add v2 1.i64;
+    obj.store v4 zero.[i64; 32];
+    obj.store v5 v2;
+    v6.[i64; 32] = obj.load v4;
+    v8.i1 = lt v3 v0;
+    br v8 block1 block2;
+block2:
+    v9.i64 = extract_value v6 0.i64;
+    mstore v1 v9 i64;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, []);
+    }
+
+    #[test]
+    fn loads_read_after_loops_keep_copies_when_a_write_reaches_the_exit() {
+        // A block that writes after the load and leaves the loop reaches the
+        // read without the load running again: a copy.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    v4.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v5.objref<i64> = obj.index v4 0.i64;
+    obj.store v4 zero.[i64; 32];
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block2);
+    v3.i64 = add v2 1.i64;
+    v6.[i64; 32] = obj.load v4;
+    v8.i1 = lt v3 v0;
+    br v8 block2 block3;
+block2:
+    obj.store v5 v3;
+    br v8 block1 block3;
+block3:
+    v9.i64 = extract_value v6 0.i64;
+    mstore v1 v9 i64;
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [256]);
+    }
+
+    #[test]
+    fn views_of_loads_in_loops_read_in_place() {
+        // A view of the loaded object, read after the next iteration's
+        // writes only through another run of the load.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    v4.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v5.objref<[i64; 32]> = obj.index v4 1.i64;
+    v10.objref<i64> = obj.index v5 0.i64;
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block1);
+    v3.i64 = add v2 1.i64;
+    obj.store v10 v2;
+    v6.[[i64; 32]; 2] = obj.load v4;
+    v7.[i64; 32] = extract_value v6 1.i64;
+    v9.i64 = extract_value v7 0.i64;
+    mstore v1 v9 i64;
+    v8.i1 = lt v3 v0;
+    br v8 block1 block2;
+block2:
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, []);
+    }
+
+    #[test]
+    fn views_of_loads_keep_copies_when_written_between() {
+        // A write between the view and its read keeps a copy.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i64, v1.*i64) {
+block0:
+    v4.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
+    v5.objref<[i64; 32]> = obj.index v4 1.i64;
+    v10.objref<i64> = obj.index v5 0.i64;
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v3 block1);
+    v3.i64 = add v2 1.i64;
+    v6.[[i64; 32]; 2] = obj.load v4;
+    v7.[i64; 32] = extract_value v6 1.i64;
+    obj.store v10 v3;
+    v9.i64 = extract_value v7 0.i64;
+    mstore v1 v9 i64;
+    v8.i1 = lt v3 v0;
+    br v8 block1 block2;
+block2:
+    return;
+}
+"#,
+        );
+        assert_eq!(sizes, [512]);
     }
 }
