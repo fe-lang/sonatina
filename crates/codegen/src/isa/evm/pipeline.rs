@@ -179,6 +179,7 @@ impl EvmPipelineContext<'_> {
             passes,
             &mut self.func_behavior_dirty,
             Some(self.funcs.as_slice()),
+            None,
         );
     }
 

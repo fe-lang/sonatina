@@ -11,6 +11,7 @@ use crate::{
     machinst::lower::{SectionMembership, SectionWorkModule},
     module_analysis::{CallGraphSchedule, SccRef},
     object::lowering::{MachinePassKind, MachineSteps, MallocLowering, StepKind},
+    optim::steps::StepRecorder,
     stackalloc::{Action, StackifyAlloc},
 };
 use sonatina_ir::{
@@ -59,7 +60,6 @@ use super::{
             compute_semantic_memory_placement,
         },
         prepare::{SectionStackifySearchCaches, prepare_machine_stackify_analyses},
-        record::MachineRecorder,
     },
     memory_plan::{
         self, BackendSpillPlan, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan,
@@ -996,9 +996,9 @@ fn prepare_machine_section_after_pipeline(
         );
 
         let mut machine = lower_section_to_machine(&work, &funcs, &placement, backend)?;
-        let mut recorder = backend.record_lowering.then(|| {
-            MachineRecorder::new(machine.work.module(), &funcs, backend.late_cleanup_profile)
-        });
+        let mut recorder = backend
+            .record_lowering
+            .then(|| StepRecorder::new(machine.work.module(), &funcs));
         run_machine_opt_pipeline(
             machine.work.module(),
             &funcs,
@@ -1036,11 +1036,9 @@ fn prepare_machine_section_after_pipeline(
             &search_caches,
         )?;
         if let Some(recorder) = recorder.as_mut() {
-            recorder.record_done_pass(
-                machine.work.module(),
-                MachinePassKind::EdgeSplit,
-                StepKind::EdgeSplit,
-            );
+            // The splitter ran in the analyses, which change nothing else.
+            let kind = (MachinePassKind::EdgeSplit, StepKind::EdgeSplit);
+            StepRecorder::run_pass(Some(recorder), machine.work.module(), &funcs, kind, |_| {});
         }
         // Recompute fixed-slot effects from the current machine allocation.
         let actual_fixed_slot_effects: FxHashSet<FuncRef> = machine_analyses
@@ -1388,7 +1386,7 @@ fn prepare_machine_section_after_pipeline(
                     &funcs,
                     &placement,
                     &machine.source_to_machine,
-                    recorder.finish(),
+                    recorder.finish(backend.late_cleanup_profile),
                 )
             });
             return Ok(EvmPreparedSection {
