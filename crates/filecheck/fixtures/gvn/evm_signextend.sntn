@@ -28,3 +28,30 @@ func private %fold_evm_signextend_known_zero_sign(v0.i256) -> i256 {
         v2.i256 = evm_signextend 0.i256 v1;
         return v2;
 }
+
+# sameln: func private %fold_evm_signextend_byte_31_sign_clear() -> i256 {
+# nextln:     block0:
+# nextln:         return 5.i256;
+func private %fold_evm_signextend_byte_31_sign_clear() -> i256 {
+    block0:
+        v0.i256 = evm_signextend 31.i256 5.i256;
+        return v0;
+}
+
+# sameln: func private %fold_evm_signextend_byte_31_sign_set() -> i256 {
+# nextln:     block0:
+# nextln:         return -5.i256;
+func private %fold_evm_signextend_byte_31_sign_set() -> i256 {
+    block0:
+        v0.i256 = evm_signextend 31.i256 -5.i256;
+        return v0;
+}
+
+# sameln: func private %fold_evm_signextend_byte_31_narrow() -> i32 {
+# nextln:     block0:
+# nextln:         return 5.i32;
+func private %fold_evm_signextend_byte_31_narrow() -> i32 {
+    block0:
+        v0.i32 = evm_signextend 31.i32 5.i32;
+        return v0;
+}

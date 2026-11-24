@@ -3907,3 +3907,20 @@ func public %entry() {
         assert_eq!(result, Ok(IrU256::from(42u64)), "{level:?}");
     }
 }
+
+/// `signextend 31 5` extends from bit 255, which leaves every word unchanged.
+#[test]
+fn signextend_from_top_byte_folds_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.i256 = evm_signextend 31.i256 5.i256;
+        mstore 0.i256 v0 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &[]);
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::from(5u64)), "{level:?}");
+    }
+}

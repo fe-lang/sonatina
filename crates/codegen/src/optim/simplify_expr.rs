@@ -357,7 +357,8 @@ pub(crate) fn simplify_evm_byte_known(
 
 fn fold_evm_signextend_raw(byte: U256, value: U256, ty: Type) -> U256 {
     let mask = type_mask(ty);
-    if byte >= U256::from(32u8) {
+    // From byte 31 on, the sign bit is bit 255 or above, and the word is left as it is.
+    if byte >= U256::from(31u8) {
         return value & mask;
     }
 
@@ -1903,6 +1904,28 @@ func private %entry(v0.i256) {
             ),
             Some(Immediate::from_i256(I256::from(0x80u16), ty))
         );
+    }
+
+    /// Byte 30 extends bit 247; byte 31 would extend bit 255, which is the top bit already.
+    #[test]
+    fn fold_evm_signextend_of_top_bytes() {
+        let word = |value: U256| Immediate::from_i256(I256::from(value), Type::I256);
+        let byte = |byte: u8| word(U256::from(byte));
+        let top = U256::one() << 255;
+        let five = U256::from(5u8);
+        let cases = [
+            (30, top | five, five),
+            (30, U256::one() << 247, !U256::zero() << 247),
+            (31, five, five),
+            (31, top | five, top | five),
+        ];
+        for (index, value, expected) in cases {
+            assert_eq!(
+                fold_evm_signextend(byte(index), word(value)),
+                Some(word(expected)),
+                "signextend {index} {value:#x}"
+            );
+        }
     }
 
     #[test]
