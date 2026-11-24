@@ -2538,13 +2538,14 @@ impl<'a> RedundantCodeRemover<'a> {
                                     .is_none_or(|def| dominates(func, domtree, def, insn)),
                                 ValuePhi::PhiInsn(_) => true,
                             };
-                            if self.is_value_phi_resolvable(value_phi, block)
+                            if self.is_value_phi_resolvable(domtree, value_phi, block)
                                 && precedes
                                 && self
                                     .pushes_constants_only_where_used(func, cfg, value_phi, block)
                             {
                                 let value = self.resolve_value_phi(
                                     func,
+                                    domtree,
                                     &mut inserter,
                                     value_phi,
                                     ty,
@@ -2584,26 +2585,27 @@ impl<'a> RedundantCodeRemover<'a> {
             .is_some()
     }
 
-    /// Returns `true` if the `value_phi` can be resolved, i.e. all phi args are dominated by
-    /// in the `block`.
-    fn is_value_phi_resolvable(&self, value_phi: &ValuePhi, block: BlockId) -> bool {
-        if self.resolved_value_phis.contains_key(value_phi) {
-            return true;
-        }
-
+    /// Returns `true` if the `value_phi` can be resolved for a use in `block`: at its end for a
+    /// phi operand, or at an instruction of it at the top level. A value must be available
+    /// there, and a phi, inserted at the top of its own block, must be in a block that
+    /// dominates `block`.
+    fn is_value_phi_resolvable(
+        &self,
+        domtree: &DomTree,
+        value_phi: &ValuePhi,
+        block: BlockId,
+    ) -> bool {
         match value_phi {
-            ValuePhi::Value(value) => {
-                let class = self.solver.value_class(*value);
-                self.lookup_avail_from(Some(block), class).is_some()
-            }
+            ValuePhi::Value(value) => self
+                .lookup_avail_from(Some(block), self.solver.value_class(*value))
+                .is_some(),
             ValuePhi::PhiInsn(phi_insn) => {
-                for (value_phi, phi_block) in &phi_insn.args {
-                    if !self.is_value_phi_resolvable(value_phi, *phi_block) {
-                        return false;
-                    }
-                }
-
-                true
+                domtree.dominates(phi_insn.block, block)
+                    && (self.resolved_value_phis.contains_key(value_phi)
+                        || phi_insn
+                            .args
+                            .iter()
+                            .all(|(arg, pred)| self.is_value_phi_resolvable(domtree, arg, *pred)))
             }
         }
     }
@@ -2679,12 +2681,13 @@ impl<'a> RedundantCodeRemover<'a> {
     fn resolve_value_phi(
         &mut self,
         func: &mut Function,
+        domtree: &DomTree,
         inserter: &mut InstInserter,
         value_phi: &ValuePhi,
         ty: Type,
         block: BlockId,
     ) -> ValueId {
-        debug_assert!(self.is_value_phi_resolvable(value_phi, block));
+        debug_assert!(self.is_value_phi_resolvable(domtree, value_phi, block));
 
         if let Some(value) = self.resolved_value_phis.get(value_phi) {
             return *value;
@@ -2705,8 +2708,12 @@ impl<'a> RedundantCodeRemover<'a> {
                 let mut phi_args = SmallVec::with_capacity(phi_insn.args.len());
                 for (value_phi, phi_block) in &phi_insn.args {
                     let resolved =
-                        self.resolve_value_phi(func, inserter, value_phi, ty, *phi_block);
-                    phi_args.push((self.resolve_alias(resolved), *phi_block));
+                        self.resolve_value_phi(func, domtree, inserter, value_phi, ty, *phi_block);
+                    let resolved = self.resolve_alias(resolved);
+                    debug_assert!(func.dfg.value_inst(resolved).is_none_or(|def| {
+                        domtree.dominates(func.layout.inst_block(def), *phi_block)
+                    }));
+                    phi_args.push((resolved, *phi_block));
                 }
                 let phi = func.dfg.make_phi(phi_args);
 
@@ -3173,6 +3180,90 @@ block8:
         });
         assert!(dumped.contains("uaddo v3 v7"), "{dumped}");
         assert!(dumped.contains("zext v9 i32"), "{dumped}");
+    }
+
+    const NESTED_PHI_OUTSIDE_PREDECESSOR: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i1, v2.i32, v3.i32, v4.i32) -> i32 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v5.i32 = phi (v2 block1) (0.i32 block2);
+    br v1 block4 block5;
+
+block4:
+    v6.i32 = sub v2 v3;
+    jump block6;
+
+block5:
+    v7.i32 = sub v2 v4;
+    jump block6;
+
+block6:
+    v8.i32 = phi (v3 block4) (v4 block5);
+    v9.i32 = neg v8;
+    v10.i32 = add v5 v9;
+    return v10;
+}
+"#;
+
+    /// On the edge from `block1`, `add v5 v9` is `sub v2 v8`, a phi of `v6` and `v7` in
+    /// `block6`, which does not dominate `block1`; the value phi of `v10` in `block3` must not
+    /// be resolved through it.
+    #[test]
+    fn nested_value_phi_outside_its_predecessor_is_not_resolved() {
+        let module = parse_module(NESTED_PHI_OUTSIDE_PREDECESSOR)
+            .expect("module parses")
+            .module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            GvnSolver::new().run(func, &mut cfg, &mut domtree);
+        });
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+    }
+
+    /// A phi resolved in `block6` is not available at the end of `block1` or `block2`, which
+    /// `block6` does not dominate, even once it exists.
+    #[test]
+    fn resolved_phi_is_resolvable_only_where_its_block_dominates() {
+        let module = parse_module(NESTED_PHI_OUTSIDE_PREDECESSOR)
+            .expect("module parses")
+            .module;
+        module.func_store.view(module.funcs()[0], |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            let solver = GvnSolver::new();
+            let mut remover = RedundantCodeRemover::new(&solver);
+            let nested = ValuePhi::PhiInsn(ValuePhiInsn {
+                block: BlockId(6),
+                args: vec![
+                    (ValuePhi::Value(ValueId(6)), BlockId(4)),
+                    (ValuePhi::Value(ValueId(7)), BlockId(5)),
+                ],
+            });
+            remover
+                .resolved_value_phis
+                .insert(nested.clone(), ValueId(11));
+            let outer = ValuePhi::PhiInsn(ValuePhiInsn {
+                block: BlockId(3),
+                args: vec![(nested.clone(), BlockId(1)), (nested, BlockId(2))],
+            });
+            assert!(!remover.is_value_phi_resolvable(&domtree, &outer, BlockId(3)));
+        });
     }
 
     /// Two phis of one block with the same incoming values are one value.
