@@ -1223,6 +1223,222 @@ func public %caller(v0.i1, v1.i32) -> i32 {
     );
 }
 
+/// `%forced` is inlined into `%mid`, then `%mid` into `%top`; with
+/// `%forced` calling `%leaf`, `%leaf` is inlined into `%forced` first.
+fn forced_depth_module(forced_calls_leaf: bool) -> String {
+    let forced_body = if forced_calls_leaf {
+        "v1.i32 = call %leaf v0;"
+    } else {
+        "v1.i32 = add v0 1.i32;"
+    };
+    format!(
+        r#"
+target = "evm-ethereum-london"
+
+func private %leaf(v0.i32) -> i32 {{
+    block0:
+        v1.i32 = add v0 1.i32;
+        return v1;
+}}
+
+func inline(always) private %forced(v0.i32) -> i32 {{
+    block0:
+        {forced_body}
+        return v1;
+}}
+
+func private %mid(v0.i32) -> i32 {{
+    block0:
+        v1.i32 = call %forced v0;
+        v2.i32 = mul v1 3.i32;
+        return v2;
+}}
+
+func public %top(v0.i32) -> i32 {{
+    block0:
+        v1.i32 = call %mid v0;
+        return v1;
+}}
+"#
+    )
+}
+
+#[test]
+fn full_inliner_forced_inlines_add_no_inline_depth() {
+    let mut parsed = sonatina_parser::parse_module(&forced_depth_module(false))
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let cfg = InlinerConfig {
+        max_inline_depth: 1,
+        ..full_only_inliner_test_config()
+    };
+    Inliner::new(cfg).run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %forced") && !dumped.contains("call %mid"),
+        "inlining %forced should leave %mid within the depth limit:\n{dumped}"
+    );
+}
+
+#[test]
+fn full_inliner_forced_inlines_carry_their_callees_depth() {
+    let mut parsed = sonatina_parser::parse_module(&forced_depth_module(true))
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let cfg = InlinerConfig {
+        max_inline_depth: 1,
+        ..full_only_inliner_test_config()
+    };
+    Inliner::new(cfg).run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %leaf") && !dumped.contains("call %forced"),
+        "%leaf and %forced should be inlined:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("call %mid"),
+        "%mid holds %leaf's level through %forced, at the depth limit:\n{dumped}"
+    );
+}
+
+#[test]
+fn full_inliner_forced_inlines_between_ordinary_ones_keep_the_cap() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %leaf(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 1.i32;
+        return v1;
+}
+
+func inline(always) private %f2(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %leaf v0;
+        return v1;
+}
+
+func private %m2(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %f2 v0;
+        v2.i32 = mul v1 3.i32;
+        return v2;
+}
+
+func inline(always) private %f1(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %m2 v0;
+        return v1;
+}
+
+func private %m1(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %f1 v0;
+        v2.i32 = mul v1 5.i32;
+        return v2;
+}
+
+func public %top(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %m1 v0;
+        return v1;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let cfg = InlinerConfig {
+        max_inline_depth: 2,
+        ..full_only_inliner_test_config()
+    };
+    Inliner::new(cfg).run(module);
+    assert_module_verified(module);
+
+    // `%leaf` and `%m2` are the two ordinary levels the limit allows; `%m1`
+    // would be a third.
+    let dumped = dump_module(module);
+    assert!(
+        ["leaf", "f2", "m2", "f1"]
+            .iter()
+            .all(|name| !dumped.contains(&format!("call %{name} "))),
+        "every call below %m1 should be inlined:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("call %m1"),
+        "%m1 holds two ordinary levels, at the depth limit:\n{dumped}"
+    );
+}
+
+#[test]
+fn full_inliner_forced_inlines_keep_a_deeper_callers_depth() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %leaf(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 1.i32;
+        return v1;
+}
+
+func private %deep(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %leaf v0;
+        v2.i32 = mul v1 3.i32;
+        return v2;
+}
+
+func inline(always) private %forced(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 7.i32;
+        return v1;
+}
+
+func private %mid(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %deep v0;
+        v2.i32 = call %forced v1;
+        return v2;
+}
+
+func public %top(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %mid v0;
+        return v1;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let cfg = InlinerConfig {
+        max_inline_depth: 2,
+        ..full_only_inliner_test_config()
+    };
+    Inliner::new(cfg).run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %leaf")
+            && !dumped.contains("call %deep")
+            && !dumped.contains("call %forced"),
+        "%leaf, %deep and %forced should be inlined:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("call %mid"),
+        "inlining the shallower %forced after %deep should leave %mid at the limit:\n{dumped}"
+    );
+}
+
 #[test]
 fn full_inliner_credits_the_call_sequence_against_growth() {
     let source = r#"
@@ -1995,6 +2211,102 @@ func public %caller(v0.i1, v1.i32) -> i32 {
     assert_eq!(stats.full_calls_inlined, 0);
     // Not inlined as a single use, the callee is over the size caps.
     assert!(stats.skipped_inlinee_size > 0);
+}
+
+/// A multi-block `%helper` whose one call is in a forced `%wrapper`, which
+/// `callers` public functions `%c0`, `%c1`, ... call.
+fn forced_wrapper_module(callers: usize) -> String {
+    let callers: String = (0..callers)
+        .map(|i| {
+            format!(
+                r#"
+func public %c{i}(v0.i1, v1.i32) -> i32 {{
+    block0:
+        v2.i32 = call %wrapper v0 v1;
+        return v2;
+}}
+"#
+            )
+        })
+        .collect();
+    format!(
+        r#"
+target = "evm-ethereum-london"
+
+func private %helper(v0.i1, v1.i32) -> i32 {{
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i32 = mul v1 3.i32;
+        return v2;
+
+    block2:
+        v3.i32 = add v1 7.i32;
+        return v3;
+}}
+
+func inline(always) private %wrapper(v0.i1, v1.i32) -> i32 {{
+    block0:
+        v2.i32 = call %helper v0 v1;
+        return v2;
+}}
+{callers}"#
+    )
+}
+
+/// Caps and thresholds that no ordinary inline of `%helper` meets.
+fn helper_over_caps_config() -> InlinerConfig {
+    InlinerConfig {
+        max_inlinee_blocks: 1,
+        inline_threshold: -1000,
+        inline_threshold_cold: -1000,
+        ..full_only_inliner_test_config()
+    }
+}
+
+#[test]
+fn full_inliner_single_use_in_forced_caller_is_not_removable() {
+    let mut parsed = sonatina_parser::parse_module(&forced_wrapper_module(3))
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    Inliner::new(helper_over_caps_config()).run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    for name in ["c0", "c1", "c2"] {
+        let func_ref = find_func(module, name);
+        let caller = module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        });
+        assert!(
+            caller.contains("call %helper"),
+            "%helper over the caps should stay a call in each of %wrapper's callers:\n{dumped}"
+        );
+    }
+}
+
+#[test]
+fn full_inliner_single_use_inlines_after_its_forced_caller() {
+    let mut parsed = sonatina_parser::parse_module(&forced_wrapper_module(1))
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut pipeline = Pipeline::new();
+    pipeline.inliner_config = helper_over_caps_config();
+    pipeline
+        .add_step(Step::Inline)
+        .add_step(Step::DeadFuncElim)
+        .add_step(Step::Inline);
+    pipeline.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %wrapper") && !dumped.contains("call %helper"),
+        "%helper should inline as a single use once %wrapper is inlined and removed:\n{dumped}"
+    );
 }
 
 #[test]

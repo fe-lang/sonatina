@@ -133,6 +133,9 @@ pub struct InlinerConfig {
     /// limit. A pipeline that runs the inliner repeatedly allows this per run.
     /// `inline(always)` callees neither count against nor spend it.
     pub max_total_growth: usize,
+    /// Levels of nested inlining one inliner run allows: a callee into which
+    /// inlines nest this deep stays a call; zero is no limit. An
+    /// `inline(always)` callee adds no level, only the levels inlined into it.
     pub max_inline_depth: usize,
     pub allow_inline_recursive: bool,
     /// Instructions a call site costs beyond the call itself: pushing the
@@ -331,7 +334,8 @@ impl Inliner {
 
             let mut changed = false;
             for caller_ref in caller_order {
-                let caller_cold = module.ctx.func_hints(caller_ref).contains(FuncHints::COLD);
+                let caller_hints = module.ctx.func_hints(caller_ref);
+                let caller_cold = caller_hints.contains(FuncHints::COLD);
                 let mut reachable_blocks: Option<FxHashSet<BlockId>> = None;
                 let mut forced_recursive_inline_succeeded = false;
                 let sites = sites_by_caller
@@ -499,7 +503,13 @@ impl Inliner {
                         continue;
                     }
 
+                    // A forced caller is copied into each of its callers, so
+                    // its one call is not a single use: absorbing the callee
+                    // would copy it, unbudgeted, into all of them. Once the
+                    // caller is inlined and removed, a copy left in its only
+                    // caller is a single use.
                     let callee_removable = callee_calls == 1
+                        && !caller_hints.contains(FuncHints::ALWAYSINLINE)
                         && module.ctx.func_linkage(site.callee).is_private()
                         && !retained_funcs.contains(&site.callee)
                         && !recursive_callsite;
@@ -631,12 +641,17 @@ impl Inliner {
                             *growth_by_caller.entry(caller_ref).or_insert(0) += growth;
                             total_growth += growth;
 
+                            // A forced callee's body becomes the caller's as if
+                            // written there, so it adds no level of its own:
+                            // counting it would keep the caller out of its own
+                            // callers until a later run. Its inlined levels
+                            // still count.
                             let callee_depth =
-                                inline_depth_by_func.get(&site.callee).copied().unwrap_or(0);
+                                inline_depth_by_func.get(&site.callee).copied().unwrap_or(0)
+                                    + usize::from(!always_inline);
                             let caller_depth =
                                 inline_depth_by_func.get(&caller_ref).copied().unwrap_or(0);
-                            inline_depth_by_func
-                                .insert(caller_ref, caller_depth.max(callee_depth + 1));
+                            inline_depth_by_func.insert(caller_ref, caller_depth.max(callee_depth));
 
                             // Full inlining always splits the callsite block. If the callee
                             // can return, keep the cache and mark the continuation reachable
