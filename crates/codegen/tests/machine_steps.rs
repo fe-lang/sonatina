@@ -18,6 +18,10 @@ use sonatina_codegen::{
         },
     },
 };
+use sonatina_ir::{
+    Function, InstId, U256, ValueId,
+    inst::{BinaryInstKind, InstClassKind, UnaryInstKind, evm::EvmMstore8},
+};
 use sonatina_parser::parse_module;
 
 fn compile(source: &str, opt: OptLevel, record: bool) -> Option<Vec<ObjectArtifact>> {
@@ -253,7 +257,7 @@ fn check_facts(input: &FuncSnap, output: &FuncSnap, facts: &StepFacts, machine: 
             assert!(dests.contains_key(&block.0), "{name}: no block{}", block.0);
         }
     }
-    if facts.known_bits.is_empty() {
+    if facts.known_bits.is_empty() && facts.demanded_bits.is_none() {
         return;
     }
     let parsed = parse_module(&machine.replace(last, &input.text)).expect("a step input parses");
@@ -263,14 +267,23 @@ fn check_facts(input: &FuncSnap, output: &FuncSnap, facts: &StepFacts, machine: 
         .into_iter()
         .find(|&func| parsed.module.ctx.func_sig(func, |sig| sig.name() == name))
         .unwrap();
+    let parsed_value = |value: ValueId| {
+        parsed
+            .debug
+            .value(func, &format!("v{}", value.as_u32()))
+            .unwrap()
+    };
     parsed.module.func_store.view(func, |function| {
+        if let Some(demanded) = &facts.demanded_bits {
+            let demanded = demanded
+                .iter()
+                .map(|&(value, bits)| (parsed_value(value), bits))
+                .collect();
+            check_demanded(name, function, &demanded);
+        }
         let known = KnownBitsQuery::new(function);
         for &(value, known_zero, known_one) in &facts.known_bits {
-            let parsed_value = parsed
-                .debug
-                .value(func, &format!("v{}", value.as_u32()))
-                .unwrap();
-            let bits = known.for_value(function, parsed_value);
+            let bits = known.for_value(function, parsed_value(value));
             assert!(
                 bits.known_zero & known_zero == known_zero
                     && bits.known_one & known_one == known_one,
@@ -281,6 +294,111 @@ fn check_facts(input: &FuncSnap, output: &FuncSnap, facts: &StepFacts, machine: 
             );
         }
     });
+}
+
+/// The bits of operand `index` of `inst` its result needs when uses read
+/// `demand` of the result, on `i256`.
+fn operand_demand(function: &Function, inst: InstId, index: usize, demand: U256) -> U256 {
+    let args = function.dfg.inst(inst).collect_values();
+    let count = function.dfg.value_imm(args[0]);
+    let count = count
+        .map(|count| count.as_i256().to_u256())
+        .filter(|_| index == 1);
+    match (function.dfg.inst(inst).kind(), count) {
+        (InstClassKind::Unary(UnaryInstKind::Not), _)
+        | (
+            InstClassKind::Binary(BinaryInstKind::And | BinaryInstKind::Or | BinaryInstKind::Xor),
+            _,
+        ) => demand,
+        (InstClassKind::Binary(BinaryInstKind::Shl), Some(count)) if count < U256::from(256) => {
+            demand >> count.as_usize()
+        }
+        (InstClassKind::Binary(BinaryInstKind::Shr), Some(count)) if count < U256::from(256) => {
+            demand << count.as_usize()
+        }
+        (InstClassKind::Binary(BinaryInstKind::Shl | BinaryInstKind::Shr), Some(_)) => U256::zero(),
+        (InstClassKind::Binary(BinaryInstKind::Sar), Some(count)) => {
+            // The top `count` bits of the result copy the sign bit.
+            let (shifted, fill) = match count.min(U256::from(256)).as_usize() {
+                256 => (U256::zero(), U256::MAX),
+                count => (demand << count, !(U256::MAX >> count)),
+            };
+            let sign = if demand & fill == U256::zero() {
+                U256::zero()
+            } else {
+                U256::one() << 255
+            };
+            shifted | sign
+        }
+        (InstClassKind::Binary(BinaryInstKind::EvmSignExtend), Some(byte))
+            if byte < U256::from(31) =>
+        {
+            let width = (byte.as_usize() + 1) * 8;
+            let low = (U256::one() << width) - 1;
+            let sign = if demand & !low == U256::zero() {
+                U256::zero()
+            } else {
+                U256::one() << (width - 1)
+            };
+            (demand & low) | sign
+        }
+        (InstClassKind::Binary(BinaryInstKind::EvmSignExtend), Some(_)) => demand,
+        _ => U256::MAX,
+    }
+}
+
+/// The demanded bits of a step, missing ones none, are a post-fixpoint of
+/// the backward demanded-bits condition on its input `function`: an
+/// instruction used outside values demands all of its operands (`mstore8`
+/// only the low byte of its value), a pure one what its result needs of
+/// each operand, and a phi its result's demand of each incoming value.
+fn check_demanded(name: &str, function: &Function, demanded: &BTreeMap<ValueId, U256>) {
+    let of = |value| demanded.get(&value).copied().unwrap_or_default();
+    let needs = |inst: InstId, value: ValueId, need: U256| {
+        assert!(
+            function.dfg.value_is_imm(value) || of(value) & need == need,
+            "{name}: inst {} needs {need:#x} of v{}, claimed {:#x}",
+            inst.as_u32(),
+            value.as_u32(),
+            of(value)
+        );
+    };
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
+            let args = function.dfg.inst(inst).collect_values();
+            let results = function.dfg.inst_results(inst);
+            if let Some(phi) = function.dfg.cast_phi(inst) {
+                for &(incoming, _) in phi.args() {
+                    needs(inst, incoming, of(results[0]));
+                }
+            } else if function.dfg.branch_info(inst).is_some()
+                || function.dfg.inst(inst).kind() == InstClassKind::Opaque
+                || !function.dfg.can_drop_if_unused(inst)
+            {
+                let mstore8 = function.dfg.downcast::<&EvmMstore8>(inst).is_some();
+                for (index, &arg) in args.iter().enumerate() {
+                    // Operand 1 of `mstore8` is the value.
+                    let byte = mstore8 && index == 1;
+                    needs(inst, arg, if byte { U256::from(255) } else { U256::MAX });
+                }
+            } else {
+                for (result_index, &result) in results.iter().enumerate() {
+                    let demand = of(result);
+                    if demand.is_zero() {
+                        continue;
+                    }
+                    for (index, &arg) in args.iter().enumerate() {
+                        let need = if result_index == 0 {
+                            operand_demand(function, inst, index, demand)
+                        } else {
+                            U256::MAX
+                        };
+                        needs(inst, arg, need);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Composing `lowered` with the steps gives the functions of `machine_ir`,
@@ -394,4 +512,54 @@ fn machine_steps_compose_to_the_machine_ir(fixture: Fixture<&str>) {
             "{opt:?}: the record differs between compilations"
         );
     }
+}
+
+/// `check_demanded` on the function `machine_steps_record_demanded_bits_of_dropped_mask`
+/// records a demand round of, with the demanded bits of `v0`, `v1` and `v2`.
+fn check_masked_byte_store(demanded: [u64; 3]) {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i256) {
+    block0:
+        v2.i256 = and v1 255.i256;
+        evm_mstore8 v0 v2;
+        return;
+}
+"#,
+    )
+    .unwrap();
+    let func = parsed.module.funcs()[0];
+    let demanded = demanded
+        .iter()
+        .enumerate()
+        .map(|(value, &bits)| {
+            let bits = if bits == u64::MAX {
+                U256::MAX
+            } else {
+                U256::from(bits)
+            };
+            (
+                parsed.debug.value(func, &format!("v{value}")).unwrap(),
+                bits,
+            )
+        })
+        .collect();
+    parsed
+        .module
+        .func_store
+        .view(func, |function| check_demanded("f", function, &demanded));
+}
+
+#[test]
+fn demanded_bits_of_a_masked_byte_store_are_a_post_fixpoint() {
+    check_masked_byte_store([u64::MAX, 255, 255]);
+}
+
+/// The record omitted the arguments, which read as demanding nothing.
+#[test]
+#[should_panic(expected = "needs 0xff")]
+fn demanded_bits_without_the_arguments_are_not() {
+    check_masked_byte_store([0, 0, 255]);
 }

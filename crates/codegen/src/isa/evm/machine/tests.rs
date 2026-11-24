@@ -544,9 +544,17 @@ fn machine_steps_record_demanded_bits_of_dropped_mask() {
         .demanded_bits
         .as_ref()
         .expect("a round from demanded bits");
-    assert!(
-        demanded.contains(&(masked, U256::from(255))),
-        "{demanded:?}"
+    let args = module
+        .func_store
+        .view(func_ref, |function| function.arg_values.clone());
+    // `mstore8` reads all of its address and the low byte of its value.
+    assert_eq!(
+        demanded[..],
+        [
+            (args[0], U256::MAX),
+            (args[1], U256::from(255)),
+            (masked, U256::from(255))
+        ],
     );
 }
 
