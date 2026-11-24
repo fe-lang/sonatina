@@ -16,13 +16,14 @@ use sonatina_ir::{
 };
 
 use super::{
-    INLINE_MEMORY_BYTES, aggregate_elem_offset, constant_value_index,
+    INLINE_MEMORY_BYTES, aggregate_elem_offset, constant_value_index, sha256::Sha256Words,
     uses_indirect_value_representation, value_storage_alignment, value_storage_size,
 };
 
 /// Stack slots for indirectly represented SSA values: aggregates. (i256
-/// values are four limbs in Cranelift values, and small aggregates their
-/// parts: see `register_parts`.)
+/// values are four limbs in Cranelift values, small aggregates their parts
+/// (see `register_parts`), and the states and blocks of SHA-256
+/// compressions held in registers their words (see `Sha256Words`).)
 ///
 /// A value-producing instruction with an aggregate result writes a
 /// snapshot that nothing mutates afterwards. Phis, loads, call results,
@@ -130,9 +131,10 @@ impl FrameSlots {
         block_order: &[BlockId],
         return_buffer: Option<clif::Value>,
         calls: &impl CallFacts,
+        words: &Sha256Words,
         builder: &mut FunctionBuilder,
     ) -> Result<Self, String> {
-        let plan = Plan::new(function, cfg, block_order, calls)?;
+        let plan = Plan::new(function, cfg, block_order, calls, words)?;
         let mut in_buffer = vec![false; plan.classes.len()];
         if return_buffer.is_some() {
             // Keep the most returned classes that are never live together.
@@ -422,6 +424,7 @@ impl Plan {
         cfg: &ControlFlowGraph,
         block_order: &[BlockId],
         calls: &impl CallFacts,
+        words: &Sha256Words,
     ) -> Result<Self, String> {
         let dfg = &function.dfg;
         let ctx = function.ctx();
@@ -493,7 +496,7 @@ impl Plan {
                     continue;
                 };
                 let ty = dfg.value_ty(result);
-                if !uses_indirect_value_representation(ctx, ty) {
+                if !uses_indirect_value_representation(ctx, ty) || words.holds(result) {
                     continue;
                 }
                 let class = match native_inst_set().resolve_inst(dfg.inst(inst)) {
@@ -1401,7 +1404,7 @@ mod tests {
 
     use sonatina_ir::{inst::InstId, module::FuncRef};
 
-    use super::{CallFacts, FrameSlots};
+    use super::{CallFacts, FrameSlots, Sha256Words};
 
     /// Calls nothing is known of: no tail calls or owned arguments, and
     /// every call may write through every argument.
@@ -1439,13 +1442,130 @@ mod tests {
             let mut clif_function = clif::Function::new();
             let mut context = FunctionBuilderContext::new();
             let mut builder = FunctionBuilder::new(&mut clif_function, &mut context);
-            FrameSlots::new(function, &cfg, &block_order, None, &NoCalls, &mut builder).unwrap();
+            let words = Sha256Words::new(function, false);
+            FrameSlots::new(
+                function,
+                &cfg,
+                &block_order,
+                None,
+                &NoCalls,
+                &words,
+                &mut builder,
+            )
+            .unwrap();
             clif_function
                 .sized_stack_slots
                 .values()
                 .map(|slot| slot.size)
                 .collect()
         })
+    }
+
+    #[test]
+    fn compression_words_own_no_slots() {
+        // The block, the constants and both states are only built and read
+        // word by word, so none is in memory.
+        let sizes = slot_sizes(
+            r#"
+global private const [i32; 8] $iv = [1779033703, -1150833019, 1013904242, -1521486534, 1359893119, -1694144372, 528734635, 1541459225];
+global private const [i32; 16] $padding = [-2147483648, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 512];
+func public %f(v0.i32, v1.i32) -> i32 {
+block0:
+    v2.[i32; 16] = agg.make [i32; 16] v0 v1 v0 v1 v0 v1 v0 v1 v0 v1 v0 v1 v0 v1 v0 v1;
+    v3.constref<[i32; 8]> = const.ref $iv;
+    v4.[i32; 8] = const.load v3;
+    v5.[i32; 8] = sha256_compress v4 v2;
+    v6.[i32; 8] = insert_value v5 7.i64 v1;
+    v7.constref<[i32; 16]> = const.ref $padding;
+    v8.[i32; 16] = const.load v7;
+    v9.[i32; 8] = sha256_compress v6 v8;
+    v10.i32 = extract_value v9 0.i64;
+    return v10;
+}
+"#,
+        );
+        assert_eq!(sizes, []);
+        // A block and a result also stored are in memory, and so is the
+        // insert into that result; the compression of the insert is not.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i32, v1.*[i32; 16], v2.*[i32; 8]) -> i32 {
+block0:
+    v3.[i32; 16] = agg.make [i32; 16] v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0;
+    v4.[i32; 8] = sha256_compress zero.[i32; 8] v3;
+    v5.[i32; 8] = insert_value v4 0.i64 v0;
+    v6.[i32; 8] = sha256_compress v5 zero.[i32; 16];
+    mstore v1 v3 [i32; 16];
+    mstore v2 v4 [i32; 8];
+    v7.i32 = extract_value v6 0.i64;
+    return v7;
+}
+"#,
+        );
+        assert_eq!(sizes, [64, 32, 32]);
+    }
+
+    #[test]
+    fn compression_words_cross_blocks_loops_and_calls() {
+        // The first state lives across a call and into a loop that
+        // compresses it with a constant block on each iteration.
+        let sizes = slot_sizes(
+            r#"
+global private const [i32; 8] $iv = [1779033703, -1150833019, 1013904242, -1521486534, 1359893119, -1694144372, 528734635, 1541459225];
+global private const [i32; 16] $padding = [-2147483648, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 512];
+declare external %g(i32) -> i32;
+func public %f(v0.i32, v1.i64) -> i32 {
+block0:
+    v2.[i32; 16] = agg.make [i32; 16] v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0;
+    v3.constref<[i32; 8]> = const.ref $iv;
+    v4.[i32; 8] = const.load v3;
+    v5.[i32; 8] = sha256_compress v4 v2;
+    v6.i32 = call %g v0;
+    jump block1;
+block1:
+    v7.i64 = phi (0.i64 block0) (v13 block1);
+    v8.i32 = phi (v6 block0) (v12 block1);
+    v9.constref<[i32; 16]> = const.ref $padding;
+    v10.[i32; 16] = const.load v9;
+    v11.[i32; 8] = sha256_compress v5 v10;
+    v14.i32 = extract_value v11 0.i64;
+    v12.i32 = add v8 v14;
+    v13.i64 = add v7 1.i64;
+    v15.i1 = lt v13 v1;
+    br v15 block1 block2;
+block2:
+    return v12;
+}
+"#,
+        );
+        assert_eq!(sizes, []);
+    }
+
+    #[test]
+    fn compression_states_through_phis_are_in_memory() {
+        // The state a phi carries around the loop, and the values it takes,
+        // are in memory; the block built in the loop is not.
+        let sizes = slot_sizes(
+            r#"
+func public %f(v0.i32, v1.i64) -> i32 {
+block0:
+    v2.[i32; 8] = sha256_compress zero.[i32; 8] zero.[i32; 16];
+    jump block1;
+block1:
+    v3.i64 = phi (0.i64 block0) (v7 block1);
+    v4.[i32; 8] = phi (v2 block0) (v6 block1);
+    v5.[i32; 16] = agg.make [i32; 16] v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0 v0;
+    v6.[i32; 8] = sha256_compress v4 v5;
+    v7.i64 = add v3 1.i64;
+    v8.i1 = lt v7 v1;
+    br v8 block1 block2;
+block2:
+    v9.i32 = extract_value v6 0.i64;
+    return v9;
+}
+"#,
+        );
+        assert_eq!(sizes, [32, 32]);
     }
 
     #[test]
