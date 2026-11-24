@@ -1,0 +1,107 @@
+target = "evm-ethereum-osaka"
+
+# A predecessor with another successor would run the copied call on that
+# successor's path too.
+# sameln: func public %pure_call_not_speculated(v0.i256, v1.i1, v2.i1) -> i256 {
+# check:   block1:
+# nextln:      br v2 block3 block4;
+# check:   block3:
+# nextln:      v3.i1 = phi (1.i1 block1) (v2 block2);
+# nextln:      v4.i256 = call %square v0;
+# nextln:      br v3 block5 block6;
+func public %pure_call_not_speculated(v0.i256, v1.i1, v2.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    br v2 block3 block4;
+
+block2:
+    jump block3;
+
+block3:
+    v3.i1 = phi (1.i1 block1) (v2 block2);
+    v4.i256 = call %square v0;
+    br v3 block5 block6;
+
+block4:
+    return 0.i256;
+
+block5:
+    return v4;
+
+block6:
+    return 1.i256;
+}
+
+# A predecessor that only jumps would run the call once, but as a second
+# copy of it.
+# sameln: func public %pure_call_not_duplicated(v0.i256, v1.i1) -> i256 {
+# check:   block1:
+# nextln:      jump block3;
+# check:   block2:
+# nextln:      jump block3;
+# check:   block3:
+# nextln:      v2.i1 = phi (1.i1 block1) (0.i1 block2);
+# nextln:      v3.i256 = call %square v0;
+# nextln:      br v2 block4 block5;
+func public %pure_call_not_duplicated(v0.i256, v1.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v2.i1 = phi (1.i1 block1) (0.i1 block2);
+    v3.i256 = call %square v0;
+    br v2 block4 block5;
+
+block4:
+    return v3;
+
+block5:
+    v4.i256 = add v3 1.i256;
+    return v4;
+}
+
+# A cheap pure instruction is still recomputed in a predecessor with another
+# successor.
+# sameln: func public %pure_inst_speculated(v0.i256, v1.i1, v2.i1) -> i256 {
+# check:   block1:
+# nextln:      add v0 1.i256;
+# nextln:      br v2 block5 block4;
+func public %pure_inst_speculated(v0.i256, v1.i1, v2.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    br v2 block3 block4;
+
+block2:
+    jump block3;
+
+block3:
+    v3.i1 = phi (1.i1 block1) (v2 block2);
+    v4.i256 = add v0 1.i256;
+    br v3 block5 block6;
+
+block4:
+    return 0.i256;
+
+block5:
+    return v4;
+
+block6:
+    return 1.i256;
+}
+
+# check:   mul v0 v0;
+func public %square(v0.i256) -> i256 {
+block0:
+    v1.i256 = mul v0 v0;
+    return v1;
+}

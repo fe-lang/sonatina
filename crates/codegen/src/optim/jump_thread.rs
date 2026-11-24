@@ -21,6 +21,11 @@
 //! phis then takes the value of whichever of `B` and the threaded
 //! predecessors its path last left, through new phis where paths meet.
 //!
+//! A block that calls a function, pure or not, is not threaded. A call costs
+//! what its callee does, which on `P`'s other paths would run where it did
+//! not; and where `P` has no other path, the copy still adds a call sequence,
+//! more code than the few instructions allowed.
+//!
 //! A cursor loop's `Option` test is the motivating shape: the latch tests
 //! the next cursor, enters a join that materializes the tag as `phi(1, 0)`,
 //! and branches on the tag again. Threading leaves one branch, and the
@@ -196,7 +201,10 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
             continue;
         }
         size += inst_size(func, inst);
-        if !func.dfg.has_value_semantics(inst) || size > MAX_DUPLICATED_INSTS {
+        if !func.dfg.has_value_semantics(inst)
+            || func.dfg.is_call(inst)
+            || size > MAX_DUPLICATED_INSTS
+        {
             return None;
         }
         body.push(inst);
