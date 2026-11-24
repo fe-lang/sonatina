@@ -323,7 +323,8 @@ impl Inliner {
 
             let mut changed = false;
             for caller_ref in caller_order {
-                let caller_cold = module.ctx.func_hints(caller_ref).contains(FuncHints::COLD);
+                let caller_hints = module.ctx.func_hints(caller_ref);
+                let caller_cold = caller_hints.contains(FuncHints::COLD);
                 let mut reachable_blocks: Option<FxHashSet<BlockId>> = None;
                 let mut forced_recursive_inline_succeeded = false;
                 let sites = sites_by_caller
@@ -491,7 +492,13 @@ impl Inliner {
                         continue;
                     }
 
+                    // A forced caller is copied into each of its callers, so
+                    // its one call is not a single use: absorbing the callee
+                    // would copy it, unbudgeted, into all of them. Once the
+                    // caller is inlined and removed, a copy left in its only
+                    // caller is a single use.
                     let callee_removable = callee_calls == 1
+                        && !caller_hints.contains(FuncHints::ALWAYSINLINE)
                         && module.ctx.func_linkage(site.callee).is_private()
                         && !retained_funcs.contains(&site.callee)
                         && !recursive_callsite;
