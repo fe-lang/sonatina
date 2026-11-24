@@ -1,0 +1,321 @@
+target = "evm-ethereum-osaka"
+
+type @Res = enum {
+    #Ok(i256),
+    #Err(i256),
+};
+
+type @Tri = enum {
+    #A(i256),
+    #B(i256),
+    #C(i256),
+};
+
+# A join that tests the variant of a phi of `enum.make`s sends the
+# predecessor that built the tested variant to the nonzero successor and the
+# one that built the other to the zero successor. The successors' reads of
+# the joined value take the predecessor's `enum.make`.
+# sameln: func private %is_variant_of_made_phi_threads_each_pred(v0.i256, v1.i1) -> i256 {
+# check:   block1:
+# nextln:      v2.@Res = enum.make @Res #Ok v0;
+# nextln:      enum.is_variant v2 #Ok;
+# nextln:      jump block4;
+# check:   block2:
+# nextln:      v3.@Res = enum.make @Res #Err v0;
+# nextln:      enum.is_variant v3 #Ok;
+# nextln:      jump block5;
+# check:   block4:
+# nextln:      v6.i256 = enum.extract v2 #Ok 0.i256;
+# check:   block5:
+# nextln:      v7.i256 = enum.extract v3 #Err 0.i256;
+# not:     block3:
+func private %is_variant_of_made_phi_threads_each_pred(v0.i256, v1.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    v2.@Res = enum.make @Res #Ok v0;
+    jump block3;
+
+block2:
+    v3.@Res = enum.make @Res #Err v0;
+    jump block3;
+
+block3:
+    v5.@Res = phi (v2 block1) (v3 block2);
+    v4.i1 = enum.is_variant v5 #Ok;
+    br v4 block4 block5;
+
+block4:
+    v6.i256 = enum.extract v5 #Ok 0.i256;
+    return v6;
+
+block5:
+    v7.i256 = enum.extract v5 #Err 0.i256;
+    return v7;
+}
+
+# Only the edge whose incoming value is an `enum.make` knows the variant.
+# regex: JOIN=\bv\d+\b
+# sameln: func private %mixed_phi_threads_made_pred(v0.i256, v1.i1, v2.@Res) -> i256 {
+# check:   block1:
+# nextln:      v3.@Res = enum.make @Res #Err v0;
+# nextln:      enum.is_variant v3 #Ok;
+# nextln:      jump block5;
+# check:   block2:
+# nextln:      jump block3;
+# check:   block3:
+# nextln:      v5.i1 = enum.is_variant v2 #Ok;
+# nextln:      br v5 block4 block5;
+# check:   block5:
+# nextln:      $JOIN.@Res = phi (v2 block3) (v3 block1);
+# nextln:      v7.i256 = enum.extract $JOIN #Err 0.i256;
+func private %mixed_phi_threads_made_pred(v0.i256, v1.i1, v2.@Res) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    v3.@Res = enum.make @Res #Err v0;
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v4.@Res = phi (v3 block1) (v2 block2);
+    v5.i1 = enum.is_variant v4 #Ok;
+    br v5 block4 block5;
+
+block4:
+    return 0.i256;
+
+block5:
+    v7.i256 = enum.extract v4 #Err 0.i256;
+    return v7;
+}
+
+# `?` on a result built in a loop body: the overflow test leaves either for
+# the join with an `Err` or for a block making an `Ok` of the sum, and the
+# join tests the variant. The block making the `Ok` goes straight to the
+# latch, whose read of the payload takes its `enum.make`, and the overflow
+# edge to the exit; the test recomputed on the overflow edge is
+# speculatable.
+# sameln: func private %try_in_loop_threads_to_latch_and_exit(v0.i256) -> i256 {
+# check:   block1:
+# check:       v7.i1 = gt v6 1000.i256;
+# nextln:      enum.is_variant v1 #Ok;
+# nextln:      br v7 block4 block2;
+# check:   block2:
+# nextln:      v8.@Res = enum.make @Res #Ok v6;
+# nextln:      enum.is_variant v8 #Ok;
+# nextln:      jump block3;
+# check:   block3:
+# nextln:      enum.assert_variant v8 #Ok;
+# nextln:      v10.i256 = enum.extract v8 #Ok 0.i256;
+# check:   block4:
+# nextln:      return 0.i256;
+# not:     block5:
+func private %try_in_loop_threads_to_latch_and_exit(v0.i256) -> i256 {
+block0:
+    v1.@Res = enum.make @Res #Err 0.i256;
+    jump block1;
+
+block1:
+    v2.i256 = phi (0.i256 block0) (v10 block3);
+    v3.i256 = phi (0.i256 block0) (v5 block3);
+    v4.i256 = mload v3 i256;
+    v5.i256 = add v3 32.i256;
+    v6.i256 = add v2 v4;
+    v7.i1 = gt v6 1000.i256;
+    br v7 block5 block2;
+
+block2:
+    v8.@Res = enum.make @Res #Ok v6;
+    jump block5;
+
+block5:
+    v9.@Res = phi (v8 block2) (v1 block1);
+    v13.i1 = enum.is_variant v9 #Ok;
+    br v13 block3 block4;
+
+block3:
+    enum.assert_variant v9 #Ok;
+    v10.i256 = enum.extract v9 #Ok 0.i256;
+    jump block1;
+
+block4:
+    return 0.i256;
+}
+
+# A payload read in the join is valid only where the variant is known, so it
+# is not recomputed at the end of a predecessor with another successor: only
+# the edge from the block with one successor threads.
+# regex: PAYLOAD=\bv\d+\b
+# sameln: func private %join_extract_not_speculated(v0.i256, v1.i256) -> i256 {
+# check:   block0:
+# nextln:      v2.@Res = enum.make @Res #Ok v0;
+# nextln:      v10.i1 = lt v0 10.i256;
+# nextln:      br v10 block1 block3;
+# check:   block1:
+# nextln:      v3.@Res = enum.make @Res #Ok v1;
+# nextln:      enum.is_variant v3 #Ok;
+# nextln:      $PAYLOAD.i256 = enum.extract v3 #Ok 0.i256;
+# nextln:      jump block4;
+# check:   block3:
+# nextln:      v5.i1 = enum.is_variant v2 #Ok;
+# nextln:      v6.i256 = enum.extract v2 #Ok 0.i256;
+# nextln:      br v5 block4 block5;
+# check:   block4:
+# nextln:      v7.i256 = phi (v6 block3) ($PAYLOAD block1);
+func private %join_extract_not_speculated(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.@Res = enum.make @Res #Ok v0;
+    v10.i1 = lt v0 10.i256;
+    br v10 block1 block3;
+
+block1:
+    v3.@Res = enum.make @Res #Ok v1;
+    jump block3;
+
+block3:
+    v4.@Res = phi (v3 block1) (v2 block0);
+    v5.i1 = enum.is_variant v4 #Ok;
+    v6.i256 = enum.extract v4 #Ok 0.i256;
+    br v5 block4 block5;
+
+block4:
+    v7.i256 = phi (v6 block3);
+    return v7;
+
+block5:
+    return 0.i256;
+}
+
+# A body instruction that consumes the folded test folds too: `is_zero` of
+# the `#Ok` test sends the `Ok` predecessor to the zero successor.
+# regex: OK=\bv\d+\b
+# regex: ERR=\bv\d+\b
+# sameln: func private %folded_test_feeds_body(v0.i256, v1.i1) -> i256 {
+# check:   block1:
+# nextln:      v2.@Res = enum.make @Res #Ok v0;
+# nextln:      $OK.i1 = enum.is_variant v2 #Ok;
+# nextln:      is_zero $OK;
+# nextln:      jump block4;
+# check:   block2:
+# nextln:      v3.@Res = enum.make @Res #Err v0;
+# nextln:      $ERR.i1 = enum.is_variant v3 #Ok;
+# nextln:      is_zero $ERR;
+# nextln:      jump block5;
+# not:     block3:
+func private %folded_test_feeds_body(v0.i256, v1.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    v2.@Res = enum.make @Res #Ok v0;
+    jump block3;
+
+block2:
+    v3.@Res = enum.make @Res #Err v0;
+    jump block3;
+
+block3:
+    v5.@Res = phi (v2 block1) (v3 block2);
+    v4.i1 = enum.is_variant v5 #Ok;
+    v6.i1 = is_zero v4;
+    br v6 block5 block4;
+
+block4:
+    return 1.i256;
+
+block5:
+    return 2.i256;
+}
+
+# A use of the test below the block takes, where the threaded and the
+# remaining paths meet, a phi of the test recomputed in the predecessor and
+# the block's own.
+# regex: COPY=\bv\d+\b
+# regex: MEET=\bv\d+\b
+# sameln: func private %escaping_test_meets_in_phi(v0.i256, v1.i1, v2.@Res) -> i256 {
+# check:   block1:
+# nextln:      v3.@Res = enum.make @Res #Err v0;
+# nextln:      $COPY.i1 = enum.is_variant v3 #Ok;
+# nextln:      jump block5;
+# check:   block3:
+# nextln:      v5.i1 = enum.is_variant v2 #Ok;
+# nextln:      br v5 block4 block5;
+# check:   block5:
+# nextln:      $MEET.i1 = phi (v5 block3) ($COPY block1);
+# nextln:      v6.i256 = zext $MEET i256;
+func private %escaping_test_meets_in_phi(v0.i256, v1.i1, v2.@Res) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    v3.@Res = enum.make @Res #Err v0;
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v4.@Res = phi (v3 block1) (v2 block2);
+    v5.i1 = enum.is_variant v4 #Ok;
+    br v5 block4 block5;
+
+block4:
+    return 0.i256;
+
+block5:
+    v6.i256 = zext v5 i256;
+    return v6;
+}
+
+# The test compares variants, not a tag with zero: testing the middle of
+# three variants sends its maker to the nonzero successor, and the first and
+# the last to the zero successor.
+# sameln: func private %middle_variant_test_threads(v0.i256, v1.i8) -> i256 {
+# check:   block1:
+# nextln:      v2.@Tri = enum.make @Tri #A v0;
+# nextln:      enum.is_variant v2 #B;
+# nextln:      jump block6;
+# check:   block2:
+# nextln:      v3.@Tri = enum.make @Tri #B v0;
+# nextln:      enum.is_variant v3 #B;
+# nextln:      jump block5;
+# check:   block3:
+# nextln:      v4.@Tri = enum.make @Tri #C v0;
+# nextln:      enum.is_variant v4 #B;
+# nextln:      jump block6;
+# check:   block5:
+# nextln:      v7.i256 = enum.extract v3 #B 0.i256;
+# not:     block4:
+func private %middle_variant_test_threads(v0.i256, v1.i8) -> i256 {
+block0:
+    br_table v1 block3 (0.i8 block1) (1.i8 block2);
+
+block1:
+    v2.@Tri = enum.make @Tri #A v0;
+    jump block4;
+
+block2:
+    v3.@Tri = enum.make @Tri #B v0;
+    jump block4;
+
+block3:
+    v4.@Tri = enum.make @Tri #C v0;
+    jump block4;
+
+block4:
+    v5.@Tri = phi (v2 block1) (v3 block2) (v4 block3);
+    v6.i1 = enum.is_variant v5 #B;
+    br v6 block5 block6;
+
+block5:
+    v7.i256 = enum.extract v5 #B 0.i256;
+    return v7;
+
+block6:
+    return 0.i256;
+}

@@ -7,8 +7,8 @@
 //!
 //! - `c` is computed in `B` from its phis, and folds to a constant given
 //!   their incoming values from `P`: a phi whose incoming value is a
-//!   constant, `is_zero` of one, or `enum.tag` of a phi whose incoming value
-//!   is an `enum.make`;
+//!   constant, `is_zero` of one, or `enum.tag` or `enum.is_variant` of a phi
+//!   whose incoming value is an `enum.make`;
 //! - `c` is defined above `B`, and the edge `P -> B`, or an edge that every
 //!   path into `P` takes, leaves a branch on `c`.
 //!
@@ -27,8 +27,10 @@
 //! header's cursor phi then takes the latch's value on the edge where the
 //! latch's own comparison holds.
 //!
-//! Rebuilding an `Option` and matching it again is the enum shape: a join
-//! takes `enum.make` values from its predecessors and branches on their tag.
+//! Rebuilding an `Option` and matching it again, or `?` on a `Result` built
+//! in the same function, is the enum shape: a join takes `enum.make` values
+//! from its predecessors and branches on their tag or on a test of their
+//! variant.
 //!
 //! Testing one condition twice is the dominating shape:
 //! `if c { a } else { b }` followed by `if c { x } else { y }` joins after
@@ -218,7 +220,8 @@ fn table_cases(func: &Function, table: &BrTable) -> Option<SmallVec<[(Immediate,
 
 /// What `pred` computes `cond`, a value of `block`, to be: the constants
 /// among `block`'s phis' incoming values from `pred`, folded through its
-/// body. The tag of an incoming `enum.make` is a constant too.
+/// body. The tag of an incoming `enum.make`, and an `enum.is_variant` test of
+/// it, are constants too.
 fn incoming_cond(
     func: &Function,
     block: BlockId,
@@ -230,7 +233,7 @@ fn incoming_cond(
         func,
         known: FxHashMap::default(),
     };
-    let mut tags = FxHashMap::default();
+    let mut variants = FxHashMap::default();
     for phi_inst in func.layout.iter_inst(block) {
         let Some(phi) = func.dfg.cast_phi(phi_inst) else {
             break;
@@ -248,26 +251,28 @@ fn incoming_cond(
             .value_inst(incoming)
             .and_then(|inst| func.dfg.downcast::<&data::EnumMake>(inst))
         {
-            tags.insert(
-                result,
-                Immediate::EnumTag {
-                    enum_ty: make.variant().enum_ty(),
-                    value: I256::from(u64::from(make.variant().index())),
-                },
-            );
+            variants.insert(result, *make.variant());
         }
     }
     for &inst in &cand.body {
         let &[result] = func.dfg.inst_results(inst) else {
             continue;
         };
-        let imm = match func.dfg.downcast::<&data::EnumTag>(inst) {
-            Some(tag) => tags.get(tag.value()).copied(),
-            None => match simplify_inst_with_facts(func, inst, &facts).result(0) {
+        let imm = if let Some(tag) = func.dfg.downcast::<&data::EnumTag>(inst) {
+            variants.get(tag.value()).map(|variant| Immediate::EnumTag {
+                enum_ty: variant.enum_ty(),
+                value: I256::from(u64::from(variant.index())),
+            })
+        } else if let Some(test) = func.dfg.downcast::<&data::EnumIsVariant>(inst) {
+            variants
+                .get(test.value())
+                .map(|variant| Immediate::I1(variant == test.variant()))
+        } else {
+            match simplify_inst_with_facts(func, inst, &facts).result(0) {
                 SimplifiedResult::Const(imm) => Some(imm),
                 SimplifiedResult::Copy(value) => facts.known_imm(value),
                 SimplifiedResult::NoChange => None,
-            },
+            }
         };
         if let Some(imm) = imm {
             facts.known.insert(result, imm);
