@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, FuncEffectSummary, Function, InstDowncast, Module,
+    BlockId, ControlFlowGraph, FuncEffectSummary, Function, InstDowncast, Module, OtherEffects,
     inst::{
         control_flow,
         evm::{EvmInvalid, EvmReturn, EvmReturnCode, EvmRevert, EvmSelfDestruct, EvmStop},
@@ -14,6 +14,7 @@ use sonatina_ir::{
 use crate::{
     cfg_scc::has_cycle,
     module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef},
+    object::lowering::FuncSummary,
 };
 
 #[derive(Debug, Default, Clone)]
@@ -31,6 +32,28 @@ struct LocalFacts {
 
 pub fn analyze_module(module: &Module) {
     FuncBehaviorAnalyzer::new(module).analyze();
+}
+
+/// The summary of each function of `module` that passes read now, by id.
+pub(crate) fn export(module: &Module) -> Vec<FuncSummary> {
+    let mut funcs = module.func_store.funcs();
+    funcs.sort_unstable_by_key(|func| func.as_u32());
+    funcs
+        .into_iter()
+        .map(|func| {
+            let effects = module.ctx.func_effects(func);
+            FuncSummary {
+                func: module.ctx.func_sig(func, |sig| sig.name().to_string()),
+                noreturn: effects.noreturn,
+                will_return: effects.will_return,
+                reads: effects.may_observe_state(),
+                writes: effects.may_write_memory(),
+                mutates: effects
+                    .other
+                    .intersects(OtherEffects::MUTATE | OtherEffects::ALLOC),
+            }
+        })
+        .collect()
 }
 
 struct FuncBehaviorAnalyzer<'a> {

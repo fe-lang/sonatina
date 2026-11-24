@@ -6,8 +6,9 @@ use sonatina_ir::{Function, Module, module::FuncRef, parallel};
 
 use super::super::LateCleanupProfile;
 use crate::{
+    analysis::func_behavior,
     object::lowering::{
-        FuncSnap, MachinePass, MachinePassKind, MachineStep, MachineSteps, StepKind,
+        FuncSnap, FuncSummary, MachinePass, MachinePassKind, MachineStep, MachineSteps, StepKind,
     },
     optim::steps::StepLog,
 };
@@ -65,13 +66,18 @@ impl MachineRecorder {
                 log
             })
             .collect();
-        self.push_pass(kind, logs);
+        self.push_pass(kind, None, logs);
     }
 
     /// Merges the logs of the functions, in the section's order, into the
     /// pass `kind`: the steps of a group and round of every function are one
     /// step.
-    fn push_pass(&mut self, kind: MachinePassKind, logs: Vec<StepLog>) {
+    fn push_pass(
+        &mut self,
+        kind: MachinePassKind,
+        func_behavior: Option<Vec<FuncSummary>>,
+        logs: Vec<StepLog>,
+    ) {
         let mut steps = BTreeMap::<_, MachineStep>::new();
         for log in logs {
             for (step_kind, group, round, step) in log.steps {
@@ -89,6 +95,7 @@ impl MachineRecorder {
         }
         self.passes.push(MachinePass {
             kind,
+            func_behavior,
             steps: steps
                 .into_values()
                 .filter(|step| !step.funcs.is_empty())
@@ -107,6 +114,17 @@ pub(crate) fn run_machine_pass(
     kind: MachinePassKind,
     run: impl Fn(FuncRef, &mut Function, Option<&mut StepLog>) -> bool + Sync + Send,
 ) -> bool {
+    // The passes that read function effects, of calls in particular.
+    let func_behavior = (recorder.is_some()
+        && matches!(
+            kind,
+            MachinePassKind::CfgCleanup
+                | MachinePassKind::ScalarCanonicalize
+                | MachinePassKind::Sccp
+                | MachinePassKind::Gvn
+                | MachinePassKind::Adce
+        ))
+    .then(|| func_behavior::export(module));
     let logs: Vec<_> = match recorder.as_deref_mut() {
         Some(recorder) => mem::take(&mut recorder.current)
             .into_iter()
@@ -127,7 +145,7 @@ pub(crate) fn run_machine_pass(
     let changed = results.iter().any(|(changed, _)| *changed);
     if let Some(recorder) = recorder {
         let logs = results.into_iter().filter_map(|(_, log)| log).collect();
-        recorder.push_pass(kind, logs);
+        recorder.push_pass(kind, func_behavior, logs);
     }
     changed
 }

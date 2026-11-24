@@ -70,9 +70,31 @@ pub struct MachineSteps {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachinePass {
     pub kind: MachinePassKind,
+    /// What the pass read of the behavior of each function of the module,
+    /// as analyzed of the module before it, or before an earlier pass whose
+    /// changes did not lead the round to analyze it again. `None` for a pass
+    /// that reads none.
+    pub func_behavior: Option<Vec<FuncSummary>>,
     /// The steps of the pass in order. A function a step did not change is
     /// not in it, and a step that changed no function is left out.
     pub steps: Vec<MachineStep>,
+}
+
+/// What machine passes read of a function's effect summary. A function not
+/// listed may do anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FuncSummary {
+    pub func: String,
+    /// Never returns to its caller.
+    pub noreturn: bool,
+    /// Always returns to its caller.
+    pub will_return: bool,
+    /// May read memory or observe other state.
+    pub reads: bool,
+    /// May write memory.
+    pub writes: bool,
+    /// May change other state, or allocate.
+    pub mutates: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

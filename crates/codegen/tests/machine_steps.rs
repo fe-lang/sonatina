@@ -3,7 +3,7 @@
 //! names each instruction once and keeps the instruction of each value, the
 //! record is the same in every compilation, and recording it changes no byte.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use dir_test::{Fixture, dir_test};
 use rayon::ThreadPoolBuilder;
@@ -11,7 +11,7 @@ use sonatina_codegen::{
     EvmCompile, OptLevel,
     object::{
         ObjectArtifact,
-        lowering::{FuncSnap, MachineSteps, SectionLowering},
+        lowering::{FuncSnap, MachinePassKind, MachineSteps, SectionLowering},
     },
 };
 use sonatina_parser::parse_module;
@@ -108,7 +108,8 @@ fn check_snap(snap: &FuncSnap, defs: &mut BTreeMap<u32, u32>) {
 }
 
 /// Composing `lowered` with the steps gives the functions of `machine_ir`,
-/// and every snapshot passes `check_snap`.
+/// every snapshot passes `check_snap`, and the passes that read function
+/// behavior list it for every function of the section.
 fn check_steps(lowering: &SectionLowering) {
     let steps = &lowering.machine_steps;
     let mut current: BTreeMap<_, _> = steps
@@ -122,6 +123,32 @@ fn check_steps(lowering: &SectionLowering) {
     }
     let machine = func_texts(&lowering.machine_ir);
     for pass in &steps.passes {
+        let reads_behavior = matches!(
+            pass.kind,
+            MachinePassKind::CfgCleanup
+                | MachinePassKind::ScalarCanonicalize
+                | MachinePassKind::Sccp
+                | MachinePassKind::Gvn
+                | MachinePassKind::Adce
+        );
+        assert_eq!(
+            pass.func_behavior.is_some(),
+            reads_behavior,
+            "{:?}",
+            pass.kind
+        );
+        if let Some(summaries) = &pass.func_behavior {
+            let listed: BTreeSet<_> = summaries
+                .iter()
+                .map(|summary| summary.func.as_str())
+                .collect();
+            assert!(current.keys().all(|name| listed.contains(name)));
+            assert!(
+                summaries
+                    .iter()
+                    .all(|summary| !(summary.noreturn && summary.will_return))
+            );
+        }
         for step in &pass.steps {
             assert!(!step.funcs.is_empty(), "{:?}: an empty step", pass.kind);
             for func in &step.funcs {
