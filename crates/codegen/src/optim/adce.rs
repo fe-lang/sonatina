@@ -20,7 +20,8 @@ use crate::{
     cfg_scc::{CfgSccAnalysis, SccId},
     domtree::DomTree,
     loop_analysis::{Loop, LoopTree},
-    optim::{call_purity::is_nonmutating_returning_call, cfg_cleanup::CfgCleanup},
+    object::lowering::StepKind,
+    optim::{call_purity::is_nonmutating_returning_call, cfg_cleanup::CfgCleanup, steps::StepLog},
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
     range_analysis::{NormalizedCond, RangeEnv, imm_to_unsigned, normalize_condition},
 };
@@ -62,11 +63,25 @@ impl AdceSolver {
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
+        self.run_with_steps(func, None)
+    }
+
+    pub(crate) fn run_with_steps(
+        &mut self,
+        func: &mut Function,
+        mut steps: Option<&mut StepLog>,
+    ) -> bool {
         let mut changed = false;
-        while self.run_dce(func) {
+        loop {
+            let round_changed = self.run_dce(func);
+            StepLog::step(&mut steps, StepKind::Adce, func, None);
+            if !round_changed {
+                break;
+            }
             changed = true;
         }
         let cleaned_cfg = CfgCleanup::new().run(func);
+        StepLog::step(&mut steps, StepKind::CfgCleanup, func, None);
         changed || cleaned_cfg
     }
 

@@ -1,7 +1,9 @@
 //! A record of how the EVM backend lowered a section: the IR machine lowering
-//! read, the machine IR the section's code is emitted from, and what connects
-//! that machine IR to the bytes. It is meant for an external checker that
-//! validates each compilation's bytes against its IR.
+//! read, the machine IR the section's code is emitted from, each step of the
+//! machine stage between the machine IR lowering built and that one
+//! (`SectionLowering::machine_steps`), and what connects the machine IR to
+//! the bytes. It is meant for an external checker that validates each
+//! compilation's bytes against its IR.
 //!
 //! The record is an in-memory API with no version and no stability promise.
 //! Sonatina does not serialize it; its consumer does. Turn it on with
@@ -16,9 +18,10 @@
 //! names them, values and blocks by their ids in the text of their module
 //! (`v12`, `block3`).
 
-use sonatina_ir::{BlockId, Immediate, ValueId};
+use sonatina_ir::{BlockId, Immediate, InstId, ValueId, module::FuncRef};
 
 use super::SymbolDef;
+use crate::isa::evm::LateCleanupProfile;
 
 #[derive(Debug, Clone)]
 pub struct SectionLowering {
@@ -45,6 +48,110 @@ pub struct SectionLowering {
     /// pipeline adds functions and globals to the section's module, which the
     /// compiled module does not name.
     pub symbols: Vec<(String, SymbolDef)>,
+    /// How the machine stage turned the lowered machine IR into `machine_ir`.
+    pub machine_steps: MachineSteps,
+}
+
+/// Each transformation of the machine stage, from the machine IR that
+/// lowering built to `SectionLowering::machine_ir`, with the facts each step
+/// relied on. Of the placement iterations of a section, only the one whose
+/// code is emitted is recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachineSteps {
+    /// The profile the passes ran under, which decides which of them run.
+    pub profile: LateCleanupProfile,
+    /// Every function of the section as lowering built it.
+    pub lowered: Vec<FuncSnap>,
+    /// The passes in the order they ran. Every function finishes a pass
+    /// before any starts the next.
+    pub passes: Vec<MachinePass>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachinePass {
+    pub kind: MachinePassKind,
+    /// The steps of the pass in order. A function a step did not change is
+    /// not in it, and a step that changed no function is left out.
+    pub steps: Vec<MachineStep>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MachinePassKind {
+    CfgCleanup,
+    BranchCanonicalize,
+    ScalarCanonicalize,
+    KnownBitsSimplify,
+    Sccp,
+    Gvn,
+    Adce,
+    LowerSwitches,
+    BranchConditions,
+    CoalesceCopies,
+    EdgeSplit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachineStep {
+    pub kind: StepKind,
+    /// The functions the step changed, in the section's function order.
+    pub funcs: Vec<FuncStep>,
+}
+
+/// A step of a machine pass. A pass of one step has a step of its own kind;
+/// `Sccp` runs `CfgCleanup`, `SccpPrune`, `SccpFold`, `CfgCleanup`, `Adce`
+/// rounds, `CfgCleanup` and `CfgCleanup`, `Gvn` runs `GvnPrune` and
+/// `GvnRewrite`, and `Adce` runs `Adce` rounds and `CfgCleanup`. A pass of
+/// `ScalarCanonicalize` or `KnownBitsSimplify` runs rounds of its step: a
+/// step of a kind that repeats is one round, the same round of each function
+/// it lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepKind {
+    CfgCleanup,
+    BranchCanonicalize,
+    ScalarCanonicalize,
+    KnownBitsSimplify,
+    SccpPrune,
+    SccpFold,
+    Adce,
+    GvnPrune,
+    GvnRewrite,
+    LowerSwitches,
+    BranchConditions,
+    CoalesceCopies,
+    EdgeSplit,
+}
+
+impl StepKind {
+    /// Whether a pass runs steps of this kind in rounds.
+    pub fn repeats(self) -> bool {
+        matches!(
+            self,
+            Self::ScalarCanonicalize | Self::KnownBitsSimplify | Self::Adce
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FuncStep {
+    /// The whole function after the step.
+    pub out: FuncSnap,
+    /// What the step relied on, true of the function before the step.
+    pub facts: StepFacts,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StepFacts {}
+
+/// A function of the machine module at one point of the machine stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FuncSnap {
+    pub func: String,
+    pub func_ref: FuncRef,
+    /// The function's IR text, values and blocks named by their ids.
+    pub text: String,
+    /// The instruction of each line of `text`, by block in the order the
+    /// text lists them, phis and terminators included.
+    pub insts: Vec<Vec<InstId>>,
 }
 
 #[derive(Debug, Clone)]

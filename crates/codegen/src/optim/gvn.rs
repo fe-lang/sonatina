@@ -28,6 +28,7 @@ use crate::{
     cfg_edit::CfgEditor,
     cfg_scc::CfgSccAnalysis,
     domtree::{DomTree, DominatorTreeTraversable},
+    object::lowering::StepKind,
     optim::{
         adce::divergent_blocks,
         aggregate::{CarrierSource, ObjectMemoryAnalysis, ObjectReadGvnKey},
@@ -35,6 +36,7 @@ use crate::{
         simplify_expr::{
             ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_key_with_facts,
         },
+        steps::StepLog,
     },
     post_domtree::PostDomTree,
 };
@@ -192,6 +194,17 @@ impl GvnSolver {
         cfg: &mut ControlFlowGraph,
         domtree: &mut DomTree,
         object_memory: Option<&ObjectMemoryAnalysis>,
+    ) -> bool {
+        self.run_with_steps(func, cfg, domtree, object_memory, None)
+    }
+
+    pub(crate) fn run_with_steps(
+        &mut self,
+        func: &mut Function,
+        cfg: &mut ControlFlowGraph,
+        domtree: &mut DomTree,
+        object_memory: Option<&ObjectMemoryAnalysis>,
+        steps: Option<&mut StepLog>,
     ) -> bool {
         self.clear();
         cfg.compute(func);
@@ -431,7 +444,7 @@ impl GvnSolver {
 
         // Remove redundant insn and unreachable block.
         let mut remover = RedundantCodeRemover::new(self);
-        remover.remove_redundant_code(func, cfg, domtree, object_memory)
+        remover.remove_redundant_code(func, cfg, domtree, object_memory, steps)
     }
 
     /// Clear all internal data of the solver.
@@ -2371,10 +2384,12 @@ impl<'a> RedundantCodeRemover<'a> {
         cfg: &mut ControlFlowGraph,
         domtree: &mut DomTree,
         object_memory: Option<&ObjectMemoryAnalysis>,
+        mut steps: Option<&mut StepLog>,
     ) -> bool {
         // Remove unreachable edges and blocks before redundant code removal to calculate precise
         // dominator tree.
         self.changed |= self.remove_unreachable_edges(func);
+        StepLog::step(&mut steps, StepKind::GvnPrune, func, None);
 
         // Recompute cfg and domtree.
         cfg.compute(func);
@@ -2407,6 +2422,7 @@ impl<'a> RedundantCodeRemover<'a> {
                 self.changed = true;
             }
         }
+        StepLog::step(&mut steps, StepKind::GvnRewrite, func, None);
         self.changed
     }
 

@@ -262,5 +262,6 @@ pub(crate) fn record_section_lowering(
         units,
         redirects,
         symbols,
+        machine_steps: lowering.machine_steps.clone(),
     })
 }

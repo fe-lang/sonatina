@@ -17,12 +17,16 @@ use crate::{
     },
     domtree::DomTree,
     loop_analysis::LoopTree,
+    object::lowering::StepKind,
     range_analysis::{RangeAnalysis, RangeEnv, RangeFact, fact_for_value},
 };
 
-use super::simplify_expr::{
-    ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_binary_with_facts,
-    simplify_unary_with_same_inner,
+use super::{
+    simplify_expr::{
+        ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_binary_with_facts,
+        simplify_unary_with_same_inner,
+    },
+    steps::StepLog,
 };
 
 pub struct KnownBitsSimplify {
@@ -87,9 +91,18 @@ impl KnownBitsSimplify {
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
+        self.run_with_steps(func, None)
+    }
+
+    pub(crate) fn run_with_steps(
+        &mut self,
+        func: &mut Function,
+        mut steps: Option<&mut StepLog>,
+    ) -> bool {
         let mut changed = false;
         loop {
             let (round_changed, deferred) = self.run_round(func);
+            StepLog::step(&mut steps, StepKind::KnownBitsSimplify, func, None);
             changed |= round_changed;
             if !deferred {
                 return changed;

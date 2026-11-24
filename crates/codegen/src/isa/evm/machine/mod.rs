@@ -9,6 +9,7 @@ pub(crate) mod module;
 pub(crate) mod pipeline;
 pub(crate) mod placement;
 pub(crate) mod prepare;
+pub(crate) mod record;
 mod switch;
 pub(crate) mod verify;
 

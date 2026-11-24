@@ -331,11 +331,11 @@ impl Pass {
         self.info().name
     }
 
-    const fn needs_func_behavior(self) -> bool {
+    pub(crate) const fn needs_func_behavior(self) -> bool {
         self.info().needs_func_behavior
     }
 
-    const fn needs_object_facts(self) -> bool {
+    pub(crate) const fn needs_object_facts(self) -> bool {
         matches!(
             self,
             Pass::AggregateCombine
@@ -347,7 +347,7 @@ impl Pass {
         )
     }
 
-    const fn invalidates_func_behavior(self) -> bool {
+    pub(crate) const fn invalidates_func_behavior(self) -> bool {
         self.info().invalidates_func_behavior
     }
 

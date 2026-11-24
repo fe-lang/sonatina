@@ -8,11 +8,14 @@ use sonatina_ir::{
 
 use sonatina_triple::Architecture;
 
-use crate::isa::evm::immediate_materialization_plan;
+use crate::{isa::evm::immediate_materialization_plan, object::lowering::StepKind};
 
-use super::simplify_expr::{
-    ZextI1CompareRewrite, canonicalize_cast_chain, imm_to_u256, integral_bit_width,
-    nontrivial_pow2_shift, simplify_cast, simplify_zext_i1_compare,
+use super::{
+    simplify_expr::{
+        ZextI1CompareRewrite, canonicalize_cast_chain, imm_to_u256, integral_bit_width,
+        nontrivial_pow2_shift, simplify_cast, simplify_zext_i1_compare,
+    },
+    steps::StepLog,
 };
 
 pub struct ScalarCanonicalize {
@@ -62,6 +65,14 @@ impl ScalarCanonicalize {
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
+        self.run_with_steps(func, None)
+    }
+
+    pub(crate) fn run_with_steps(
+        &mut self,
+        func: &mut Function,
+        mut steps: Option<&mut StepLog>,
+    ) -> bool {
         let mut changed = false;
 
         loop {
@@ -100,6 +111,7 @@ impl ScalarCanonicalize {
             }
 
             prune_dead_pure_insts(func);
+            StepLog::step(&mut steps, StepKind::ScalarCanonicalize, func, None);
         }
     }
 

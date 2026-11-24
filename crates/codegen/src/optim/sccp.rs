@@ -29,8 +29,8 @@ use super::{
     sccp_simplify::{AuxDeps, SimplifyAction, SimplifyCtx, simplify_inst},
 };
 use crate::{
-    analysis::known_bits::KnownBitsQuery, cfg_edit::CfgEditor,
-    transform::aggregate::fresh::fold_fresh_insert,
+    analysis::known_bits::KnownBitsQuery, cfg_edit::CfgEditor, object::lowering::StepKind,
+    optim::steps::StepLog, transform::aggregate::fresh::fold_fresh_insert,
 };
 
 #[derive(Debug)]
@@ -67,9 +67,19 @@ impl SccpSolver {
         }
     }
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) -> bool {
+        self.run_with_steps(func, cfg, None)
+    }
+
+    pub(crate) fn run_with_steps(
+        &mut self,
+        func: &mut Function,
+        cfg: &mut ControlFlowGraph,
+        mut steps: Option<&mut StepLog>,
+    ) -> bool {
         self.clear();
 
         let mut changed = CfgCleanup::new().run(func);
+        StepLog::step(&mut steps, StepKind::CfgCleanup, func, None);
         let constref_value_tys = collect_constref_value_tys(func);
         let const_paths = analyze_const_paths(func, &constref_value_tys);
 
@@ -122,6 +132,7 @@ impl SccpSolver {
         self.assert_no_executable_inst_results_are_bot(func);
 
         let edges_removed = self.remove_unreachable_edges(func);
+        StepLog::step(&mut steps, StepKind::SccpPrune, func, None);
         changed |= edges_removed;
         cfg.compute(func);
         // Solving only reads the function, so its known bits still hold
@@ -132,11 +143,14 @@ impl SccpSolver {
             solve_known_bits
         };
         changed |= self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
+        StepLog::step(&mut steps, StepKind::SccpFold, func, None);
 
         changed |= CfgCleanup::new().run(func);
+        StepLog::step(&mut steps, StepKind::CfgCleanup, func, None);
         cfg.compute(func);
 
-        changed |= AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects).run(func);
+        changed |= AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects)
+            .run_with_steps(func, steps);
         cfg.compute(func);
         changed
     }

@@ -10,7 +10,7 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     machinst::lower::{SectionMembership, SectionWorkModule},
     module_analysis::{CallGraphSchedule, SccRef},
-    object::lowering::MallocLowering,
+    object::lowering::{MachinePassKind, MachineSteps, MallocLowering, StepKind},
     stackalloc::{Action, StackifyAlloc},
 };
 use sonatina_ir::{
@@ -59,6 +59,7 @@ use super::{
             compute_semantic_memory_placement,
         },
         prepare::{SectionStackifySearchCaches, prepare_machine_stackify_analyses},
+        record::MachineRecorder,
     },
     memory_plan::{
         self, BackendSpillPlan, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan,
@@ -93,6 +94,7 @@ pub(crate) struct PreparedLowering {
     pub(crate) source_blocks: FxHashMap<FuncRef, FxHashMap<BlockId, Vec<BlockId>>>,
     pub(crate) mallocs: FxHashMap<FuncRef, Vec<(ValueId, MallocLowering)>>,
     pub(crate) entry_free_ptr: Option<u32>,
+    pub(crate) machine_steps: MachineSteps,
 }
 
 impl PreparedLowering {
@@ -101,6 +103,7 @@ impl PreparedLowering {
         funcs: &[FuncRef],
         placement: &EvmMemoryPlacementPlan,
         source_to_machine: &SourceMachineMap,
+        machine_steps: MachineSteps,
     ) -> Self {
         let mut source_blocks = FxHashMap::default();
         let mut mallocs = FxHashMap::default();
@@ -146,6 +149,7 @@ impl PreparedLowering {
             source_blocks,
             mallocs,
             entry_free_ptr: placement.section_entry_free_ptr,
+            machine_steps,
         }
     }
 }
@@ -992,12 +996,16 @@ fn prepare_machine_section_after_pipeline(
         );
 
         let mut machine = lower_section_to_machine(&work, &funcs, &placement, backend)?;
+        let mut recorder = backend.record_lowering.then(|| {
+            MachineRecorder::new(machine.work.module(), &funcs, backend.late_cleanup_profile)
+        });
         run_machine_opt_pipeline(
             machine.work.module(),
             &funcs,
             backend.late_cleanup_profile,
             backend.switch_lowering_strategy,
             backend.stackify_reach_depth,
+            recorder.as_mut(),
         )?;
         machine.source_to_machine.retain_live(machine.work.module());
 
@@ -1027,6 +1035,13 @@ fn prepare_machine_section_after_pipeline(
             &machine_allocation_addrs,
             &search_caches,
         )?;
+        if let Some(recorder) = recorder.as_mut() {
+            recorder.record_done_pass(
+                machine.work.module(),
+                MachinePassKind::EdgeSplit,
+                StepKind::EdgeSplit,
+            );
+        }
         // Recompute fixed-slot effects from the current machine allocation.
         let actual_fixed_slot_effects: FxHashSet<FuncRef> = machine_analyses
             .iter()
@@ -1367,12 +1382,13 @@ fn prepare_machine_section_after_pipeline(
             }
             let mut globals: Vec<_> = membership.globals.iter().copied().collect();
             globals.sort_unstable();
-            let lowering = backend.record_lowering.then(|| {
+            let lowering = recorder.map(|recorder| {
                 PreparedLowering::new(
                     source_module,
                     &funcs,
                     &placement,
                     &machine.source_to_machine,
+                    recorder.finish(),
                 )
             });
             return Ok(EvmPreparedSection {
