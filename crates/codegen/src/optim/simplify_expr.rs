@@ -263,7 +263,10 @@ pub(crate) fn simplify_evm_modop_known(
         return None;
     }
 
-    if modulus.is_some_and(Immediate::is_zero) {
+    if modulus.is_some_and(|m| m.is_zero() || m.is_one())
+        || (matches!(op, EvmModOp::Mul)
+            && (lhs.is_some_and(Immediate::is_zero) || rhs.is_some_and(Immediate::is_zero)))
+    {
         return Some(Immediate::zero(ty));
     }
 

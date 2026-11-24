@@ -1,0 +1,40 @@
+#! evm.config: { opt: 2 }
+#! evm.case: zero_modulus
+#!   calldata: u256(17) u256(0)
+#!   expect: return u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0)
+#! evm.case: unit_modulus
+#!   calldata: u256(17) u256(1)
+#!   expect: return u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0)
+#! evm.case: remainder
+#!   calldata: u256(17) u256(5)
+#!   expect: return u256(2) u256(2) u256(2) u256(2) u256(0) u256(0) u256(0) u256(0)
+#! evm.case: wide
+#!   calldata: u256(115792089237316195423570985008687907853269984665640564039457584007913129639935) u256(256)
+#!   expect: return u256(255) u256(255) u256(255) u256(255) u256(0) u256(0) u256(0) u256(0)
+
+target = "evm-ethereum-osaka"
+func public %entry() {
+block0:
+ v0.i256 = evm_calldata_load 0.i256;
+ v1.i256 = evm_calldata_load 32.i256;
+ v2.i256 = evm_add_mod v0 0.i256 v1;
+ v3.i256 = evm_add_mod 0.i256 v0 v1;
+ v4.i256 = evm_mul_mod v0 1.i256 v1;
+ v5.i256 = evm_mul_mod 1.i256 v0 v1;
+ v6.i256 = evm_add_mod v0 v1 1.i256;
+ v7.i256 = evm_mul_mod v0 v1 1.i256;
+ v8.i256 = evm_mul_mod v0 0.i256 v1;
+ v9.i256 = evm_mul_mod 0.i256 v0 v1;
+ mstore 0.i256 v2 i256;
+ mstore 32.i256 v3 i256;
+ mstore 64.i256 v4 i256;
+ mstore 96.i256 v5 i256;
+ mstore 128.i256 v6 i256;
+ mstore 160.i256 v7 i256;
+ mstore 192.i256 v8 i256;
+ mstore 224.i256 v9 i256;
+ evm_return 0.i256 256.i256;
+}
+object @Contract {
+ section runtime { entry %entry; }
+}
