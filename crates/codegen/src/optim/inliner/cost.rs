@@ -8,6 +8,7 @@ use sonatina_ir::{
 
 use crate::{
     cfg_scc::has_cycle,
+    isa::native::is_free_cast,
     module_analysis::ModuleInfo,
     optim::inst_size,
     transform::aggregate::{objref_element_ty, scalarize::AggregateScalarize, shape},
@@ -56,7 +57,13 @@ pub(super) struct InlinePlan {
 pub(super) struct InlineeSummary {
     pub has_body: bool,
     pub blocks: usize,
+    /// Instructions, by `inst_size`, less the casts
+    /// [`InlinerConfig::free_casts`] sizes as nothing: what the size caps
+    /// and the cost model judge.
     pub insts: usize,
+    /// Instructions, by `inst_size`: what inlining adds to the caller, for
+    /// the growth budgets.
+    pub ir_insts: usize,
     pub calls: usize,
     pub phis: usize,
     pub returns: usize,
@@ -193,6 +200,7 @@ pub(super) fn decide_inline(
         callee,
         ctx.local_object_args,
         ctx.object_effects,
+        config,
     );
 
     if !summary.has_body {
@@ -203,7 +211,7 @@ pub(super) fn decide_inline(
     // when there are multiple returns; the remaining growth is the cloned body,
     // less the call sequence inlining removes.
     let predicted_growth = summary
-        .insts
+        .ir_insts
         .saturating_add(if summary.returns > 1 {
             request.call_result_count
         } else {
@@ -225,7 +233,7 @@ pub(super) fn decide_inline(
     // DFE removes the now-unreferenced private definition. Do not count moving
     // that body into its only caller as duplication, or refund earlier growth.
     let removed_insts = if removable_single_use {
-        summary.insts
+        summary.ir_insts
     } else {
         0
     };
@@ -430,6 +438,7 @@ fn reduces_to_small_leaf_helper(
                     &func,
                     ctx.local_object_args,
                     ctx.object_effects,
+                    config,
                 )
             };
             callee.map_or_else(
@@ -476,6 +485,7 @@ fn compute_scalarization_helper_cluster_bonus(
                 None,
                 ctx.local_object_args,
                 ctx.object_effects,
+                config,
             )
             .scalarization
             .has_opportunity()
@@ -545,6 +555,7 @@ fn get_inlinee_summary(
     callee: Option<&Function>,
     local_object_args: Option<&LocalObjectArgMap>,
     object_effects: Option<&ObjectEffectSummaryMap>,
+    config: &InlinerConfig,
 ) -> InlineeSummary {
     *summary_cache
         .entry(match callee {
@@ -562,11 +573,20 @@ fn get_inlinee_summary(
                                 func,
                                 local_object_args,
                                 object_effects,
+                                config,
                             )
                         })
                         .unwrap_or_default()
                 },
-                |func| compute_inlinee_summary(callee_ref, func, local_object_args, object_effects),
+                |func| {
+                    compute_inlinee_summary(
+                        callee_ref,
+                        func,
+                        local_object_args,
+                        object_effects,
+                        config,
+                    )
+                },
             )
         })
 }
@@ -576,6 +596,7 @@ fn compute_inlinee_summary(
     func: &Function,
     local_object_args: Option<&LocalObjectArgMap>,
     object_effects: Option<&ObjectEffectSummaryMap>,
+    config: &InlinerConfig,
 ) -> InlineeSummary {
     let Some(_entry) = func.layout.entry_block() else {
         return InlineeSummary {
@@ -592,6 +613,7 @@ fn compute_inlinee_summary(
 
     let mut blocks = 0usize;
     let mut insts = 0usize;
+    let mut ir_insts = 0usize;
     let mut calls = 0usize;
     let mut phis = 0usize;
     let mut returns = 0usize;
@@ -611,7 +633,13 @@ fn compute_inlinee_summary(
     for block in reachable_rpo {
         blocks += 1;
         for inst_id in func.layout.iter_inst(block) {
-            let weight = inst_size(func, inst_id);
+            let ir_weight = inst_size(func, inst_id);
+            let weight = if config.free_casts && is_free_cast(func, inst_id) {
+                0
+            } else {
+                ir_weight
+            };
+            ir_insts += ir_weight;
             insts += weight;
 
             if func.dfg.downcast::<&data::ObjLoad>(inst_id).is_some() {
@@ -684,6 +712,7 @@ fn compute_inlinee_summary(
         has_body: true,
         blocks,
         insts,
+        ir_insts,
         calls,
         phis,
         returns,

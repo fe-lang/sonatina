@@ -119,6 +119,9 @@ pub struct InlinerConfig {
     pub enable_wrapper_rewrite: bool,
     pub enable_single_block_splice: bool,
 
+    /// The most instructions, casts included, that a callee with several
+    /// calls splices into each: splicing spends no growth budget, so this
+    /// bounds what it adds.
     pub splice_max_insts: usize,
     pub splice_require_pure: bool,
 
@@ -126,6 +129,12 @@ pub struct InlinerConfig {
 
     pub max_inlinee_blocks: usize,
     pub max_inlinee_insts: usize,
+    /// Size the casts that native code for the module's target, a Cranelift
+    /// target or wasm32, lowers to nothing
+    /// ([`is_free_cast`](crate::isa::native::is_free_cast)) as zero for the
+    /// size caps and the cost model. The growth budgets and the single-use
+    /// caller cap still count them: they bound the IR inlining adds.
+    pub free_casts: bool,
     /// Net instructions one inliner run may add to a caller; zero is no limit.
     /// `inline(always)` callees neither count against nor spend it.
     pub max_growth_per_caller: usize,
@@ -187,6 +196,7 @@ impl Default for InlinerConfig {
 
             max_inlinee_blocks: 0,
             max_inlinee_insts: 0,
+            free_casts: false,
             max_growth_per_caller: 0,
             max_total_growth: 0,
             max_inline_depth: 8,

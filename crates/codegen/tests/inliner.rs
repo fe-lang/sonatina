@@ -2497,6 +2497,215 @@ const STRAIGHT_BODY: &str = "    block0:
         return v7;";
 
 #[test]
+fn native_inliner_sizes_multi_limb_casts_as_free() {
+    // A six-limb modular doubling as multi-limb arithmetic lowers: each limb
+    // widens, adds the carry in, narrows and shifts the carry out, and the
+    // modulus is subtracted the same way. Half its instructions are casts.
+    let mut insts = Vec::new();
+    let push = |insts: &mut Vec<String>, ty: &str, inst: String| {
+        let value = format!("v{}", insts.len() + 6);
+        insts.push(format!("        {value}.{ty} = {inst};\n"));
+        value
+    };
+    let (mut sums, mut carry) = (Vec::new(), None);
+    for limb in 0..6 {
+        let wide = push(&mut insts, "i128", format!("zext v{limb} i128"));
+        let mut sum = push(&mut insts, "i128", format!("add {wide} {wide}"));
+        if let Some(carry) = carry {
+            let carry = push(&mut insts, "i128", format!("zext {carry} i128"));
+            sum = push(&mut insts, "i128", format!("add {sum} {carry}"));
+        }
+        sums.push(push(&mut insts, "i64", format!("trunc {sum} i64")));
+        let high = push(&mut insts, "i128", format!("shr 64.i128 {sum}"));
+        carry = Some(push(&mut insts, "i64", format!("trunc {high} i64")));
+    }
+    let (mut differences, mut borrow) = (Vec::new(), None);
+    for (limb, sum) in sums.iter().enumerate() {
+        let wide = push(&mut insts, "i128", format!("zext {sum} i128"));
+        let modulus = 1000 + limb;
+        let mut difference = push(&mut insts, "i128", format!("sub {wide} {modulus}.i128"));
+        if let Some(borrow) = borrow {
+            let borrow = push(&mut insts, "i128", format!("zext {borrow} i128"));
+            difference = push(&mut insts, "i128", format!("sub {difference} {borrow}"));
+        }
+        differences.push(push(&mut insts, "i64", format!("trunc {difference} i64")));
+        let high = push(&mut insts, "i128", format!("shr 127.i128 {difference}"));
+        borrow = Some(push(&mut insts, "i64", format!("trunc {high} i64")));
+    }
+    let borrow = borrow.unwrap();
+    let keep = push(&mut insts, "i1", format!("eq {borrow} 1.i64"));
+    let mut fold = None;
+    for (sum, difference) in sums.iter().zip(&differences) {
+        let limb = push(
+            &mut insts,
+            "i64",
+            format!("select {keep} {sum} {difference}"),
+        );
+        fold = Some(match fold {
+            Some(fold) => push(&mut insts, "i64", format!("xor {fold} {limb}")),
+            None => limb,
+        });
+    }
+    let (body, fold) = (insts.concat(), fold.unwrap());
+    let source = |target| {
+        format!(
+            r#"
+target = "{target}"
+
+func private %double(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64) -> i64 {{
+    block0:
+{body}        return {fold};
+}}
+
+func public %caller(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64) -> i64 {{
+    block0:
+        v6.i64 = call %double v0 v1 v2 v3 v4 v5;
+        v7.i64 = call %double v6 v1 v2 v3 v4 v5;
+        return v7;
+}}
+"#
+        )
+    };
+    let inline = |target, config| {
+        let mut parsed = sonatina_parser::parse_module(&source(target))
+            .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+        Inliner::new(config).run(&mut parsed.module);
+        assert_module_verified(&parsed.module);
+        dump_module(&parsed.module).matches("call %double").count()
+    };
+
+    let native = Pipeline::native(OptLevel::O2).inliner_config;
+    // wasm32 too lowers these casts to nothing.
+    for target in ["x86_64-unknown-native", "wasm32-unknown-native"] {
+        assert_eq!(inline(target, native), 0, "{target}");
+    }
+    // Counting its casts, the cost model keeps both calls.
+    assert_eq!(
+        inline(
+            "x86_64-unknown-native",
+            InlinerConfig {
+                free_casts: false,
+                ..native
+            }
+        ),
+        2
+    );
+    // The EVM configs count every cast.
+    for pipeline in [
+        Pipeline::speed(),
+        Pipeline::size(),
+        Pipeline::native(OptLevel::Os),
+    ] {
+        assert!(!pipeline.inliner_config.free_casts);
+    }
+}
+
+/// The calls left after the native inliner runs on a module for `target`
+/// whose `%caller` makes `call_count` chained calls to `%casts`, a function
+/// of one `ty` that runs `insts` and returns the last one's result.
+fn native_calls_left(target: &str, ty: &str, insts: &[String], call_count: usize) -> usize {
+    let body: String = insts
+        .iter()
+        .map(|inst| format!("        {inst};\n"))
+        .collect();
+    let result = insts
+        .last()
+        .and_then(|inst| inst.split('.').next())
+        .unwrap();
+    let calls: String = (0..call_count)
+        .map(|index| format!("        v{}.{ty} = call %casts v{index};\n", index + 1))
+        .collect();
+    let source = format!(
+        r#"
+target = "{target}"
+
+func private %casts(v0.{ty}) -> {ty} {{
+    block0:
+{body}        return {result};
+}}
+
+func public %caller(v0.{ty}) -> {ty} {{
+    block0:
+{calls}        return v{call_count};
+}}
+"#
+    );
+    let mut parsed = sonatina_parser::parse_module(&source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    Inliner::new(Pipeline::native(OptLevel::O2).inliner_config).run(&mut parsed.module);
+    assert_module_verified(&parsed.module);
+    dump_module(&parsed.module).matches("call %casts").count()
+}
+
+#[test]
+fn native_inliner_sizes_casts_that_lower_to_code() {
+    // Each round goes through memory and back and sign- and zero-extends to
+    // i256, four casts that lower to code, and truncates twice, which does
+    // not: 160 instructions, over the 128-instruction cap.
+    let insts: Vec<_> = (0..40)
+        .flat_map(|round| {
+            let [from, bytes, word, low, signed, high, to] =
+                [0, 1, 2, 3, 4, 5, 6].map(|index| 6 * round + index);
+            [
+                format!("v{bytes}.[i8; 32] = bitcast v{from} [i8; 32]"),
+                format!("v{word}.i256 = bitcast v{bytes} i256"),
+                format!("v{low}.i64 = trunc v{word} i64"),
+                format!("v{signed}.i256 = sext v{low} i256"),
+                format!("v{high}.i64 = trunc v{signed} i64"),
+                format!("v{to}.i256 = zext v{high} i256"),
+            ]
+        })
+        .collect();
+    assert_eq!(
+        native_calls_left("x86_64-unknown-native", "i256", &insts, 2),
+        2
+    );
+}
+
+#[test]
+fn native_inliner_sizes_casts_for_the_target() {
+    // An address's round trip through an i64, 140 casts: nothing on a
+    // 64-bit target, a bounds check and an extension on wasm32.
+    let insts: Vec<_> = (0..70)
+        .flat_map(|round| {
+            let [from, pointer, to] = [0, 1, 2].map(|index| 2 * round + index);
+            [
+                format!("v{pointer}.*i8 = int_to_ptr v{from} *i8"),
+                format!("v{to}.i64 = ptr_to_int v{pointer} i64"),
+            ]
+        })
+        .collect();
+    assert_eq!(
+        native_calls_left("x86_64-unknown-native", "i64", &insts, 2),
+        0
+    );
+    assert_eq!(
+        native_calls_left("wasm32-unknown-native", "i64", &insts, 2),
+        2
+    );
+}
+
+#[test]
+fn native_inliner_charges_free_casts_to_growth() {
+    // 1,000 casts that lower to nothing: one instruction to the size caps
+    // and the cost model, 1,001 to the caller's growth budget, of which
+    // 4,096 affords four.
+    let insts: Vec<_> = (0..500)
+        .flat_map(|round| {
+            let [from, wide, to] = [0, 1, 2].map(|index| 2 * round + index);
+            [
+                format!("v{wide}.i128 = zext v{from} i128"),
+                format!("v{to}.i64 = trunc v{wide} i64"),
+            ]
+        })
+        .collect();
+    assert_eq!(
+        native_calls_left("x86_64-unknown-native", "i64", &insts, 8),
+        4
+    );
+}
+
+#[test]
 fn full_inliner_credits_call_overhead_per_loop_iteration() {
     for (body, scale, inlined) in [
         (LOOP_BODY, 0, false),

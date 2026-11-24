@@ -576,6 +576,11 @@ fn native_inliner_config() -> InlinerConfig {
         // does not make it cold.
         max_inlinee_blocks: 32,
         max_inlinee_insts: 128,
+        // Native code lowers `zext i64 -> i128` and truncations to nothing
+        // (on wasm32, those to 64 bits or more), so a limb of a multi-limb
+        // addition, `(a as u128) + (b as u128) + carry`, counts its
+        // additions and shift, not its casts.
+        free_casts: true,
         max_growth_per_caller: 4096,
         // No module cap, as in the speed config: a native build is one
         // module, so a fixed cap is spent partway through a large one and
