@@ -58,6 +58,7 @@ use super::{
     loop_rotate::LoopRotate,
     loop_strength_reduce::LoopStrengthReduce,
     loop_unroll::LoopUnroll,
+    merge_index_checks::MergeIndexChecks,
     multi_result_legalize::legalize_multi_result,
     narrow_object_loads::NarrowObjectLoads,
     range_branch_simplify::{RangeBranchSimplify, has_conditional_branch},
@@ -95,6 +96,9 @@ pub enum Pass {
     CheckedArithElim,
     /// Thread predecessors past a branch on a phi of constants.
     JumpThread,
+    /// Strengthen the first of a run of bounds checks on consecutive indexes
+    /// to cover the run, for `RangeBranchSimplify` to fold the rest.
+    MergeIndexChecks,
     /// Remove conditional branches whose truth is proven by range analysis.
     RangeBranchSimplify,
     /// Sparse conditional constant propagation (composite: CfgCleanup + SCCP + CfgCleanup + ADCE).
@@ -212,6 +216,11 @@ impl Pass {
                 name: "jump_thread",
                 needs_func_behavior: false,
                 invalidates_func_behavior: true,
+            },
+            Pass::MergeIndexChecks => PassInfo {
+                name: "merge_index_checks",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
             },
             Pass::RangeBranchSimplify => PassInfo {
                 name: "range_branch_simplify",
@@ -402,6 +411,7 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::LoadStore,
     Pass::CheckedArithElim,
     Pass::JumpThread,
+    Pass::MergeIndexChecks,
     Pass::RangeBranchSimplify,
     Pass::LoopRotate,
     Pass::LoopUnroll,
@@ -428,6 +438,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::LoadStore,
     Pass::CheckedArithElim,
     Pass::JumpThread,
+    Pass::MergeIndexChecks,
     Pass::RangeBranchSimplify,
     Pass::LoopRotate,
     Pass::LoopUnroll,
@@ -705,6 +716,7 @@ impl Pipeline {
     ///    - `LoadStore`
     ///    - `CheckedArithElim`
     ///    - `JumpThread`
+    ///    - `MergeIndexChecks`
     ///    - `RangeBranchSimplify`
     ///    - `LoopRotate` — move header exit tests to the latch
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
@@ -728,6 +740,7 @@ impl Pipeline {
     ///    - `LoadStore`
     ///    - `CheckedArithElim`
     ///    - `JumpThread`
+    ///    - `MergeIndexChecks`
     ///    - `RangeBranchSimplify`
     ///    - `LoopRotate`
     ///    - `Sccp`
@@ -1129,6 +1142,15 @@ fn run_pass(
                 None => Vec::new(),
             };
             CompareSubFusion::new().run(func, &ctx.domtree, &switches)
+        }
+        Pass::MergeIndexChecks => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.merge_index_checks").entered();
+            if !has_conditional_branch(func) {
+                false
+            } else {
+                ctx.cfg.compute(func);
+                MergeIndexChecks.run(func, &ctx.cfg)
+            }
         }
         Pass::RangeBranchSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.range_branch_simplify").entered();

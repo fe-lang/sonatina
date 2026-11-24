@@ -1,0 +1,37 @@
+#! A run whose largest offset reaches its bound always fails: its first check
+#! becomes `lt b 0`, and the panic follows at once.
+
+target = "evm-ethereum-osaka"
+
+declare external %report_panic(i256);
+
+# `b + 3 < 2` passes only where `b + 3` wraps, and then `b < 2` fails.
+# sameln: func private %always_fails(v0.objref<[i8; 32]>, v1.i64) -> i8 {
+# nextln: block0:
+# not: obj.load
+# not: br
+# check: call %report_panic 50.i256;
+# nextln: unreachable;
+# not: block
+func private %always_fails(v0.objref<[i8; 32]>, v1.i64) -> i8 {
+block0:
+    v2.i64 = add v1 3.i64;
+    v3.i1 = lt v2 2.i64;
+    br v3 block2 block1;
+
+block1:
+    call %report_panic 50.i256;
+    unreachable;
+
+block2:
+    v4.objref<i8> = obj.index v0 v2;
+    v5.i8 = obj.load v4;
+    v6.i1 = lt v1 2.i64;
+    br v6 block3 block1;
+
+block3:
+    v7.objref<i8> = obj.index v0 v1;
+    v8.i8 = obj.load v7;
+    v9.i8 = xor v5 v8;
+    return v9;
+}

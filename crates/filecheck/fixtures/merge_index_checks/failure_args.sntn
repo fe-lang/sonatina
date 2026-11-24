@@ -1,0 +1,83 @@
+#! The failure block cannot tell which check of a merged run failed: every
+#! check passes it the same arguments, and the first check's own compare
+#! keeps its value.
+
+target = "evm-ethereum-osaka"
+
+declare external %report_panic(i256);
+declare external %report_index(i64);
+
+# Each check passes the base to the failure block, which another block
+# enters with another value.
+# regex: VALUE=\bv\d+\b
+# sameln: func private %matching_failure_args(v0.objref<[i8; 32]>, v1.i64, v2.i1) -> i8 {
+# check: $(cond=$VALUE).i1 = lt v1 31.i64;
+# nextln: br $cond block2 block4;
+# check: block2:
+# not: br
+# not: block
+# check: return v9;
+func private %matching_failure_args(v0.objref<[i8; 32]>, v1.i64, v2.i1) -> i8 {
+block0:
+    br v2 block1 block4;
+
+block1:
+    v3.i1 = lt v1 32.i64;
+    br v3 block2 block4;
+
+block2:
+    v4.objref<i8> = obj.index v0 v1;
+    v5.i8 = obj.load v4;
+    v6.i64 = add v1 1.i64;
+    v7.i1 = lt v6 32.i64;
+    br v7 block3 block4;
+
+block3:
+    v8.objref<i8> = obj.index v0 v6;
+    v11.i8 = obj.load v8;
+    v9.i8 = xor v5 v11;
+    return v9;
+
+block4:
+    v10.i64 = phi (0.i64 block0) (v1 block1) (v1 block2);
+    call %report_index v10;
+    unreachable;
+}
+
+# The failure block reads the first check's compare, which stays: it is
+# false where the merged check fails at `b`, and true at `b = 31`, as when the
+# second check failed.
+# regex: VALUE=\bv\d+\b
+# sameln: func private %first_compare_read_on_failure(v0.objref<[i8; 32]>, v1.i64) -> i8 {
+# nextln: block0:
+# nextln: v2.i1 = lt v1 32.i64;
+# nextln: $(cond=$VALUE).i1 = lt v1 31.i64;
+# nextln: br $cond block2 block1;
+# check: v10.i256 = zext v2 i256;
+# check: block2:
+# not: br
+# not: block
+# check: return v9;
+func private %first_compare_read_on_failure(v0.objref<[i8; 32]>, v1.i64) -> i8 {
+block0:
+    v2.i1 = lt v1 32.i64;
+    br v2 block2 block1;
+
+block1:
+    v10.i256 = zext v2 i256;
+    call %report_panic v10;
+    unreachable;
+
+block2:
+    v3.objref<i8> = obj.index v0 v1;
+    v4.i8 = obj.load v3;
+    v5.i64 = add v1 1.i64;
+    v6.i1 = lt v5 32.i64;
+    br v6 block3 block1;
+
+block3:
+    v7.objref<i8> = obj.index v0 v5;
+    v8.i8 = obj.load v7;
+    v9.i8 = xor v4 v8;
+    return v9;
+}
