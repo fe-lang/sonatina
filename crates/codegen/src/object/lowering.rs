@@ -168,7 +168,8 @@ pub struct StepFacts {
     pub finite_loops: Vec<FiniteLoop>,
     /// For `GvnPrune` and `GvnRewrite`.
     pub gvn: Option<GvnFacts>,
-    /// For a `KnownBitsSimplify` round that ran range analysis.
+    /// For a `KnownBitsSimplify` round with a rewrite that may rest on a
+    /// range fact.
     pub ranges: Option<RangeFacts>,
 }
 

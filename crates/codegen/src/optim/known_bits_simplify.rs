@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     ControlFlowGraph, Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
@@ -61,6 +63,8 @@ struct LocalExprFacts<'a, 'b> {
     func: &'a Function,
     scalar_facts: &'b ScalarFacts<'a, 'b>,
     range_env: Option<&'b RangeEnv>,
+    /// Whether a query found a range fact.
+    ranged: &'b Cell<bool>,
 }
 
 impl ExprFactProvider for LocalExprFacts<'_, '_> {
@@ -78,7 +82,9 @@ impl ExprFactProvider for LocalExprFacts<'_, '_> {
     }
 
     fn range(&self, value: ValueId) -> Option<RangeFact> {
-        self.range_env.and_then(|env| env.get(&value).copied())
+        let fact = self.range_env.and_then(|env| env.get(&value).copied());
+        self.ranged.set(self.ranged.get() || fact.is_some());
+        fact
     }
 }
 
@@ -135,6 +141,8 @@ impl KnownBitsSimplify {
 
         let mut counts = Vec::new();
         let mut divisions = Vec::new();
+        // Whether a rewrite of `plans` may rest on a range fact.
+        let mut ranged_plans = false;
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
             let mut range_env = range_analysis
@@ -143,16 +151,21 @@ impl KnownBitsSimplify {
                 .map(|analysis| analysis.entry_env(block).clone());
 
             for inst in func.layout.iter_inst(block) {
+                let ranged = Cell::new(false);
                 let facts = LocalExprFacts {
                     func,
                     scalar_facts: &scalar_facts,
                     range_env: range_env.as_ref(),
+                    ranged: &ranged,
                 };
                 if let Some(plan) = signed_pow2_division(func, &scalar_facts, inst) {
                     divisions.push(plan);
                 }
                 match self.plan_inst(func, &facts, inst) {
-                    Some((plan, false)) => self.plans.push(plan),
+                    Some((plan, false)) => {
+                        self.plans.push(plan);
+                        ranged_plans |= ranged.get();
+                    }
                     Some((plan, true)) => self.demand_plans.push(plan),
                     None => {}
                 }
@@ -182,6 +195,7 @@ impl KnownBitsSimplify {
             demanded_bits: from_demand.then(|| scalar_facts.demanded_bits.export()),
             ranges: range_analysis
                 .as_ref()
+                .filter(|_| (ranged_plans && !from_demand) || !counts.is_empty())
                 .map(|analysis| analysis.export(func)),
             ..StepFacts::default()
         });

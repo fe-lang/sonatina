@@ -546,6 +546,8 @@ fn machine_steps_record_demanded_bits_of_dropped_mask() {
     let args = module
         .func_store
         .view(func_ref, |function| function.arg_values.clone());
+    // The round rests on no range fact.
+    assert_eq!(func.facts.ranges, None);
     // `mstore8` reads all of its address and the low byte of its value.
     assert_eq!(
         demanded[..],
