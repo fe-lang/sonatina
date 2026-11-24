@@ -27,7 +27,10 @@ mod tail_calls;
 #[path = "cranelift/control_flow.rs"]
 mod wide_control_flow;
 
-use sonatina_codegen::{Compile, OptLevel};
+use sonatina_codegen::{
+    Compile, OptLevel,
+    backend::{Backend, BackendOptions},
+};
 use sonatina_cranelift::{CraneliftError, CraneliftJitArtifact, CraneliftJitBackend};
 use sonatina_ir::{
     I256, Immediate, Linkage, Signature, Type, U256,
@@ -2128,4 +2131,49 @@ fn object_and_constant_indices_accept_narrow_integers() {
     let address = artifact.function_address("index_with_i32").unwrap();
     let function: unsafe extern "C" fn(i32) -> i64 = unsafe { std::mem::transmute(address) };
     assert_eq!(unsafe { function(1) }, 62);
+}
+
+#[test]
+fn folded_functions_share_one_address() {
+    let module = parse_verified_native_module(
+        r#"
+func private %first(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    v2.i64 = add v1 7.i64;
+    return v2;
+}
+
+func private %second(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    v2.i64 = add v1 7.i64;
+    return v2;
+}
+
+func public %run(v0.i64) -> i64 {
+block0:
+    v1.i64 = call %first v0;
+    v2.i64 = call %second v1;
+    v3.i64 = add v1 v2;
+    return v3;
+}
+"#,
+    );
+    let artifact = CraneliftJitBackend::new()
+        .compile_module(
+            &module,
+            &BackendOptions {
+                opt_level: OptLevel::O1,
+            },
+        )
+        .unwrap();
+    let first = artifact.function_address("first").unwrap();
+    assert_eq!(artifact.function_address("second"), Some(first));
+    let first: unsafe extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(first) };
+    let run: unsafe extern "C" fn(i64) -> i64 =
+        unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+    assert_eq!(unsafe { first(4) }, 19);
+    // 4 * 3 + 7 = 19, 19 * 3 + 7 = 64.
+    assert_eq!(unsafe { run(4) }, 19 + 64);
 }

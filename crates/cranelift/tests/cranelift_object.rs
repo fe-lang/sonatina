@@ -1576,3 +1576,442 @@ fn assert_macos_platform_metadata(bytes: &[u8]) {
     }
     panic!("Mach-O object is missing LC_BUILD_VERSION");
 }
+
+/// The names of the functions `bytes` defines.
+fn defined_functions(bytes: &[u8]) -> Vec<String> {
+    object::File::parse(bytes)
+        .unwrap()
+        .symbols()
+        .filter(|symbol| symbol.kind() == object::SymbolKind::Text && symbol.is_definition())
+        .filter_map(|symbol| Some(symbol.name().ok()?.trim_start_matches('_').to_string()))
+        .collect()
+}
+
+/// The object of the host module `source`, compiled as it is at `level`.
+fn compile_object_at(source: &str, level: OptLevel) -> Vec<u8> {
+    let triple = native_isa(host_architecture()).triple();
+    let module = sonatina_parser::parse_module(&format!("target = \"{triple}\"\n{source}"))
+        .unwrap()
+        .module;
+    let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+    assert!(!report.has_errors(), "{report}");
+    CraneliftObjectBackend::new()
+        .compile_module(&module, &BackendOptions { opt_level: level })
+        .unwrap()
+        .into_bytes()
+}
+
+/// The object of the host module `source`, compiled as it is with
+/// optimization.
+fn compile_object(source: &str) -> Vec<u8> {
+    compile_object_at(source, OptLevel::O1)
+}
+
+#[track_caller]
+fn assert_defines(bytes: &[u8], defined: &[&str], folded: &[&str]) {
+    let functions = defined_functions(bytes);
+    for name in defined {
+        assert!(
+            functions.iter().any(|function| function == name),
+            "{name}: {functions:?}"
+        );
+    }
+    for name in folded {
+        assert!(
+            functions.iter().all(|function| function != name),
+            "{name}: {functions:?}"
+        );
+    }
+}
+
+const TWINS: &str = r#"
+func private %first(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    v2.i64 = add v1 7.i64;
+    return v2;
+}
+
+func private %second(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    v2.i64 = add v1 7.i64;
+    return v2;
+}
+
+func public %run(v0.i64) -> i64 {
+block0:
+    v1.i64 = call %first v0;
+    v2.i64 = call %second v1;
+    v3.i64 = add v1 v2;
+    return v3;
+}
+"#;
+
+#[test]
+fn identical_private_functions_share_one_body() {
+    let bytes = compile_object(TWINS);
+    assert_defines(&bytes, &["first", "run"], &["second"]);
+    assert_eq!(references(&bytes, "first"), 2);
+    assert_eq!(compile_object(TWINS), bytes, "the object is deterministic");
+}
+
+#[test]
+fn functions_calling_different_functions_stay_apart() {
+    let bytes = compile_object(
+        r#"
+func private %one(v0.i64) -> i64 {
+block0:
+    v1.i64 = add v0 1.i64;
+    return v1;
+}
+
+func private %two(v0.i64) -> i64 {
+block0:
+    v1.i64 = add v0 2.i64;
+    return v1;
+}
+
+func private %call_one(v0.i64) -> i64 {
+block0:
+    v1.i64 = call %one v0;
+    v2.i64 = mul v1 5.i64;
+    return v2;
+}
+
+func private %call_two(v0.i64) -> i64 {
+block0:
+    v1.i64 = call %two v0;
+    v2.i64 = mul v1 5.i64;
+    return v2;
+}
+
+func private %call_one_again(v0.i64) -> i64 {
+block0:
+    v1.i64 = call %one v0;
+    v2.i64 = mul v1 5.i64;
+    return v2;
+}
+
+func public %run(v0.i64) -> i64 {
+block0:
+    v1.i64 = call %call_one v0;
+    v2.i64 = call %call_two v0;
+    v3.i64 = call %call_one_again v0;
+    v4.i64 = add v1 v2;
+    v5.i64 = add v4 v3;
+    return v5;
+}
+"#,
+    );
+    assert_defines(
+        &bytes,
+        &["one", "two", "call_one", "call_two", "run"],
+        &["call_one_again"],
+    );
+}
+
+#[test]
+fn identical_recursive_pairs_fold_to_one_pair() {
+    // `f3` is `f` but for its callee `g3`, which adds 3 where `g` adds 2.
+    let pair = |f: &str, g: &str, step: i64| {
+        format!(
+            r#"
+func private %{f}(v0.i64) -> i64 {{
+block0:
+    v1.i1 = eq v0 0.i64;
+    br v1 block1 block2;
+block1:
+    return 0.i64;
+block2:
+    v2.i64 = sub v0 1.i64;
+    v3.i64 = call %{g} v2;
+    v4.i64 = add v3 1.i64;
+    return v4;
+}}
+
+func private %{g}(v0.i64) -> i64 {{
+block0:
+    v1.i1 = eq v0 0.i64;
+    br v1 block1 block2;
+block1:
+    return 0.i64;
+block2:
+    v2.i64 = sub v0 1.i64;
+    v3.i64 = call %{f} v2;
+    v4.i64 = add v3 {step}.i64;
+    return v4;
+}}
+"#
+        )
+    };
+    let bytes = compile_object(&format!(
+        r#"{}{}{}
+func public %run(v0.i64) -> i64 {{
+block0:
+    v1.i64 = call %f v0;
+    v2.i64 = call %f2 v0;
+    v3.i64 = call %f3 v0;
+    v4.i64 = add v1 v2;
+    v5.i64 = add v4 v3;
+    return v5;
+}}
+"#,
+        pair("f", "g", 2),
+        pair("f2", "g2", 2),
+        pair("f3", "g3", 3),
+    ));
+    assert_defines(&bytes, &["f", "g", "f3", "g3", "run"], &["f2", "g2"]);
+}
+
+#[test]
+fn identical_public_functions_keep_their_symbols() {
+    // The private twins fold into each other, not into the public ones.
+    let body = "(v0.i64) -> i64 {\nblock0:\n    v1.i64 = mul v0 3.i64;\n    v2.i64 = add v1 7.i64;\n    return v2;\n}\n";
+    let bytes = compile_object(&format!(
+        "func public %left{body}\nfunc public %right{body}\nfunc private %inner{body}\nfunc private %inner2{body}
+func public %run(v0.i64) -> i64 {{
+block0:
+    v1.i64 = call %inner v0;
+    v2.i64 = call %inner2 v1;
+    v3.i64 = add v1 v2;
+    return v3;
+}}
+"
+    ));
+    assert_defines(&bytes, &["left", "right", "inner", "run"], &["inner2"]);
+}
+
+#[test]
+fn unoptimized_builds_keep_every_function() {
+    // Each function keeps its name for debuggers and profilers.
+    assert_defines(
+        &compile_object_at(TWINS, OptLevel::O0),
+        &["first", "second", "run"],
+        &[],
+    );
+}
+
+#[test]
+fn cold_functions_fold_into_hot_twins() {
+    // The group's body is the hot one, which comes before cold code.
+    let bytes = compile_object(
+        r#"
+func cold private %rare(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    v2.i64 = add v1 7.i64;
+    return v2;
+}
+
+func private %common(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 3.i64;
+    v2.i64 = add v1 7.i64;
+    return v2;
+}
+
+func public %run(v0.i64) -> i64 {
+block0:
+    v1.i64 = call %rare v0;
+    v2.i64 = call %common v1;
+    v3.i64 = add v1 v2;
+    return v3;
+}
+"#,
+    );
+    assert_defines(&bytes, &["common", "run"], &["rare"]);
+    assert_eq!(references(&bytes, "common"), 2);
+}
+
+#[test]
+fn functions_reading_different_globals_stay_apart() {
+    // `$left` and `$right` hold the same value but are different objects.
+    let read = |name: &str, global: &str| {
+        format!(
+            "func private %{name}(v0.i64) -> i64 {{\nblock0:\n    v1.i64 = mload ${global} i64;\n    v2.i64 = add v0 v1;\n    return v2;\n}}\n"
+        )
+    };
+    let bytes = compile_object(&format!(
+        r#"global private i64 $left = 5;
+global private i64 $right = 5;
+{}{}{}
+func public %run(v0.i64) -> i64 {{
+block0:
+    v1.i64 = call %read_left v0;
+    v2.i64 = call %read_right v1;
+    v3.i64 = call %read_left_again v2;
+    v4.i64 = add v1 v3;
+    return v4;
+}}
+"#,
+        read("read_left", "left"),
+        read("read_right", "right"),
+        read("read_left_again", "left"),
+    ));
+    assert_defines(
+        &bytes,
+        &["read_left", "read_right", "run"],
+        &["read_left_again"],
+    );
+}
+
+#[test]
+fn identical_three_cycles_fold_to_one_cycle() {
+    // Each cycle's members differ from each other. The second cycle differs
+    // from the first only in `c2`, which splits off first, then `b2` that
+    // calls it, then `a2`.
+    let cycle = |suffix: &str, step: i64| {
+        let call = |from: &str, to: &str, step: i64| {
+            format!(
+                r#"
+func private %{from}{suffix}(v0.i64) -> i64 {{
+block0:
+    v1.i1 = eq v0 0.i64;
+    br v1 block1 block2;
+block1:
+    return 0.i64;
+block2:
+    v2.i64 = sub v0 1.i64;
+    v3.i64 = call %{to}{suffix} v2;
+    v4.i64 = add v3 {step}.i64;
+    return v4;
+}}
+"#
+            )
+        };
+        [call("a", "b", 1), call("b", "c", 2), call("c", "a", step)].concat()
+    };
+    let bytes = compile_object(&format!(
+        r#"{}{}{}
+func public %run(v0.i64) -> i64 {{
+block0:
+    v1.i64 = call %a1 v0;
+    v2.i64 = call %a2 v0;
+    v3.i64 = call %a3 v0;
+    v4.i64 = add v1 v2;
+    v5.i64 = add v4 v3;
+    return v5;
+}}
+"#,
+        cycle("1", 3),
+        cycle("2", 4),
+        cycle("3", 3),
+    ));
+    assert_defines(
+        &bytes,
+        &["a1", "b1", "c1", "a2", "b2", "c2", "run"],
+        &["a3", "b3", "c3"],
+    );
+}
+
+#[test]
+fn self_recursive_functions_fold_with_twins_calling_them() {
+    // `twin` is `count` but calls `count`, which is itself; `other` calls
+    // `unrelated`.
+    let count = |name: &str, callee: &str| {
+        format!(
+            r#"
+func private %{name}(v0.i64) -> i64 {{
+block0:
+    v1.i1 = eq v0 0.i64;
+    br v1 block1 block2;
+block1:
+    return 0.i64;
+block2:
+    v2.i64 = sub v0 1.i64;
+    v3.i64 = call %{callee} v2;
+    v4.i64 = add v3 1.i64;
+    return v4;
+}}
+"#
+        )
+    };
+    let bytes = compile_object(&format!(
+        r#"{}{}{}
+func private %unrelated(v0.i64) -> i64 {{
+block0:
+    v1.i64 = mul v0 7.i64;
+    return v1;
+}}
+
+func public %run(v0.i64) -> i64 {{
+block0:
+    v1.i64 = call %count v0;
+    v2.i64 = call %twin v0;
+    v3.i64 = call %other v0;
+    v4.i64 = add v1 v2;
+    v5.i64 = add v4 v3;
+    return v5;
+}}
+"#,
+        count("count", "count"),
+        count("twin", "count"),
+        count("other", "unrelated"),
+    ));
+    assert_defines(&bytes, &["count", "other", "unrelated", "run"], &["twin"]);
+}
+
+#[test]
+fn calls_to_outside_functions_compare_by_callee() {
+    // Calls to the same external function, variadic or not, are alike;
+    // calls to different external or public functions are not, even public
+    // functions with the same code.
+    let call = |name: &str, callee: &str| {
+        format!(
+            "func private %{name}(v0.i64) -> i64 {{\nblock0:\n    v1.i64 = call %{callee} v0;\n    v2.i64 = mul v1 5.i64;\n    return v2;\n}}\n"
+        )
+    };
+    let print = |name: &str| {
+        format!(
+            "func private %{name}(v0.*i8, v1.i64) -> i64 {{\nblock0:\n    v2.i32 = call %printf v0 v1;\n    v3.i64 = sext v2 i64;\n    v4.i64 = mul v3 5.i64;\n    return v4;\n}}\n"
+        )
+    };
+    let public = |name: &str| {
+        format!(
+            "func public %{name}(v0.i64) -> i64 {{\nblock0:\n    v1.i64 = add v0 1.i64;\n    return v1;\n}}\n"
+        )
+    };
+    let bytes = compile_object(&format!(
+        r#"declare external %ext_a(i64) -> i64;
+declare external %ext_b(i64) -> i64;
+declare external %printf(*i8, ...) -> i32;
+{}{}{}{}{}{}{}{}{}
+func public %run(v0.*i8, v1.i64) -> i64 {{
+block0:
+    v2.i64 = call %call_a v1;
+    v3.i64 = call %call_a_again v2;
+    v4.i64 = call %call_b v3;
+    v5.i64 = call %call_pub_a v4;
+    v6.i64 = call %call_pub_b v5;
+    v7.i64 = call %print v0 v6;
+    v8.i64 = call %print_again v0 v7;
+    v9.i64 = add v2 v8;
+    return v9;
+}}
+"#,
+        public("pub_a"),
+        public("pub_b"),
+        call("call_a", "ext_a"),
+        call("call_a_again", "ext_a"),
+        call("call_b", "ext_b"),
+        call("call_pub_a", "pub_a"),
+        call("call_pub_b", "pub_b"),
+        print("print"),
+        print("print_again"),
+    ));
+    assert_defines(
+        &bytes,
+        &[
+            "pub_a",
+            "pub_b",
+            "call_a",
+            "call_b",
+            "call_pub_a",
+            "call_pub_b",
+            "print",
+            "run",
+        ],
+        &["call_a_again", "print_again"],
+    );
+}

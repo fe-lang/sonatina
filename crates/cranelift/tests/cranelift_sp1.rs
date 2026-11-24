@@ -1,4 +1,6 @@
-use object::{Object, ObjectSection, ObjectSymbol, RelocationFlags, SectionKind};
+use object::{
+    Object, ObjectSection, ObjectSymbol, RelocationFlags, RelocationTarget, SectionKind, SymbolKind,
+};
 use sonatina_codegen::{
     Compile,
     backend::{Backend, BackendOptions},
@@ -262,4 +264,65 @@ fn variadic_imports_are_rejected() {
         matches!(errors.as_slice(), [CraneliftError::Translation(text)] if text.contains("variadic")),
         "{errors:?}"
     );
+}
+
+#[test]
+fn folded_functions_keep_their_pc_relative_pairs() {
+    // Each load of `$value` is an `auipc` with a `PCREL_HI20` relocation and
+    // a load whose `PCREL_LO12_I` relocation names that `auipc`, a place in
+    // the function itself. `second` folds into `first`, whose pairs stay.
+    let read = |name: &str| {
+        format!(
+            "func private %{name}(v0.i64) -> i64 {{\nblock0:\n    v1.i64 = mload $value i64;\n    v2.i64 = add v0 v1;\n    return v2;\n}}\n"
+        )
+    };
+    let source = format!(
+        "global private i64 $value = 5;\n{}{}func public %main(v0.i64) -> i64 {{\nblock0:\n    v1.i64 = call %first v0;\n    v2.i64 = call %second v1;\n    v3.i64 = add v1 v2;\n    return v3;\n}}\n",
+        read("first"),
+        read("second"),
+    );
+    let artifact = CraneliftObjectBackend::new()
+        .compile_module(
+            &parse(&source),
+            &BackendOptions {
+                opt_level: OptLevel::O1,
+            },
+        )
+        .unwrap();
+    let object = object::File::parse(artifact.as_bytes()).unwrap();
+    let function = |name| {
+        object
+            .symbols()
+            .find(|symbol| symbol.kind() == SymbolKind::Text && symbol.name() == Ok(name))
+    };
+    assert!(function("second").is_none());
+    let first = function("first").unwrap();
+    let first = first.address()..first.address() + first.size();
+    let (mut high, mut low) = (Vec::new(), Vec::new());
+    for section in object
+        .sections()
+        .filter(|section| section.kind() == SectionKind::Text)
+    {
+        for (offset, relocation) in section.relocations() {
+            match relocation.flags() {
+                RelocationFlags::Elf {
+                    r_type: object::elf::R_RISCV_PCREL_HI20,
+                } => high.push(offset),
+                RelocationFlags::Elf {
+                    r_type: object::elf::R_RISCV_PCREL_LO12_I,
+                } => {
+                    let RelocationTarget::Symbol(label) = relocation.target() else {
+                        panic!("a low part names its high part's label")
+                    };
+                    low.push(object.symbol_by_index(label).unwrap().address());
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(!low.is_empty());
+    for label in low {
+        assert!(first.contains(&label), "{label:#x} outside {first:x?}");
+        assert!(high.contains(&label), "no high part at {label:#x}");
+    }
 }
