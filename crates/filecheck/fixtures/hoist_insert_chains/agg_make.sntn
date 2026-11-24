@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 # nextln: block0:
 # nextln: v2.i64 = add v0 1.i64;
 # nextln: v4.[i64; 2] = agg.make [i64; 2] v2 v0;
-# nextln: v5.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v4 undef.[i64; 2];
+# nextln: v5.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v4 zero.[i64; 2];
 # nextln: br v1 block1 block2;
 func private %across_blocks(v0.i64, v1.i1) -> [[i64; 2]; 2] {
 block0:
@@ -22,6 +22,6 @@ block2:
 
 block3:
     v4.[i64; 2] = agg.make [i64; 2] v2 v0;
-    v5.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v4 undef.[i64; 2];
+    v5.[[i64; 2]; 2] = agg.make [[i64; 2]; 2] v4 zero.[i64; 2];
     return v5;
 }

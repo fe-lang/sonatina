@@ -2149,13 +2149,6 @@ block3:
             assert_eq!(phi_args(&editor, *b1), 1);
             assert!(editor.remove_succ(*b1, *b2));
             assert_eq!(phi_args(&editor, *b2), 0);
-            assert!(
-                editor
-                    .func()
-                    .dfg
-                    .value_ids()
-                    .all(|value| !matches!(editor.func().dfg.value(value), Value::Undef { .. }))
-            );
 
             assert!(editor.delete_blocks_unreachable(&[*b1, *b2]));
             let blocks: Vec<_> = editor.func().layout.iter_block().collect();

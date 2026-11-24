@@ -234,13 +234,6 @@ fn cases() -> Vec<Case> {
             reference: |a, _| (U256::from(a.trailing_zeros()), false),
         },
         Case {
-            name: "freeze",
-            instruction: "v10.i256 = freeze v8;",
-            shape: Shape::Value,
-            skip: never,
-            reference: |a, _| (a, false),
-        },
-        Case {
             name: "neg",
             instruction: "v10.i256 = neg v8;",
             shape: Shape::Value,

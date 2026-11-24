@@ -72,7 +72,7 @@ impl Interpret for Select {
         let cond = state.lookup_val(*self.cond());
         state.set_action(Action::Continue);
         let Some(cond) = cond.as_imm() else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
         let chosen = if cond.is_zero() {
             *self.else_value()

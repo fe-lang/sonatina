@@ -55,6 +55,7 @@ super::impl_inst_build! {EvmBaseFee, ()}
 super::impl_inst_build! {EvmBlobHash, (idx: ValueId)}
 super::impl_inst_build! {EvmBlobBaseFee, ()}
 super::impl_inst_build! {EvmMload, (addr: ValueId)}
+super::impl_inst_build! {EvmMloadBytes, (addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmMstore, (addr: ValueId, value: ValueId)}
 super::impl_inst_build! {EvmMstore8, (addr: ValueId, val: ValueId)}
 super::impl_inst_build! {EvmSload, (key: ValueId)}
@@ -73,6 +74,7 @@ super::impl_inst_build! {EvmCreate, (val: ValueId, addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmCall, (gas: ValueId, addr: ValueId, val: ValueId, arg_addr: ValueId, arg_len: ValueId, ret_addr: ValueId, ret_len: ValueId)}
 super::impl_inst_build! {EvmCallCode, (gas: ValueId, addr: ValueId, val: ValueId, arg_addr: ValueId, arg_len: ValueId, ret_addr: ValueId, ret_len: ValueId)}
 super::impl_inst_build! {EvmReturn, (addr: ValueId, len: ValueId)}
+super::impl_inst_build! {EvmReturnCode, (code_offset: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmDelegateCall, (gas: ValueId, ext_addr: ValueId, arg_addr: ValueId, arg_len: ValueId, ret_addr: ValueId, ret_len: ValueId)}
 super::impl_inst_build! {EvmCreate2, (val: ValueId, addr: ValueId, len: ValueId, salt: ValueId)}
 super::impl_inst_build! {EvmStaticCall, (gas: ValueId, ext_addr: ValueId, arg_addr: ValueId, arg_len: ValueId, ret_addr: ValueId, ret_len: ValueId)}

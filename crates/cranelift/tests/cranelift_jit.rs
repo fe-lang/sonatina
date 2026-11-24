@@ -663,18 +663,18 @@ block0:
 }
 
 #[test]
-fn undef_enum_values_read_as_zero() {
-    // Native undef values are zero, so an undef enum is its first variant.
+fn zero_enum_values_are_their_first_variant() {
+    // A zero enum is its first variant with a zero payload.
     for payload in ["i64", "i256"] {
         let source = format!(
             r#"
 type @Choice = enum {{ #Some({payload}), #None }};
 func public %read() -> i64 {{
 block0:
-    v0.enumtag(@Choice) = enum.tag undef.@Choice;
+    v0.enumtag(@Choice) = enum.tag zero.@Choice;
     br_table v0 block3 (0.enumtag(@Choice) block1) (1.enumtag(@Choice) block3);
 block1:
-    v1.i1 = enum.is_variant undef.@Choice #Some;
+    v1.i1 = enum.is_variant zero.@Choice #Some;
     br v1 block2 block3;
 block2:
     return 1.i64;

@@ -176,6 +176,9 @@ impl<'a> PrivateMallocUseAnalysis<'a> {
             EvmInstKind::EvmMload(mload) => {
                 self.addr_range_within_alloc(*mload.addr(), WORD_BYTES, alloc_size)
             }
+            EvmInstKind::EvmMloadBytes(load) if !self.derived_values.contains(load.len()) => {
+                self.value_addr_range_within_alloc(*load.addr(), *load.len(), alloc_size)
+            }
             EvmInstKind::EvmMstore(mstore) if !self.derived_values.contains(mstore.value()) => {
                 self.addr_range_within_alloc(*mstore.addr(), WORD_BYTES, alloc_size)
             }

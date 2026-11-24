@@ -208,7 +208,7 @@ fn aggregates_built_in_their_fields_keep_their_values() {
 func private %make(v0.i64) -> [i64; 6] {
 block0:
     v2.i64 = add v0 1.i64;
-    v3.[i64; 6] = agg.make [i64; 6] v0 undef.i64 undef.i64 undef.i64 undef.i64 v2;
+    v3.[i64; 6] = agg.make [i64; 6] v0 0.i64 0.i64 0.i64 0.i64 v2;
     return v3;
 }
 func private %nest(v0.i64, v1.i1) -> [[i64; 6]; 3] {
@@ -219,12 +219,12 @@ block1:
     v4.[i64; 6] = call %make 7.i64;
     jump block3;
 block2:
-    v5.[i64; 6] = agg.make [i64; 6] undef.i64 undef.i64 undef.i64 9.i64 undef.i64 undef.i64;
+    v5.[i64; 6] = agg.make [i64; 6] 0.i64 0.i64 0.i64 9.i64 0.i64 0.i64;
     jump block3;
 block3:
     v6.[i64; 6] = phi (v4 block1) (v5 block2);
     v11.i64 = mul v0 3.i64;
-    v12.[i64; 6] = agg.make [i64; 6] undef.i64 v0 undef.i64 undef.i64 v11 undef.i64;
+    v12.[i64; 6] = agg.make [i64; 6] 0.i64 v0 0.i64 0.i64 v11 0.i64;
     v15.[[i64; 6]; 3] = agg.make [[i64; 6]; 3] v3 v6 v12;
     return v15;
 }
@@ -276,7 +276,7 @@ func private %fill(v0.objref<[i64; 4]>, v1.i64) {
 block0:
     v3.objref<i64> = obj.index v0 0.i64;
     v4.i64 = obj.load v3;
-    v5.[i64; 4] = agg.make [i64; 4] v1 v4 undef.i64 undef.i64;
+    v5.[i64; 4] = agg.make [i64; 4] v1 v4 0.i64 0.i64;
     obj.store v0 v5;
     return;
 }
@@ -284,7 +284,7 @@ func public %apply(v0.i64, v20.*[i64; 8]) {
 block0:
     v1.objref<[i64; 4]> = obj.alloc [i64; 4];
     v3.i64 = add v0 1.i64;
-    v4.[i64; 4] = agg.make [i64; 4] v0 undef.i64 undef.i64 v3;
+    v4.[i64; 4] = agg.make [i64; 4] v0 0.i64 0.i64 v3;
     obj.store v1 v4;
     v6.objref<[i64; 4]> = obj.alloc [i64; 4];
     v7.objref<i64> = obj.index v6 0.i64;
@@ -553,7 +553,7 @@ block0:
 }
 
 #[test]
-fn undef_aggregates_read_as_zero_in_every_position() {
+fn zero_aggregates_read_as_zero_in_every_position() {
     let source = r#"
 type @Big = {[i64; 40], i64};
 func inline(never) private %ends(v0.[i64; 40]) -> i64 {
@@ -565,9 +565,9 @@ block0:
 }
 func public %read(v0.i1, v1.*[i64; 40], v2.*[i64; 40], v3.*i64) {
 block0:
-    v4.i64 = call %ends undef.[i64; 40];
+    v4.i64 = call %ends zero.[i64; 40];
     mstore v3 v4 i64;
-    v5.[i64; 40] = extract_value undef.@Big 0.i64;
+    v5.[i64; 40] = extract_value zero.@Big 0.i64;
     mstore v1 v5 [i64; 40];
     br v0 block1 block2;
 block1:
@@ -576,7 +576,7 @@ block2:
     v6.[i64; 40] = mload v2 [i64; 40];
     jump block3;
 block3:
-    v7.[i64; 40] = phi (undef.[i64; 40] block1) (v6 block2);
+    v7.[i64; 40] = phi (zero.[i64; 40] block1) (v6 block2);
     mstore v2 v7 [i64; 40];
     return;
 }
@@ -591,14 +591,14 @@ block3:
         .unwrap();
         let read: unsafe extern "C" fn(bool, *mut i64, *mut i64, *mut i64) =
             unsafe { std::mem::transmute(artifact.function_address("read").unwrap()) };
-        for take_undef in [false, true] {
+        for take_zero in [false, true] {
             let mut extracted = [-1i64; 40];
             let mut merged: [i64; 40] = std::array::from_fn(|i| i as i64 + 1);
             let original = merged;
             let mut sum = -1;
             unsafe {
                 read(
-                    take_undef,
+                    take_zero,
                     extracted.as_mut_ptr(),
                     merged.as_mut_ptr(),
                     &mut sum,
@@ -608,8 +608,8 @@ block3:
             assert_eq!(extracted, [0; 40], "{level:?}");
             assert_eq!(
                 merged,
-                if take_undef { [0; 40] } else { original },
-                "{level:?} {take_undef}"
+                if take_zero { [0; 40] } else { original },
+                "{level:?} {take_zero}"
             );
         }
     }
@@ -700,13 +700,13 @@ block2:
 fn nested_insert_chains_zero_their_own_unwritten_fields() {
     // The inner chain `v3` becomes a field of the outer chain's continuation
     // `v4`. Only `v3`'s own inserts cover its storage, so it still zeroes
-    // the array it leaves undef.
+    // the array it leaves zero.
     let source = r#"
 type @Inner = {i64, [i64; 20]};
 type @Outer = {i64, i64, @Inner};
 func public %nest(v0.i64, v1.*@Outer) {
 block0:
-    v3.@Inner = agg.make @Inner v0 undef.[i64; 20];
+    v3.@Inner = agg.make @Inner v0 zero.[i64; 20];
     v5.@Outer = agg.make @Outer v0 v0 v3;
     mstore v1 v5 @Outer;
     return;
@@ -825,7 +825,7 @@ fn single_use_loads_copy_from_memory_only_while_it_is_unchanged() {
 type @Pair = {[i64; 32], [i64; 32]};
 func inline(never) private %clobber(v0.*[i64; 32]) {
 block0:
-    mstore v0 undef.[i64; 32] [i64; 32];
+    mstore v0 zero.[i64; 32] [i64; 32];
     return;
 }
 func inline(never) private %load(v0.*[i64; 32]) -> [i64; 32] {
@@ -843,7 +843,7 @@ block0:
 func public %snapshot(v0.*[i64; 4], v1.*[i64; 4]) {
 block0:
     v2.[i64; 4] = mload v0 [i64; 4];
-    mstore v0 undef.[i64; 4] [i64; 4];
+    mstore v0 zero.[i64; 4] [i64; 4];
     mstore v1 v2 [i64; 4];
     return;
 }
@@ -853,7 +853,7 @@ block0:
     v4.[i64; 4] = insert_value v3 0.i64 9.i64;
     mstore v1 v4 [i64; 4];
     v5.[i64; 4] = mload v0 [i64; 4];
-    mstore v0 undef.[i64; 4] [i64; 4];
+    mstore v0 zero.[i64; 4] [i64; 4];
     v6.[i64; 4] = insert_value v5 1.i64 9.i64;
     mstore v2 v6 [i64; 4];
     return;
@@ -1426,7 +1426,7 @@ fn objects_move_into_and_out_of_calls_without_copies() {
 func inline(never) private %fill(v0.i64) -> [i64; 32] {
 block0:
     v2.i64 = add v0 1.i64;
-    v3.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v2;
+    v3.[i64; 32] = agg.make [i64; 32] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 v2;
     return v3;
 }
 func inline(never) private %sum(v0.[i64; 32]) -> i64 {
@@ -1449,7 +1449,7 @@ block0:
     v2.i64 = obj.load v1;
     v3.objref<i64> = obj.index v0 31.i64;
     v4.i64 = obj.load v3;
-    v6.[i64; 32] = agg.make [i64; 32] v4 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v2;
+    v6.[i64; 32] = agg.make [i64; 32] v4 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 v2;
     return v6;
 }
 func public %roundtrip(v0.i64) -> i64 {
@@ -1529,7 +1529,7 @@ fn callees_rebuild_objects_in_entry_blocks_that_loop() {
     let source = r#"
 func inline(never) private %fill(v0.i64) -> [i64; 32] {
 block0:
-    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v0;
+    v2.[i64; 32] = agg.make [i64; 32] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 v0;
     return v2;
 }
 func inline(never) private %passes(v0.[i64; 32], noalias nocapture v1.objref<[i64; 2]>) -> i64 {
@@ -1600,7 +1600,7 @@ fn callees_build_objects_in_arguments_they_own() {
     let source = r#"
 func inline(never) private %fill(v0.i64) -> [i64; 32] {
 block0:
-    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v0;
+    v2.[i64; 32] = agg.make [i64; 32] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 v0;
     return v2;
 }
 func inline(never) private %consume(v0.[i64; 32]) -> i64 {
@@ -1737,7 +1737,7 @@ fn in_place_loads_keep_snapshots_of_objects_given_away() {
 func inline(never) private %fill(v0.i64) -> [i64; 32] {
 block0:
     v2.i64 = add v0 1.i64;
-    v3.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v2;
+    v3.[i64; 32] = agg.make [i64; 32] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 v2;
     return v3;
 }
 func inline(never) private %consume(v0.[i64; 32], v1.i64) -> i64 {
@@ -1909,7 +1909,7 @@ fn loads_read_local_objects_in_place_until_written() {
     let source = r#"
 func inline(never) private %fill(v0.i64) -> [i64; 32] {
 block0:
-    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v0;
+    v2.[i64; 32] = agg.make [i64; 32] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 v0;
     return v2;
 }
 func inline(never) private %noise(v0.i64) -> i64 {
@@ -2001,7 +2001,7 @@ fn loads_read_local_objects_in_place_until_a_write_precedes_a_read() {
     let source = r#"
 func inline(never) private %fill(v0.i64) -> [i64; 32] {
 block0:
-    v2.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v0;
+    v2.[i64; 32] = agg.make [i64; 32] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 v0;
     return v2;
 }
 func inline(never) private %noise(v0.i64) -> i64 {
@@ -2033,7 +2033,7 @@ block0:
     v4.i64 = extract_value v3 31.i64;
     v5.i64 = call %noise v4;
     v6.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
-    v7.[i64; 32] = agg.make [i64; 32] v5 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v7.[i64; 32] = agg.make [i64; 32] v5 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     v9.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v3 v7;
     obj.store v6 v9;
     v10.i64 = add v0 1.i64;
@@ -2100,7 +2100,7 @@ block0:
     v2.[i64; 32] = obj.load v1;
     v3.i64 = add v0 1.i64;
     v4.[i64; 32] = call %fill v3;
-    v5.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v2 undef.[i64; 32];
+    v5.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] v2 zero.[i64; 32];
     obj.store v1 v4;
     v6.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
     obj.store v6 v5;
@@ -2169,12 +2169,12 @@ func public %across(v0.i64, v20.*i64, v22.*[[i64; 8]; 2]) {
 block0:
     v1.objref<[[i64; 8]; 2]> = obj.alloc [[i64; 8]; 2];
     v2.objref<[i64; 8]> = obj.alloc [i64; 8];
-    v30.[i64; 8] = agg.make [i64; 8] undef.i64 undef.i64 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v30.[i64; 8] = agg.make [i64; 8] 0.i64 0.i64 v0 0.i64 0.i64 0.i64 0.i64 0.i64;
     obj.store v2 v30;
     v8.[i64; 8] = obj.load v2;
     v4.i64 = call %noise v0;
     mstore v20 v4 i64;
-    v5.[i64; 8] = agg.make [i64; 8] v0 undef.i64 undef.i64 v4 undef.i64 undef.i64 undef.i64 undef.i64;
+    v5.[i64; 8] = agg.make [i64; 8] v0 0.i64 0.i64 v4 0.i64 0.i64 0.i64 0.i64;
     v7.[[i64; 8]; 2] = agg.make [[i64; 8]; 2] v8 v5;
     obj.store v1 v7;
     v21.objref<i64> = obj.index v2 2.i64;
@@ -2186,13 +2186,13 @@ block0:
 func public %swapped(v0.i64, v22.*[[i64; 8]; 2]) {
 block0:
     v1.objref<[[i64; 8]; 2]> = obj.alloc [[i64; 8]; 2];
-    v2.[i64; 8] = agg.make [i64; 8] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
-    v3.[[i64; 8]; 2] = agg.make [[i64; 8]; 2] undef.[i64; 8] v2;
+    v2.[i64; 8] = agg.make [i64; 8] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
+    v3.[[i64; 8]; 2] = agg.make [[i64; 8]; 2] zero.[i64; 8] v2;
     obj.store v1 v3;
     v4.objref<[i64; 8]> = obj.index v1 1.i64;
     v5.[i64; 8] = obj.load v4;
     v6.i64 = add v0 1.i64;
-    v7.[i64; 8] = agg.make [i64; 8] undef.i64 v6 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v7.[i64; 8] = agg.make [i64; 8] 0.i64 v6 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     v9.[[i64; 8]; 2] = agg.make [[i64; 8]; 2] v5 v7;
     obj.store v1 v9;
     v10.[[i64; 8]; 2] = obj.load v1;
@@ -2256,7 +2256,7 @@ block0:
     v1.objref<[i64; 8]> = obj.alloc [i64; 8];
     obj.store v1 v0;
     v3.i64 = extract_value v0 0.i64;
-    v4.[i64; 8] = agg.make [i64; 8] 7.i64 v3 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v4.[i64; 8] = agg.make [i64; 8] 7.i64 v3 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     obj.store v1 v4;
     v5.objref<i64> = obj.index v1 1.i64;
     v6.i64 = obj.load v5;
@@ -2268,7 +2268,7 @@ block0:
     obj.store v1 v0;
     v3.i64 = extract_value v0 0.i64;
     v7.i64 = call %noise v3;
-    v4.[i64; 8] = agg.make [i64; 8] 7.i64 v7 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v4.[i64; 8] = agg.make [i64; 8] 7.i64 v7 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     obj.store v1 v4;
     v5.objref<i64> = obj.index v1 1.i64;
     v6.i64 = obj.load v5;
@@ -2276,9 +2276,9 @@ block0:
 }
 func public %sums(v0.i64) -> i64 {
 block0:
-    v1.[i64; 8] = agg.make [i64; 8] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v1.[i64; 8] = agg.make [i64; 8] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     v2.i64 = call %first v1;
-    v3.[i64; 8] = agg.make [i64; 8] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v3.[i64; 8] = agg.make [i64; 8] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     v4.i64 = call %across v3;
     v5.i64 = mul v4 1000.i64;
     v6.i64 = add v2 v5;
@@ -2314,15 +2314,15 @@ fn chains_built_in_local_objects_come_after_reads_of_load_views() {
 func public %viewed(v0.i64) -> i64 {
 block0:
     v1.objref<[[i64; 32]; 2]> = obj.alloc [[i64; 32]; 2];
-    v2.[i64; 32] = agg.make [i64; 32] undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v0;
-    v3.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v2;
+    v2.[i64; 32] = agg.make [i64; 32] 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 v0;
+    v3.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] zero.[i64; 32] v2;
     obj.store v1 v3;
     v4.[[i64; 32]; 2] = obj.load v1;
     v5.[i64; 32] = extract_value v4 1.i64;
     v6.i64 = add v0 1.i64;
-    v7.[i64; 32] = agg.make [i64; 32] undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 v6;
+    v7.[i64; 32] = agg.make [i64; 32] 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 v6;
     v8.i64 = extract_value v5 31.i64;
-    v9.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v7;
+    v9.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] zero.[i64; 32] v7;
     obj.store v1 v9;
     v10.objref<[i64; 32]> = obj.index v1 1.i64;
     v14.objref<i64> = obj.index v10 31.i64;
@@ -2365,7 +2365,7 @@ block0:
     v2.objref<[[i64; 32]; 2]> = obj.from_ptr v1;
     v3.*[i64; 32] = bitcast v0 *[i64; 32];
     v4.[i64; 32] = mload v3 [i64; 32];
-    v5.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v4;
+    v5.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] zero.[i64; 32] v4;
     obj.store v2 v5;
     return;
 }
@@ -2375,7 +2375,7 @@ block0:
     v2.objref<[[i64; 32]; 2]> = obj.from_ptr v1;
     v3.[[i64; 32]; 2] = mload v1 [[i64; 32]; 2];
     v4.[i64; 32] = extract_value v3 0.i64;
-    v5.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v4;
+    v5.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] zero.[i64; 32] v4;
     obj.store v2 v5;
     return;
 }
@@ -2454,7 +2454,7 @@ fn read_only_objects_share_storage_until_a_callee_may_write() {
 func inline(never) private %fill(v0.i64) -> [i64; 32] {
 block0:
     v2.i64 = add v0 3.i64;
-    v3.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 v2 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v3.[i64; 32] = agg.make [i64; 32] v0 0.i64 0.i64 v2 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     return v3;
 }
 func inline(never) private %reader(noalias nocapture v0.objref<[i64; 32]>) -> i64 {
@@ -2559,7 +2559,7 @@ fn readonly_callees_share_object_storage() {
 func inline(never) private %fill(v0.i64) -> [i64; 32] {
 block0:
     v2.i64 = add v0 3.i64;
-    v3.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 v2 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v3.[i64; 32] = agg.make [i64; 32] v0 0.i64 0.i64 v2 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     return v3;
 }
 func inline(never) private %glance(noalias nocapture readonly v0.objref<[i64; 32]>) -> i64 {
@@ -2666,13 +2666,13 @@ block0:
 }
 
 #[test]
-fn sha256_compress_takes_undef_operands() {
-    // An undef state or block reads as zeros, as from a zeroed slot.
+fn sha256_compress_takes_zero_operands() {
+    // A zero state or block reads as zeros.
     let source = r#"
-func public %undefs(v0.*i8) {
+func public %zeros(v0.*i8) {
 block0:
     v1.*[i32; 8] = bitcast v0 *[i32; 8];
-    v2.[i32; 8] = sha256_compress undef.[i32; 8] undef.[i32; 16];
+    v2.[i32; 8] = sha256_compress zero.[i32; 8] zero.[i32; 16];
     mstore v1 v2 [i32; 8];
     return;
 }
@@ -2696,12 +2696,12 @@ block0:
         .with_opt_level(level)
         .compile()
         .unwrap();
-        let undefs: unsafe extern "C" fn(*mut u32) =
-            unsafe { std::mem::transmute(artifact.function_address("undefs").unwrap()) };
+        let zeros: unsafe extern "C" fn(*mut u32) =
+            unsafe { std::mem::transmute(artifact.function_address("zeros").unwrap()) };
         let compress: unsafe extern "C" fn(*const u32, *const u32, *mut u32) =
             unsafe { std::mem::transmute(artifact.function_address("compress").unwrap()) };
         let (mut out, mut zeros_out) = ([0xa5a5_a5a5u32; 8], [0u32; 8]);
-        unsafe { undefs(out.as_mut_ptr()) };
+        unsafe { zeros(out.as_mut_ptr()) };
         unsafe { compress([0; 8].as_ptr(), [0; 16].as_ptr(), zeros_out.as_mut_ptr()) };
         assert_eq!(out, zeros_out, "{level:?}");
     }
@@ -2716,9 +2716,9 @@ func public %nested(v0.i64, v1.*i8) {
 block0:
     v2.objref<[[i64; 3]; 2]> = obj.alloc [[i64; 3]; 2];
     v4.i64 = add v0 1.i64;
-    v5.[i64; 3] = agg.make [i64; 3] v0 undef.i64 v4;
+    v5.[i64; 3] = agg.make [i64; 3] v0 0.i64 v4;
     v7.i64 = add v0 2.i64;
-    v8.[i64; 3] = agg.make [i64; 3] undef.i64 v7 undef.i64;
+    v8.[i64; 3] = agg.make [i64; 3] 0.i64 v7 0.i64;
     v9.[[i64; 3]; 2] = agg.make [[i64; 3]; 2] v8 v5;
     obj.store v2 v9;
     v10.[[i64; 3]; 2] = obj.load v2;
@@ -2801,7 +2801,7 @@ block0:
 #[test]
 fn agg_make_builds_values_in_registers_and_storage() {
     // `@Pair` is held in registers and `@Outer` in storage; `%partial` leaves
-    // a scalar and an aggregate field `undef`. Padding and `undef` fields are
+    // a scalar and an aggregate field zero. Padding and zero fields are
     // not checked.
     let source = r#"
 type @Pair = { i64, i64 };
@@ -2825,10 +2825,10 @@ block0:
 }
 func public %partial(v0.i64, v1.i64, v2.*@Outer) {
 block0:
-    v3.@Pair = agg.make @Pair v0 undef.i64;
+    v3.@Pair = agg.make @Pair v0 0.i64;
     v4.i8 = trunc v1 i8;
     v5.@Gap = agg.make @Gap v4 v0;
-    v6.@Outer = agg.make @Outer v3 undef.[i64; 3] v5;
+    v6.@Outer = agg.make @Outer v3 zero.[i64; 3] v5;
     v7.@Pair = extract_value v6 0.i64;
     v8.i64 = extract_value v7 0.i64;
     v9.@Pair = agg.make @Pair v8 v1;

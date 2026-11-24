@@ -9,6 +9,14 @@ type @pair = {i256, i256};
 
 func public %entry() {
     block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v16.i1 = is_zero v0;
+        br v16 block2 block3;
+
+    block2:
+        jump block2;
+
+    block3:
         mstore 0.i32 7.i256 i256;
         evm_return 0.i8 32.i8;
 }

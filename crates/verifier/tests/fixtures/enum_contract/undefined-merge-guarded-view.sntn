@@ -1,8 +1,9 @@
 # Required enum contract: accept
-# The element arm contributes a guarded payload view and the fallback arm
-# `undef`; the merged view keeps the element arm's certificate although the
-# object's tag joins to {None, Some}. Two trampolines delay one arm: in %entry
-# the undefined arm reaches the merge first, in %defined_first the defined arm.
+# The element arm contributes a guarded payload view and the fallback arm a
+# null reference (`zero.objref`); the merged view keeps the element arm's
+# certificate although the object's tag joins to {None, Some}. Two
+# trampolines delay one arm: in %entry the undefined arm reaches the merge
+# first, in %defined_first the defined arm.
 target = "evm-ethereum-osaka"
 type @E = enum { #None, #Some(i256) };
 func private %entry(v100.i1) -> i256 {
@@ -21,7 +22,7 @@ block7:
 block8:
  jump block3;
 block3:
- v2.objref<i256> = phi (undef.objref<i256> block1) (v1 block8);
+ v2.objref<i256> = phi (zero.objref<i256> block1) (v1 block8);
  v3.i8 = phi (0.i8 block1) (1.i8 block8);
  br_table v3 block5 (1.i8 block4);
 block4:
@@ -46,7 +47,7 @@ block7:
 block8:
  jump block3;
 block3:
- v2.objref<i256> = phi (undef.objref<i256> block8) (v1 block2);
+ v2.objref<i256> = phi (zero.objref<i256> block8) (v1 block2);
  v3.i8 = phi (0.i8 block8) (1.i8 block2);
  br_table v3 block5 (1.i8 block4);
 block4:

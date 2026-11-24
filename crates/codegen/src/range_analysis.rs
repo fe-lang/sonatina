@@ -9,9 +9,9 @@ use sonatina_ir::{
     inst::{
         BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind,
         control_flow::BranchKind,
-        data::Freeze,
         evm::{
-            EvmCalldataSize, EvmCodeSize, EvmExtCodeSize, EvmMalloc, EvmMsize, EvmReturnDataSize,
+            EvmCalldataSize, EvmCodeSize, EvmExtCodeSize, EvmMalloc, EvmMloadBytes, EvmMsize,
+            EvmReturnDataSize,
         },
         logic::Select,
     },
@@ -412,7 +412,7 @@ impl SignedInterval {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NormalizedCond {
+pub(crate) enum NormalizedCond {
     Constant(bool),
     Compare {
         kind: BinaryInstKind,
@@ -434,17 +434,13 @@ pub(crate) fn fact_for_value(func: &Function, env: &RangeEnv, value: ValueId) ->
     let ty = func.dfg.value_ty(value);
     debug_assert!(supports_range_facts(ty));
 
-    if let Some(imm) = func.dfg.value_imm(value) {
+    if let Some(imm) = func.dfg.value_const_imm(value) {
         return RangeFact::singleton(imm);
     }
 
-    match func.dfg.value(value) {
-        Value::Undef { .. } => RangeFact::full_for(ty),
-        _ => env
-            .get(&value)
-            .copied()
-            .unwrap_or_else(|| RangeFact::full_for(ty)),
-    }
+    env.get(&value)
+        .copied()
+        .unwrap_or_else(|| RangeFact::full_for(ty))
 }
 
 pub(crate) fn exact_immediate(
@@ -452,7 +448,7 @@ pub(crate) fn exact_immediate(
     env: &RangeEnv,
     value: ValueId,
 ) -> Option<Immediate> {
-    if let Some(imm) = func.dfg.value_imm(value) {
+    if let Some(imm) = func.dfg.value_const_imm(value) {
         return Some(imm);
     }
 
@@ -513,14 +509,6 @@ fn transfer_inst(
         InstClassKind::Binary(kind) => {
             transfer_binary_inst(func, env, inst, kind, guarded_subs.contains(&inst))
         }
-        // A frozen value is one of its argument's.
-        _ if let Some(freeze) = func.dfg.downcast::<&Freeze>(inst)
-            && let Some(result) = func.dfg.inst_result(inst)
-            && supports_range_facts(func.dfg.value_ty(result)) =>
-        {
-            let fact = fact_for_value(func, env, *freeze.arg());
-            set_env_fact(func, env, result, fact);
-        }
         // A selected value is one of its two.
         _ if let Some(select) = func.dfg.downcast::<&Select>(inst)
             && let Some(result) = func.dfg.inst_result(inst)
@@ -533,11 +521,36 @@ fn transfer_inst(
             );
             set_env_fact(func, env, result, fact);
         }
-        _ => match evm_byte_len_fact(func, inst) {
-            Some((result, fact)) => set_env_fact(func, env, result, fact),
-            None => clear_inst_results(func, env, inst),
-        },
+        _ => {
+            match evm_mload_bytes_fact(func, env, inst).or_else(|| evm_byte_len_fact(func, inst)) {
+                Some((result, fact)) => set_env_fact(func, env, result, fact),
+                None => clear_inst_results(func, env, inst),
+            }
+        }
     }
+}
+
+fn evm_mload_bytes_fact(
+    func: &Function,
+    env: &RangeEnv,
+    inst: InstId,
+) -> Option<(ValueId, RangeFact)> {
+    let load = func.dfg.downcast::<&EvmMloadBytes>(inst)?;
+    let result = func.dfg.inst_result_at(inst, 0)?;
+    let ty = func.dfg.value_ty(result);
+    if !supports_range_facts(ty) {
+        return None;
+    }
+    let len_hi = fact_for_value(func, env, *load.len()).unsigned.hi;
+    if len_hi.is_zero() {
+        return Some((result, RangeFact::singleton(Immediate::zero(ty))));
+    }
+    if len_hi < U256::from(32u8) {
+        let bits = len_hi.as_usize() * 8;
+        let hi = (U256::one() << bits) - U256::one();
+        return Some((result, unsigned_fact(U256::zero(), hi, ty)));
+    }
+    None
 }
 
 /// Every byte length the EVM reports is below `2**62`. Gas is a `u64`, and
@@ -930,7 +943,11 @@ fn refine_br_edge(
     }
 }
 
-fn normalize_condition(func: &Function, env: &RangeEnv, mut value: ValueId) -> NormalizedCond {
+pub(crate) fn normalize_condition(
+    func: &Function,
+    env: &RangeEnv,
+    mut value: ValueId,
+) -> NormalizedCond {
     let mut invert = false;
 
     loop {
@@ -1560,7 +1577,7 @@ fn transfer_cast_inst(func: &Function, env: &mut RangeEnv, inst: InstId, kind: C
     let fact = match kind {
         CastInstKind::Zext => zext_fact(src, ty),
         CastInstKind::Sext => sext_fact(src, ty),
-        CastInstKind::Trunc => trunc_fact(src, ty),
+        CastInstKind::Trunc | CastInstKind::TruncNuw => trunc_fact(src, ty),
         CastInstKind::Bitcast | CastInstKind::IntToPtr | CastInstKind::PtrToInt => {
             RangeFact::full_for(ty)
         }
@@ -2331,7 +2348,7 @@ fn signed_to_unsigned(value: I256, ty: Type) -> U256 {
     imm_to_unsigned(Immediate::from_i256(value, ty))
 }
 
-fn imm_to_unsigned(imm: Immediate) -> U256 {
+pub(crate) fn imm_to_unsigned(imm: Immediate) -> U256 {
     imm.as_i256().to_u256() & unsigned_max(imm.ty())
 }
 

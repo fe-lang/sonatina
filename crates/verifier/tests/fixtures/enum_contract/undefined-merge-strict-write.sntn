@@ -1,8 +1,8 @@
 # Required enum contract: accept
-# `v2` is `undef` on the fallback arm, where the site tag keeps the write away.
-# Two trampolines delay one arm: in %entry the undefined arm reaches the merge
-# first, in %defined_first the defined arm does. A no-op write through `undef`
-# would leave the unwritten payload in the successor's join.
+# `v2` is null (`zero.objref`) on the fallback arm, where the site tag keeps
+# the write away. Two trampolines delay one arm: in %entry the undefined arm
+# reaches the merge first, in %defined_first the defined arm does. A no-op
+# write through null would leave the unwritten payload in the successor's join.
 target = "evm-ethereum-osaka"
 type @E = enum { #None, #Some(i256) };
 func private %entry(v100.i1) -> i256 {
@@ -19,7 +19,7 @@ block7:
 block8:
  jump block3;
 block3:
- v2.objref<@E> = phi (undef.objref<@E> block1) (v0 block8);
+ v2.objref<@E> = phi (zero.objref<@E> block1) (v0 block8);
  v3.i8 = phi (0.i8 block1) (1.i8 block8);
  br_table v3 block6 (1.i8 block4);
 block4:
@@ -46,7 +46,7 @@ block7:
 block8:
  jump block3;
 block3:
- v2.objref<@E> = phi (undef.objref<@E> block8) (v0 block2);
+ v2.objref<@E> = phi (zero.objref<@E> block8) (v0 block2);
  v3.i8 = phi (0.i8 block8) (1.i8 block2);
  br_table v3 block6 (1.i8 block4);
 block4:

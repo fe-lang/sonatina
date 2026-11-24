@@ -312,7 +312,10 @@ impl<'a> DemandedBitsQuery<'a> {
                     );
                 }
             }
-            CastInstKind::Bitcast | CastInstKind::IntToPtr | CastInstKind::PtrToInt => {
+            CastInstKind::TruncNuw
+            | CastInstKind::Bitcast
+            | CastInstKind::IntToPtr
+            | CastInstKind::PtrToInt => {
                 self.add_demand(*arg, src_mask, worklist, queued);
             }
         }

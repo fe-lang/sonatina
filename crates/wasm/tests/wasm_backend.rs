@@ -596,31 +596,6 @@ fn bit_counts_count_zeros_at_each_width() {
 }
 
 #[test]
-fn freeze_returns_its_argument() {
-    let widths = [1u32, 8, 16, 32, 64];
-    let mut source = String::new();
-    for width in widths {
-        let t = ir_type(width);
-        source += &format!(
-            "func public %freeze{width}(v0.{t}) -> {t} {{
-    block0:
-        v1.{t} = freeze v0;
-        return v1;
-}}
-"
-        );
-    }
-    let mut machine = Machine::new(&compile_valid(&parse(&source)));
-    for width in widths {
-        let func = machine.func(&format!("freeze{width}"));
-        for a in operands(width) {
-            let results = machine.call(&func, &[val(width, a)]);
-            assert_eq!(bits_from(width, &results[0]), a, "freeze{width}: {a:#x}");
-        }
-    }
-}
-
-#[test]
 fn extensions_and_truncations_match_the_reference() {
     let widths = [1u32, 8, 16, 32, 64];
     let mut source = String::new();

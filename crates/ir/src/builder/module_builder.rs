@@ -388,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sparse_effect_map_hole_reuse_keeps_new_function_unknown() {
+    fn test_sparse_effect_map_new_function_does_not_reuse_removed_ref() {
         let builder = test_module_builder();
 
         let mut refs = Vec::new();
@@ -434,7 +434,7 @@ mod tests {
 
         let new_sig = Signature::new_unit("new_func", Linkage::Private, &[]);
         let new_ref = builder.declare_function(new_sig).unwrap();
-        assert_eq!(new_ref, refs[3]);
+        assert_eq!(new_ref, FuncRef::from_u32(5));
         assert!(!builder.ctx.has_func_effects(new_ref));
         assert!(!builder.ctx.has_func_hints(new_ref));
     }

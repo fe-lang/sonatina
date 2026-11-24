@@ -10,8 +10,9 @@ use sonatina_ir::{
 use sonatina_parser::parse_module;
 use sonatina_triple::TargetTriple;
 use sonatina_verifier::{
-    ModuleBuilderVerifyExt, ParseVerifyError, VerificationLevel, VerifierConfig, build_and_verify,
-    parse_and_verify_module, verify_function_signature, verify_module, verify_module_invariants,
+    DiagnosticCode, ModuleBuilderVerifyExt, ParseVerifyError, VerificationLevel, VerifierConfig,
+    build_and_verify, parse_and_verify_module, verify_function_signature, verify_module,
+    verify_module_invariants,
 };
 
 fn has_code(report: &sonatina_verifier::VerificationReport, code: &str) -> bool {
@@ -1567,13 +1568,13 @@ func public %bad_gep(v0.*@s) -> unit {
 
 func public %bad_insert() -> unit {
     block0:
-        v0.@s = insert_value undef.@s -1.i32 1.i32;
+        v0.@s = insert_value zero.@s -1.i32 1.i32;
         return;
 }
 
 func public %bad_extract() -> unit {
     block0:
-        v0.i32 = extract_value undef.@s -1.i32;
+        v0.i32 = extract_value zero.@s -1.i32;
         return;
 }
 "#;
@@ -1598,7 +1599,7 @@ type @empty = {};
 
 func public %f(v0.i32) -> @nested {
     block0:
-        v1.@s = agg.make @s v0 undef.i64;
+        v1.@s = agg.make @s v0 0.i64;
         v2.[i8; 2] = agg.make [i8; 2] 1.i8 2.i8;
         v3.@nested = agg.make @nested v1 v2;
         v4.@empty = agg.make @empty;
@@ -1850,13 +1851,13 @@ func private %bad_gep(v0.*@s) -> unit {
 
 func private %bad_insert() -> unit {
     block0:
-        v0.[i32; 2] = insert_value undef.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256 1.i32;
+        v0.[i32; 2] = insert_value zero.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256 1.i32;
         return;
 }
 
 func private %bad_extract() -> unit {
     block0:
-        v0.i32 = extract_value undef.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256;
+        v0.i32 = extract_value zero.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256;
         return;
 }
 
@@ -3669,8 +3670,7 @@ func private %flag() -> @flag {
 }
 func private %null() -> *i8 {
     block0:
-        v0.*i8 = freeze zero.*i8;
-        return v0;
+        return zero.*i8;
 }
 "#;
     if let Err(err) = parse_and_verify_module(ok, &cfg) {
@@ -3697,6 +3697,317 @@ func private %null() -> *i8 {
                 "zero value of a type with no zero: an enum without variants or a function"
             ),
             "{report}"
+        );
+    }
+}
+
+#[test]
+fn uninhabited_types_rejected_in_signatures_and_ssa_values() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+
+    // Inhabited containers and pointers to uninhabited types are allowed.
+    let ok = r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+type @flipped = enum { #Err(@empty), #Ok(i256) };
+type @opt = enum { #None, #Some(@empty) };
+func private %ptr(v0.*@empty) -> *@empty {
+    block0:
+        return v0;
+}
+func private %empty_arr(v0.[@empty; 0]) -> [@empty; 0] {
+    block0:
+        return v0;
+}
+func private %flipped(v0.i256) -> @flipped {
+    block0:
+        v1.@flipped = enum.make @flipped #Ok (v0);
+        return v1;
+}
+func private %opt_none() -> @opt {
+    block0:
+        return zero.@opt;
+}
+"#;
+    if let Err(err) = parse_and_verify_module(ok, &cfg) {
+        panic!("inhabited containers/pointers of uninhabited types should verify: {err:?}");
+    }
+
+    // `zero.@flipped` is still rejected because variant 0 is uninhabited.
+    let bad_zero = r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+type @flipped = enum { #Err(@empty), #Ok(i256) };
+func private %f() -> @flipped {
+    block0:
+        return zero.@flipped;
+}
+"#;
+    let Err(ParseVerifyError::Verify(report)) = parse_and_verify_module(bad_zero, &cfg) else {
+        panic!("zero.@flipped should fail verification");
+    };
+    assert!(
+        has_message(
+            &report,
+            "zero value of a type with no zero: an enum without variants or a function"
+        ),
+        "{report}"
+    );
+
+    // Uninhabited parameters, returns, and SSA values are rejected (V4).
+    for (name, src) in [
+        (
+            "empty_enum_param",
+            r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+func private %f(v0.@empty) {
+    block0:
+        unreachable;
+}
+"#,
+        ),
+        (
+            "all_empty_enum_ret",
+            r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+type @all_empty = enum { #A(@empty), #B(i256, @empty) };
+func private %f() -> @all_empty {
+    block0:
+        unreachable;
+}
+"#,
+        ),
+        (
+            "struct_with_empty_param",
+            r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+type @mixed = { i256, @empty };
+func private %f(v0.@mixed) {
+    block0:
+        unreachable;
+}
+"#,
+        ),
+        (
+            "nonempty_array_of_empty_ssa",
+            r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+func private %f(v0.*[@empty; 3]) {
+    block0:
+        v1.[@empty; 3] = mload v0 [@empty; 3];
+        return;
+}
+"#,
+        ),
+        (
+            "uninhabited_enum_tag_ssa",
+            r#"
+target = "evm-ethereum-osaka"
+type @empty = enum {};
+func private %f(v0.objref<@empty>) {
+    block0:
+        v1.enumtag(@empty) = enum.get_tag v0;
+        return;
+}
+"#,
+        ),
+    ] {
+        let Err(ParseVerifyError::Verify(report)) = parse_and_verify_module(src, &cfg) else {
+            panic!("{name} should fail V4 verification");
+        };
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("uninhabited type")),
+            "{name} expected uninhabited-type diagnostic, got:\n{report}"
+        );
+    }
+}
+
+#[test]
+fn default_less_br_table_requires_exhaustive_enum_tag() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+
+    let ok_enum = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #A, #B, #C };
+func private %f(v0.enumtag(@E)) -> i256 {
+    block0:
+        br_table v0 (0.enumtag(@E) block1) (1.enumtag(@E) block2) (2.enumtag(@E) block3);
+    block1:
+        return 1.i256;
+    block2:
+        return 2.i256;
+    block3:
+        return 3.i256;
+}
+"#;
+    assert!(parse_and_verify_module(ok_enum, &cfg).is_ok());
+
+    let bad_non_exhaustive_enum = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #A, #B, #C };
+func private %f(v0.enumtag(@E)) -> i256 {
+    block0:
+        br_table v0 (0.enumtag(@E) block1) (1.enumtag(@E) block2);
+    block1:
+        return 1.i256;
+    block2:
+        return 2.i256;
+}
+"#;
+    let Err(ParseVerifyError::Verify(report)) =
+        parse_and_verify_module(bad_non_exhaustive_enum, &cfg)
+    else {
+        panic!("non-exhaustive default-less enum br_table must fail");
+    };
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == DiagnosticCode::NonExhaustiveBrTable
+                && d.message.contains("must cover every variant")),
+        "{report}"
+    );
+
+    let bad_int = r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.i256) -> i256 {
+    block0:
+        br_table v0 (0.i256 block1) (1.i256 block2);
+    block1:
+        return 1.i256;
+    block2:
+        return 2.i256;
+}
+"#;
+    let Err(ParseVerifyError::Verify(report)) = parse_and_verify_module(bad_int, &cfg) else {
+        panic!("default-less integer br_table must fail");
+    };
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == DiagnosticCode::NonExhaustiveBrTable
+                && d.message.contains("exhaustive enum tag scrutinee")),
+        "{report}"
+    );
+}
+
+#[test]
+fn evm_mload_bytes_rejects_constant_length_above_32() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let source = |len: &str| {
+        format!(
+            r#"
+target = "evm-ethereum-osaka"
+func public %f(v0.*i8, v1.i256) -> i256 {{
+    block0:
+        v2.i256 = evm_mload_bytes v0 {len};
+        return v2;
+}}
+"#
+        )
+    };
+    for len in ["0.i256", "32.i256", "v1"] {
+        let result = parse_and_verify_module(&source(len), &cfg);
+        assert!(result.is_ok(), "length {len} must verify");
+    }
+    for len in ["33.i256", "-1.i256"] {
+        let Err(ParseVerifyError::Verify(report)) = parse_and_verify_module(&source(len), &cfg)
+        else {
+            panic!("length {len} must be rejected");
+        };
+        assert!(
+            has_code(&report, "IR0614"),
+            "length {len} expected IR0614, got:\n{report}"
+        );
+    }
+}
+
+#[test]
+fn evm_fixed_memory_limit_rejects_backend_slots_and_out_of_bounds_scratch() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full).with_evm_fixed_memory_limit(0x40);
+
+    let ok_scratch = r#"
+target = "evm-ethereum-osaka"
+func public %ok(v0.i256) {
+    block0:
+        mstore 0.i256 v0 i256;
+        v1.i256 = mload 32.i256 i256;
+        v2.*i8 = evm_malloc 32.i256;
+        mstore v2 v1 i256;
+        evm_revert 0.i256 36.i256;
+}
+"#;
+    assert!(parse_and_verify_module(ok_scratch, &cfg).is_ok());
+
+    for (name, src, needle) in [
+        (
+            "free_ptr_slot",
+            r#"
+target = "evm-ethereum-osaka"
+func public %bad() -> i256 {
+    block0:
+        v0.i256 = mload 64.i256 i256;
+        return v0;
+}
+"#,
+            "backend-owned slot",
+        ),
+        (
+            "free_ptr_slot_via_int_to_ptr",
+            r#"
+target = "evm-ethereum-osaka"
+func public %bad() -> i256 {
+    block0:
+        v0.*i256 = int_to_ptr 64.i256 *i256;
+        v1.i256 = mload v0 i256;
+        return v1;
+}
+"#,
+            "backend-owned slot",
+        ),
+        (
+            "dyn_sp_slot",
+            r#"
+target = "evm-ethereum-osaka"
+func public %bad(v0.i256) {
+    block0:
+        mstore 128.i256 v0 i256;
+        return;
+}
+"#,
+            "backend-owned slot",
+        ),
+        (
+            "past_declared_limit",
+            r#"
+target = "evm-ethereum-osaka"
+func public %bad() -> i256 {
+    block0:
+        v0.i256 = mload 96.i256 i256;
+        return v0;
+}
+"#,
+            "exceeds declared fixed scratch bounds",
+        ),
+    ] {
+        let Err(ParseVerifyError::Verify(report)) = parse_and_verify_module(src, &cfg) else {
+            panic!("{name} should fail E2 verification");
+        };
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.code == DiagnosticCode::EvmFixedMemoryOutOfBounds
+                    && d.message.contains(needle)),
+            "{name} expected `{needle}`, got:\n{report}"
         );
     }
 }

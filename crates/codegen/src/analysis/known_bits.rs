@@ -8,7 +8,9 @@ use std::{
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     Function, Immediate, Type, U256, Value, ValueId,
-    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, data, downcast, logic},
+    inst::{
+        BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, data, downcast, evm, logic,
+    },
 };
 
 use crate::optim::const_eval::{
@@ -244,11 +246,10 @@ impl KnownBitsQuery {
 
         let ty = self.value_ty(func, value);
         match func.dfg.value(value) {
-            // A `zero` is all zero bits, but known as unknown, like the `undef`
-            // that `concretize` turns into it, so later analyses decide as before.
-            Value::Arg { .. } | Value::Global { .. } | Value::Undef { .. } | Value::Zero { .. } => {
-                KnownBits::unknown(ty)
+            Value::Zero { ty } if supports_known_bits(*ty) => {
+                KnownBits::from_imm(Immediate::zero(*ty))
             }
+            Value::Arg { .. } | Value::Global { .. } | Value::Zero { .. } => KnownBits::unknown(ty),
             Value::Immediate { .. } => unreachable!("immediates handled above"),
             Value::Inst {
                 inst, result_idx, ..
@@ -282,9 +283,21 @@ impl KnownBitsQuery {
         if let Some(load) = downcast::<&data::ConstLoad>(func.inst_set(), inst_data) {
             return self.const_load_known_bits(func, *load.object(), ty);
         }
-        // A frozen value is one of its argument's.
-        if let Some(freeze) = downcast::<&data::Freeze>(func.inst_set(), inst_data) {
-            return self.known_of(func, *freeze.arg());
+        if let Some(load) = downcast::<&evm::EvmMloadBytes>(func.inst_set(), inst_data) {
+            if let Some(imm) = self
+                .value_imm(func, *load.len())
+                .or_else(|| func.dfg.value_const_imm(*load.len()))
+                && let Some(bytes) = imm.to_nonnegative_usize()
+                && bytes <= 32
+            {
+                if bytes == 0 {
+                    return KnownBits::from_imm(Immediate::zero(ty));
+                }
+                if bytes < 32 {
+                    return KnownBits::normalized(ty, !low_mask((bytes * 8) as u16), U256::zero());
+                }
+            }
+            return KnownBits::unknown(ty);
         }
         // A selected value is one of its two.
         if let Some(select) = downcast::<&logic::Select>(func.inst_set(), inst_data) {
@@ -407,7 +420,9 @@ impl KnownBitsQuery {
                     src.known_one & src_mask,
                 )
             }
-            CastInstKind::Trunc => KnownBits::normalized(ty, src.known_zero, src.known_one),
+            CastInstKind::Trunc | CastInstKind::TruncNuw => {
+                KnownBits::normalized(ty, src.known_zero, src.known_one)
+            }
             CastInstKind::Sext => {
                 let src_mask = type_mask(src_ty);
                 let dst_mask = type_mask(ty);
@@ -1358,12 +1373,12 @@ block0:
         builder.insert_inst_no_result_with(|| Jump::new(is, join));
 
         builder.switch_to_block(right);
-        let undef = builder.make_undef_value(ptr_ty);
+        let null_ptr = builder.make_zero_value(ptr_ty);
         builder.insert_inst_no_result_with(|| Jump::new(is, join));
 
         builder.switch_to_block(join);
         let phi = builder.insert_inst_with(
-            || Phi::new(is, smallvec![(ptr, left), (undef, right)]),
+            || Phi::new(is, smallvec![(ptr, left), (null_ptr, right)]),
             ptr_ty,
         );
         builder.insert_inst_no_result_with(|| Return::new_unit(is));

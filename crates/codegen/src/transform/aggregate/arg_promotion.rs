@@ -349,9 +349,7 @@ fn rewrite_function(func: &mut Function, plan: &Plan) {
         InstInserter::at_location(CursorLocation::At(projection)).remove_inst(func);
     }
     let old_arg = old_args[plan.arg_index];
-    func.dfg.values[old_arg] = Value::Undef {
-        ty: func.dfg.value_ty(old_arg),
-    };
+    func.dfg.delete_value(old_arg);
     func.arg_values = args;
 }
 

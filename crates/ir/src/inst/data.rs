@@ -150,16 +150,6 @@ pub struct Sha256Compress {
     block: ValueId,
 }
 
-/// Returns `arg` when it is specified, and otherwise some concrete value, the
-/// same for every use of the result. A transform that adds a branch, address
-/// or variant-assumption use of a value that may be unspecified, or makes a
-/// result depend on an operand it did not depend on, freezes that operand.
-/// See `docs/undef.md`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-pub struct Freeze {
-    arg: ValueId,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(arity(at_least(2)))]
 pub struct Gep {
@@ -352,8 +342,7 @@ pub struct MemAllocDynamic {
 }
 
 /// Builds a value of struct or array type `ty` from `values`, one per field
-/// or element in order. An `undef` operand leaves its field unspecified; a
-/// type without fields takes no operands.
+/// or element in order. A type without fields takes no operands.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(arity(at_least(1)))]
 #[inst(text = "agg.make")]

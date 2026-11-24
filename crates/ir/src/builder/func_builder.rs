@@ -118,10 +118,6 @@ where
         self.func.dfg.make_imm_value(imm)
     }
 
-    pub fn make_undef_value(&mut self, ty: Type) -> ValueId {
-        self.func.dfg.make_undef_value(ty)
-    }
-
     pub fn make_zero_value(&mut self, ty: Type) -> ValueId {
         self.func.dfg.make_zero_value(ty)
     }

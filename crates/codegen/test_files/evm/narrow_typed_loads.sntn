@@ -1,0 +1,65 @@
+#! evm.config: { opt: 2 }
+#! evm.case: well_formed_words
+#!   calldata: u256(200) u256(1) u256(96) u256(64)
+#!   expect: return u256(200) u256(1) u256(96)
+
+target = "evm-ethereum-osaka"
+
+# Narrow typed loads of well-formed words (upper bits zero, R3) give the word's
+# value: an `i8` load of 200 and an `i1` load of 1. A loaded `i8` used as an
+# offset (`evm_calldata_load` at 64) and as a length (`evm_return` of 96 bytes)
+# is the value it holds.
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i256 = evm_calldata_load 64.i32;
+        v3.i256 = evm_calldata_load 96.i32;
+        mstore 4096.i32 v0 i256;
+        mstore 4128.i32 v1 i256;
+        mstore 4160.i32 v2 i256;
+        mstore 4192.i32 v3 i256;
+        v4.i256 = call %load_i8 4096.i32;
+        v5.i256 = call %load_i1 4128.i32;
+        v6.i256 = call %load_offset 4192.i32;
+        mstore 4224.i32 v4 i256;
+        mstore 4256.i32 v5 i256;
+        mstore 4288.i32 v6 i256;
+        call %return_len 4160.i32;
+        unreachable;
+}
+
+func inline(never) private %load_i8(v0.i32) -> i256 {
+    block0:
+        v1.i8 = mload v0 i8;
+        v2.i256 = zext v1 i256;
+        return v2;
+}
+
+func inline(never) private %load_i1(v0.i32) -> i256 {
+    block0:
+        v1.i1 = mload v0 i1;
+        v2.i256 = zext v1 i256;
+        return v2;
+}
+
+func inline(never) private %load_offset(v0.i32) -> i256 {
+    block0:
+        v1.i8 = mload v0 i8;
+        v2.i256 = evm_calldata_load v1;
+        return v2;
+}
+
+func inline(never) private %return_len(v0.i32) {
+    block0:
+        v1.i8 = mload v0 i8;
+        v2.*i8 = evm_malloc 96.i256;
+        evm_mcopy v2 4224.i32 96.i32;
+        evm_return v2 v1;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

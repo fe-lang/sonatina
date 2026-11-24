@@ -70,10 +70,3 @@ func private %large_array(v0.i32) -> i8 {
         v2.i8 = extract_value v1 99999.i32;
         return v2;
 }
-
-#[() -> 0.i32]
-func private %frozen() -> i32 {
-    block0:
-        v0.i32 = freeze zero.i32;
-        return v0;
-}

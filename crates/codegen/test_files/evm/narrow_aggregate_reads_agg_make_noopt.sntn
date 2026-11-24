@@ -1,6 +1,6 @@
 #! evm.config: { opt: 0 }
 #! evm.case: dirty
-#!   calldata: u256(256) u256(1) u256(0)
+#!   calldata: u256(257) u256(1) u256(0)
 #!   expect: return u256(0) u256(0) u256(0) u256(0)
 
 target = "evm-ethereum-osaka"
@@ -10,13 +10,11 @@ type @words = { i256, i256, i256 };
 type @fields = { i8, i1, i8 };
 type @outer = { @fields, i8 };
 
-# Nothing is stored for an `undef` operand of an `agg.make`: memory keeps the
-# word it held, 256 here. A narrow field read back from memory, whether the
-# value was stored there or a phi of it was given a slot, gives that word, the
-# unspecified value of the field; `freeze` makes it a value of its type, so
-# `zext` of the frozen field is below 256: read directly, through an `undef`
-# aggregate operand, and at a dynamic index. Every narrow value stored here is
-# 0 mod 256, so a frozen field gives 0 and the unmasked word 256.
+# A zero operand of an `agg.make` is stored like any other: it overwrites the
+# word memory held, 257 here, so a narrow field read back from memory gives 0
+# whether the value was stored there or a phi of it was given a slot: read
+# directly, through a zero aggregate operand, and at a dynamic index. A field
+# whose zero was not stored would read the dirty word, whose low byte is 1.
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
@@ -41,7 +39,7 @@ func public %entry() {
 
 func inline(never) private %store_make() {
     block0:
-        v0.@P = agg.make @P undef.i8 0.i8;
+        v0.@P = agg.make @P 0.i8 0.i8;
         mstore 4096.i32 v0 @P;
         return;
 }
@@ -50,8 +48,7 @@ func inline(never) private %read() -> i256 {
     block0:
         v0.@P = mload 4096.i32 @P;
         v1.i8 = extract_value v0 0.i8;
-        v2.i8 = freeze v1;
-        v3.i256 = zext v2 i256;
+        v3.i256 = zext v1 i256;
         return v3;
 }
 
@@ -68,16 +65,15 @@ func inline(never) private %phi_read(v0.i1) -> i256 {
     block0:
         br v0 block1 block2;
     block1:
-        v1.@fields = agg.make @fields undef.i8 1.i1 0.i8;
+        v1.@fields = agg.make @fields 0.i8 1.i1 0.i8;
         jump block3;
     block2:
-        v2.@fields = agg.make @fields undef.i8 0.i1 0.i8;
+        v2.@fields = agg.make @fields 0.i8 0.i1 0.i8;
         jump block3;
     block3:
         v3.@fields = phi (v1 block1) (v2 block2);
         v4.i8 = extract_value v3 0.i8;
-        v5.i8 = freeze v4;
-        v6.i256 = zext v5 i256;
+        v6.i256 = zext v4 i256;
         return v6;
 }
 
@@ -85,7 +81,7 @@ func inline(never) private %nested_read(v0.i1) -> i256 {
     block0:
         br v0 block1 block2;
     block1:
-        v1.@outer = agg.make @outer undef.@fields 0.i8;
+        v1.@outer = agg.make @outer zero.@fields 0.i8;
         jump block3;
     block2:
         v2.@fields = agg.make @fields 0.i8 1.i1 0.i8;
@@ -95,8 +91,7 @@ func inline(never) private %nested_read(v0.i1) -> i256 {
         v4.@outer = phi (v1 block1) (v3 block2);
         v5.@fields = extract_value v4 0.i8;
         v6.i8 = extract_value v5 0.i8;
-        v7.i8 = freeze v6;
-        v8.i256 = zext v7 i256;
+        v8.i256 = zext v6 i256;
         return v8;
 }
 
@@ -104,7 +99,7 @@ func inline(never) private %dynamic_read(v0.i1, v1.i256) -> i256 {
     block0:
         br v0 block1 block2;
     block1:
-        v2.[i8; 3] = agg.make [i8; 3] undef.i8 0.i8 0.i8;
+        v2.[i8; 3] = agg.make [i8; 3] 0.i8 0.i8 0.i8;
         jump block3;
     block2:
         v3.[i8; 3] = agg.make [i8; 3] 0.i8 0.i8 0.i8;
@@ -112,8 +107,7 @@ func inline(never) private %dynamic_read(v0.i1, v1.i256) -> i256 {
     block3:
         v4.[i8; 3] = phi (v2 block1) (v3 block2);
         v5.i8 = extract_value v4 v1;
-        v6.i8 = freeze v5;
-        v7.i256 = zext v6 i256;
+        v7.i256 = zext v5 i256;
         return v7;
 }
 

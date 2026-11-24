@@ -197,10 +197,8 @@ floating point, so a callee that reads it at most saves registers it need
 not. A variadic function has no address in Sonatina: `get_function_ptr`
 and `sym_addr` reject it.
 
-Representable `undef` values surviving to native translation are materialized
-as zero, null or zero-filled aggregate storage. This is a backend choice,
-not a guarantee that earlier IR optimization preserves a particular undef
-value. Unresolved SSA values are compilation errors, not implicit undef.
+`zero.T` constants are materialized as zero, null or zero-filled aggregate
+storage. Unresolved SSA values are compilation errors.
 
 The native instruction set includes integer arithmetic, comparisons, casts,
 control flow, direct calls, memory and aggregate/object operations. It also
@@ -210,7 +208,7 @@ zero-extended. `black_box` returns its integer operand, passing it through
 memory that an opaque call could change, so Cranelift cannot see the value.
 Enum operations are translated against the enum layout above;
 `enum.make` writes its variant's tag and fields, and `agg.make` writes every
-field from its operand, `undef` ones as zero. Padding and other variants'
+field from its operand. Padding and other variants'
 payloads are not part of a value: copies, `agg.make` and `enum.make` leave
 them as they are.
 `get_function_ptr`, `sym_size` and `sym_addr` of anything but a global are
@@ -220,6 +218,7 @@ above.
 There are no first-class function values, indirect calls, variadic
 definitions, floating point operations or EVM-specific runtime services in
 this slice. Division
-by zero is undefined at the IR level; callers must not rely on an EVM-style
-zero result or a uniform trap policy across widths. `i128` and `i256`
+by zero is undefined behavior in the IR (U5 in `docs/memory.md`): it traps up
+to 128 bits, and at 256 bits gives an all-ones quotient and the dividend as
+remainder. `i128` and `i256`
 divisions call a divider function local to each object.

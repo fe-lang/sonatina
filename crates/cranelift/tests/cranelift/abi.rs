@@ -73,7 +73,7 @@ block1:
     v9.@Quad = agg.make @Quad 1.i8 v3 v5 v1;
     return v9;
 block2:
-    v10.@Quad = agg.make @Quad undef.i8 undef.i64 undef.i16 v1;
+    v10.@Quad = agg.make @Quad 0.i8 0.i64 0.i16 v1;
     return v10;
 }
 func public %sum_quad(v0.@Quad) -> i64 {
@@ -93,7 +93,7 @@ block0:
 block1:
     v2.i64 = phi (v0 block0) (v9 block1);
     v3.i64 = phi (0.i64 block0) (v10 block1);
-    v4.@Opt = phi (undef.@Opt block0) (v5 block1);
+    v4.@Opt = phi (zero.@Opt block0) (v5 block1);
     v5.@Opt = call %wrap v2 7.i32;
     v6.@Quad = call %quad v5 v1;
     v7.i64 = call %sum_quad v6;
@@ -166,7 +166,7 @@ block0:
             let expected_total: i64 = (1..=rounds).map(|value| value + 8).sum();
             assert_eq!(&out[..8], &expected_total.to_le_bytes(), "{level:?}");
             assert_eq!(&out[8..16], &(pointer as i64).to_le_bytes(), "{level:?}");
-            // The phi's value is the previous round's `@Opt`: undef (zero) for
+            // The phi's value is the previous round's `@Opt`: zero for
             // one round, else `#Some(2, 7)`.
             let previous = if rounds == 1 {
                 [0u8; 24]
@@ -267,7 +267,7 @@ block1:
     v1.@EZ = enum.make @EZ #A ();
     return v1;
 block2:
-    v2.@EZ = enum.make @EZ #B (undef.@Empty);
+    v2.@EZ = enum.make @EZ #B (zero.@Empty);
     return v2;
 }
 func inline(never) private %arr(v0.[i8; 4], v1.i8) -> [i8; 4] {
@@ -292,8 +292,8 @@ block2:
 }
 func public %run(v0.i64, v1.*i8, v2.i32) -> i64 {
 block0:
-    v4.@Z = agg.make @Z v0 undef.@Empty undef.[i8; 0] 5.i32;
-    v5.@Z = call %z v4 undef.@Empty;
+    v4.@Z = agg.make @Z v0 zero.@Empty zero.[i8; 0] 5.i32;
+    v5.@Z = call %z v4 zero.@Empty;
     v6.*@Z = bitcast v1 *@Z;
     mstore v6 v5 @Z;
     v7.@Outer = call %outer v0;
@@ -313,7 +313,7 @@ block0:
     v19.*[i8; 4] = bitcast v18 *[i8; 4];
     mstore v19 v17 [i8; 4];
     v20.@Inner = enum.make @Inner #None ();
-    v21.@S = agg.make @S undef.i8 v20;
+    v21.@S = agg.make @S 0.i8 v20;
     v22.@S = call %s v21;
     v23.*i8 = gep v1 48.i64;
     v24.*@S = bitcast v23 *@S;
@@ -387,7 +387,7 @@ func public %run(v0.i64, v1.*i8, v2.i256) -> i64 {
 block0:
     v3.i8 = trunc v0 i8;
     v4.i1 = trunc v3 i1;
-    v6.@B = agg.make @B v4 v3 undef.i1;
+    v6.@B = agg.make @B v4 v3 0.i1;
     v7.@B = call %flip v6;
     v8.*@B = bitcast v1 *@B;
     mstore v8 v7 @B;
@@ -406,7 +406,7 @@ block0:
     v20.*i8 = gep v1 8.i64;
     v21.*i256 = bitcast v20 *i256;
     mstore v21 v19 i256;
-    v22.@P = agg.make @P 1.i32 undef.i32;
+    v22.@P = agg.make @P 1.i32 0.i32;
     v23.@P = insert_value v22 1.i64 515.i32;
     v24.@Q = bitcast v23 @Q;
     v25.*i8 = gep v1 40.i64;
@@ -521,7 +521,7 @@ block1:
     v4.@Pair = agg.make @Pair 1.i8 v2;
     return v4;
 block2:
-    return undef.@Pair;
+    return zero.@Pair;
 }
 func inline(never) private %fill(v0.objref<@Holder>, v1.@Opt, v2.objref<@E>) {
 block0:

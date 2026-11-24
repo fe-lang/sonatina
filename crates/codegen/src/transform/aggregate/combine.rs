@@ -42,7 +42,7 @@ pub struct AggregateCombine {
 enum AggregateFieldLookup {
     Found(ValueId),
     BaseNeedsExtract(ValueId),
-    Undef(Type),
+    Zero(Type),
     Unknown,
 }
 
@@ -300,13 +300,12 @@ impl AggregateCombine {
     }
 
     fn payload_is_readable(&mut self, func: &Function, value: ValueId) -> bool {
-        // Readability is not scalar definedness. Typed undef and scalar SSA
-        // values retain their existing contract. An aggregate snapshot needs
-        // its own evidence; a later assertion cannot initialize the old SSA value.
+        // An aggregate snapshot needs its own evidence; a later assertion
+        // cannot initialize the old SSA value.
         !matches!(
             func.dfg.value_ty(value).resolve_compound(func.ctx()),
             Some(CompoundType::Struct(_) | CompoundType::Array { .. } | CompoundType::Enum(_))
-        ) || is_explicit_undef(func, value)
+        ) || func.dfg.value_is_zero(value)
             || value_initialization(func, value, &FxHashMap::default(), &mut self.layout_cache)
                 .defined(func.ctx())
     }
@@ -459,12 +458,12 @@ impl AggregateCombine {
                 func.dfg.replace_inst(inst, Box::new(new_extract));
                 true
             }
-            AggregateFieldLookup::Undef(field_ty) => {
+            AggregateFieldLookup::Zero(field_ty) => {
                 if field_ty != func.dfg.value_ty(result) {
                     return false;
                 }
-                let undef = func.dfg.make_undef_value(field_ty);
-                self.replace_with_alias(func, inst, result, undef);
+                let zero = func.dfg.make_zero_const(field_ty);
+                self.replace_with_alias(func, inst, result, zero);
                 true
             }
             AggregateFieldLookup::BaseNeedsExtract(_) | AggregateFieldLookup::Unknown => self
@@ -580,7 +579,7 @@ impl AggregateCombine {
             return true;
         }
 
-        // A chain of inserts into `undef` or an `agg.make` is one `agg.make`.
+        // A chain of inserts into `zero` or an `agg.make` is one `agg.make`.
         if is_fresh_chain_end(func, inst) && fold_fresh_insert(func, inst).is_some() {
             return true;
         }
@@ -590,9 +589,7 @@ impl AggregateCombine {
             while let Some(&replacement) = self.replacements.get(&source) {
                 source = replacement;
             }
-            if is_explicit_undef(func, source)
-                || func.dfg.value_ty(source) != func.dfg.value_ty(result)
-            {
+            if func.dfg.value_ty(source) != func.dfg.value_ty(result) {
                 return false;
             }
             self.replace_with_alias(func, inst, result, source);
@@ -1371,7 +1368,7 @@ fn enum_proj_of_value(func: &Function, value: ValueId) -> Option<data::EnumProj>
     func.dfg.downcast::<&data::EnumProj>(inst).cloned()
 }
 
-/// A phi of `args` just before `at`, the phi being rewritten, or `undef` if every argument is.
+/// A phi of `args` just before `at`, the phi being rewritten, or zero if every argument is.
 /// The phis one rewrite makes stay in the order they are made, so a split, nested ones included,
 /// is in field order wherever and in whatever order it happens; a block's phi order is its entry
 /// stack order.
@@ -1381,8 +1378,8 @@ fn insert_phi_before(
     ty: Type,
     args: control_flow::PhiArgs,
 ) -> ValueId {
-    if args.iter().all(|&(arg, _)| is_explicit_undef(func, arg)) {
-        return func.dfg.make_undef_value(ty);
+    if !args.is_empty() && args.iter().all(|&(arg, _)| func.dfg.value_is_zero(arg)) {
+        return func.dfg.make_zero_const(ty);
     }
     let phi = control_flow::Phi::new_unchecked(func.inst_set(), args);
     let loc = func.layout.prev_inst_of(at).map_or(
@@ -1508,9 +1505,7 @@ fn rebuilt_aggregate(func: &Function, value: ValueId) -> Option<ValueId> {
             return None;
         }
     }
-    source.filter(|&source| {
-        !is_explicit_undef(func, source) && func.dfg.value_ty(source) == func.dfg.value_ty(value)
-    })
+    source.filter(|&source| func.dfg.value_ty(source) == func.dfg.value_ty(value))
 }
 
 fn inst_const_index(func: &Function, v: ValueId) -> Option<u32> {
@@ -1523,10 +1518,6 @@ fn equivalent_indices(func: &Function, lhs: ValueId, rhs: ValueId) -> bool {
             (inst_const_index(func, lhs), inst_const_index(func, rhs)),
             (Some(lhs), Some(rhs)) if lhs == rhs
         )
-}
-
-fn is_explicit_undef(func: &Function, v: ValueId) -> bool {
-    matches!(func.dfg.value(v), Value::Undef { .. })
 }
 
 fn is_identical_field_reinsert(func: &Function, insert: &data::InsertValue) -> bool {
@@ -1555,10 +1546,10 @@ fn walk_insert_chain_for_field(
     aggregate: ValueId,
     target_idx: u32,
 ) -> AggregateFieldLookup {
-    if is_explicit_undef(func, aggregate) {
+    if func.dfg.value_is_zero(aggregate) {
         let agg_ty = func.dfg.value_ty(aggregate);
         if let Some(field_ty) = shape::aggregate_child_ty(func.ctx(), agg_ty, target_idx) {
-            return AggregateFieldLookup::Undef(field_ty);
+            return AggregateFieldLookup::Zero(field_ty);
         }
         return AggregateFieldLookup::Unknown;
     }
@@ -1841,7 +1832,7 @@ block0:
     }
 
     #[test]
-    fn combine_merges_undef_insert_bases_without_a_phi() {
+    fn combine_merges_zero_insert_bases_without_a_phi() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -1852,10 +1843,10 @@ func private %f(v0.i1, v1.i256, v2.i256) -> @pair {
 block0:
     br v0 block1 block2;
 block1:
-    v3.@pair = agg.make @pair v1 undef.i256;
+    v3.@pair = agg.make @pair v1 0.i256;
     jump block3;
 block2:
-    v4.@pair = agg.make @pair v2 undef.i256;
+    v4.@pair = agg.make @pair v2 0.i256;
     jump block3;
 block3:
     v5.@pair = phi (v3 block1) (v4 block2);
@@ -1871,7 +1862,7 @@ block3:
         let dumped = dump_func(&module, func_ref);
         assert!(
             !dumped.contains("@pair = phi"),
-            "undef bases should merge to undef, not a phi:\n{dumped}"
+            "zero bases should merge to zero, not a phi:\n{dumped}"
         );
         assert!(
             dumped.contains("i256 = phi (v1 block1) (v2 block2)"),

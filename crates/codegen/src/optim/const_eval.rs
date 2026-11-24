@@ -99,7 +99,6 @@ impl ConstPathAnalysis {
             Value::Arg { .. }
             | Value::Immediate { .. }
             | Value::Global { .. }
-            | Value::Undef { .. }
             | Value::Zero { .. } => None,
         };
 
@@ -208,7 +207,6 @@ where
             Value::Arg { .. }
             | Value::Immediate { .. }
             | Value::Global { .. }
-            | Value::Undef { .. }
             | Value::Zero { .. } => None,
         };
 

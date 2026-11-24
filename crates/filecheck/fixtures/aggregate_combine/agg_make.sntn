@@ -75,7 +75,7 @@ func public %not_rebuilt(v0.@slice, v1.i256) -> @slice {
 # sameln: func public %phi_of_made(v0.i1, v1.i256, v2.i256) -> @slice {
 # check:     block3:
 # nextln:         v7.i256 = phi (v1 block1) (v2 block2);
-# nextln:         v8.i256 = phi (v2 block1) (undef.i256 block2);
+# nextln:         v8.i256 = phi (v2 block1) (0.i256 block2);
 # nextln:         v9.@slice = agg.make @slice v7 v8;
 # nextln:         return v9;
 func public %phi_of_made(v0.i1, v1.i256, v2.i256) -> @slice {
@@ -85,7 +85,7 @@ func public %phi_of_made(v0.i1, v1.i256, v2.i256) -> @slice {
         v3.@slice = agg.make @slice v1 v2;
         jump block3;
     block2:
-        v4.@slice = agg.make @slice v2 undef.i256;
+        v4.@slice = agg.make @slice v2 0.i256;
         jump block3;
     block3:
         v5.@slice = phi (v3 block1) (v4 block2);

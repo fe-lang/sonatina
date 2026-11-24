@@ -1177,31 +1177,6 @@ block0:
 }
 
 #[test]
-fn gvn_uses_shape_definedness_for_reconstructed_aggregate_carriers() {
-    for (second, keeps_load) in [("v1", false), ("undef.i256", true)] {
-        let text = run_pass(
-            &format!(
-                r#"
-target = "evm-ethereum-osaka"
-type @Pair = {{ i256, i256 }};
-func private %f(v0.i256, v1.i256) -> @Pair {{
-block0:
-    v2.objref<@Pair> = obj.alloc @Pair;
-    v3.@Pair = agg.make @Pair v0 undef.i256;
-    v4.@Pair = insert_value v3 1.i8 {second};
-    obj.store v2 v4;
-    v5.@Pair = obj.load v2;
-    return v5;
-}}
-"#
-            ),
-            Pass::Gvn,
-        );
-        assert_eq!(text.contains("obj.load"), keeps_load, "{text}");
-    }
-}
-
-#[test]
 fn licm_keeps_payload_read_below_the_assumption_establishing_its_guard() {
     for outside_loop in [false, true] {
         let assumption = "v3.objref<@Choice> = enum.assert_variant_ref v0 #Some;";

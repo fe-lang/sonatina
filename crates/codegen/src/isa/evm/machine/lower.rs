@@ -382,6 +382,8 @@ impl FuncLowerCtx<'_> {
                 )
             }
             EvmInstKind::Mload(mload) => self.lower_mload(source_inst, mload),
+            EvmInstKind::EvmMloadBytes(load) => self.lower_mload_bytes(source_inst, load),
+            EvmInstKind::EvmReturnCode(ret) => self.lower_return_code(source_inst, ret),
             EvmInstKind::Mstore(mstore) => self.lower_mstore(source_inst, mstore),
             EvmInstKind::Alloca(_) => self.lower_alloca(source_inst),
             EvmInstKind::Gep(gep) => self.lower_gep(source_inst, gep.values()),
@@ -420,12 +422,13 @@ impl FuncLowerCtx<'_> {
             EvmInstKind::Trunc(cast) => {
                 self.lower_zext_or_trunc(source_inst, *cast.from(), *cast.ty())
             }
+            EvmInstKind::TruncNuw(cast) => {
+                let value = self.lower_value(*cast.from())?;
+                self.alias_inst_single_result(source_inst, value)
+            }
             EvmInstKind::Sext(cast) => self.lower_sext(source_inst, *cast.from()),
             EvmInstKind::EvmKeccak256Words(_) => {
                 Err("evm_keccak256_words must be lowered before machine lowering".to_string())
-            }
-            EvmInstKind::Freeze(_) => {
-                Err("freeze must be lowered before machine lowering".to_string())
             }
             _ => self.lower_structural(source_inst),
         }
@@ -447,6 +450,75 @@ impl FuncLowerCtx<'_> {
         }
         let addr = self.lower_value(*mload.addr())?;
         self.insert_with_results(source_inst, evm::EvmMload::new(self.is, addr))
+    }
+
+    fn lower_mload_bytes(
+        &mut self,
+        source_inst: sonatina_ir::InstId,
+        load: &evm::EvmMloadBytes,
+    ) -> Result<(), String> {
+        if let Some(len) = self.source_value_imm_u32(*load.len()) {
+            if len == 0 {
+                let zero = self.i256_imm(0);
+                return self.alias_inst_single_result(source_inst, zero);
+            }
+            let addr = self.lower_value(*load.addr())?;
+            if len >= WORD_BYTES {
+                return self.insert_with_results(source_inst, evm::EvmMload::new(self.is, addr));
+            }
+            let word = self.emit_unary(evm::EvmMload::new(self.is, addr), Type::I256);
+            let shift = self.i256_imm((WORD_BYTES - len) * 8);
+            return self.insert_with_results(source_inst, arith::Shr::new(self.is, shift, word));
+        }
+
+        let addr = self.lower_value(*load.addr())?;
+        let len = self.lower_value(*load.len())?;
+        let from_block = self
+            .current_block
+            .expect("mload_bytes lowering needs a current block");
+        let zero = self.i256_imm(0);
+        let load_block = self.append_machine_block();
+        let join_block = self.append_machine_block();
+        self.append_inst_no_result_to(
+            from_block,
+            control_flow::Br::new(self.is, len, load_block, join_block),
+        );
+
+        self.current_block = Some(load_block);
+        let word = self.emit_unary(evm::EvmMload::new(self.is, addr), Type::I256);
+        let three = self.i256_imm(3);
+        let bits = self.emit_binary(arith::Shl::new(self.is, three, len), Type::I256);
+        let width = self.i256_imm(256);
+        let shift = self.emit_binary(arith::Sub::new(self.is, width, bits), Type::I256);
+        let shifted = self.emit_binary(arith::Shr::new(self.is, shift, word), Type::I256);
+        self.append_inst_no_result_to(load_block, control_flow::Jump::new(self.is, join_block));
+
+        let phi = self.append_inst_with_results_to(
+            join_block,
+            control_flow::Phi::new(
+                self.is,
+                smallvec![(zero, from_block), (shifted, load_block)],
+            ),
+            &[Type::I256],
+        );
+        self.current_block = Some(join_block);
+        let result = self.machine.dfg.inst_results(phi)[0];
+        self.alias_inst_single_result(source_inst, result)
+    }
+
+    fn lower_return_code(
+        &mut self,
+        source_inst: sonatina_ir::InstId,
+        ret: &evm::EvmReturnCode,
+    ) -> Result<(), String> {
+        let zero = self.i256_imm(0);
+        let offset = self.lower_value(*ret.code_offset())?;
+        let len = self.lower_value(*ret.len())?;
+        let block = self
+            .current_block
+            .expect("evm_return_code lowering needs a current block");
+        self.append_inst_no_result_to(block, evm::EvmCodeCopy::new(self.is, zero, offset, len));
+        self.insert_no_result(source_inst, evm::EvmReturn::new(self.is, zero, len))
     }
 
     fn lower_mstore(
@@ -920,11 +992,6 @@ impl FuncLowerCtx<'_> {
                 self.map.values[value] = Some(lowered);
                 Ok(lowered)
             }
-            Value::Undef { .. } => Err(format!(
-                "value v{} in func {}: machine lowering takes concrete IR, which has no `undef`",
-                value.as_u32(),
-                self.func_ref.as_u32()
-            )),
             Value::Zero { ty } => {
                 let imm = lower_immediate(Immediate::zero(Type::I256), *ty, self.source_module)?;
                 let lowered = self.machine.dfg.make_imm_value(imm);

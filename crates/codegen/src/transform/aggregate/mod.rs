@@ -38,7 +38,10 @@ pub use byval_object_abi::{
 };
 pub use enum_lowering::EnumTagLower;
 pub use frame_lifetimes::check_frame_lifetimes;
-pub use fresh::{MAX_UNWRITTEN_FIELDS, fold_fresh_aggregates, is_fresh_insert};
+pub use fresh::{
+    MAX_UNWRITTEN_FIELDS, check_fresh_aggregates_folded, check_module_fresh_aggregates_folded,
+    fold_fresh_aggregates, is_fresh_insert,
+};
 pub use legalize::{
     AggregateLowerToMemoryLegalize, assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,
 };

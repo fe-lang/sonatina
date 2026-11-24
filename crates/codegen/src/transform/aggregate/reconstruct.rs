@@ -60,8 +60,8 @@ impl<'a> AggregateValueReconstructor<'a> {
         source_slice: shape::AggregateSlice,
         result_ty: Type,
     ) -> Option<ValueId> {
-        if source_slice.leaf_count == 0 || is_explicit_undef(func, source) {
-            return Some(func.dfg.make_undef_value(result_ty));
+        if source_slice.leaf_count == 0 || func.dfg.value_is_zero(source) {
+            return Some(func.dfg.make_zero_const(result_ty));
         }
         if source_slice.ty == source_ty {
             return self.cast_aggregate_view_value(func, inst, source, source_ty, result_ty);
@@ -69,7 +69,7 @@ impl<'a> AggregateValueReconstructor<'a> {
         let (_, source_runtime_leaf_count) =
             shape::runtime_leaf_range_for_slice(func.ctx(), source_ty, source_slice)?;
         if source_runtime_leaf_count == 0 {
-            return Some(func.dfg.make_undef_value(result_ty));
+            return Some(func.dfg.make_zero_const(result_ty));
         }
 
         // Any other slice is a node inside one child, even one spanning the
@@ -103,8 +103,8 @@ impl<'a> AggregateValueReconstructor<'a> {
         target_idx: u32,
     ) -> Option<ValueId> {
         let child_ty = shape::aggregate_child_ty(func.ctx(), aggregate_ty, target_idx)?;
-        if is_explicit_undef(func, aggregate) {
-            return Some(func.dfg.make_undef_value(child_ty));
+        if func.dfg.value_is_zero(aggregate) {
+            return Some(func.dfg.make_zero_const(child_ty));
         }
 
         if let Some(slot) =
@@ -271,7 +271,7 @@ fn rebuild_value_from_leaf_values_impl(
     scalar_leaves: &[ValueId],
 ) -> Option<ValueId> {
     if scalar_leaves.is_empty() {
-        return Some(func.dfg.make_undef_value(agg_ty));
+        return Some(func.dfg.make_zero_const(agg_ty));
     }
 
     match value_rebuild_kind(module, agg_ty)? {
@@ -286,7 +286,7 @@ fn rebuild_value_from_leaf_values_impl(
                 let idx = u32::try_from(idx).ok()?;
                 let child = shape::aggregate_slice_for_index(module, agg_ty, idx)?;
                 fields.push(if child.leaf_count == 0 {
-                    func.dfg.make_undef_value(child.ty)
+                    func.dfg.make_zero_const(child.ty)
                 } else {
                     rebuild_value_from_leaf_values_impl(
                         func,
@@ -322,7 +322,7 @@ fn rebuild_enum_from_leaf_values(
         let field_idx = u32::try_from(field_idx).ok()?;
         let field_slice = shape::enum_variant_field_slice(module, enum_ty, variant, field_idx)?;
         let value = if field_slice.leaf_count == 0 {
-            func.dfg.make_undef_value(field_slice.ty)
+            func.dfg.make_zero_const(field_slice.ty)
         } else {
             rebuild_value_from_leaf_values_impl(
                 func,
@@ -365,10 +365,6 @@ fn resolve_known_enum_variant(
     (idx < variant_count).then_some(EnumVariantRef::new(enum_ty, u32::try_from(idx).ok()?))
 }
 
-fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
-    matches!(func.dfg.value(value), Value::Undef { .. })
-}
-
 fn enum_child_value_from_source(
     func: &mut Function,
     inst: InstId,
@@ -399,7 +395,7 @@ fn enum_child_value_from_source(
                 return Some(None);
             };
             if *enum_make.variant() != variant {
-                return Some(Some(func.dfg.make_undef_value(child_ty)));
+                return Some(Some(func.dfg.make_zero_const(child_ty)));
             }
             // The verifier checks that `enum.make` gives every field of its variant.
             return Some(Some(enum_make.values()[field as usize]));

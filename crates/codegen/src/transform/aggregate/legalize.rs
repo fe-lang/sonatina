@@ -737,8 +737,8 @@ impl AggregateLowerToMemoryLegalize {
                 panic!("zero-sized aggregate projection produced non-zero scalar extract");
             }
             if child_view.runtime_leaf_count == 0 {
-                let undef = func.dfg.make_undef_value(result_ty);
-                self.alias_and_remove(func, inst, result, undef);
+                let zero = func.dfg.make_zero_const(result_ty);
+                self.alias_and_remove(func, inst, result, zero);
                 return;
             }
             if child_view.runtime_leaf_count != 1 {
@@ -796,8 +796,8 @@ impl AggregateLowerToMemoryLegalize {
             panic!("zero-sized aggregate leaf produced non-zero scalar extract");
         }
         if src_leaf.size_bytes == 0 {
-            let undef = func.dfg.make_undef_value(result_ty);
-            self.alias_and_remove(func, inst, result, undef);
+            let zero = func.dfg.make_zero_const(result_ty);
+            self.alias_and_remove(func, inst, result, zero);
             return;
         }
         let mut builder = BeforeCursor::new_before_inst(func, inst);
@@ -831,26 +831,24 @@ impl AggregateLowerToMemoryLegalize {
             panic!("extract_value result type mismatch for dynamic array index");
         }
         if is_zero(func, src_value) {
-            let zero = func.dfg.make_zero_value(result_ty);
+            let zero = func.dfg.make_zero_const(result_ty);
             self.alias_and_remove(func, inst, result, zero);
             return;
         }
         if shape::is_supported_aggregate_ty(module, result_ty) {
             let dst_ptr = self.materialized_ptr(func, result, module);
             let mut builder = BeforeCursor::new_before_inst(func, inst);
-            if !is_explicit_undef(func, src_value) {
-                let src_ptr = self.materialized_ptr(func, src_value, module);
-                let elem_ptr =
-                    self.emit_gep_array_element_ptr(func, &mut builder, src_ptr, idx_value, elem);
-                self.emit_copy_aggregate_ptr_to_ptr(
-                    func,
-                    module,
-                    &mut builder,
-                    elem_ptr,
-                    dst_ptr,
-                    result_ty,
-                );
-            }
+            let src_ptr = self.materialized_ptr(func, src_value, module);
+            let elem_ptr =
+                self.emit_gep_array_element_ptr(func, &mut builder, src_ptr, idx_value, elem);
+            self.emit_copy_aggregate_ptr_to_ptr(
+                func,
+                module,
+                &mut builder,
+                elem_ptr,
+                dst_ptr,
+                result_ty,
+            );
             self.remove_if_results_dead(func, inst);
             return;
         }
@@ -860,8 +858,8 @@ impl AggregateLowerToMemoryLegalize {
             return;
         }
         if self.runtime_size_bytes_or_panic(module, result_ty) == 0 {
-            let undef = func.dfg.make_undef_value(result_ty);
-            self.alias_and_remove(func, inst, result, undef);
+            let zero = func.dfg.make_zero_const(result_ty);
+            self.alias_and_remove(func, inst, result, zero);
             return;
         }
 
@@ -1034,8 +1032,8 @@ impl AggregateLowerToMemoryLegalize {
             if !func.layout.is_inst_inserted(scalar_use.inst) {
                 continue;
             }
-            let undef = func.dfg.make_undef_value(scalar_use.result_ty);
-            self.alias_and_remove(func, scalar_use.inst, scalar_use.result, undef);
+            let zero = func.dfg.make_zero_const(scalar_use.result_ty);
+            self.alias_and_remove(func, scalar_use.inst, scalar_use.result, zero);
         }
 
         self.remove_dead_transparents(func, &plan.transparent_insts);
@@ -1350,9 +1348,6 @@ impl AggregateLowerToMemoryLegalize {
         value: ValueId,
         module: &ModuleCtx,
     ) -> ValueId {
-        if is_explicit_undef(func, value) {
-            panic!("explicit undef aggregate has no materialized pointer");
-        }
         let ty = func.dfg.value_ty(value);
         if !shape::is_supported_aggregate_ty(module, ty) {
             panic!("expected aggregate value, got {ty:?}");
@@ -1548,10 +1543,6 @@ impl AggregateLowerToMemoryLegalize {
         agg_ty: Type,
         dst: AggregateLeafCopyDst<'_>,
     ) {
-        if is_explicit_undef(func, value) {
-            return;
-        }
-        // Unlike `undef`, a `zero` stores zero in every leaf.
         if is_zero(func, value) {
             self.emit_zero_leaves(func, builder, dst.ptr, dst.leaves);
             return;
@@ -1571,14 +1562,10 @@ impl AggregateLowerToMemoryLegalize {
         if let Some(def_inst) = def_inst
             && let Some(make) = func.dfg.downcast::<&data::AggMake>(def_inst).cloned()
         {
-            // Nothing is stored for an `undef` field: the slot already holds
-            // some value of it.
             for (idx, &field) in (0..).zip(make.values()) {
                 let slice = shape::aggregate_slice_for_index(module, agg_ty, idx)
                     .unwrap_or_else(|| panic!("agg.make operand out of bounds"));
-                if !is_explicit_undef(func, field) {
-                    self.emit_copy_field_to_leaves(func, module, builder, field, slice, dst);
-                }
+                self.emit_copy_field_to_leaves(func, module, builder, field, slice, dst);
             }
             return;
         }
@@ -1763,9 +1750,6 @@ impl AggregateLowerToMemoryLegalize {
             panic!("extract_value slice leaf mismatch during legalization");
         }
 
-        if is_explicit_undef(func, src.value) {
-            return;
-        }
         if is_zero(func, src.value) {
             self.emit_zero_leaves(func, builder, dst.ptr, &dst_shape.leaves);
             return;
@@ -2277,20 +2261,15 @@ fn append_component_rpo(
     blocks.extend(post_order);
 }
 
-fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
-    matches!(func.dfg.value(value), Value::Undef { .. })
-}
-
 fn is_zero(func: &Function, value: ValueId) -> bool {
     matches!(func.dfg.value(value), Value::Zero { .. })
 }
 
-/// The `undef` or `zero` of `ty`, when `value` is the `undef` or `zero` of
-/// another type: what a cast or field read of it gives.
+/// The zero constant of `ty`, when `value` is the `zero` of another type:
+/// what a cast or field read of it gives.
 fn constant_like(func: &mut Function, value: ValueId, ty: Type) -> Option<ValueId> {
     match func.dfg.value(value) {
-        Value::Undef { .. } => Some(func.dfg.make_undef_value(ty)),
-        Value::Zero { .. } => Some(func.dfg.make_zero_value(ty)),
+        Value::Zero { .. } => Some(func.dfg.make_zero_const(ty)),
         _ => None,
     }
 }
@@ -2743,7 +2722,7 @@ type @outer = { @empty, i256 };
 
 func private %f(v0.i256) -> i256 {
     block0:
-        v2.@outer = agg.make @outer undef.@empty v0;
+        v2.@outer = agg.make @outer zero.@empty v0;
         v3.@empty = extract_value v2 0.i8;
         v4.i256 = extract_value v2 1.i8;
         return v4;
@@ -2831,7 +2810,7 @@ type @outer = { unit, i256 };
 
 func private %f(v0.i256) {
     block0:
-        v2.@outer = agg.make @outer undef.unit v0;
+        v2.@outer = agg.make @outer zero.unit v0;
         mstore 0.i32 v2 @outer;
         return;
 }
@@ -2856,7 +2835,7 @@ func private %f(v0.i256) {
     }
 
     #[test]
-    fn late_legalizer_extracts_zero_sized_projection_leaves_as_undef() {
+    fn late_legalizer_extracts_zero_sized_projection_leaves_as_zero() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -2896,7 +2875,7 @@ target = "evm-ethereum-osaka"
 
 func private %f(v0.i256) {
     block0:
-        v1.[unit; 2] = insert_value undef.[unit; 2] v0 undef.unit;
+        v1.[unit; 2] = insert_value zero.[unit; 2] v0 zero.unit;
         v2.unit = extract_value v1 v0;
         v3.[unit; 2] = insert_value v1 v0 v2;
         mstore 0.i32 v3 [unit; 2];
@@ -3219,9 +3198,9 @@ type @big = {{i256, i256, i256, i256, i256, i256, [i256; 18]}};
 
 func public %entry() {{
     block0:
-        v1.@big = agg.make @big 1.i256 2.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.[i256; 18];
-        v3.@big = agg.make @big 3.i256 4.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.[i256; 18];
-        v4.@big = agg.make @big 5.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.[i256; 18];
+        v1.@big = agg.make @big 1.i256 2.i256 0.i256 0.i256 0.i256 0.i256 zero.[i256; 18];
+        v3.@big = agg.make @big 3.i256 4.i256 0.i256 0.i256 0.i256 0.i256 zero.[i256; 18];
+        v4.@big = agg.make @big 5.i256 0.i256 0.i256 0.i256 0.i256 0.i256 zero.[i256; 18];
         jump block1;
 
     block1:
@@ -3265,9 +3244,8 @@ object @Contract {{
 
     #[test]
     fn late_legalizer_stores_agg_make_operands_once() {
-        // Each defined field is stored once to the destination: no slot for
-        // the `agg.make`, no store for the `undef` field, none for the
-        // zero-sized one.
+        // Each non-zero-sized field is stored once to the destination: no slot
+        // for the `agg.make`, and no store for zero-sized fields.
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -3278,9 +3256,9 @@ type @outer = { @inner, i256, @empty, unit };
 
 func private %f(v0.i256, v1.i256) {
     block0:
-        v2.@inner = agg.make @inner v0 undef.i256;
+        v2.@inner = agg.make @inner v0 0.i256;
         v3.@empty = agg.make @empty;
-        v4.@outer = agg.make @outer v2 v1 v3 undef.unit;
+        v4.@outer = agg.make @outer v2 v1 v3 zero.unit;
         mstore 0.i32 v4 @outer;
         return;
 }
@@ -3304,7 +3282,14 @@ func private %f(v0.i256, v1.i256) {
                 .filter_map(|inst| func.dfg.downcast::<&data::Mstore>(inst))
                 .map(|mstore| *mstore.value())
                 .collect();
-            assert_eq!(stored, func.arg_values.to_vec(), "{dumped}");
+            assert_eq!(stored.len(), 3, "{dumped}");
+            assert_eq!(stored[0], func.arg_values[0], "{dumped}");
+            assert_eq!(
+                func.dfg.value_imm(stored[1]),
+                Some(sonatina_ir::Immediate::zero(Type::I256)),
+                "{dumped}"
+            );
+            assert_eq!(stored[2], func.arg_values[1], "{dumped}");
         });
     }
 
@@ -3322,8 +3307,8 @@ type @wrap = {@big};
 
 func public %entry() {
     block0:
-        v0.@big = agg.make @big 3.i256 9.i256 undef.[i256; 18];
-        v1.@big = agg.make @big 9.i256 3.i256 undef.[i256; 18];
+        v0.@big = agg.make @big 3.i256 9.i256 zero.[i256; 18];
+        v1.@big = agg.make @big 9.i256 3.i256 zero.[i256; 18];
         v2.@wrap = agg.make @wrap v1;
         jump block1;
 

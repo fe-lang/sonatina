@@ -110,6 +110,53 @@ impl Node {
         }
     }
 
+    fn zero(ctx: &ModuleCtx, ty: Type) -> Self {
+        let data = match ty {
+            Type::Compound(id) => ctx.with_ty_store(|types| match types.resolve_compound(id) {
+                CompoundType::Struct(record) => Data::Product(
+                    record
+                        .fields
+                        .iter()
+                        .map(|&ty| Self::zero(ctx, ty))
+                        .collect(),
+                ),
+                CompoundType::Array { elem, len } => {
+                    assert!(*len <= 16, "concrete oracle array bound exceeded");
+                    Data::Product(vec![Self::zero(ctx, *elem); *len])
+                }
+                CompoundType::Enum(enumeration) => Data::Enum {
+                    tag: 0,
+                    payloads: enumeration
+                        .variants
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, variant)| {
+                            variant
+                                .fields
+                                .iter()
+                                .map(|&ty| {
+                                    if idx == 0 {
+                                        Self::zero(ctx, ty)
+                                    } else {
+                                        Self::uninitialized(ctx, ty)
+                                    }
+                                })
+                                .collect()
+                        })
+                        .collect(),
+                },
+                CompoundType::ObjRef(_) => Data::Reference(None),
+                CompoundType::Ptr(_) => Data::RawPointer(None),
+                other => panic!("unsupported concrete type {other:?}"),
+            }),
+            _ => Data::Scalar(0),
+        };
+        Self {
+            initialized: true,
+            data,
+        }
+    }
+
     fn initialized_values(&self) -> Vec<Self> {
         let data = match &self.data {
             Data::Product(fields) => Self::products(fields)
@@ -285,7 +332,7 @@ impl World {
             Value::Immediate { imm, .. } => {
                 Node::scalar(imm.to_nonnegative_usize().expect("small model integer") as u64)
             }
-            Value::Undef { ty } => Node::uninitialized(func.ctx(), *ty),
+            Value::Zero { ty } => Node::zero(func.ctx(), *ty),
             _ => self.values[&value].clone(),
         }
     }
@@ -490,7 +537,7 @@ fn execute_block(
             .or_else(|| downcast::<&data::ObjIndex>(is, data).map(|index| *index.object()))
             .filter(|&base| matches!(value(base).data, Data::Reference(None)))
         {
-            // Address formation from an `undef` reference denotes no location.
+            // Address formation from a null reference denotes no location.
             Some(value(base))
         } else if let Some(proj) = downcast::<&data::EnumProj>(is, data) {
             let mut view = value(*proj.object()).view();

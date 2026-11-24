@@ -495,7 +495,7 @@ fn machine_known_bits_drops_mask_on_mstore8_value() {
 #[test]
 fn machine_known_bits_drops_mask_on_mstore8_value_in_loop() {
     // for i in 0..n { mstore8(dst + i, mload(src + i) & 0xff) }: the mask
-    // depends on the loop counter, which no undef reaches.
+    // depends on the loop counter.
     let mb = machine_builder();
     let func_ref = mb
         .declare_function(Signature::new(

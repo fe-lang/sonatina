@@ -1,6 +1,6 @@
 #! evm.config: { opt: 2 }
 #! evm.case: ok
-#!   calldata: u256(0)
+#!   calldata: u256(1)
 #!   expect: return u256(7)
 
 target = "evm-ethereum-osaka"

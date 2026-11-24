@@ -16,5 +16,4 @@ pub const ZERO_CASES: &[(&str, i64)] = &[
     ("insert_into_zero", 11),
     ("phi_zero", 3),
     ("large_array", 14),
-    ("frozen", 15),
 ];

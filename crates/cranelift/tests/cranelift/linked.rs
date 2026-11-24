@@ -68,7 +68,7 @@ func public %run(v0.*[i64; 64], v1.*[i64; 64], v2.i64) -> *i8 {
 block0:
     v3.[i64; 64] = mload v0 [i64; 64];
     mstore v1 v3 [i64; 64];
-    mstore v0 undef.[i64; 64] [i64; 64];
+    mstore v0 zero.[i64; 64] [i64; 64];
     v4.i64 = call %memcpy v2;
     v5.i64 = call %memset v4;
     v6.i64 = call %malloc v5;

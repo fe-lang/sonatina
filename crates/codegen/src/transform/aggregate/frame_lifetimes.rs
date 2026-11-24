@@ -316,7 +316,7 @@ block0:
 func private %f(v0.objref<@pair>) {
 block0:
     v1.objref<i64> = obj.alloc i64;
-    v2.@pair = agg.make @pair undef.i64 v1;
+    v2.@pair = agg.make @pair 0.i64 v1;
     obj.store v0 v2;
     return;
 }"#,
@@ -384,7 +384,7 @@ block0:
             r#"type @pair = { i64, objref<i64> };
 func private %f(v0.objref<i64>, v1.i64) -> @pair {
 block0:
-    v2.@pair = agg.make @pair undef.i64 v0;
+    v2.@pair = agg.make @pair 0.i64 v0;
     jump block1;
 block1:
     v3.@pair = phi (v2 block0) (v5 block1);
@@ -466,7 +466,7 @@ block0:
 block0:
     v1.objref<i64> = obj.alloc i64;
     v2.*i64 = obj.materialize.stack v1;
-    v3.[*i64; 2] = insert_value undef.[*i64; 2] v0 v2;
+    v3.[*i64; 2] = insert_value zero.[*i64; 2] v0 v2;
     return v3;
 }"#,
             r#"type @pair = { i64, objref<i64> };

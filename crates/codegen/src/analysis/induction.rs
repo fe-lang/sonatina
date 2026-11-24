@@ -1,7 +1,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, I256, Immediate, InstDowncast, InstId, Type, Value,
+    BlockId, ControlFlowGraph, Function, I256, Immediate, InstDowncast, InstId, Type, U256, Value,
     ValueId,
     inst::{
         arith::{Add, Mul, Sub},
@@ -66,6 +66,22 @@ impl From<&BasicInductionVarProbe> for AffineIv {
 }
 
 impl StepKind {
+    /// Whether the step moves the variable up, modulo its width, and by how
+    /// much; `None` for a step of the signed minimum, which is both.
+    pub(crate) fn direction(self) -> Option<(bool, U256)> {
+        let (imm, add) = match self {
+            Self::AddConst(imm) => (imm, true),
+            Self::SubConst(imm) => (imm, false),
+        };
+        (imm != Immediate::signed_min(imm.ty())).then(|| {
+            if imm.is_negative() {
+                (!add, (-imm).as_i256().to_u256())
+            } else {
+                (add, imm.as_i256().to_u256())
+            }
+        })
+    }
+
     pub fn signed_step_i64(self) -> Option<i64> {
         match self {
             Self::AddConst(imm) => imm_i64(imm),
@@ -137,8 +153,8 @@ pub fn detect_basic_ivs_for_loop(
         let Some((init, backedge)) = phi_init_and_backedge(phi, preheader, latch) else {
             continue;
         };
-        let Some((step_inst, step_value, step)) =
-            detect_basic_iv_step(func, latch, phi_value, backedge)
+        let Some((step_inst, step)) = detect_basic_iv_step(func, phi_value, backedge)
+            .filter(|&(step_inst, _)| func.layout.inst_block(step_inst) == latch)
         else {
             continue;
         };
@@ -151,7 +167,7 @@ pub fn detect_basic_ivs_for_loop(
             phi: phi_value,
             init,
             step_inst,
-            step_value,
+            step_value: backedge,
             step,
         });
     }
@@ -221,7 +237,7 @@ fn match_addr_term(
             coeff_bytes: 0,
             profitable: false,
         })
-    } else if is_loop_invariant_value(func, lpt, biv, value, &mut FxHashSet::default()) {
+    } else if is_loop_invariant_value(func, lpt, biv.loop_id, value, &mut FxHashSet::default()) {
         Some(MatchedAffineAddr {
             base: Some(value),
             const_bytes: 0,
@@ -435,14 +451,15 @@ fn phi_init_and_backedge(
     Some((init?, backedge?))
 }
 
-fn detect_basic_iv_step(
+/// The instruction that steps `phi` to its back-edge value `backedge` by a
+/// non-zero constant, and the step.
+pub(crate) fn detect_basic_iv_step(
     func: &Function,
-    latch: BlockId,
     phi: ValueId,
     backedge: ValueId,
-) -> Option<(InstId, ValueId, StepKind)> {
+) -> Option<(InstId, StepKind)> {
     let step_inst = func.dfg.value_inst(backedge)?;
-    if !func.layout.is_inst_inserted(step_inst) || func.layout.inst_block(step_inst) != latch {
+    if !func.layout.is_inst_inserted(step_inst) {
         return None;
     }
 
@@ -451,11 +468,11 @@ fn detect_basic_iv_step(
     if let Some(add) = <&Add as InstDowncast>::downcast(is, inst) {
         if *add.lhs() == phi {
             let step = nonzero_step_imm(func, *add.rhs())?;
-            return Some((step_inst, backedge, StepKind::AddConst(step)));
+            return Some((step_inst, StepKind::AddConst(step)));
         }
         if *add.rhs() == phi {
             let step = nonzero_step_imm(func, *add.lhs())?;
-            return Some((step_inst, backedge, StepKind::AddConst(step)));
+            return Some((step_inst, StepKind::AddConst(step)));
         }
         return None;
     }
@@ -465,7 +482,7 @@ fn detect_basic_iv_step(
         return None;
     }
     let step = nonzero_step_imm(func, *sub.rhs())?;
-    Some((step_inst, backedge, StepKind::SubConst(step)))
+    Some((step_inst, StepKind::SubConst(step)))
 }
 
 fn nonzero_step_imm(func: &Function, value: ValueId) -> Option<Immediate> {
@@ -487,7 +504,7 @@ fn unique_outside_pred(
     outside_preds.next().is_none().then_some(preheader)
 }
 
-fn unique_latch(
+pub(crate) fn unique_latch(
     cfg: &ControlFlowGraph,
     lpt: &LoopTree,
     loop_id: LoopId,
@@ -527,7 +544,9 @@ pub(crate) fn detect_basic_iv_probes_for_loop(
         let Some(backedge) = phi_backedge_with_outside_preds(phi, latch, loop_id, lpt) else {
             continue;
         };
-        let Some((_, _, step)) = detect_basic_iv_step(func, latch, phi_value, backedge) else {
+        let Some((_, step)) = detect_basic_iv_step(func, phi_value, backedge)
+            .filter(|&(step_inst, _)| func.layout.inst_block(step_inst) == latch)
+        else {
             continue;
         };
 
@@ -543,7 +562,7 @@ pub(crate) fn detect_basic_iv_probes_for_loop(
     probes
 }
 
-fn phi_backedge_with_outside_preds(
+pub(crate) fn phi_backedge_with_outside_preds(
     phi: &Phi,
     latch: BlockId,
     loop_id: LoopId,
@@ -566,10 +585,11 @@ fn phi_backedge_with_outside_preds(
     if has_outside_pred { backedge } else { None }
 }
 
-fn is_loop_invariant_value(
+/// Whether `value` is the same on every iteration of `loop_id`.
+pub(crate) fn is_loop_invariant_value(
     func: &Function,
     lpt: &LoopTree,
-    biv: AffineIv,
+    loop_id: LoopId,
     value: ValueId,
     visiting: &mut FxHashSet<ValueId>,
 ) -> bool {
@@ -581,10 +601,9 @@ fn is_loop_invariant_value(
         Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } | Value::Zero { .. } => {
             true
         }
-        Value::Undef { .. } => false,
         Value::Inst { inst, .. } => {
             let block = func.layout.inst_block(*inst);
-            if !lpt.is_in_loop(block, biv.loop_id) {
+            if !lpt.is_in_loop(block, loop_id) {
                 true
             } else {
                 let inst = func.dfg.inst(*inst);
@@ -592,29 +611,29 @@ fn is_loop_invariant_value(
                 if <&Phi as InstDowncast>::downcast(is, inst).is_some() {
                     false
                 } else if let Some(cast) = <&Bitcast as InstDowncast>::downcast(is, inst) {
-                    is_loop_invariant_value(func, lpt, biv, *cast.from(), visiting)
+                    is_loop_invariant_value(func, lpt, loop_id, *cast.from(), visiting)
                 } else if let Some(cast) = <&IntToPtr as InstDowncast>::downcast(is, inst) {
-                    is_loop_invariant_value(func, lpt, biv, *cast.from(), visiting)
+                    is_loop_invariant_value(func, lpt, loop_id, *cast.from(), visiting)
                 } else if let Some(cast) = <&PtrToInt as InstDowncast>::downcast(is, inst) {
-                    is_loop_invariant_value(func, lpt, biv, *cast.from(), visiting)
+                    is_loop_invariant_value(func, lpt, loop_id, *cast.from(), visiting)
                 } else if let Some(add) = <&Add as InstDowncast>::downcast(is, inst) {
                     let lhs_const = value_i64(func, *add.lhs()).is_some();
                     let rhs_const = value_i64(func, *add.rhs()).is_some();
                     (lhs_const || rhs_const)
-                        && is_loop_invariant_value(func, lpt, biv, *add.lhs(), visiting)
-                        && is_loop_invariant_value(func, lpt, biv, *add.rhs(), visiting)
+                        && is_loop_invariant_value(func, lpt, loop_id, *add.lhs(), visiting)
+                        && is_loop_invariant_value(func, lpt, loop_id, *add.rhs(), visiting)
                 } else if let Some(sub) = <&Sub as InstDowncast>::downcast(is, inst) {
                     let lhs_const = value_i64(func, *sub.lhs()).is_some();
                     let rhs_const = value_i64(func, *sub.rhs()).is_some();
                     (lhs_const || rhs_const)
-                        && is_loop_invariant_value(func, lpt, biv, *sub.lhs(), visiting)
-                        && is_loop_invariant_value(func, lpt, biv, *sub.rhs(), visiting)
+                        && is_loop_invariant_value(func, lpt, loop_id, *sub.lhs(), visiting)
+                        && is_loop_invariant_value(func, lpt, loop_id, *sub.rhs(), visiting)
                 } else if let Some(gep) = <&Gep as InstDowncast>::downcast(is, inst) {
                     let Some((&base, indices)) = gep.values().split_first() else {
                         return false;
                     };
                     const_gep_offset(func, base, indices).is_some()
-                        && is_loop_invariant_value(func, lpt, biv, base, visiting)
+                        && is_loop_invariant_value(func, lpt, loop_id, base, visiting)
                 } else {
                     false
                 }

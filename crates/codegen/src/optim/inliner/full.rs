@@ -272,9 +272,7 @@ pub(super) fn try_inline_callsite_full(
 
         let func = editor.func_mut();
         func.dfg.edit_phi(fixup.phi_inst, |phi| {
-            if fixup.arg_index < phi.args().len() {
-                phi.args_mut()[fixup.arg_index].0 = mapped;
-            }
+            phi.args_mut()[fixup.arg_index].0 = mapped;
         });
     }
 
@@ -395,10 +393,7 @@ struct OperandValidator<'a> {
 impl OperandValidator<'_> {
     fn validate_value(&mut self, value: ValueId) {
         match self.callee.dfg.value(value) {
-            Value::Immediate { .. }
-            | Value::Global { .. }
-            | Value::Undef { .. }
-            | Value::Zero { .. } => {}
+            Value::Immediate { .. } | Value::Global { .. } | Value::Zero { .. } => {}
             Value::Arg { .. } => {
                 if !self.arg_values.contains(&value) {
                     self.ok = false;
@@ -429,9 +424,9 @@ impl Visitor for OperandValidator<'_> {
 /// block ends in a terminator, every block operand is reachable, and every
 /// value operand is an argument, a constant, or a result defined earlier in
 /// reverse post-order. A phi operand may instead be a result of a later
-/// reachable block. A callee that passes cannot fail partway through the
-/// rewrite, nor return an enum part that may be undef. Other malformations are
-/// copied as they are and left to the module verifier.
+/// reachable block, and each return gives one value of each result type. A
+/// callee that passes cannot fail partway through the rewrite. Other
+/// malformations are copied as they are and left to the module verifier.
 fn validate_full_inline_callee_rewriteability(
     callee: &Function,
     rpo: &[BlockId],
@@ -537,7 +532,6 @@ fn map_or_materialize(
     let mapped = match callee.dfg.value(old) {
         Value::Immediate { imm, .. } => caller.dfg.make_imm_value(*imm),
         Value::Global { gv, .. } => caller.dfg.make_global_value(*gv),
-        Value::Undef { ty } => caller.dfg.make_undef_value(*ty),
         Value::Zero { ty } => caller.dfg.make_zero_value(*ty),
         Value::Arg { .. } | Value::Inst { .. } => return None,
     };

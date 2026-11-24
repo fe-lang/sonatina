@@ -22,7 +22,7 @@ func public %entry() {
         jump block1;
 
     block1:
-        v1.unit = phi (undef.unit block0) (v3 block1);
+        v1.unit = phi (zero.unit block0) (v3 block1);
         v2.i256 = phi (0.i256 block0) (v5 block1);
         (v3.unit, v4.i256) = call %pick v1 v2;
         v5.i256 = add v4 1.i256;

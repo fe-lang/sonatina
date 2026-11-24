@@ -911,7 +911,7 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn undef_use() {
+    fn use_of_undefined_variable() {
         let mb = test_module_builder();
         let (_, mut builder) = test_func_builder(&mb, &[], Type::Unit);
 

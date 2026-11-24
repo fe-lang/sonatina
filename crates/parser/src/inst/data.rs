@@ -9,7 +9,6 @@ super::impl_inst_build! {Memzero, (dest: ValueId, len: ValueId)}
 super::impl_inst_build! {Memcopy, (dest: ValueId, src: ValueId, len: ValueId)}
 super::impl_inst_build! {BlackBox, (arg: ValueId)}
 super::impl_inst_build! {Sha256Compress, (state: ValueId, block: ValueId)}
-super::impl_inst_build! {Freeze, (arg: ValueId)}
 super::impl_inst_build_common! {Gep, build_gep}
 super::impl_inst_build! {GetFunctionPtr, (func: FuncRef)}
 super::impl_inst_build_common! {SymAddr, build_sym_addr}

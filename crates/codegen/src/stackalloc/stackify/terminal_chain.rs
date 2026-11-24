@@ -82,7 +82,7 @@ fn block_uses_only_local_values(
                 local_values.contains(value)
                     || matches!(
                         func.dfg.value(value),
-                        Value::Immediate { .. } | Value::Global { .. } | Value::Undef { .. }
+                        Value::Immediate { .. } | Value::Global { .. } | Value::Zero { .. }
                     )
             })
         {

@@ -1,11 +1,11 @@
 //! Sparse initialization of typed values and object subtrees: a leaf is
-//! initialized once something other than `undef` set it. This is stronger than
+//! initialized once something set it. This is stronger than
 //! verifier readability: a trusted payload assumption initializes no leaf.
 
 use rpds::RedBlackTreeMapSync;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, InstId, Type, Value, ValueId,
+    Function, InstId, Type, ValueId,
     effects::AccessKind,
     inst::{control_flow, data, downcast},
     module::ModuleCtx,
@@ -287,10 +287,7 @@ impl ValueInitialization<'_> {
         let func = self.func;
         let ty = func.dfg.value_ty(value);
         let Some(inst) = func.dfg.value_inst(value) else {
-            return InitializedValue::new(
-                ty,
-                !matches!(func.dfg.value(value), Value::Undef { .. }),
-            );
+            return InitializedValue::new(ty, true);
         };
         let data = func.dfg.inst(inst);
         let is = func.inst_set();
@@ -493,13 +490,13 @@ block0:
         value.assume_variant(some);
         assert!(
             !value.defined(ctx),
-            "trusted assumptions cannot define scalar undef"
+            "trusted assumptions cannot initialize a scalar"
         );
         assert!(retained.defined(ctx));
         value.select(ctx, none);
         assert!(
             value.defined(ctx),
-            "inactive undefined payloads do not count"
+            "inactive uninitialized payloads do not count"
         );
         assert_eq!(retained.variant(), Some(some));
         let joined = retained.join(ctx, &value);

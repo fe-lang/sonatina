@@ -159,7 +159,7 @@ impl Interpret for EvmUdivo {
                 EvalValue::Imm(if rhs.is_zero() { rhs } else { lhs.udiv(rhs) }),
                 EvalValue::Imm(Immediate::from(rhs.is_zero())),
             ),
-            _ => overflow_results(EvalValue::Undef, EvalValue::Undef),
+            _ => overflow_results(EvalValue::Unknown, EvalValue::Unknown),
         }
     }
 }
@@ -197,7 +197,7 @@ impl Interpret for EvmSdivo {
                     )),
                 )
             }
-            _ => overflow_results(EvalValue::Undef, EvalValue::Undef),
+            _ => overflow_results(EvalValue::Unknown, EvalValue::Unknown),
         }
     }
 }
@@ -227,7 +227,7 @@ impl Interpret for EvmUmodo {
                 EvalValue::Imm(if rhs.is_zero() { rhs } else { lhs.urem(rhs) }),
                 EvalValue::Imm(Immediate::from(rhs.is_zero())),
             ),
-            _ => overflow_results(EvalValue::Undef, EvalValue::Undef),
+            _ => overflow_results(EvalValue::Unknown, EvalValue::Unknown),
         }
     }
 }
@@ -257,7 +257,7 @@ impl Interpret for EvmSmodo {
                 EvalValue::Imm(if rhs.is_zero() { rhs } else { lhs.srem(rhs) }),
                 EvalValue::Imm(Immediate::from(rhs.is_zero())),
             ),
-            _ => overflow_results(EvalValue::Undef, EvalValue::Undef),
+            _ => overflow_results(EvalValue::Unknown, EvalValue::Unknown),
         }
     }
 }
@@ -269,7 +269,7 @@ impl Interpret for EvmUaddsat {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         single_result(zero_extend_i256(lhs.saturating_uadd(rhs)))
@@ -283,7 +283,7 @@ impl Interpret for EvmSaddsat {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         single_result(sign_extend_i256(lhs.saturating_sadd(rhs)))
@@ -297,7 +297,7 @@ impl Interpret for EvmUsubsat {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         single_result(zero_extend_i256(lhs.saturating_usub(rhs)))
@@ -311,7 +311,7 @@ impl Interpret for EvmSsubsat {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         single_result(sign_extend_i256(lhs.saturating_ssub(rhs)))
@@ -325,7 +325,7 @@ impl Interpret for EvmUmulsat {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         single_result(zero_extend_i256(lhs.saturating_umul(rhs)))
@@ -339,7 +339,7 @@ impl Interpret for EvmSmulsat {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         single_result(sign_extend_i256(lhs.saturating_smul(rhs)))
@@ -357,7 +357,7 @@ impl Interpret for EvmAddMod {
         let (EvalValue::Imm(lhs), EvalValue::Imm(rhs), EvalValue::Imm(modulus)) =
             (lhs, rhs, modulus)
         else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         debug_assert_eq!(lhs.ty(), rhs.ty());
@@ -376,7 +376,7 @@ impl Interpret for EvmKeccak256Words {
         let mut words = Vec::with_capacity(self.words().len());
         for &word in self.words() {
             let EvalValue::Imm(word) = state.lookup_val(word) else {
-                return single_result(EvalValue::Undef);
+                return single_result(EvalValue::Unknown);
             };
             words.push(imm_to_u256(word));
         }
@@ -396,7 +396,7 @@ impl Interpret for EvmMulMod {
         let (EvalValue::Imm(lhs), EvalValue::Imm(rhs), EvalValue::Imm(modulus)) =
             (lhs, rhs, modulus)
         else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         debug_assert_eq!(lhs.ty(), rhs.ty());
@@ -416,7 +416,7 @@ impl Interpret for EvmExp {
         let exponent = state.lookup_val(*self.exponent());
 
         let (EvalValue::Imm(base), EvalValue::Imm(exponent)) = (base, exponent) else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         debug_assert_eq!(base.ty(), exponent.ty());
@@ -436,7 +436,7 @@ impl Interpret for EvmSignExtend {
         let value = state.lookup_val(*self.value());
 
         let (EvalValue::Imm(byte), EvalValue::Imm(value)) = (byte, value) else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         debug_assert_eq!(byte.ty(), value.ty());
@@ -455,7 +455,7 @@ impl Interpret for EvmByte {
         let value = state.lookup_val(*self.value());
 
         let (EvalValue::Imm(pos), EvalValue::Imm(value)) = (pos, value) else {
-            return single_result(EvalValue::Undef);
+            return single_result(EvalValue::Unknown);
         };
 
         debug_assert_eq!(pos.ty(), value.ty());
@@ -528,7 +528,7 @@ mod tests {
         );
         assert_eq!(
             EvmKeccak256Words::new(&hi, smallvec![known, unknown]).interpret(&mut state),
-            single_result(EvalValue::Undef)
+            single_result(EvalValue::Unknown)
         );
     }
 

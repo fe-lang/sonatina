@@ -1,24 +1,23 @@
 #! evm.config: { vcode: true, opt: 2 }
-#! evm.case: scalar_dirty_even
-#!   calldata: u256(2) u256(0)
+#! evm.case: scalar_false
+#!   calldata: u256(0) u256(0)
 #!   expect: return u256(0)
-#! evm.case: scalar_dirty_odd
-#!   calldata: u256(3) u256(0)
+#! evm.case: scalar_true
+#!   calldata: u256(1) u256(0)
 #!   expect: return u256(1)
-#! evm.case: member_dirty_even
-#!   calldata: u256(2) u256(1)
+#! evm.case: member_false
+#!   calldata: u256(0) u256(1)
 #!   expect: return u256(0)
-#! evm.case: member_dirty_odd
-#!   calldata: u256(3) u256(1)
+#! evm.case: member_true
+#!   calldata: u256(1) u256(1)
 #!   expect: return u256(1)
 
 target = "evm-ethereum-osaka"
 
 type @B = { i1, i256 };
 
-# A word of 2 or 3 in an `i1` slot is copied to another slot, then read back
-# and branched on. The copy moves the word unchanged; the read keeps its low
-# bit.
+# A canonical `i1` word (0 or 1 under R3) in an `i1` slot is copied to another
+# slot, then read back and branched on with no mask.
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;

@@ -530,7 +530,7 @@ impl ValueState {
             self.tag_initialized = false;
             self.tags = None;
             if reference {
-                // A replaced `undef` cell may now hold any reference.
+                // A replaced null cell may now hold any reference.
                 self.references.unknown = true;
                 self.references.undefined = false;
                 self.references.cache = None;

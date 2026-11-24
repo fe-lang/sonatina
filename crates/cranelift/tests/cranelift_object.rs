@@ -363,8 +363,8 @@ block0:
 
 #[test]
 fn large_aggregate_copies_have_constant_code_size() {
-    // Snapshot loads, chain-head copies, return buffers, stores and undef
-    // zero fills of every length share one bounded code size.
+    // Snapshot loads, chain-head copies, return buffers, stores and zero
+    // fills of every length share one bounded code size.
     for length in [8, 4096] {
         let triple = native_isa(host_architecture()).triple();
         let source = format!(
@@ -378,10 +378,10 @@ block0:
 func public %copy(v0.*[i64; {length}], v1.*[i64; {length}], v2.*@Pair) {{
 block0:
     v3.[i64; {length}] = mload v0 [i64; {length}];
-    mstore v0 undef.[i64; {length}] [i64; {length}];
+    mstore v0 zero.[i64; {length}] [i64; {length}];
     v4.[i64; {length}] = call %update v3 99.i64;
     mstore v1 v4 [i64; {length}];
-    v5.@Pair = agg.make @Pair v3 undef.[i64; {length}];
+    v5.@Pair = agg.make @Pair v3 zero.[i64; {length}];
     mstore v2 v5 @Pair;
     return;
 }}
@@ -575,12 +575,12 @@ fn loads_pass_other_loads_to_their_uses() {
 #[test]
 fn agg_make_zeroes_only_unwritten_bytes() {
     // An `agg.make` that writes both halves needs no zero fill, one with an
-    // `undef` half zeroes it, past the inline limit, and padding is zeroed
+    // `zero` half zeroes it, past the inline limit, and padding is zeroed
     // inline.
     let triple = native_isa(host_architecture()).triple();
     let cases = [
         ("v4.@T = agg.make @T v2 v2;", false),
-        ("v4.@T = agg.make @T undef.[i64; 64] v2;", true),
+        ("v4.@T = agg.make @T zero.[i64; 64] v2;", true),
     ];
     for (make, zero_fill) in cases {
         let source = format!(
@@ -715,7 +715,7 @@ block0:
             "func private %wrap(v0.*[i64; 32], v1.*@Pair) {
 block0:
     v2.[i64; 32] = mload v0 [i64; 32];
-    v3.@Pair = agg.make @Pair undef.[i64; 32] v2;
+    v3.@Pair = agg.make @Pair zero.[i64; 32] v2;
     mstore v1 v3 @Pair;
     return;
 }",
@@ -771,7 +771,7 @@ fn local_objects_move_through_calls_without_copies() {
             "target = \"{triple}\"
 func inline(never) private %fill(v0.i64) -> [i64; 32] {{
 block0:
-    v1.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v1.[i64; 32] = agg.make [i64; 32] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     return v1;
 }}
 func inline(never) private %sum(v0.[i64; 32]) -> i64 {{
@@ -851,7 +851,7 @@ fn owned_arguments_skip_the_callee_copy() {
             "target = \"{triple}\"
 func inline(never) private %fill(v0.i64) -> [i64; 32] {{
 block0:
-    v1.[i64; 32] = agg.make [i64; 32] v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v1.[i64; 32] = agg.make [i64; 32] v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     return v1;
 }}
 func inline(never) private %consume(v0.[i64; 32]) -> i64 {{
@@ -904,8 +904,8 @@ fn argument_fields_pass_in_place() {
             "target = \"{triple}\"
 func inline(never) private %fill(v0.i64) -> [[i64; 32]; 2] {{
 block0:
-    v2.[i64; 32] = agg.make [i64; 32] undef.i64 undef.i64 undef.i64 v0 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
-    v3.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] undef.[i64; 32] v2;
+    v2.[i64; 32] = agg.make [i64; 32] 0.i64 0.i64 0.i64 v0 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
+    v3.[[i64; 32]; 2] = agg.make [[i64; 32]; 2] zero.[i64; 32] v2;
     return v3;
 }}
 func inline(never) private %glance({marks} v0.objref<[i64; 32]>) -> i64 {{

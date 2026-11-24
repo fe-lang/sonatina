@@ -158,7 +158,7 @@ entry-prefix read before ordering/validity barriers, or separate caller evidence
 that its actual region is allocated, initialized, and unguarded at every call.
 Unchanged contents alone do not permit speculation. Unused leaves add no reads;
 whole-object loads demand every leaf. Mutated ordinary inputs and unsupported
-shapes remain excluded. Private roots retain allocation-site undef reseeding.
+shapes remain excluded. Private roots retain allocation-site zero reseeding.
 
 Caller inference uses baseline effects only. Eligible functions are private,
 nonrecursive, have at least one direct caller, and have no non-call symbol use

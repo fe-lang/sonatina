@@ -312,27 +312,6 @@ return;
 }
 
 #[test]
-fn ptr_escape_tracks_frozen_args() {
-    let (summaries, _) = compute(
-        r#"
-target = "evm-ethereum-osaka"
-
-func public %capture(v0.i256, v1.i256) -> i256 {
-block0:
-v2.i256 = freeze v0;
-v3.i256 = freeze v1;
-mstore v3 v2 i256;
-return v2;
-}
-"#,
-    );
-
-    let capture = &summaries["capture"];
-    assert_eq!(ret_args(capture, 0), vec![0]);
-    assert_eq!(arg_store_targets(capture, 0), vec![1]);
-}
-
-#[test]
 fn ptr_escape_tracks_i256_malloc_return_as_non_arg_pointer() {
     let (summaries, _) = compute(
         r#"

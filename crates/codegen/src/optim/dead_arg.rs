@@ -147,6 +147,7 @@ pub fn run_dead_arg_elim(
     // No root uses a removed argument, so whatever still uses one is dead.
     for (func_ref, mut values) in removed_args {
         module.func_store.modify(func_ref, |function| {
+            let retired_args = values.clone();
             function.rebuild_users();
             let mut dead = Vec::new();
             while let Some(value) = values.pop() {
@@ -165,6 +166,9 @@ pub fn run_dead_arg_elim(
                 function.layout.remove_inst(inst);
             }
             function.erase_insts(&dead);
+            for arg in retired_args {
+                function.dfg.delete_value(arg);
+            }
         });
     }
 
@@ -286,10 +290,7 @@ fn analyze_func(
                     &mut visited_insts,
                     &mut value_worklist,
                 ),
-                Value::Immediate { .. }
-                | Value::Global { .. }
-                | Value::Undef { .. }
-                | Value::Zero { .. } => {}
+                Value::Immediate { .. } | Value::Global { .. } | Value::Zero { .. } => {}
             }
         }
     });
@@ -404,7 +405,6 @@ fn rewrite_function(function: &mut Function, plan: &FuncPlan) -> Vec<ValueId> {
             function.dfg.values[arg] = Value::Arg { ty, idx };
             new_args.push(arg);
         } else {
-            function.dfg.values[arg] = Value::Undef { ty };
             removed.push(arg);
         }
     }

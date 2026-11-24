@@ -44,6 +44,108 @@ impl FunctionVerifier<'_> {
             };
 
             self.verify_inst_type(inst_id, inst);
+            if let Some(limit) = self.cfg.evm_fixed_memory_limit {
+                self.verify_evm_fixed_memory_access(inst_id, limit);
+            }
+        }
+    }
+
+    fn const_addr_imm(&self, mut value: ValueId) -> Option<Immediate> {
+        for _ in 0..8 {
+            if let Some(imm) = self.value_imm(value) {
+                return Some(imm);
+            }
+            let inst_id = self.func.dfg.value_inst(value)?;
+            let inst = self.func.dfg.inst(inst_id);
+            if let Some(i2p) =
+                downcast::<&sonatina_ir::inst::cast::IntToPtr>(self.ctx.inst_set, inst)
+            {
+                value = *i2p.from();
+            } else {
+                let bc = downcast::<&sonatina_ir::inst::cast::Bitcast>(self.ctx.inst_set, inst)?;
+                value = *bc.from();
+            }
+        }
+        None
+    }
+
+    fn verify_evm_fixed_memory_access(&mut self, inst_id: InstId, limit: u32) {
+        use sonatina_ir::{effects::AccessLoc, isa::evm::space::MEMORY};
+
+        const BACKEND_SLOTS: [(u64, u64); 2] = [(0x40, 0x60), (0x80, 0xa0)];
+
+        let effects = self.func.dfg.effects(inst_id);
+        for access in &effects.accesses {
+            if access.space != MEMORY {
+                continue;
+            }
+            let (start_imm, len_opt): (Immediate, Option<u64>) = match access.loc {
+                AccessLoc::LinearExact { addr, bytes, .. } => {
+                    let Some(imm) = self.const_addr_imm(addr) else {
+                        continue;
+                    };
+                    (imm, Some(u64::from(bytes)))
+                }
+                AccessLoc::LinearRange { addr, len } => {
+                    let Some(imm) = self.const_addr_imm(addr) else {
+                        continue;
+                    };
+                    let len_u64 = self
+                        .value_imm(len)
+                        .and_then(|l| u64::try_from(l.as_i256().to_u256()).ok());
+                    (imm, len_u64)
+                }
+                // `LinearExactImm` models backend-owned allocator bookkeeping
+                // (e.g. `evm_malloc` updating `FREE_PTR_SLOT = 0x40`), not an
+                // IR fixed-address access.
+                AccessLoc::LinearExactImm { .. }
+                | AccessLoc::WholeSpace
+                | AccessLoc::Unknown
+                | AccessLoc::KeyedExact { .. } => {
+                    continue;
+                }
+            };
+            if len_opt == Some(0) {
+                continue;
+            }
+            let Ok(start) = u64::try_from(start_imm.as_i256().to_u256()) else {
+                self.emit(Diagnostic::error(
+                    DiagnosticCode::EvmFixedMemoryOutOfBounds,
+                    "EVM fixed-address memory access exceeds declared fixed scratch bounds",
+                    self.inst_location(inst_id),
+                ));
+                continue;
+            };
+            let Some(len) = len_opt else {
+                self.emit(Diagnostic::error(
+                    DiagnosticCode::EvmFixedMemoryOutOfBounds,
+                    "EVM fixed-address memory access with dynamic length exceeds fixed scratch bounds",
+                    self.inst_location(inst_id),
+                ));
+                continue;
+            };
+            let end = start.saturating_add(len);
+            if BACKEND_SLOTS.iter().any(|&(s, e)| start < e && s < end) {
+                self.emit(
+                    Diagnostic::error(
+                        DiagnosticCode::EvmFixedMemoryOutOfBounds,
+                        "EVM memory access touches backend-owned slot (0x40..0x60 or 0x80..0xa0)",
+                        self.inst_location(inst_id),
+                    )
+                    .with_note(format!("access range [0x{start:x}, 0x{end:x})")),
+                );
+            } else if end > u64::from(limit) {
+                self.emit(
+                    Diagnostic::error(
+                        DiagnosticCode::EvmFixedMemoryOutOfBounds,
+                        "EVM fixed-address memory access exceeds declared fixed scratch bounds",
+                        self.inst_location(inst_id),
+                    )
+                    .with_note(format!(
+                        "access range [0x{start:x}, 0x{end:x}) exceeds limit 0x{limit:x}"
+                    )),
+                );
+            }
         }
     }
 
@@ -112,26 +214,6 @@ impl FunctionVerifier<'_> {
         if let Some(rule) = rule {
             rule.verify_inst(self, inst_id);
         }
-    }
-
-    /// Freezes the scalar values that memory, calls and parameters carry:
-    /// integers, pointers and enum tags.
-    fn verify_freeze(&mut self, inst_id: InstId, arg: ValueId) {
-        let location = self.inst_location(inst_id);
-        let Some(arg_ty) = self.value_ty(arg) else {
-            return;
-        };
-        if !(arg_ty.is_integral() || arg_ty.is_enum_tag() || arg_ty.is_pointer(self.ctx)) {
-            self.emit(
-                Diagnostic::error(
-                    DiagnosticCode::InstOperandTypeMismatch,
-                    "freeze operand must be an integer, pointer or enum tag",
-                    location.clone(),
-                )
-                .with_note(format!("found operand type {:?}", arg_ty)),
-            );
-        }
-        self.expect_result_ty(inst_id, arg_ty, location);
     }
 
     fn verify_unary_integral_same(&mut self, inst_id: InstId, arg: ValueId, opname: &str) {

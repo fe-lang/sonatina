@@ -2077,7 +2077,7 @@ func private %f(v0.i256) -> i256 {
     }
 
     #[test]
-    fn forwards_reads_of_undefined_fields() {
+    fn forwards_reads_of_zero_fields() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -2087,7 +2087,7 @@ type @pair = { i256, i256 };
 func private %f(v0.i256) -> i256 {
     block0:
         v1.objref<@pair> = obj.alloc @pair;
-        v2.@pair = agg.make @pair v0 undef.i256;
+        v2.@pair = agg.make @pair v0 0.i256;
         obj.store v1 v2;
         v3.objref<i256> = obj.proj v1 1.i8;
         v4.i256 = obj.load v3;
@@ -2105,15 +2105,13 @@ func private %f(v0.i256) -> i256 {
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
-            // A read gives what the store wrote, the unspecified field
-            // included.
             assert!(!dumped.contains("obj.load"), "{dumped}");
         });
     }
 
     #[test]
-    fn forwards_whole_reads_of_aggregates_with_undefined_fields() {
-        for field in ["undef.i256", "v0"] {
+    fn forwards_whole_reads_of_aggregates_with_zero_fields() {
+        for field in ["0.i256", "v0"] {
             let module = parse_test_module(&format!(
                 r#"
 target = "evm-ethereum-osaka"
@@ -2124,7 +2122,7 @@ type @nested = {{i256, @pair}};
 func private %f(v0.i256) -> i256 {{
     block0:
         v1.objref<@nested> = obj.alloc @nested;
-        v2.@pair = agg.make @pair 7.i256 undef.i256;
+        v2.@pair = agg.make @pair 7.i256 0.i256;
         v3.@pair = insert_value v2 1.i8 {field};
         v5.@nested = agg.make @nested v0 v3;
         obj.store v1 v5;

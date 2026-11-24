@@ -15,6 +15,10 @@ pub struct VerifierConfig {
     pub check_value_caches: bool,
     pub check_dominance: bool,
     pub deep_sanity: bool,
+    /// When set on EVM targets, rejects any constant-address memory access that
+    /// overlaps backend-owned slots (`0x40..0x60`, `0x80..0xa0`) or extends past
+    /// `[0, limit)` (E2).
+    pub evm_fixed_memory_limit: Option<u32>,
 }
 
 impl VerifierConfig {
@@ -29,6 +33,7 @@ impl VerifierConfig {
                 check_value_caches: false,
                 check_dominance: false,
                 deep_sanity: false,
+                evm_fixed_memory_limit: None,
             },
             VerificationLevel::Standard => Self {
                 level,
@@ -39,6 +44,7 @@ impl VerifierConfig {
                 check_value_caches: false,
                 check_dominance: false,
                 deep_sanity: false,
+                evm_fixed_memory_limit: None,
             },
             VerificationLevel::Full => Self {
                 level,
@@ -49,8 +55,14 @@ impl VerifierConfig {
                 check_value_caches: true,
                 check_dominance: true,
                 deep_sanity: true,
+                evm_fixed_memory_limit: None,
             },
         }
+    }
+
+    pub fn with_evm_fixed_memory_limit(mut self, limit: u32) -> Self {
+        self.evm_fixed_memory_limit = Some(limit);
+        self
     }
 
     pub fn should_check_types(&self) -> bool {

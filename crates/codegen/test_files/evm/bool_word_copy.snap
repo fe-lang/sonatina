@@ -6,8 +6,8 @@ input_file: test_files/evm/bool_word_copy.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 89 bytes
-  total: 89 bytes
+  section runtime: 86 bytes
+  total: 86 bytes
 
 functions:
   mem: global_dyn_base=0x2020 arena_base=0x2020 scratch_peak_words=0 stable_chain_peak_words=0
@@ -17,14 +17,14 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   copy_member: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  branch_on_copy: ir_blocks=3 ir_insts=5 vcode_ops=15 fixups=1 imm_bytes=3
+  branch_on_copy: ir_blocks=3 ir_insts=4 vcode_ops=13 fixups=1 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case scalar_dirty_even: calldata_len=64 success reason=Return gas_used=22314 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=1046
-  case scalar_dirty_odd: calldata_len=64 success reason=Return gas_used=22314 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=1046
-  case member_dirty_even: calldata_len=64 success reason=Return gas_used=22877 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=1597
-  case member_dirty_odd: calldata_len=64 success reason=Return gas_used=22877 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=1597
+  case scalar_false: calldata_len=64 success reason=Return gas_used=22296 gas_refunded=0 logs=0 output=call len=32 tx_gas=21256 runtime_gas=1040
+  case scalar_true: calldata_len=64 success reason=Return gas_used=22308 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=1040
+  case member_false: calldata_len=64 success reason=Return gas_used=22859 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=1591
+  case member_true: calldata_len=64 success reason=Return gas_used=22871 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=1591
 
 
 --------------- DEBUG ---------------
@@ -95,9 +95,7 @@ branch_on_copy:
     JUMPDEST
     PUSH2 0x2000 (8192)  // v1.i256 = evm_mload v0;
     MLOAD
-    PUSH1 0x1 (1)  // v3.i256 = and v1 1.i256;
-    AND
-    ISZERO  // br v3 block1 block2;
+    ISZERO  // br v1 block1 block2;
     PUSH1 block2
     JUMPI
   block1:

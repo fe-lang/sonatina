@@ -14,7 +14,7 @@ func public %entry() {
         mstore 4160.i32 v1 i256;
         v0.i256 = evm_calldata_load 0.i32;
         call %store v0;
-        call %store_undef;
+        call %store_zero;
         call %array v0;
         v2.i256 = call %read 4096.i32;
         v3.i256 = call %read 4160.i32;
@@ -33,9 +33,9 @@ func inline(never) private %store(v0.i256) {
         return;
 }
 
-func inline(never) private %store_undef() {
+func inline(never) private %store_zero() {
     block0:
-        v0.@B = agg.make @B undef.i1 9.i256;
+        v0.@B = agg.make @B 0.i1 9.i256;
         mstore 4160.i32 v0 @B;
         return;
 }
@@ -53,8 +53,7 @@ func inline(never) private %read(v0.i32) -> i256 {
     block0:
         v1.@B = mload v0 @B;
         v2.i1 = extract_value v1 0.i8;
-        v3.i1 = freeze v2;
-        v4.i256 = zext v3 i256;
+        v4.i256 = zext v2 i256;
         return v4;
 }
 

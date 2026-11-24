@@ -217,7 +217,7 @@ fn malformed_aggregate_input_is_an_error_not_a_panic() {
             "type @P = { i32, i32 };
 func public %f(v0.i32) -> i32 {
     block0:
-        v1.@P = insert_value undef.@P v0 1.i32;
+        v1.@P = insert_value zero.@P v0 1.i32;
         v2.i32 = extract_value v1 0.i32;
         return v2;
 }",
@@ -245,7 +245,7 @@ func private %take(v0.@P) -> i32 {
 }
 func public %f(v0.i32) -> i32 {
     block0:
-        v1.@P = agg.make @P undef.i32 v0;
+        v1.@P = agg.make @P 0.i32 v0;
         v2.i32 = call %take v1;
         return v2;
 }",

@@ -45,7 +45,7 @@ fn exposed_structural_types_keep_return_lanes_without_function_addresses() {
     for exposure in [
         "func public %entry(v0.@callback) {\nblock0:\n    return;\n}",
         "declare external %consume(@callback);",
-        "func public %entry() -> @callback {\nblock0:\n    return undef.@callback;\n}",
+        "func public %entry() -> @callback {\nblock0:\n    return zero.@callback;\n}",
         "global public @callback $callback = {0};",
     ] {
         let source = format!(

@@ -1,4 +1,4 @@
-# Inserts into `undef` that passes make out of verified input. Each route's
+# Inserts into `zero` that passes make out of verified input. Each route's
 # function builds a `@pair` whose field 0 is its argument; each case returns
 # that field. Compiles fold the inserts into `agg.make` before optimizing and
 # again where each backend makes its final IR, and the shared simplifier in
@@ -12,31 +12,31 @@ block0:
     return v2;
 }
 
-# Inlining `%set_first` with an `undef` argument.
-func inline(never) private %inline_undef(v0.i64) -> @pair {
+# Inlining `%set_first` with a `zero` argument.
+func inline(never) private %inline_zero(v0.i64) -> @pair {
 block0:
-    v1.@pair = call %set_first undef.@pair v0;
+    v1.@pair = call %set_first zero.@pair v0;
     return v1;
 }
 
-# Field 0 of `undef.@outer` folds to `undef`.
-func inline(never) private %field_of_undef(v0.i64) -> @pair {
+# Field 0 of `zero.@outer` folds to `zero.@pair`.
+func inline(never) private %field_of_zero(v0.i64) -> @pair {
 block0:
-    v1.@pair = extract_value undef.@outer 0.i32;
+    v1.@pair = extract_value zero.@outer 0.i32;
     v2.@pair = insert_value v1 0.i32 v0;
     return v2;
 }
 
-# Field 0 of the `agg.make` folds to its `undef` operand.
+# Field 0 of the `agg.make` folds to its `zero` operand.
 func inline(never) private %field_of_make(v0.i64) -> @pair {
 block0:
-    v1.@outer = agg.make @outer undef.@pair 7.i64;
+    v1.@outer = agg.make @outer zero.@pair 7.i64;
     v2.@pair = extract_value v1 0.i32;
     v3.@pair = insert_value v2 0.i32 v0;
     return v3;
 }
 
-# The constant branch leaves the phi only its `undef` input.
+# The constant branch leaves the phi only its `zero` input.
 func inline(never) private %dead_edge(v0.i64) -> @pair {
 block0:
     br 1.i1 block1 block2;
@@ -46,27 +46,27 @@ block2:
     v1.@pair = agg.make @pair v0 v0;
     jump block3;
 block3:
-    v2.@pair = phi (undef.@pair block1) (v1 block2);
+    v2.@pair = phi (zero.@pair block1) (v1 block2);
     v3.@pair = insert_value v2 0.i32 v0;
     return v3;
 }
 
-# The load reads the `undef` stored before it.
-func inline(never) private %stored_undef(v0.i64) -> @pair {
+# The load reads the `zero` stored before it.
+func inline(never) private %stored_zero(v0.i64) -> @pair {
 block0:
     v1.objref<@pair> = obj.alloc @pair;
-    obj.store v1 undef.@pair;
+    obj.store v1 zero.@pair;
     v2.@pair = obj.load v1;
     v3.@pair = insert_value v2 0.i32 v0;
     return v3;
 }
 
-# The first unrolled copy takes the phi's `undef` entry value.
+# The first unrolled copy takes the phi's `zero` entry value.
 func inline(never) private %unrolled(v0.i64) -> @pair {
 block0:
     jump block1;
 block1:
-    v1.@pair = phi (undef.@pair block0) (v3 block2);
+    v1.@pair = phi (zero.@pair block0) (v3 block2);
     v2.i64 = phi (0.i64 block0) (v4 block2);
     v5.i1 = lt v2 2.i64;
     br v5 block2 block3;
@@ -78,7 +78,7 @@ block3:
     return v1;
 }
 
-# Threading the branch on `v3` takes the phi's `undef` input on one path.
+# Threading the branch on `v3` takes the phi's `zero` input on one path.
 func inline(never) private %threaded(v0.i64, v4.i1) -> @pair {
 block0:
     br v4 block1 block2;
@@ -89,7 +89,7 @@ block2:
     jump block3;
 block3:
     v3.i1 = phi (1.i1 block1) (0.i1 block2);
-    v2.@pair = phi (undef.@pair block1) (v7 block2);
+    v2.@pair = phi (zero.@pair block1) (v7 block2);
     v9.@pair = insert_value v2 0.i32 v0;
     br v3 block4 block5;
 block4:
@@ -100,14 +100,14 @@ block5:
 
 func public %inlined() -> i64 {
 block0:
-    v0.@pair = call %inline_undef 11.i64;
+    v0.@pair = call %inline_zero 11.i64;
     v1.i64 = extract_value v0 0.i32;
     return v1;
 }
 
-func public %extracted_undef() -> i64 {
+func public %extracted_zero() -> i64 {
 block0:
-    v0.@pair = call %field_of_undef 12.i64;
+    v0.@pair = call %field_of_zero 12.i64;
     v1.i64 = extract_value v0 0.i32;
     return v1;
 }
@@ -128,7 +128,7 @@ block0:
 
 func public %forwarded() -> i64 {
 block0:
-    v0.@pair = call %stored_undef 15.i64;
+    v0.@pair = call %stored_zero 15.i64;
     v1.i64 = extract_value v0 0.i32;
     return v1;
 }

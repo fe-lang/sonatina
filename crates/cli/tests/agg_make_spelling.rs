@@ -1,4 +1,4 @@
-//! A fresh aggregate has two spellings: an `insert_value` chain on `undef` and
+//! A fresh aggregate has two spellings: an `insert_value` chain on `zero` and
 //! one `agg.make`. Every fixture that builds one is compiled as written and
 //! respelled the other way, at every optimization level, on EVM, wasm and
 //! Cranelift, and the two must give the same bytes. A fixture written with
@@ -23,7 +23,7 @@ use std::{
 use sonatina_codegen::{Compile, EvmCompiler, OptLevel, object::SymbolId};
 use sonatina_cranelift::CraneliftObjectBackend;
 use sonatina_ir::{
-    Function, InstId, Module, Type, Value, ValueId,
+    Function, InstId, Module, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::data::{AggMake, InsertValue},
     ir_writer::ModuleWriter,
@@ -159,8 +159,8 @@ fn const_index(func: &Function, value: ValueId) -> Option<usize> {
     func.dfg.value_imm(value)?.to_nonnegative_usize()
 }
 
-fn is_undef(func: &Function, value: ValueId) -> bool {
-    matches!(func.dfg.value(value), Value::Undef { .. })
+fn is_zero_const(func: &Function, value: ValueId) -> bool {
+    func.dfg.value_is_zero(value) || func.dfg.value_imm(value).is_some_and(|imm| imm.is_zero())
 }
 
 /// Whether the insert `user` continues the chain ending in `value`: it is the
@@ -182,7 +182,7 @@ struct Respelled {
     aggregates: usize,
     funcs: usize,
     fixtures: usize,
-    /// Chains on `undef` kept: with a dynamic index, or into an array longer
+    /// Chains on `zero` kept: with a dynamic index, or into an array longer
     /// than `MAX_FIELDS`.
     dynamic: usize,
     long: usize,
@@ -198,9 +198,9 @@ impl Respelled {
     }
 }
 
-/// Rewrites each `insert_value` chain on `undef` with constant indices whose
+/// Rewrites each `insert_value` chain on `zero` with constant indices whose
 /// inner results have no other use into one `agg.make` at the chain's last
-/// insert, with `undef` for the fields no insert writes.
+/// insert, with zero for the fields no insert writes.
 fn chains_to_agg_make(func: &mut Function, stats: &mut Respelled) {
     func.rebuild_users();
     let tops: Vec<InstId> = func
@@ -213,19 +213,19 @@ fn chains_to_agg_make(func: &mut Function, stats: &mut Respelled) {
         })
         .collect();
     for top in tops {
-        // The chain from its last insert down to `undef`: (inst, index, value).
+        // The chain from its last insert down to `zero`: (inst, index, value).
         let mut chain = Vec::new();
         let mut inst = top;
-        let on_undef = loop {
+        let on_zero = loop {
             let insert = func.dfg.downcast::<&InsertValue>(inst).unwrap().clone();
             let Some(index) = const_index(func, *insert.idx()) else {
-                // A chain on `undef` below a dynamic index is its own top.
-                stats.dynamic += usize::from(is_undef(func, *insert.dest()));
+                // A chain on `zero` below a dynamic index is its own top.
+                stats.dynamic += usize::from(is_zero_const(func, *insert.dest()));
                 break false;
             };
             chain.push((inst, index, *insert.value()));
             let dest = *insert.dest();
-            if is_undef(func, dest) {
+            if is_zero_const(func, dest) {
                 break true;
             }
             match func.dfg.value_inst(dest) {
@@ -238,7 +238,7 @@ fn chains_to_agg_make(func: &mut Function, stats: &mut Respelled) {
                 _ => break false,
             }
         };
-        if !on_undef {
+        if !on_zero {
             continue;
         }
         let ty = func.dfg.value_ty(func.dfg.inst_result(top).unwrap());
@@ -254,7 +254,7 @@ fn chains_to_agg_make(func: &mut Function, stats: &mut Respelled) {
         let values = fields
             .into_iter()
             .zip(tys)
-            .map(|(field, ty)| field.unwrap_or_else(|| func.dfg.make_undef_value(ty)))
+            .map(|(field, ty)| field.unwrap_or_else(|| func.dfg.make_zero_const(ty)))
             .collect();
         let make = AggMake::new_unchecked(func.inst_set(), ty, values);
         func.dfg.replace_inst(top, Box::new(make));
@@ -265,8 +265,8 @@ fn chains_to_agg_make(func: &mut Function, stats: &mut Respelled) {
     }
 }
 
-/// Rewrites each `agg.make` into an `insert_value` chain on `undef` that
-/// inserts its operands other than `undef` in order. Returns how many.
+/// Rewrites each `agg.make` into an `insert_value` chain on `zero` that
+/// inserts its non-zero operands in order. Returns how many.
 fn agg_make_to_chains(func: &mut Function) -> usize {
     func.rebuild_users();
     let makes: Vec<InstId> = func
@@ -278,18 +278,18 @@ fn agg_make_to_chains(func: &mut Function) -> usize {
     for &inst in &makes {
         let make = func.dfg.downcast::<&AggMake>(inst).unwrap().clone();
         let ty = *make.ty();
-        let result = func.dfg.inst_result(inst).unwrap();
         let mut fields: Vec<(i32, ValueId)> = (0..)
             .zip(make.values().iter().copied())
-            .filter(|&(_, value)| !is_undef(func, value))
+            .filter(|&(_, value)| !is_zero_const(func, value))
             .collect();
-        let Some((last_index, last_value)) = fields.pop() else {
-            let undef = func.dfg.make_undef_value(ty);
-            func.dfg.change_to_alias(result, undef);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-            continue;
-        };
-        let mut dest = func.dfg.make_undef_value(ty);
+        if fields.is_empty() {
+            let Some(&first) = make.values().first() else {
+                continue;
+            };
+            fields.push((0, first));
+        }
+        let (last_index, last_value) = fields.pop().unwrap();
+        let mut dest = func.dfg.make_zero_const(ty);
         let mut cursor = InstInserter::at_location(func.layout.prev_inst_of(inst).map_or(
             CursorLocation::BlockTop(func.layout.inst_block(inst)),
             CursorLocation::At,
@@ -382,7 +382,7 @@ fn both_spellings_of_a_fresh_aggregate_compile_alike() {
     let verifier = VerifierConfig::for_level(VerificationLevel::Full);
     let mut report = String::new();
     let mut differences = Vec::new();
-    let mut narrow_compared = Vec::new();
+    let mut evm_compared = Vec::new();
     for backend in [Backend::Evm, Backend::Wasm, Backend::Cranelift] {
         let mut total = Respelled::default();
         let (mut compared, mut unparsed, mut uncompiled) = (0, 0, 0);
@@ -414,8 +414,8 @@ fn both_spellings_of_a_fresh_aggregate_compile_alike() {
                 respell(&other);
                 let actual = backend.compile(other, level);
                 compared += 1;
-                if backend == Backend::Evm && name.contains("narrow_aggregate_reads") {
-                    narrow_compared.push(name.clone());
+                if backend == Backend::Evm {
+                    evm_compared.push(name.clone());
                 }
                 if actual.as_ref() != Ok(&expected) {
                     let size = |bytes: &[Vec<u8>]| bytes.iter().map(Vec::len).sum::<usize>();
@@ -497,17 +497,13 @@ fn both_spellings_of_a_fresh_aggregate_compile_alike() {
     }
     eprintln!("{report}");
     assert!(differences.is_empty(), "{report}");
-    // These fixtures store and read back `i1` members through chains and
-    // `agg.make`s, `undef` ones included: the same bytes for both spellings are
-    // the same widenings to words.
-    for fixture in [
-        "narrow_aggregate_reads_bool_agg_make.sntn",
-        "narrow_aggregate_reads_bool_agg_make_noopt.sntn",
-    ] {
-        let levels = narrow_compared
-            .iter()
-            .filter(|name| Path::new(name).ends_with(fixture))
-            .count();
-        assert_eq!(levels, LEVELS.len(), "{fixture} was not compared on EVM");
-    }
+    let agg_make_levels = evm_compared
+        .iter()
+        .filter(|name| Path::new(name).ends_with("evm/agg_make.sntn"))
+        .count();
+    assert_eq!(
+        agg_make_levels,
+        LEVELS.len(),
+        "evm/agg_make.sntn was not compared on EVM"
+    );
 }

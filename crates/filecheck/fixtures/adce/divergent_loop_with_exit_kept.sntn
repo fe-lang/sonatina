@@ -1,0 +1,44 @@
+#! The loop has an exit edge but never takes it: `v2` is 1 on every iteration,
+#! so `sgt 100 v2` always holds. ADCE cannot prove the loop finite and keeps
+#! it, removing only the dead `add` in its body.
+
+target = "evm-ethereum-london"
+
+# sameln: func public %divergent_loop_with_exit_kept() -> i8 {
+# nextln:     block0:
+# nextln:         v0.i8 = or 1.i8 0.i8;
+# nextln:         v1.i8 = add v0 0.i8;
+# nextln:         jump block1;
+# nextln:
+# nextln:     block1:
+# nextln:         v2.i8 = phi (v1 block0) (v5 block2);
+# nextln:         v3.i8 = add v1 99.i8;
+# nextln:         v4.i1 = sgt v3 v2;
+# nextln:         br v4 block2 block3;
+# nextln:
+# nextln:     block2:
+# nextln:         v5.i8 = and 1.i8 1.i8;
+# nextln:         jump block1;
+# nextln:
+# nextln:     block3:
+# nextln:         return 1.i8;
+func public %divergent_loop_with_exit_kept() -> i8 {
+    block0:
+        v0.i8 = or 1.i8 0.i8;
+        v1.i8 = add v0 0.i8;
+        jump block1;
+
+    block1:
+        v2.i8 = phi (v1 block0) (v5 block2);
+        v3.i8 = add v1 99.i8;
+        v4.i1 = sgt v3 v2;
+        br v4 block2 block3;
+
+    block2:
+        v5.i8 = and 1.i8 1.i8;
+        v6.i8 = add v2 v5;
+        jump block1;
+
+    block3:
+        return 1.i8;
+}

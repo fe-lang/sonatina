@@ -130,6 +130,60 @@ pub(super) fn is_type_valid(ctx: &ModuleCtx, ty: Type) -> bool {
     true
 }
 
+/// Whether `ty` has at least one runtime value (IR contract V4):
+/// 0-variant enums, enums whose variants are all uninhabited, enum tags of
+/// uninhabited enums, and structs or non-empty arrays containing an
+/// uninhabited type have no runtime values. Pointers and references remain
+/// inhabited regardless of their pointee type.
+pub(super) fn is_type_inhabited(ctx: &ModuleCtx, ty: Type) -> bool {
+    fn inner(
+        ctx: &ModuleCtx,
+        ty: Type,
+        visiting: &mut FxHashSet<CompoundTypeRef>,
+        memo: &mut FxHashMap<CompoundTypeRef, bool>,
+    ) -> bool {
+        let compound = match ty {
+            Type::Compound(compound) | Type::EnumTag(compound) => compound,
+            _ => return true,
+        };
+        if let Some(&cached) = memo.get(&compound) {
+            return cached;
+        }
+        if !visiting.insert(compound) {
+            // Recursive by-value cycles are rejected separately by `is_type_valid`.
+            return true;
+        }
+        let Some(data) = ctx.with_ty_store(|store| store.get_compound(compound).cloned()) else {
+            visiting.remove(&compound);
+            return true;
+        };
+        let inhabited = match data {
+            CompoundType::Array { elem, len } => len == 0 || inner(ctx, elem, visiting, memo),
+            CompoundType::Struct(data) => {
+                data.fields.iter().all(|&f| inner(ctx, f, visiting, memo))
+            }
+            CompoundType::Enum(data) => data
+                .variants
+                .iter()
+                .any(|v| v.fields.iter().all(|&f| inner(ctx, f, visiting, memo))),
+            CompoundType::Ptr(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => true,
+        };
+        visiting.remove(&compound);
+        memo.insert(compound, inhabited);
+        inhabited
+    }
+
+    inner(
+        ctx,
+        ty,
+        &mut FxHashSet::default(),
+        &mut FxHashMap::default(),
+    )
+}
+
 pub(super) fn is_pointer_ty(ctx: &ModuleCtx, ty: Type) -> bool {
     let Type::Compound(cmpd_ref) = ty else {
         return false;

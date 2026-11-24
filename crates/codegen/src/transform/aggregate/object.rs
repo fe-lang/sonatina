@@ -142,6 +142,8 @@ impl ObjectLowerToMemory {
             return changed;
         }
 
+        changed |= fold_enum_make_stores(func);
+
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
@@ -163,7 +165,61 @@ impl ObjectLowerToMemory {
     fn rewrite_types(&self, func: &mut Function, type_lowerer: &mut ObjRefTypeLowerer) -> bool {
         rewrite_function_type_uses(func, type_lowerer, |_, _, _| None)
     }
+}
 
+/// Folds `obj.store dst (enum.make V args...)` into `enum.write_variant dst V args...`
+/// before enum lowering, at every optimization level, so storing a freshly built enum
+/// writes only the active variant's payload fields and tag.
+fn fold_enum_make_stores(func: &mut Function) -> bool {
+    let mut folded = false;
+    let mut candidate_makes = Vec::new();
+    let blocks: Vec<_> = func.layout.iter_block().collect();
+    for block in blocks {
+        let insts: Vec<_> = func.layout.iter_inst(block).collect();
+        for inst in insts {
+            let Some(store) = func.dfg.downcast::<&data::ObjStore>(inst).cloned() else {
+                continue;
+            };
+            let Some(make_inst) = func.dfg.value_inst(*store.value()) else {
+                continue;
+            };
+            let Some(make) = func.dfg.downcast::<&data::EnumMake>(make_inst).cloned() else {
+                continue;
+            };
+            let is = func.inst_set();
+            func.dfg.replace_inst(
+                inst,
+                Box::new(data::EnumWriteVariant::new_unchecked(
+                    is,
+                    *store.object(),
+                    *make.variant(),
+                    make.values().clone(),
+                )),
+            );
+            candidate_makes.push(make_inst);
+            folded = true;
+        }
+    }
+    if folded {
+        func.rebuild_users();
+        for make_inst in candidate_makes {
+            if !func.layout.is_inst_inserted(make_inst) {
+                continue;
+            }
+            if func
+                .dfg
+                .inst_result(make_inst)
+                .is_some_and(|result| func.dfg.users_num(result) == 0)
+            {
+                func.layout.remove_inst(make_inst);
+                func.erase_inst(make_inst);
+            }
+        }
+    }
+    folded
+}
+
+impl ObjectLowerToMemory {
     fn collect_alloc_kinds(
         &self,
         func: &Function,

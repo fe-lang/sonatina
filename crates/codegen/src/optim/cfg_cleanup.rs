@@ -338,7 +338,7 @@ func private %caller() {
     }
 
     #[test]
-    fn trims_noreturn_split_continuation_without_undef() {
+    fn trims_noreturn_split_continuation_without_new_values() {
         let module = parse(
             r#"
 target = "evm-ethereum-osaka"
@@ -375,12 +375,11 @@ block1:
         module.func_store.modify(test_run, |func| {
             assert!(CfgCleanup::new().run(func));
 
-            let dumped = FuncWriter::new(test_run, func).dump_string();
-            assert!(dumped.contains("unreachable;"));
-            assert!(!dumped.contains("eq "));
-            assert!(!dumped.contains("is_zero "));
-            assert!(!dumped.contains("undef"));
-            assert_eq!(func.layout.iter_block().count(), 1);
+            // Nothing of the continuation is left, and no value is made for it.
+            assert_eq!(
+                FuncWriter::new(test_run, func).dump_string(),
+                "func private %test_run() {\n    block0:\n        v0.i256 = call %run;\n        unreachable;\n}\n",
+            );
         });
     }
 
@@ -488,11 +487,10 @@ block4:
         module.func_store.modify(dead_region, |func| {
             assert!(CfgCleanup::new().run(func));
 
-            let dumped = FuncWriter::new(dead_region, func).dump_string();
-            assert!(!dumped.contains("eq "));
-            assert!(!dumped.contains("is_zero "));
-            assert!(!dumped.contains("undef"));
-            assert_eq!(func.layout.iter_block().count(), 1);
+            assert_eq!(
+                FuncWriter::new(dead_region, func).dump_string(),
+                "func private %dead_region() {\n    block0:\n        return;\n}\n",
+            );
         });
     }
 }

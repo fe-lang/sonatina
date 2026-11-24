@@ -16,9 +16,9 @@ use sonatina_verifier::{VerifierConfig, verify_function_signature};
 use sonatina_codegen::{
     backend::{Backend, BackendOptions},
     optim::Pipeline,
-    transform::{
-        aggregate::{EnumTagLower, check_frame_lifetimes},
-        concrete::{check_concrete_module, concretize},
+    transform::aggregate::{
+        EnumTagLower, check_frame_lifetimes, check_module_fresh_aggregates_folded,
+        fold_fresh_aggregates,
     },
 };
 
@@ -152,16 +152,15 @@ pub const DEFAULT_STACK_BYTES: u32 = memory::DEFAULT_STACK_BYTES;
 /// its frame.
 fn legalize_module(module: &Module) -> Result<(), WasmError> {
     EnumTagLower.run(module);
-    // Translation takes concrete IR: no `undef`, no `freeze`, and fresh
-    // aggregates spelled `agg.make` (`transform::concrete`).
-    concretize(module);
+    // Translation takes fresh aggregates spelled `agg.make`.
+    fold_fresh_aggregates(module);
     for func in module.funcs() {
         let report = verify_function_signature(&module.ctx, func, &VerifierConfig::default());
         if report.has_errors() {
             return Err(WasmError::Invalid(report.to_string()));
         }
     }
-    check_concrete_module(module).map_err(WasmError::Invalid)?;
+    check_module_fresh_aggregates_folded(module).map_err(WasmError::Invalid)?;
     check_frame_lifetimes(module).map_err(WasmError::Unsupported)
 }
 

@@ -8,38 +8,38 @@ target = "evm-ethereum-osaka"
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i256;
-        v93.i1 = is_zero v0;
-        br v93 block1 block4;
+        v73.i1 = is_zero v0;
+        br v73 block1 block4;
 
     block4:
-        v87.i256 = phi (1.i256 block0) (v86 block4);
-        v86.i256 = phi (2.i256 block0) (v85 block4);
-        v85.i256 = phi (3.i256 block0) (v84 block4);
-        v84.i256 = phi (4.i256 block0) (v83 block4);
-        v83.i256 = phi (5.i256 block0) (v82 block4);
-        v82.i256 = phi (6.i256 block0) (v81 block4);
-        v81.i256 = phi (7.i256 block0) (v80 block4);
-        v80.i256 = phi (8.i256 block0) (v79 block4);
-        v79.i256 = phi (9.i256 block0) (v78 block4);
-        v78.i256 = phi (10.i256 block0) (v77 block4);
-        v77.i256 = phi (11.i256 block0) (v76 block4);
-        v76.i256 = phi (12.i256 block0) (v75 block4);
-        v75.i256 = phi (13.i256 block0) (v74 block4);
-        v74.i256 = phi (14.i256 block0) (v73 block4);
-        v73.i256 = phi (15.i256 block0) (v72 block4);
-        v72.i256 = phi (16.i256 block0) (v71 block4);
-        v71.i256 = phi (17.i256 block0) (v70 block4);
-        v70.i256 = phi (18.i256 block0) (v69 block4);
-        v69.i256 = phi (19.i256 block0) (v68 block4);
-        v68.i256 = phi (20.i256 block0) (v87 block4);
-        v67.i256 = phi (0.i256 block0) (v66 block4);
-        v66.i256 = add v67 1.i256;
-        v89.i1 = lt v66 v0;
-        br v89 block4 block1;
+        v67.i256 = phi (1.i256 block0) (v66 block4);
+        v66.i256 = phi (2.i256 block0) (v65 block4);
+        v65.i256 = phi (3.i256 block0) (v64 block4);
+        v64.i256 = phi (4.i256 block0) (v63 block4);
+        v63.i256 = phi (5.i256 block0) (v62 block4);
+        v62.i256 = phi (6.i256 block0) (v61 block4);
+        v61.i256 = phi (7.i256 block0) (v60 block4);
+        v60.i256 = phi (8.i256 block0) (v59 block4);
+        v59.i256 = phi (9.i256 block0) (v58 block4);
+        v58.i256 = phi (10.i256 block0) (v57 block4);
+        v57.i256 = phi (11.i256 block0) (v56 block4);
+        v56.i256 = phi (12.i256 block0) (v55 block4);
+        v55.i256 = phi (13.i256 block0) (v54 block4);
+        v54.i256 = phi (14.i256 block0) (v53 block4);
+        v53.i256 = phi (15.i256 block0) (v52 block4);
+        v52.i256 = phi (16.i256 block0) (v51 block4);
+        v51.i256 = phi (17.i256 block0) (v50 block4);
+        v50.i256 = phi (18.i256 block0) (v49 block4);
+        v49.i256 = phi (19.i256 block0) (v48 block4);
+        v48.i256 = phi (20.i256 block0) (v67 block4);
+        v47.i256 = phi (0.i256 block0) (v46 block4);
+        v46.i256 = add v47 1.i256;
+        v69.i1 = lt v46 v0;
+        br v69 block4 block1;
 
     block1:
-        v90.i256 = phi (20.i256 block0) (v87 block4);
-        mstore 0.i256 v90 i256;
+        v70.i256 = phi (20.i256 block0) (v67 block4);
+        mstore 0.i256 v70 i256;
         evm_return 0.i256 32.i256;
 }
 

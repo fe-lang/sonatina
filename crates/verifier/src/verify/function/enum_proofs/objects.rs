@@ -136,15 +136,13 @@ impl State {
         self.values.get(&id).cloned().unwrap_or_else(|| {
             let ty = verifier.func.dfg.value_ty(id);
             match verifier.func.dfg.value(id) {
-                // Neither an unspecified reference nor the null one names a
-                // location.
-                Value::Undef { .. } | Value::Zero { .. } if ty.is_obj_ref(verifier.ctx) => {
+                // A null object reference names no location.
+                Value::Zero { .. } if ty.is_obj_ref(verifier.ctx) => {
                     ValueState::reference(ty, References::undefined())
                 }
-                Value::Immediate { .. }
-                | Value::Undef { .. }
-                | Value::Zero { .. }
-                | Value::Arg { .. } => ValueState::new(ty, true),
+                Value::Immediate { .. } | Value::Zero { .. } | Value::Arg { .. } => {
+                    ValueState::new(ty, true)
+                }
                 _ => ValueState::new(ty, false),
             }
         })

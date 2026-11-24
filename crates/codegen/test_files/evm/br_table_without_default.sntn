@@ -14,14 +14,30 @@
 
 target = "evm-ethereum-osaka"
 
-# A `br_table` without a default whose cases cover the scrutinee's values: a
-# comparison (cases 1 and 0), a remainder by three (cases 0, 1 and 2) and one
-# by six (cases 0 to 5). The last case is the default of the lowered table.
+# An exhaustive `br_table` without a default over `Type::EnumTag` (A.5): 2, 3,
+# and 6 variants. The last case becomes the default when tags are lowered.
+
+type @Two = enum { #A, #B };
+type @Three = enum { #A, #B, #C };
+type @Six = enum { #A, #B, #C, #D, #E, #F };
 
 func private %by_flag(v0.i256) -> i256 {
     block0:
         v1.i1 = lt v0 5.i256;
-        br_table v1 (1.i1 block1) (0.i1 block2);
+        br v1 block3 block4;
+
+    block3:
+        v2.@Two = enum.make @Two #B ();
+        jump block5;
+
+    block4:
+        v3.@Two = enum.make @Two #A ();
+        jump block5;
+
+    block5:
+        v4.@Two = phi (v2 block3) (v3 block4);
+        v5.enumtag(@Two) = enum.tag v4;
+        br_table v5 (1.enumtag(@Two) block1) (0.enumtag(@Two) block2);
 
     block1:
         return 10.i256;
@@ -33,7 +49,24 @@ func private %by_flag(v0.i256) -> i256 {
 func private %by_three(v0.i256) -> i256 {
     block0:
         v1.i256 = umod v0 3.i256;
-        br_table v1 (0.i256 block1) (1.i256 block2) (2.i256 block3);
+        br_table v1 block6 (0.i256 block4) (1.i256 block5);
+
+    block4:
+        v2.@Three = enum.make @Three #A ();
+        jump block7;
+
+    block5:
+        v3.@Three = enum.make @Three #B ();
+        jump block7;
+
+    block6:
+        v4.@Three = enum.make @Three #C ();
+        jump block7;
+
+    block7:
+        v5.@Three = phi (v2 block4) (v3 block5) (v4 block6);
+        v6.enumtag(@Three) = enum.tag v5;
+        br_table v6 (0.enumtag(@Three) block1) (1.enumtag(@Three) block2) (2.enumtag(@Three) block3);
 
     block1:
         return 100.i256;
@@ -48,7 +81,36 @@ func private %by_three(v0.i256) -> i256 {
 func private %by_six(v0.i256) -> i256 {
     block0:
         v1.i256 = umod v0 6.i256;
-        br_table v1 (0.i256 block1) (1.i256 block2) (2.i256 block3) (3.i256 block4) (4.i256 block5) (5.i256 block6);
+        br_table v1 block12 (0.i256 block7) (1.i256 block8) (2.i256 block9) (3.i256 block10) (4.i256 block11);
+
+    block7:
+        v2.@Six = enum.make @Six #A ();
+        jump block13;
+
+    block8:
+        v3.@Six = enum.make @Six #B ();
+        jump block13;
+
+    block9:
+        v4.@Six = enum.make @Six #C ();
+        jump block13;
+
+    block10:
+        v5.@Six = enum.make @Six #D ();
+        jump block13;
+
+    block11:
+        v6.@Six = enum.make @Six #E ();
+        jump block13;
+
+    block12:
+        v7.@Six = enum.make @Six #F ();
+        jump block13;
+
+    block13:
+        v8.@Six = phi (v2 block7) (v3 block8) (v4 block9) (v5 block10) (v6 block11) (v7 block12);
+        v9.enumtag(@Six) = enum.tag v8;
+        br_table v9 (0.enumtag(@Six) block1) (1.enumtag(@Six) block2) (2.enumtag(@Six) block3) (3.enumtag(@Six) block4) (4.enumtag(@Six) block5) (5.enumtag(@Six) block6);
 
     block1:
         return 1000.i256;

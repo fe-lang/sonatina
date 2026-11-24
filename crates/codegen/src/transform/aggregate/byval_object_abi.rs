@@ -969,9 +969,7 @@ impl ObjectAggregateAbi {
             let loaded = self.insert_entry_obj_load(function, arg.hidden_arg, arg.original_ty);
             function.dfg.change_to_alias(arg.old_arg, loaded);
         }
-        function.dfg.values[arg.old_arg] = Value::Undef {
-            ty: arg.original_ty,
-        };
+        function.dfg.delete_value(arg.old_arg);
     }
 
     fn insert_entry_obj_load(&self, function: &mut Function, object: ValueId, ty: Type) -> ValueId {
@@ -1310,9 +1308,6 @@ impl ObjectAggregateAbi {
                 RetAbiKind::OutObject => {
                     let out_root = out_roots[out_idx];
                     if function.dfg.users_num(old_result) == 0 {
-                        function.dfg.values[old_result] = Value::Undef {
-                            ty: ret_plan.original_ty,
-                        };
                         out_idx += 1;
                         continue;
                     }
@@ -2364,7 +2359,7 @@ block0:
 
 func public %entry() -> i256 {
 block0:
-    v0.[i256; 20] = agg.make [i256; 20] 1.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v0.[i256; 20] = agg.make [i256; 20] 1.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     v1.i256 = call %sum v0;
     return v1;
 }
@@ -2443,7 +2438,7 @@ block0:
 func private %caller() -> i256 {
 block0:
     v0.objref<[i256; 8]> = obj.alloc [i256; 8];
-    v1.[i256; 8] = agg.make [i256; 8] 1.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 1.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v0 v1;
     v2.[i256; 8] = obj.load v0;
     v3.i256 = call %readonly v2;
@@ -2489,7 +2484,7 @@ block0:
 func private %caller() -> i256 {
 block0:
     v0.objref<[i256; 8]> = obj.alloc [i256; 8];
-    v1.[i256; 8] = agg.make [i256; 8] 1.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 1.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v0 v1;
     v2.[i256; 8] = obj.load v0;
     v3.i256 = call %mutate v2;
@@ -2538,7 +2533,7 @@ block0:
 func private %caller() -> i256 {
 block0:
     v0.objref<[i256; 8]> = obj.alloc [i256; 8];
-    v1.[i256; 8] = agg.make [i256; 8] undef.i256 2.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 0.i256 2.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v0 v1;
     v2.[i256; 8] = obj.load v0;
     v3.i256 = call %pair_read v2 v2;
@@ -2589,7 +2584,7 @@ block0:
 func private %caller() -> i256 {
 block0:
     v0.objref<[i256; 8]> = obj.alloc [i256; 8];
-    v1.[i256; 8] = agg.make [i256; 8] 1.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 1.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v0 v1;
     v2.[i256; 8] = obj.load v0;
     v3.i256 = call %mix v2 v2;
@@ -2653,7 +2648,7 @@ block0:
 func private %caller() -> i256 {{
 block0:
     v0.objref<@Choice> = obj.alloc @Choice;
-    v1.[i256; 8] = agg.make [i256; 8] 7.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 7.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     enum.write_variant v0 #Some (v1, 11.i256);
     v2.objref<[i256; 8]> = enum.proj v0 #Some 0.i8;
     v3.[i256; 8] = obj.load v2;
@@ -2690,7 +2685,7 @@ type @Choice = enum {{ #None, #Some([i256; 20]) }};
 func private %make(v0.objref<@Choice>) -> [i256; 20] {{
 block0:
     v1.objref<[i256; 20]> = obj.alloc [i256; 20];
-    v2.[i256; 20] = agg.make [i256; 20] 7.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v2.[i256; 20] = agg.make [i256; 20] 7.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v1 v2;
     {during_call}
     v3.[i256; 20] = obj.load v1;
@@ -2747,7 +2742,7 @@ block0:
 func private %caller() -> i256 {{
 block0:
     v0.objref<@Outer> = obj.alloc @Outer;
-    v1.[i256; 8] = agg.make [i256; 8] 7.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 7.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     v2.@Choice = enum.make @Choice #Some (v1);
     enum.write_variant v0 #On (v2);
     v3.objref<@Choice> = enum.proj v0 #On 0.i8;
@@ -2850,7 +2845,7 @@ block0:
 func private %make() -> objref<[i256; 8]> {
 block0:
     v0.objref<[i256; 8]> = obj.alloc [i256; 8];
-    v1.[i256; 8] = agg.make [i256; 8] 7.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 7.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v0 v1;
     v2.[i256; 8] = obj.load v0;
     v3.i256 = call %mutate v2;
@@ -3033,7 +3028,7 @@ target = "evm-ethereum-osaka"
 func private %make() -> [i256; 20] {{
 block0:
     {access}
-    v0.[i256; 20] = agg.make [i256; 20] 7.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v0.[i256; 20] = agg.make [i256; 20] 7.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     return v0;
 }}
 func private %caller({signature}) {{
@@ -3098,7 +3093,7 @@ target = "evm-ethereum-osaka"
 func private %make(v0.objref<i256>, v1.objref<i256>) -> [i256; 20] {
 block0:
     obj.store v1 7.i256;
-    return undef.[i256; 20];
+    return zero.[i256; 20];
 }
 func private %wrapper(v0.objref<i256>, v1.objref<i256>) {
 block0:
@@ -3145,7 +3140,7 @@ block0:
 target = "evm-ethereum-osaka"
 func private %make() -> (i256, [i256; 20]) {
 block0:
-    v0.[i256; 20] = agg.make [i256; 20] 7.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v0.[i256; 20] = agg.make [i256; 20] 7.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     return (3.i256, v0);
 }
 func private %consume(v0.[i256; 20], v1.i256) -> i256 {
@@ -3179,7 +3174,7 @@ block0:
 target = "evm-ethereum-osaka"
 func private %make() -> [i256; 20] {
 block0:
-    v0.[i256; 20] = agg.make [i256; 20] 7.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v0.[i256; 20] = agg.make [i256; 20] 7.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     return v0;
 }
 func private %consume(v0.[i256; 20]) -> i256 {
@@ -3215,7 +3210,7 @@ block0:
 target = "evm-ethereum-osaka"
 func private %make() -> [i256; 20] {
 block0:
-    v0.[i256; 20] = agg.make [i256; 20] 7.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v0.[i256; 20] = agg.make [i256; 20] 7.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     return v0;
 }
 func private %consume(v0.[i256; 20]) -> i256 {
@@ -3264,7 +3259,7 @@ block1:
     return v2;
 block2:
     v3.i256 = obj.load v1;
-    v4.[i256; 20] = agg.make [i256; 20] v3 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v4.[i256; 20] = agg.make [i256; 20] v3 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     return v4;
 }
 func private %caller(v0.objref<[i256; 20]>, v1.objref<i256>) {
@@ -3340,7 +3335,7 @@ block0:
 func private %caller() -> i256 {
 block0:
     v0.objref<[i256; 8]> = obj.alloc [i256; 8];
-    v1.[i256; 8] = agg.make [i256; 8] 1.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 1.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v0 v1;
     v2.[i256; 8] = obj.load v0;
     v3.i256 = call %mix v2 v0;
@@ -3392,7 +3387,7 @@ block0:
 func private %caller() -> i256 {
 block0:
     v0.objref<[i256; 8]> = obj.alloc [i256; 8];
-    v1.[i256; 8] = agg.make [i256; 8] 1.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 1.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v0 v1;
     v2.[i256; 8] = obj.load v0;
     v3.objref<i256> = obj.index v0 0.i8;
@@ -3483,8 +3478,8 @@ block0:
 func private %caller() -> i256 {
 block0:
     v0.objref<[[i256; 8]; 2]> = obj.alloc [[i256; 8]; 2];
-    v1.[i256; 8] = agg.make [i256; 8] 1.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
-    v2.[i256; 8] = agg.make [i256; 8] 2.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 1.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
+    v2.[i256; 8] = agg.make [i256; 8] 2.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     v4.[[i256; 8]; 2] = agg.make [[i256; 8]; 2] v1 v2;
     obj.store v0 v4;
     v5.objref<[i256; 8]> = obj.index v0 0.i8;
@@ -3669,10 +3664,10 @@ block0:
 func private %main() -> i1 {
 block0:
     v0.objref<[i256; 5]> = obj.alloc [i256; 5];
-    v2.[i256; 5] = agg.make [i256; 5] 0.i256 1.i256 undef.i256 undef.i256 undef.i256;
+    v2.[i256; 5] = agg.make [i256; 5] 0.i256 1.i256 0.i256 0.i256 0.i256;
     obj.store v0 v2;
     v3.objref<[i8; 5]> = obj.alloc [i8; 5];
-    v5.[i8; 5] = agg.make [i8; 5] 0.i8 1.i8 undef.i8 undef.i8 undef.i8;
+    v5.[i8; 5] = agg.make [i8; 5] 0.i8 1.i8 0.i8 0.i8 0.i8;
     obj.store v3 v5;
     v6.objref<@Pair> = obj.alloc @Pair;
     v7.objref<[i256; 5]> = obj.proj v6 0.i8;
@@ -4000,8 +3995,8 @@ block0:
 func private %caller() -> i256 {
 block0:
     v0.objref<[[i256; 8]; 2]> = obj.alloc [[i256; 8]; 2];
-    v1.[i256; 8] = agg.make [i256; 8] 1.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
-    v2.[[i256; 8]; 2] = agg.make [[i256; 8]; 2] v1 undef.[i256; 8];
+    v1.[i256; 8] = agg.make [i256; 8] 1.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
+    v2.[[i256; 8]; 2] = agg.make [[i256; 8]; 2] v1 zero.[i256; 8];
     obj.store v0 v2;
     v3.objref<[i256; 8]> = obj.index v0 0.i8;
     v4.objref<[i256; 8]> = obj.index v0 0.i8;
@@ -4053,7 +4048,7 @@ block0:
 func private %caller() -> i256 {
 block0:
     v0.objref<[i256; 8]> = obj.alloc [i256; 8];
-    v1.[i256; 8] = agg.make [i256; 8] 1.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 1.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v0 v1;
     v2.@holder = agg.make @holder v0;
     v3.[i256; 8] = obj.load v0;
@@ -4110,7 +4105,7 @@ block0:
 func private %caller() -> i256 {
 block0:
     v0.objref<[i256; 8]> = obj.alloc [i256; 8];
-    v1.[i256; 8] = agg.make [i256; 8] undef.i256 2.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 0.i256 2.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v0 v1;
     v2.[i256; 8] = obj.load v0;
     v3.@holder = agg.make @holder v0;
@@ -4161,7 +4156,7 @@ block0:
 func private %caller() -> i256 {
 block0:
     v0.objref<[i256; 8]> = obj.alloc [i256; 8];
-    v1.[i256; 8] = agg.make [i256; 8] 1.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 8] = agg.make [i256; 8] 1.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v0 v1;
     v2.[i256; 8] = obj.load v0;
     v3.@holder = agg.make @holder v0;
@@ -4263,7 +4258,7 @@ target = "evm-ethereum-osaka"
 
 func private %make() -> [i256; 20] {
 block0:
-    v0.[i256; 20] = agg.make [i256; 20] 7.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v0.[i256; 20] = agg.make [i256; 20] 7.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     return v0;
 }
 
@@ -4309,7 +4304,7 @@ target = "evm-ethereum-osaka"
 
 func private %make() -> [i256; 20] {
 block0:
-    v0.[i256; 20] = agg.make [i256; 20] 7.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v0.[i256; 20] = agg.make [i256; 20] 7.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     return v0;
 }
 
@@ -4348,7 +4343,7 @@ target = "evm-ethereum-osaka"
 func private %make() -> [i256; 20] {
 block0:
     v0.objref<[i256; 20]> = obj.alloc [i256; 20];
-    v1.[i256; 20] = agg.make [i256; 20] 7.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256 undef.i256;
+    v1.[i256; 20] = agg.make [i256; 20] 7.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256 0.i256;
     obj.store v0 v1;
     v2.[i256; 20] = obj.load v0;
     return v2;
@@ -4419,7 +4414,7 @@ func private %mix() -> (i256, @big, @small) {
 block0:
     v0.objref<@big> = obj.alloc @big;
     v1.@big = obj.load v0;
-    v2.@small = agg.make @small 1.i256 undef.i256;
+    v2.@small = agg.make @small 1.i256 0.i256;
     return (7.i256, v1, v2);
 }
 "#,

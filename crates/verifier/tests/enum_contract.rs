@@ -1516,7 +1516,7 @@ block1:
 block2:
  jump block3;
 block3:
- v2.objref<{object}> = phi (undef.objref<{object}> block1) (v0 block2);
+ v2.objref<{object}> = phi (zero.objref<{object}> block1) (v0 block2);
  v3.i8 = phi (0.i8 block1) (1.i8 block2);
  br_table v3 block5 (1.i8 block4);
 block4:
@@ -1548,7 +1548,7 @@ block0:
 }
 func private %entry() -> i256 {
 block0:
- v0.objref<i256> = call %ignore undef.objref<@E>;
+ v0.objref<i256> = call %ignore zero.objref<@E>;
  v1.i256 = obj.load v0;
  return v1;
 }
@@ -1570,7 +1570,7 @@ block0:
  v0.objref<@E> = obj.alloc @E;
  enum.write_variant v0 #Some (17.i256);
  v1.objref<i256> = enum.proj v0 #Some 0.i8;
- call %poke undef.objref<@E> v0;
+ call %poke zero.objref<@E> v0;
  v2.i256 = obj.load v1;
  return v2;
 }
@@ -1584,7 +1584,7 @@ block0:
 
 #[test]
 fn havoc_replaces_an_undefined_reference_cell() {
-    // A call can replace an exposed cell holding `undef`: what is reloaded is
+    // A call can replace an exposed cell holding null: what is reloaded is
     // the call's reference alternative. Verifier-domain only, since `%noop`
     // leaves the cell undefined and the concrete load would have no meaning.
     let source = r#"
@@ -1600,7 +1600,7 @@ block0:
  v0.objref<@E> = obj.alloc @E;
  v1.objref<@Cell> = obj.alloc @Cell;
  v2.objref<objref<i256>> = obj.proj v1 0.i8;
- obj.store v2 undef.objref<i256>;
+ obj.store v2 zero.objref<i256>;
  call %noop v1;
  v3.objref<i256> = obj.load v2;
  v4.i256 = obj.load v3;
@@ -1648,32 +1648,32 @@ fn undefined_reference_guarded_view_is_kept_and_still_invalidated() {
 
 #[test]
 fn undefined_reference_strict_uses_are_reported() {
-    // A strict use of a reference that is `undef` on every path is reported
+    // A strict use of a reference that is null on every path is reported
     // and ends the path, so the invalid read after it is not.
     const UNDEFINED: &str = "object reference operand is undefined";
     for (strict, expected) in [
-        ("v9.i256 = obj.load undef.objref<i256>;", &[UNDEFINED][..]),
-        ("obj.store undef.objref<i256> 1.i256;", &[UNDEFINED]),
+        ("v9.i256 = obj.load zero.objref<i256>;", &[UNDEFINED][..]),
+        ("obj.store zero.objref<i256> 1.i256;", &[UNDEFINED]),
         (
-            "v9.enumtag(@E) = enum.get_tag undef.objref<@E>;",
+            "v9.enumtag(@E) = enum.get_tag zero.objref<@E>;",
             &[UNDEFINED],
         ),
-        ("enum.set_tag undef.objref<@E> #None;", &[UNDEFINED]),
+        ("enum.set_tag zero.objref<@E> #None;", &[UNDEFINED]),
         (
-            "enum.write_variant undef.objref<@E> #Some (1.i256);",
-            &[UNDEFINED],
-        ),
-        (
-            "v9.@P = const.load v8;\n obj.store undef.objref<@P> v9;",
+            "enum.write_variant zero.objref<@E> #Some (1.i256);",
             &[UNDEFINED],
         ),
         (
-            "v9.*@E = obj.materialize.stack undef.objref<@E>;",
+            "v9.@P = const.load v8;\n obj.store zero.objref<@P> v9;",
+            &[UNDEFINED],
+        ),
+        (
+            "v9.*@E = obj.materialize.stack zero.objref<@E>;",
             &[UNDEFINED],
         ),
         // A trusted assumption about no location is contradicted, not a use.
         (
-            "v9.objref<@E> = enum.assert_variant_ref undef.objref<@E> #Some;",
+            "v9.objref<@E> = enum.assert_variant_ref zero.objref<@E> #Some;",
             &[],
         ),
     ] {
@@ -1709,13 +1709,13 @@ block1:
 block2:
  jump block3;
 block3:
- v1.objref<i256> = phi (undef.objref<i256> block1) (undef.objref<i256> block2);
+ v1.objref<i256> = phi (zero.objref<i256> block1) (zero.objref<i256> block2);
  v2.i256 = obj.load v1;
  return v2;
 }
 "#;
     assert_eq!(errors(merged), [UNDEFINED]);
-    // A real cell holding `undef`: loading the cell is fine, dereferencing the
+    // A real cell holding null: loading the cell is fine, dereferencing the
     // loaded reference is not.
     let stored = r#"
 target = "evm-ethereum-osaka"
@@ -1726,7 +1726,7 @@ block0:
  v0.objref<@E> = obj.alloc @E;
  v1.objref<@Cell> = obj.alloc @Cell;
  v2.objref<objref<i256>> = obj.proj v1 0.i8;
- obj.store v2 undef.objref<i256>;
+ obj.store v2 zero.objref<i256>;
  v3.objref<i256> = obj.load v2;
  v4.i256 = obj.load v3;
  return v4;
@@ -1737,7 +1737,7 @@ block0:
 
 #[test]
 fn undefined_reference_projection_is_transport() {
-    // Address formation from `undef` is not a use: the projection may run on
+    // Address formation from null is not a use: the projection may run on
     // the fallback path ahead of the dispatch that guards the read.
     let source = r#"
 target = "evm-ethereum-osaka"
@@ -1752,7 +1752,7 @@ block1:
 block2:
  jump block3;
 block3:
- v2.objref<@E> = phi (undef.objref<@E> block1) (v0 block2);
+ v2.objref<@E> = phi (zero.objref<@E> block1) (v0 block2);
  v3.i8 = phi (0.i8 block1) (1.i8 block2);
  v4.objref<i256> = enum.proj v2 #Some 0.i8;
  br_table v3 block5 (1.i8 block4);

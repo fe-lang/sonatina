@@ -390,7 +390,6 @@ fn fold_bitwise_pair(
         (Xor, Or, Xor) | (Xor, Xor, Or) => And,
         _ => return None,
     };
-    // Both original inputs remain operands, preserving strict undef dependencies.
     Some(InstSpec::Binary {
         kind,
         lhs: Operand::Value(x),
@@ -787,6 +786,9 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
             CastInstKind::Zext => Some(Box::new(cast::Zext::new(is.has_zext()?, from, ty))),
             CastInstKind::Sext => Some(Box::new(cast::Sext::new(is.has_sext()?, from, ty))),
             CastInstKind::Trunc => Some(Box::new(cast::Trunc::new(is.has_trunc()?, from, ty))),
+            CastInstKind::TruncNuw => {
+                Some(Box::new(cast::TruncNuw::new(is.has_trunc_nuw()?, from, ty)))
+            }
             CastInstKind::Bitcast | CastInstKind::IntToPtr | CastInstKind::PtrToInt => None,
         },
     }
@@ -860,6 +862,7 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             CastInstKind::Zext => is.has_zext().is_some(),
             CastInstKind::Sext => is.has_sext().is_some(),
             CastInstKind::Trunc => is.has_trunc().is_some(),
+            CastInstKind::TruncNuw => is.has_trunc_nuw().is_some(),
             CastInstKind::Bitcast | CastInstKind::IntToPtr | CastInstKind::PtrToInt => false,
         },
     }
@@ -1606,28 +1609,6 @@ block0:
                 }
             }
         }
-    }
-
-    #[test]
-    fn bitwise_pairs_retain_undef_operands() {
-        let source = r#"target = "evm-ethereum-osaka"
-func public %f(v0.i256) -> i256 {
-block0:
- v1.i256 = add undef.i256 v0;
- v2.i256 = and v0 v1;
- v3.i256 = xor v0 v1;
- v4.i256 = or v2 v3;
- return v4;
-}"#;
-        let (module, f) = parse_test_module(source);
-        module.func_store.modify(f, |func| {
-            ScalarCanonicalize::new().run(func);
-        });
-        let dumped = dump_func(&module, f);
-        assert!(dumped.contains("add undef.i256 v0"), "{dumped}");
-        assert!(dumped.contains("or v0 v1"), "{dumped}");
-        assert!(!dumped.contains(" = and "), "{dumped}");
-        assert!(!dumped.contains(" = xor "), "{dumped}");
     }
 
     #[test]

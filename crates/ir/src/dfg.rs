@@ -73,6 +73,8 @@ pub struct DataFlowGraph {
     pub immediates: FxHashMap<Immediate, ValueId>,
     #[doc(hidden)]
     pub globals: FxHashMap<GlobalVariableRef, ValueId>,
+    #[doc(hidden)]
+    pub zeros: FxHashMap<Type, ValueId>,
     users: SecondaryMap<ValueId, ValueUsers>,
 }
 
@@ -111,6 +113,7 @@ impl Clone for DataFlowGraph {
             inst_results: self.inst_results.clone(),
             immediates: self.immediates.clone(),
             globals: self.globals.clone(),
+            zeros: self.zeros.clone(),
             users: self.users.clone(),
         }
     }
@@ -129,6 +132,7 @@ impl DataFlowGraph {
             inst_results: SecondaryMap::default(),
             immediates: FxHashMap::default(),
             globals: FxHashMap::default(),
+            zeros: FxHashMap::default(),
             users: SecondaryMap::default(),
         }
     }
@@ -176,14 +180,24 @@ impl DataFlowGraph {
         value
     }
 
-    pub fn make_undef_value(&mut self, ty: Type) -> ValueId {
-        let value_data = Value::Undef { ty };
-        self.make_value(value_data)
-    }
-
     /// The constant `zero.ty`: the value of `ty` whose bits are all zero.
     pub fn make_zero_value(&mut self, ty: Type) -> ValueId {
-        self.make_value(Value::Zero { ty })
+        if let Some(&value) = self.zeros.get(&ty) {
+            return value;
+        }
+        let value = self.make_value(Value::Zero { ty });
+        self.zeros.insert(ty, value);
+        value
+    }
+
+    /// The canonical zero constant of `ty`: an immediate for integral and
+    /// enum-tag types, and interned `zero.ty` for unit and compound types.
+    pub fn make_zero_const(&mut self, ty: Type) -> ValueId {
+        if ty.is_integral() || ty.is_enum_tag() {
+            self.make_imm_value(Immediate::zero(ty))
+        } else {
+            self.make_zero_value(ty)
+        }
     }
 
     /// Returns inst if the value is originated from inst.
@@ -415,7 +429,6 @@ impl DataFlowGraph {
             | Value::Arg { ty, .. }
             | Value::Immediate { ty, .. }
             | Value::Global { ty, .. }
-            | Value::Undef { ty }
             | Value::Zero { ty } => *ty,
         }
     }
@@ -434,13 +447,28 @@ impl DataFlowGraph {
             Value::Inst { ty, .. }
             | Value::Arg { ty, .. }
             | Value::Global { ty, .. }
-            | Value::Undef { ty }
             | Value::Zero { ty } => *ty = new_ty,
         }
     }
 
     pub fn value_is_imm(&self, value_id: ValueId) -> bool {
         matches!(self.value(value_id), Value::Immediate { .. })
+    }
+
+    pub fn value_is_zero(&self, value_id: ValueId) -> bool {
+        matches!(self.value(value_id), Value::Zero { .. })
+    }
+
+    /// Returns the immediate value represented by `value_id`, including
+    /// integral and enum-tag `zero.ty` constants.
+    pub fn value_const_imm(&self, value_id: ValueId) -> Option<Immediate> {
+        match self.value(value_id) {
+            Value::Immediate { imm, .. } => Some(*imm),
+            Value::Zero { ty } if ty.is_integral() || ty.is_enum_tag() => {
+                Some(Immediate::zero(*ty))
+            }
+            _ => None,
+        }
     }
 
     pub fn attach_user(&mut self, inst_id: InstId) {
@@ -667,7 +695,7 @@ impl DataFlowGraph {
         self.live_blocks[block] = false;
     }
 
-    fn delete_value(&mut self, value_id: ValueId) {
+    pub fn delete_value(&mut self, value_id: ValueId) {
         assert!(
             self.has_value(value_id),
             "cannot delete missing value {value_id:?}"
@@ -678,11 +706,14 @@ impl DataFlowGraph {
         );
 
         match self.values[value_id] {
-            Value::Immediate { imm, .. } => {
+            Value::Immediate { imm, .. } if self.immediates.get(&imm) == Some(&value_id) => {
                 self.immediates.remove(&imm);
             }
-            Value::Global { gv, .. } => {
+            Value::Global { gv, .. } if self.globals.get(&gv) == Some(&value_id) => {
                 self.globals.remove(&gv);
+            }
+            Value::Zero { ty } if self.zeros.get(&ty) == Some(&value_id) => {
+                self.zeros.remove(&ty);
             }
             _ => {}
         }
@@ -705,7 +736,9 @@ impl DataFlowGraph {
     pub fn rebuild_value_caches(&mut self) {
         self.immediates.clear();
         self.globals.clear();
+        self.zeros.clear();
         let value_ids: Vec<_> = self.value_ids().collect();
+        let mut dup_zeros = Vec::new();
         for value_id in value_ids {
             match &self.values[value_id] {
                 Value::Immediate { imm, .. } => {
@@ -714,8 +747,20 @@ impl DataFlowGraph {
                 Value::Global { gv, .. } => {
                     self.globals.insert(*gv, value_id);
                 }
+                Value::Zero { ty } => {
+                    let ty = *ty;
+                    if let Some(&canonical) = self.zeros.get(&ty) {
+                        dup_zeros.push((value_id, canonical));
+                    } else {
+                        self.zeros.insert(ty, value_id);
+                    }
+                }
                 _ => {}
             }
+        }
+        for (dup, canonical) in dup_zeros {
+            self.change_to_alias(dup, canonical);
+            self.delete_value(dup);
         }
     }
 
@@ -764,10 +809,13 @@ impl DataFlowGraph {
     /// when hoisted above a branch. Moving it only to positions its old one
     /// dominates needs [`Self::has_value_semantics`] alone.
     pub fn can_speculate(&self, inst_id: InstId) -> bool {
-        // Payload extraction is pure, but requires an active-variant proof at
-        // its use site, which hoisting above a branch or assumption can lose.
+        // Payload extraction and unchecked narrowing are pure, but require an
+        // active-variant / high-bits-zero proof at their use site, which
+        // hoisting above a branch or assumption can lose.
         self.has_value_semantics(inst_id)
             && downcast::<&EnumExtract>(self.inst_set(), self.inst(inst_id)).is_none()
+            && downcast::<&crate::inst::cast::TruncNuw>(self.inst_set(), self.inst(inst_id))
+                .is_none()
             && !self.may_fault(inst_id)
     }
 
@@ -1008,7 +1056,10 @@ mod tests {
     fn retype_value_updates_non_immediate_type() {
         let isa = test_isa();
         let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
-        let value = dfg.make_undef_value(Type::I8);
+        let value = dfg.make_value(Value::Arg {
+            ty: Type::I8,
+            idx: 0,
+        });
 
         dfg.retype_value(value, Type::I16);
 
@@ -1217,5 +1268,31 @@ mod tests {
         assert!(!dfg.has_value(sum));
         assert_eq!(dfg.inst_results(inst), &[overflow]);
         assert_eq!(dfg.value_inst_result(overflow), Some((inst, 0)));
+    }
+
+    #[test]
+    fn make_zero_value_interns_and_rebuild_coalesces_duplicates() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let z1 = dfg.make_zero_value(Type::I8);
+        let z2 = dfg.make_zero_value(Type::I8);
+        assert_eq!(z1, z2);
+
+        // Simulate a many-to-one type rewrite making two zero constants equal.
+        let z_other = dfg.make_zero_value(Type::I16);
+        assert_ne!(z1, z_other);
+        let user = dfg.make_inst(Add::new(
+            dfg.inst_set().has_add().unwrap(),
+            z_other,
+            z_other,
+        ));
+        dfg.retype_value(z_other, Type::I8);
+        dfg.rebuild_value_caches();
+
+        assert!(dfg.has_value(z1));
+        assert!(!dfg.has_value(z_other));
+        assert_eq!(dfg.make_zero_value(Type::I8), z1);
+        assert!(dfg.users(z1).any(|&inst| inst == user));
+        assert_eq!(dfg.inst(user).collect_values().as_slice(), &[z1, z1]);
     }
 }

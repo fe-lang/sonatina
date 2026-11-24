@@ -811,13 +811,10 @@ fn non_code_address_uses(function: &Function, isa: &Evm) -> FxHashSet<ValueId> {
 
 /// The provenance of `zero.ty`, that of the `agg.make` of its leaves' zeros.
 /// An integer or enum tag is raw, as the immediate 0 is. A null pointer or
-/// object reference has none, the provenance of `undef`: `concretize` turns
-/// each `undef` into a `zero`, and with this every decision made on a pointer
-/// is the one made on `undef`. It also means an access through `zero.*T` is
-/// undefined behavior: the analyses take it to reach no memory. To make the
+/// object reference has none: an access through `zero.*T` is undefined
+/// behavior (U1), and the analyses take it to reach no memory. To make the
 /// null pointer a raw address instead, which may reach the low fixed slots,
-/// give it `raw: true` here and recompute the escape summaries after
-/// `concretize`.
+/// give it `raw: true` here.
 fn zero_provenance(module: &ModuleCtx, ty: Type) -> Provenance {
     let raw = Provenance {
         raw: true,
@@ -1029,6 +1026,15 @@ pub(crate) fn compute_provenance(
                             memory_load(&data, module).expect("matched a memory load");
                         next.union_with(&info.load_value_memory(addr, bytes));
                     }
+                    EvmInstKind::EvmMloadBytes(load) => {
+                        let bytes =
+                            value_imm_u32(function, *load.len()).map(|len| (len as usize).min(32));
+                        if bytes != Some(0) {
+                            next.union_with(
+                                &info.load_value_memory(*load.addr(), bytes.unwrap_or(32)),
+                            );
+                        }
+                    }
                     EvmInstKind::Phi(phi) => {
                         for (val, _) in phi.args().iter() {
                             let _ = next.union_with(&info.value[*val]);
@@ -1048,10 +1054,6 @@ pub(crate) fn compute_provenance(
                     }
                     EvmInstKind::Bitcast(bc) => {
                         let _ = next.union_with(&info.value[*bc.from()]);
-                    }
-                    // Freezes reach memory legalization; lowering makes each its argument.
-                    EvmInstKind::Freeze(freeze) => {
-                        let _ = next.union_with(&info.value[*freeze.arg()]);
                     }
                     EvmInstKind::BlackBox(black_box) => {
                         let _ = next.union_with(&info.value[*black_box.arg()]);
@@ -1094,6 +1096,7 @@ pub(crate) fn compute_provenance(
                     | EvmInstKind::Sext(_)
                     | EvmInstKind::Zext(_)
                     | EvmInstKind::Trunc(_)
+                    | EvmInstKind::TruncNuw(_)
                     | EvmInstKind::EvmSdiv(_)
                     | EvmInstKind::EvmUdiv(_)
                     | EvmInstKind::EvmUmod(_)

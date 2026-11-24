@@ -4235,7 +4235,9 @@ mod tests {
         },
     };
     use cranelift_entity::SecondaryMap;
-    use sonatina_ir::{Function, I256, Immediate, Type, U256, ValueId, cfg::ControlFlowGraph};
+    use sonatina_ir::{
+        Function, I256, Immediate, Type, U256, Value, ValueId, cfg::ControlFlowGraph,
+    };
     use sonatina_parser::parse_module;
     use std::cell::Cell;
 
@@ -4282,10 +4284,16 @@ func public %f() {
         (0..state.len()).map(|idx| state.get(idx)).collect()
     }
 
-    fn make_undefs(func: &mut Function, count: usize) -> Vec<ValueId> {
-        (0..count)
-            .map(|_| func.dfg.make_undef_value(Type::I256))
-            .collect()
+    fn make_dummy_value(func: &mut Function) -> ValueId {
+        let idx = func.dfg.values.len();
+        func.dfg.make_value(Value::Arg {
+            ty: Type::I256,
+            idx,
+        })
+    }
+
+    fn make_dummies(func: &mut Function, count: usize) -> Vec<ValueId> {
+        (0..count).map(|_| make_dummy_value(func)).collect()
     }
 
     fn push_values(stack: &mut SymStack, values: &[ValueId]) {
@@ -4592,8 +4600,8 @@ func public %f() {
     #[test]
     fn operand_prep_heuristic_lets_a_load_satisfy_preservation() {
         with_stackify_ctx!(16, |func, ctx| {
-            let x = func.dfg.make_undef_value(Type::I256);
-            let y = func.dfg.make_undef_value(Type::I256);
+            let x = make_dummy_value(func);
+            let y = make_dummy_value(func);
         } {
             let cost = EstimatedCostModel::default();
             let cfg = default_search_cfg(&ctx, 0);
@@ -4639,7 +4647,7 @@ func public %f() {
 
         // Reach 2 (DUP2, SWAP2) with a six-slot window leaves copies below reach.
         with_stackify_ctx!(2, |func, ctx| {
-            let pool = make_undefs(func, 4);
+            let pool = make_dummies(func, 4);
         } {
             let cost = EstimatedCostModel::default();
             let mut seed = 0x9e37_79b9_7f4a_7c15u64;
@@ -4729,8 +4737,8 @@ func public %f() {
     #[test]
     fn operand_prep_heuristic_requires_reachable_operand_copies() {
         with_stackify_ctx!(16, |func, ctx| {
-            let x = func.dfg.make_undef_value(Type::I256);
-            let y = func.dfg.make_undef_value(Type::I256);
+            let x = make_dummy_value(func);
+            let y = make_dummy_value(func);
         } {
             let cost = EstimatedCostModel::default();
             let key_infos = [KeyInfo::Val { vid: x }, KeyInfo::Val { vid: y }];
@@ -5048,8 +5056,8 @@ func public %f() {
             //   start:  [p0..p4, s0..s24]
             //   goal:   [s0, p0..p4, s0..s24]
             // where the shared suffix is [s0..s24] (25 items) and the repair region is <= SWAP17.
-            let prefix = make_undefs(func, 5);
-            let suffix = make_undefs(func, 25);
+            let prefix = make_dummies(func, 5);
+            let suffix = make_dummies(func, 25);
         } {
             let mut stack = SymStack::entry_stack(func, false);
             push_values(&mut stack, &suffix);
@@ -5153,8 +5161,8 @@ func public %f() {
     #[test]
     fn repair_greedy_builder_keeps_costly_goal_key_accessible_while_trimming() {
         with_stackify_ctx!(16, |func, ctx| {
-            let a = func.dfg.make_undef_value(Type::I256);
-            let b = func.dfg.make_undef_value(Type::I256);
+            let a = make_dummy_value(func);
+            let b = make_dummy_value(func);
         } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(a);
@@ -5201,8 +5209,8 @@ func public %f() {
     #[test]
     fn repair_greedy_builder_can_dup_from_frozen_suffix_when_search_budget_is_zero() {
         with_stackify_ctx!(16, |func, ctx| {
-            let prefix = make_undefs(func, 5);
-            let suffix = make_undefs(func, 25);
+            let prefix = make_dummies(func, 5);
+            let suffix = make_dummies(func, 25);
         } {
             let mut stack = SymStack::entry_stack(func, false);
             push_values(&mut stack, &suffix);
@@ -5248,10 +5256,10 @@ func public %f() {
     #[test]
     fn repair_greedy_builder_uses_swap_dup_for_deep_repair_source() {
         with_stackify_ctx!(16, |func, ctx| {
-            let extra = func.dfg.make_undef_value(Type::I256);
-            let mids = make_undefs(func, 15);
-            let target = func.dfg.make_undef_value(Type::I256);
-            let suffix = func.dfg.make_undef_value(Type::I256);
+            let extra = make_dummy_value(func);
+            let mids = make_dummies(func, 15);
+            let target = make_dummy_value(func);
+            let suffix = make_dummy_value(func);
         } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(suffix);
@@ -5309,10 +5317,10 @@ func public %f() {
     #[test]
     fn repair_greedy_builder_materializes_only_true_deficits() {
         with_stackify_ctx!(16, |func, ctx| {
-            let extra = func.dfg.make_undef_value(Type::I256);
-            let keep = func.dfg.make_undef_value(Type::I256);
-            let reuse = func.dfg.make_undef_value(Type::I256);
-            let suffix_tail = func.dfg.make_undef_value(Type::I256);
+            let extra = make_dummy_value(func);
+            let keep = make_dummy_value(func);
+            let reuse = make_dummy_value(func);
+            let suffix_tail = make_dummy_value(func);
             let missing = func.dfg.make_imm_value(Immediate::I8(7));
         } {
             let mut stack = SymStack::entry_stack(func, false);
@@ -5369,11 +5377,11 @@ func public %f() {
     #[test]
     fn repair_greedy_builder_preserves_frozen_suffix() {
         with_stackify_ctx!(16, |func, ctx| {
-            let extra = func.dfg.make_undef_value(Type::I256);
-            let keep = func.dfg.make_undef_value(Type::I256);
-            let suffix0 = func.dfg.make_undef_value(Type::I256);
-            let suffix1 = func.dfg.make_undef_value(Type::I256);
-            let suffix2 = func.dfg.make_undef_value(Type::I256);
+            let extra = make_dummy_value(func);
+            let keep = make_dummy_value(func);
+            let suffix0 = make_dummy_value(func);
+            let suffix1 = make_dummy_value(func);
+            let suffix2 = make_dummy_value(func);
         } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(suffix2);
@@ -5464,8 +5472,8 @@ func public %f() {
     #[test]
     fn dup_pop_preferred_over_load_when_expensive() {
         with_stackify_ctx!(16, |func, ctx| {
-            let x = func.dfg.make_undef_value(Type::I256);
-            let y = func.dfg.make_undef_value(Type::I256);
+            let x = make_dummy_value(func);
+            let y = make_dummy_value(func);
         } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(y);
@@ -5516,7 +5524,7 @@ func public %f() {
     #[test]
     fn normalize_incumbent_materializes_missing_keys_before_routing() {
         with_stackify_ctx!(16, |func, ctx| {
-            let vals = make_undefs(func, 5);
+            let vals = make_dummies(func, 5);
             let imms = [
                 func.dfg.make_imm_value(Immediate::I8(2)),
                 func.dfg.make_imm_value(Immediate::I8(4)),
@@ -5552,9 +5560,9 @@ func public %f() {
     #[test]
     fn permutation_only_sanity() {
         with_stackify_ctx!(16, |func, ctx| {
-            let a = func.dfg.make_undef_value(Type::I256);
-            let b = func.dfg.make_undef_value(Type::I256);
-            let c = func.dfg.make_undef_value(Type::I256);
+            let a = make_dummy_value(func);
+            let b = make_dummy_value(func);
+            let c = make_dummy_value(func);
         } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(c);
@@ -5589,9 +5597,9 @@ func public %f() {
             let imm0_b = func.dfg.make_imm_value(Immediate::I256(I256::zero()));
             let imm1 = func.dfg.make_imm_value(Immediate::I8(1));
             let imm_neg1 = func.dfg.make_imm_value(Immediate::I8(-1));
-            let undef = make_undefs(func, 4);
+            let dummies = make_dummies(func, 4);
             let pool: [ValueId; 8] = [
-                imm0_a, imm0_b, imm1, imm_neg1, undef[0], undef[1], undef[2], undef[3],
+                imm0_a, imm0_b, imm1, imm_neg1, dummies[0], dummies[1], dummies[2], dummies[3],
             ];
         } {
             struct Rng(u64);
@@ -5715,7 +5723,7 @@ func public %f() {
                 func.dfg.make_imm_value(Immediate::I8(1)),
                 func.dfg.make_imm_value(Immediate::I8(2)),
             ];
-            let unrelated = make_undefs(func, 20);
+            let unrelated = make_dummies(func, 20);
         } {
             let mut stack = SymStack::entry_stack(func, false);
             push_values(&mut stack, &unrelated);
@@ -5746,9 +5754,9 @@ func public %f() {
     #[test]
     fn operand_prep_effective_window_uses_tail_for_deep_preserve_copy() {
         with_stackify_ctx!(16, |func, ctx| {
-            let x = func.dfg.make_undef_value(Type::I256);
+            let x = make_dummy_value(func);
             let imm = func.dfg.make_imm_value(Immediate::I8(7));
-            let filler = make_undefs(func, 10);
+            let filler = make_dummies(func, 10);
         } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(x);
@@ -5772,9 +5780,9 @@ func public %f() {
     #[test]
     fn operand_prep_effective_window_keeps_deep_operand_source() {
         with_stackify_ctx!(16, |func, ctx| {
-            let x = func.dfg.make_undef_value(Type::I256);
+            let x = make_dummy_value(func);
             let imm = func.dfg.make_imm_value(Immediate::I8(9));
-            let filler = make_undefs(func, 15);
+            let filler = make_dummies(func, 15);
         } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(x);
@@ -5817,11 +5825,11 @@ func public %f() {
     #[test]
     fn operand_prep_anonymizes_ignored_values_in_effective_window() {
         with_stackify_ctx!(16, |func, ctx| {
-            let x = func.dfg.make_undef_value(Type::I256);
-            let ignored_a = func.dfg.make_undef_value(Type::I256);
-            let ignored_b = func.dfg.make_undef_value(Type::I256);
-            let ignored_c = func.dfg.make_undef_value(Type::I256);
-            let ignored_d = func.dfg.make_undef_value(Type::I256);
+            let x = make_dummy_value(func);
+            let ignored_a = make_dummy_value(func);
+            let ignored_b = make_dummy_value(func);
+            let ignored_c = make_dummy_value(func);
+            let ignored_d = make_dummy_value(func);
         } {
             let search_cfg = default_search_cfg(&ctx, 50_000);
             let build_problem = |top: ValueId, mid: ValueId| {
@@ -5855,8 +5863,8 @@ func public %f() {
     #[test]
     fn operand_prep_duplicate_non_last_use_keeps_operand_and_preserve_copies() {
         with_stackify_ctx!(16, |func, ctx| {
-            let x = func.dfg.make_undef_value(Type::I256);
-            let filler = func.dfg.make_undef_value(Type::I256);
+            let x = make_dummy_value(func);
+            let filler = make_dummy_value(func);
         } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(x);
@@ -5898,7 +5906,7 @@ func public %f() {
     #[test]
     fn operand_prep_greedy_upper_bound_beats_linear_on_high_arity_last_use_shuffle() {
         with_stackify_ctx!(4, |func, ctx| {
-            let values = make_undefs(func, 9);
+            let values = make_dummies(func, 9);
             let args: Vec<ValueId> = values[..8].to_vec();
             let start_vals = [
                 args[6], args[5], args[4], args[3], values[8], args[1], args[0], args[7],
@@ -5971,7 +5979,7 @@ func public %f() {
     #[test]
     fn operand_prep_search_caps_pure_last_use_permutations() {
         with_stackify_ctx!(16, |func, ctx| {
-            let args = make_undefs(func, 16);
+            let args = make_dummies(func, 16);
             let order = [14, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 15, 13];
             let start_vals: Vec<ValueId> = order.iter().map(|&idx| args[idx]).collect();
         } {
@@ -6006,7 +6014,7 @@ func public %f() {
     #[test]
     fn operand_prep_routes_last_use_permutation_with_minimal_swaps() {
         with_stackify_ctx!(16, |func, ctx| {
-            let args = make_undefs(func, 16);
+            let args = make_dummies(func, 16);
             let order = [14, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 15, 13];
             let start_vals: Vec<ValueId> = order.iter().map(|&idx| args[idx]).collect();
         } {

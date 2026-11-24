@@ -186,7 +186,7 @@ block0:
 func inline(never) private %make() -> objref<[i64; 8]> {
 block0:
     v0.objref<[i64; 8]> = obj.alloc [i64; 8];
-    v1.[i64; 8] = agg.make [i64; 8] 7.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64 undef.i64;
+    v1.[i64; 8] = agg.make [i64; 8] 7.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64 0.i64;
     obj.store v0 v1;
     v2.[i64; 8] = obj.load v0;
     v3.i64 = call %mutate v2;

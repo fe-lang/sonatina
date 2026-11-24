@@ -8,8 +8,9 @@ use sonatina_ir::{
         control_flow,
         data::{Alloca, Memzero, Mload, Mstore},
         evm::{
-            EvmCalldataLoad, EvmCodeLoad, EvmInvalid, EvmMalloc, EvmMstore8, EvmReturn, EvmRevert,
-            EvmSelfDestruct, EvmSload, EvmSstore, EvmStop, EvmTload, EvmTstore,
+            EvmCalldataLoad, EvmCodeLoad, EvmInvalid, EvmMalloc, EvmMloadBytes, EvmMstore8,
+            EvmReturn, EvmReturnCode, EvmRevert, EvmSelfDestruct, EvmSload, EvmSstore, EvmStop,
+            EvmTload, EvmTstore,
         },
     },
 };
@@ -1138,6 +1139,7 @@ fn forwardable_read_key(
     let is = func.inst_set();
 
     if <&Mload as InstDowncast>::downcast(is, inst_data).is_none()
+        && <&EvmMloadBytes as InstDowncast>::downcast(is, inst_data).is_none()
         && <&EvmSload as InstDowncast>::downcast(is, inst_data).is_none()
         && <&EvmTload as InstDowncast>::downcast(is, inst_data).is_none()
         && <&EvmCalldataLoad as InstDowncast>::downcast(is, inst_data).is_none()
@@ -1237,6 +1239,7 @@ fn exit_commits_visible_writes(func: &Function, block: sonatina_ir::BlockId) -> 
 
     if <&control_flow::Return as InstDowncast>::downcast(is, inst).is_some()
         || <&EvmReturn as InstDowncast>::downcast(is, inst).is_some()
+        || <&EvmReturnCode as InstDowncast>::downcast(is, inst).is_some()
         || <&EvmSelfDestruct as InstDowncast>::downcast(is, inst).is_some()
         || <&EvmStop as InstDowncast>::downcast(is, inst).is_some()
     {
@@ -1290,7 +1293,7 @@ type @nested = {{i256, @pair}};
 func public %f(v0.i256) -> i256 {{
 block0:
     v1.*@nested = alloca @nested;
-    v2.@pair = agg.make @pair 7.i256 undef.i256;
+    v2.@pair = agg.make @pair 7.i256 0.i256;
     v3.@pair = insert_value v2 1.i8 {field};
     v5.@nested = agg.make @nested v0 v3;
     mstore v1 v5 @nested;
@@ -1384,8 +1387,8 @@ block0:
 
     /// A read gives what the store wrote, unspecified fields included.
     #[test]
-    fn reads_take_stored_aggregates_with_undefined_fields() {
-        for field in ["undef.i256", "v0"] {
+    fn reads_take_stored_aggregates_with_zero_fields() {
+        for field in ["0.i256", "v0"] {
             let dumped = forward_pair_read(field);
             assert!(!dumped.contains("mload"), "{field}: {dumped}");
         }

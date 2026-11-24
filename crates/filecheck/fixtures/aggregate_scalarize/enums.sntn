@@ -23,7 +23,7 @@ func public %empty_struct_payload(v0.i1, v1.i256) -> i256 {
         v2.@res = enum.make @res #variant_1 v1;
         jump block3;
     block2:
-        v3.@res = enum.make @res #variant_0 undef.@unit;
+        v3.@res = enum.make @res #variant_0 zero.@unit;
         jump block3;
     block3:
         v4.@res = phi (v2 block1) (v3 block2);
@@ -44,7 +44,7 @@ func public %struct_payload(v0.i1, v1.i64) -> i64 {
     block0:
         br v0 block1 block2;
     block1:
-        v2.@pair = agg.make @pair undef.i8 v1;
+        v2.@pair = agg.make @pair 0.i8 v1;
         v3.@either = enum.make @either #variant_0 v2;
         jump block3;
     block2:
@@ -73,7 +73,7 @@ func public %asserted_variant(v0.i1, v1.i256) -> i256 {
         v2.@res = enum.make @res #variant_1 v1;
         jump block3;
     block2:
-        v3.@res = enum.make @res #variant_0 undef.@unit;
+        v3.@res = enum.make @res #variant_0 zero.@unit;
         jump block3;
     block3:
         v4.@res = phi (v2 block1) (v3 block2);

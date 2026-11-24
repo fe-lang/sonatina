@@ -2435,7 +2435,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
     assert!(stats.full_calls_inlined >= call_count);
 }
 
-const UNDEFINED_PARTS: &str = r#"
+const ZERO_PARTS: &str = r#"
 target = "evm-ethereum-osaka"
 
 type @pair = {i256, i256};
@@ -2457,7 +2457,7 @@ func private %pass_nested(v0.@nested) -> @nested {
 
 func private %partial_pair(v0.i256) -> @pair {
     block0:
-        v1.@pair = agg.make @pair v0 undef.i256;
+        v1.@pair = agg.make @pair v0 0.i256;
         return v1;
 }
 
@@ -2466,9 +2466,9 @@ func private %pass_opt(v0.@opt) -> @opt {
         return v0;
 }
 
-func private %undef_opt() -> @opt {
+func private %zero_opt() -> @opt {
     block0:
-        return undef.@opt;
+        return zero.@opt;
 }
 
 func private %some_opt(v0.i256) -> @opt {
@@ -2479,7 +2479,7 @@ func private %some_opt(v0.i256) -> @opt {
 
 func private %ok() -> @result {
     block0:
-        v0.@result = enum.make @result #Ok (undef.@empty);
+        v0.@result = enum.make @result #Ok (zero.@empty);
         return v0;
 }
 
@@ -2492,7 +2492,7 @@ func public %empty_payload_result() -> i1 {
 
 func public %nested_argument(v0.i256) -> i256 {
     block0:
-        v1.@pair = agg.make @pair v0 undef.i256;
+        v1.@pair = agg.make @pair v0 0.i256;
         v3.@nested = agg.make @nested v0 v1;
         v4.@nested = call %pass_nested v3;
         v5.@pair = extract_value v4 1.i8;
@@ -2509,7 +2509,7 @@ func public %partial_result(v0.i256) -> i256 {
 
 func public %enum_argument() -> i256 {
     block0:
-        v0.@opt = enum.make @opt #Some (undef.i256);
+        v0.@opt = enum.make @opt #Some (0.i256);
         v1.@opt = call %pass_opt v0;
         enum.assert_variant v1 #Some;
         v2.i256 = enum.extract v1 #Some 0.i8;
@@ -2518,7 +2518,7 @@ func public %enum_argument() -> i256 {
 
 func public %enum_result() -> i256 {
     block0:
-        v0.@opt = call %undef_opt;
+        v0.@opt = call %zero_opt;
         enum.assert_variant v0 #Some;
         v1.i256 = enum.extract v0 #Some 0.i8;
         return v1;
@@ -2537,12 +2537,12 @@ func public %defined_enums(v0.i256) -> i256 {
 }
 "#;
 
-/// A call passes arguments and results on unchanged, unspecified parts
-/// included, so every call inlines and nothing is frozen.
+/// A call passes arguments and results on unchanged, zero parts included,
+/// so every call inlines.
 #[test]
-fn inlining_passes_undefined_parts_of_arguments_and_results() {
+fn inlining_passes_zero_parts_of_arguments_and_results() {
     for config in [InlinerConfig::default(), full_only_inliner_test_config()] {
-        let mut module = sonatina_parser::parse_module(UNDEFINED_PARTS)
+        let mut module = sonatina_parser::parse_module(ZERO_PARTS)
             .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
             .module;
         Inliner::new(config).run(&mut module);
@@ -2564,7 +2564,6 @@ fn inlining_passes_undefined_parts_of_arguments_and_results() {
         ] {
             let text = dump(name);
             assert!(!text.contains("call"), "{text}");
-            assert!(!text.contains("freeze"), "{text}");
         }
     }
 }
@@ -2832,7 +2831,7 @@ fn loaded_aggregate_reconstruction_only_discounts_distinct_matching_scalar_loads
                     "%read(v0.objref<@triple>, v10.@triple)",
                 )
                 .replace(make, &inserts("v10"))
-                .replace("call %read v0;", "call %read v0 undef.@triple;"),
+                .replace("call %read v0;", "call %read v0 zero.@triple;"),
         ),
         (
             "aggregate call destination",
@@ -2848,7 +2847,7 @@ fn loaded_aggregate_reconstruction_only_discounts_distinct_matching_scalar_loads
         ),
         (
             "different field",
-            source.replace(make, "v9.@triple = agg.make @triple v6 v4 undef.i256;"),
+            source.replace(make, "v9.@triple = agg.make @triple v6 v4 0.i256;"),
         ),
         (
             "repeated load",
@@ -3030,21 +3029,21 @@ fn agg_make_splices_like_its_insert_chain() {
     // the chain it replaces, one per operand.
     for (chain, make, spliced) in [
         (
-            "v7.@triple = insert_value undef.@triple 0.i256 v2;\n        \
+            "v7.@triple = insert_value zero.@triple 0.i256 v2;\n        \
              v8.@triple = insert_value v7 1.i256 v4;\n        \
              v9.@triple = insert_value v8 2.i256 v6;",
             "v9.@triple = agg.make @triple v2 v4 v6;",
             7,
         ),
         (
-            "v7.@triple = insert_value undef.@triple 0.i256 v2;\n        \
+            "v7.@triple = insert_value zero.@triple 0.i256 v2;\n        \
              v8.@triple = insert_value v7 1.i256 v4;\n        \
              v9.@triple = insert_value v8 0.i256 v6;",
-            "v9.@triple = agg.make @triple v6 v4 undef.i256;",
+            "v9.@triple = agg.make @triple v6 v4 0.i256;",
             0,
         ),
         (
-            "v7.@triple = insert_value undef.@triple 0.i256 v2;\n        \
+            "v7.@triple = insert_value zero.@triple 0.i256 v2;\n        \
              v8.@triple = insert_value v7 1.i256 v4;\n        \
              v10.@triple = insert_value v8 2.i256 v6;\n        \
              v9.@triple = insert_value v10 2.i256 v6;",

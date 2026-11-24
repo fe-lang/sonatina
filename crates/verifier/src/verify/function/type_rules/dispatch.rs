@@ -84,12 +84,6 @@ impl VerifyInst for data::Sha256Compress {
     }
 }
 
-impl VerifyInst for data::Freeze {
-    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
-        verifier.verify_freeze(inst_id, *self.arg());
-    }
-}
-
 impl VerifyInst for logic::Bswap {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         verifier.verify_unary_integral_same(inst_id, *self.arg(), "bswap");
@@ -858,6 +852,7 @@ impl_ext_cast_rule!(
     cast::Sext => (true, "sext"),
     cast::Zext => (true, "zext"),
     cast::Trunc => (false, "trunc"),
+    cast::TruncNuw => (false, "trunc_nuw"),
 );
 
 impl VerifyInst for cmp::IsZero {
@@ -2165,6 +2160,36 @@ impl VerifyInst for control_flow::BrTable {
                 ));
             }
         }
+        if self.default().is_none() {
+            match scrutinee_ty {
+                Type::EnumTag(enum_ref) => {
+                    let variant_count = verifier.ctx.with_ty_store(|store| {
+                        store.enum_data(enum_ref).map(|data| data.variants.len())
+                    });
+                    if let Some(variant_count) = variant_count {
+                        let exhaustive = seen_keys.len() == variant_count
+                            && seen_keys.iter().all(|imm| {
+                                imm.to_nonnegative_usize()
+                                    .is_some_and(|idx| idx < variant_count)
+                            });
+                        if !exhaustive {
+                            verifier.emit(Diagnostic::error(
+                                DiagnosticCode::NonExhaustiveBrTable,
+                                "default-less br_table over enum tag must cover every variant",
+                                location.clone(),
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    verifier.emit(Diagnostic::error(
+                        DiagnosticCode::NonExhaustiveBrTable,
+                        "br_table without a default requires an exhaustive enum tag scrutinee",
+                        location.clone(),
+                    ));
+                }
+            }
+        }
         verifier.expect_no_result(inst_id, location);
     }
 
@@ -2394,6 +2419,7 @@ impl_evm_no_result_rule!(
     evm::EvmLog3,
     evm::EvmLog4,
     evm::EvmReturn,
+    evm::EvmReturnCode,
     evm::EvmRevert,
     evm::EvmSelfDestruct,
 );
@@ -2450,6 +2476,25 @@ impl VerifyInst for evm::EvmCodeLoad {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         verifier.verify_evm_rule_common(inst_id, &self.collect_values(), false);
         verifier.expect_result_ty(inst_id, Type::I256, verifier.inst_location(inst_id));
+    }
+}
+
+impl VerifyInst for evm::EvmMloadBytes {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        verifier.verify_evm_rule_common(inst_id, &self.collect_values(), false);
+        verifier.expect_result_ty(inst_id, Type::I256, verifier.inst_location(inst_id));
+        if let Some(len) = verifier.value_imm(*self.len())
+            && len.as_i256().to_u256() > U256::from(32)
+        {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::MloadBytesLengthOutOfRange,
+                    "evm_mload_bytes length must be at most 32",
+                    verifier.inst_location(inst_id),
+                )
+                .with_note(format!("length {}", len.as_i256().to_u256())),
+            );
+        }
     }
 }
 

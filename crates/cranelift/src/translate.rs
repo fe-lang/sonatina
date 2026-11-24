@@ -1144,11 +1144,28 @@ fn translate_function(
                         value_map.insert(result, result_val);
                     }
                 }
-                NativeInstKind::Freeze(_) => {
-                    return Err(
-                        "translation takes concrete IR: `concretize` leaves no `freeze`"
-                            .to_string(),
-                    );
+                NativeInstKind::TruncNuw(trunc) => {
+                    let to_ty = sonatina_type_to_clif_or_err(*trunc.ty(), pointer_type)?;
+                    let result_val = match function.dfg.value_ty(*trunc.from()) {
+                        Type::I256 => {
+                            let limbs =
+                                resolve_i256(function, *trunc.from(), &value_map, &mut builder)?;
+                            truncate_limbs(limbs, to_ty, &mut builder)
+                        }
+                        Type::I128 => {
+                            let val =
+                                resolve_value(function, *trunc.from(), &value_map, &mut builder)?;
+                            truncate_i128(val, to_ty, &mut builder)
+                        }
+                        _ => {
+                            let val =
+                                resolve_value(function, *trunc.from(), &value_map, &mut builder)?;
+                            resize_int_value(val, to_ty, false, &mut builder)
+                        }
+                    };
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        value_map.insert(result, result_val);
+                    }
                 }
                 NativeInstKind::Bitcast(bitcast)
                     if [function.dfg.value_ty(*bitcast.from()), *bitcast.ty()]
@@ -2025,7 +2042,8 @@ fn translate_function(
                     value_map.insert_parts(result, values);
                 }
                 NativeInstKind::InsertValue(insert) => {
-                    // No insert into an `agg.make` is left (`check_concrete`);
+                    // No insert into an `agg.make` is left
+                    // (`check_fresh_aggregates_folded`);
                     // an insert into a `zero` copies it like any base.
                     let Some(result) = function.dfg.inst_result(inst_id) else {
                         continue;
@@ -2419,7 +2437,7 @@ fn translate_function(
                         let result_ty = function.dfg.value_ty(result);
                         let addr =
                             storage_address(&frame, function, result, &value_map, &mut builder)?;
-                        // `undef` fields are zero, written first. Padding is
+                        // `zero` fields are written first. Padding is
                         // not part of the value, so it keeps whatever it
                         // holds.
                         let mut written = Vec::new();

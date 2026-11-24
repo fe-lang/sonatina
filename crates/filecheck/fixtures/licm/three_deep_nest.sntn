@@ -1,0 +1,53 @@
+#! The innermost loop exits to the outermost loop's latch, so `block2` is in
+#! the outermost loop although it reaches the latch only through the middle
+#! loop. Its invariant `v6` hoists out of the outermost loop.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %three_deep_nest(v0.i256, v1.i256, v2.i256, v3.i1, v4.i256) -> i256 {
+# nextln:     block0:
+# nextln:         v6.i256 = mul v4 3.i256;
+# nextln:         jump block1;
+# check:      block2:
+# nextln:         v8.i256 = add v5 v6;
+# nextln:         jump block3;
+func public %three_deep_nest(v0.i256, v1.i256, v2.i256, v3.i1, v4.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v5.i256 = phi (0.i256 block0) (v15 block7);
+        v7.i1 = lt v5 v0;
+        br v7 block7 block2;
+
+    block2:
+        v6.i256 = mul v4 3.i256;
+        v8.i256 = add v5 v6;
+        jump block3;
+
+    block3:
+        v9.i256 = phi (0.i256 block2) (v14 block6);
+        v10.i1 = lt v9 v1;
+        br v10 block4 block8;
+
+    block4:
+        v11.i256 = phi (0.i256 block3) (v13 block5);
+        v12.i1 = lt v11 v2;
+        br v12 block5 block7;
+
+    block5:
+        v13.i256 = add v11 1.i256;
+        evm_mstore v13 v8;
+        br v3 block4 block6;
+
+    block6:
+        v14.i256 = add v9 1.i256;
+        jump block3;
+
+    block7:
+        v15.i256 = add v5 1.i256;
+        jump block1;
+
+    block8:
+        return v5;
+}

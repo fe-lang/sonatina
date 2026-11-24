@@ -71,6 +71,7 @@ pub trait Interpret {
         inst::cast::Sext,
         inst::cast::Zext,
         inst::cast::Trunc,
+        inst::cast::TruncNuw,
         inst::cast::IntToPtr,
         inst::cast::PtrToInt,
         inst::cast::Bitcast,
@@ -88,7 +89,6 @@ pub trait Interpret {
         inst::data::Mload,
         inst::data::Mstore,
         inst::data::BlackBox,
-        inst::data::Freeze,
         inst::data::Gep,
         inst::data::GetFunctionPtr,
         inst::data::Alloca,
@@ -134,9 +134,9 @@ pub trait State {
     /// from the current state. It is typically used in an interpreter to
     /// fetch the result of a previously computed expression or constant.
     ///
-    /// NOTE: If the value cannot be found or is uninitialized, this method is
-    /// allowed to return an undefined (`Undef`) value. A state
-    /// needs to decide how to deal with the situation(e.g., report an
+    /// NOTE: If the value cannot be found or is non-constant, this method is
+    /// allowed to return an unknown (`Unknown`) value. A state
+    /// needs to decide how to deal with the situation (e.g., report an
     /// error, or cause a panic).
     fn lookup_val(&mut self, value: ValueId) -> EvalValue;
 
@@ -162,13 +162,6 @@ pub trait State {
     fn alloca(&mut self, ty: Type) -> EvalValue;
 
     fn dfg(&self) -> &DataFlowGraph;
-
-    /// The value `freeze` gives for `value` of type `ty`. Running code fixes
-    /// an unspecified value to zero; an abstract state, whose `Undef` can
-    /// stand for a value it does not know yet, keeps it.
-    fn freeze(&mut self, value: EvalValue, ty: Type) -> EvalValue {
-        value.fixed(&self.dfg().ctx, ty)
-    }
 }
 
 /// The type of the immediate that holds a scalar of `ty`: a pointer is held in
@@ -201,15 +194,13 @@ pub enum EvalValue {
         ty: Type,
     },
     #[default]
-    Undef,
+    Unknown,
 }
 
 impl EvalValue {
-    /// One concrete value of `ty` for `self`: an unspecified scalar becomes
-    /// zero, and each field of a struct or array is fixed in turn, keeping
-    /// those already set. `freeze` gives it; the interpreter also fixes
-    /// values at memory reads and call boundaries, where a concrete value
-    /// refines the unspecified one.
+    /// One concrete value of `ty` for `self`: an unknown scalar becomes zero,
+    /// and each field of a struct or array is fixed in turn, keeping those
+    /// already set.
     pub fn fixed(self, ctx: &ModuleCtx, ty: Type) -> Self {
         let field_tys = match ty.resolve_compound(ctx) {
             Some(CompoundType::Struct(s)) => s.fields,
@@ -217,7 +208,7 @@ impl EvalValue {
             _ => {
                 let imm_ty = imm_ty(ctx, ty);
                 return match self {
-                    EvalValue::Undef if imm_ty.is_integral() || imm_ty.is_enum_tag() => {
+                    EvalValue::Unknown if imm_ty.is_integral() || imm_ty.is_enum_tag() => {
                         EvalValue::Imm(Immediate::zero(imm_ty))
                     }
                     value => value,
@@ -226,7 +217,7 @@ impl EvalValue {
         };
         let fields = match self {
             EvalValue::Aggregate { fields, .. } => fields,
-            EvalValue::Undef => vec![EvalValue::Undef; field_tys.len()],
+            EvalValue::Unknown => vec![EvalValue::Unknown; field_tys.len()],
             value @ EvalValue::Imm(_) => return value,
         };
         EvalValue::Aggregate {
@@ -247,7 +238,7 @@ impl EvalValue {
         match self {
             EvalValue::Imm(value) => f(value).into(),
             EvalValue::Aggregate { .. } => panic!("Type checker needs to handle this!"),
-            EvalValue::Undef => EvalValue::Undef,
+            EvalValue::Unknown => EvalValue::Unknown,
         }
     }
 
@@ -260,7 +251,7 @@ impl EvalValue {
             (EvalValue::Imm(l), EvalValue::Imm(r)) => f(l, r).into(),
             (EvalValue::Aggregate { .. }, _) => panic!("Type checker needs to handle this!"),
             (_, EvalValue::Aggregate { .. }) => panic!("Type checker needs to handle this!"),
-            _ => EvalValue::Undef,
+            _ => EvalValue::Unknown,
         }
     }
 
@@ -271,8 +262,8 @@ impl EvalValue {
         }
     }
 
-    pub fn is_undef(&self) -> bool {
-        matches!(self, Self::Undef)
+    pub fn is_unknown(&self) -> bool {
+        matches!(self, Self::Unknown)
     }
 }
 
@@ -291,7 +282,7 @@ impl fmt::Display for EvalValue {
                 }
                 write!(f, " }}")
             }
-            Self::Undef => write!(f, "undef"),
+            Self::Unknown => write!(f, "unknown"),
         }
     }
 }

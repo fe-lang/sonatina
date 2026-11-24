@@ -36,44 +36,44 @@ func public %entry() {
         v26.objref<[i256; 5]> = obj.alloc [i256; 5];
         v28.objref<[i256; 5]> = obj.alloc [i256; 5];
         mstore v24 0.i256 i256;
-        v56.i256 = ptr_to_int v24 i256;
+        v55.i256 = ptr_to_int v24 i256;
         jump block4;
 
     block4:
-        v33.i256 = phi (7.i256 block0) (v55 block9);
-        v34.i256 = mload v24 i256;
-        v35.i1 = lt v34 1.i256;
-        br v35 block5 block6;
+        v32.i256 = phi (7.i256 block0) (v54 block9);
+        v33.i256 = mload v24 i256;
+        v34.i1 = lt v33 1.i256;
+        br v34 block5 block6;
 
     block5:
         obj.store v25 v12;
-        v38.objref<i8> = obj.index v25 v34;
-        v39.i8 = obj.load v38;
-        v62.i1 = is_zero v39;
-        br v62 block7 block8;
+        v37.objref<i8> = obj.index v25 v33;
+        v38.i8 = obj.load v37;
+        v61.i1 = is_zero v38;
+        br v61 block7 block8;
 
     block6:
-        v61.i1 = eq v33 18.i256;
-        br v61 block1 block15;
+        v60.i1 = eq v32 18.i256;
+        br v60 block1 block15;
 
     block7:
         obj.store v26 v20;
-        v43.objref<i256> = obj.index v26 v34;
-        v44.i256 = obj.load v43;
-        (v45.i256, v46.i1) = uaddo v33 v44;
-        br v46 block10 block9;
+        v42.objref<i256> = obj.index v26 v33;
+        v43.i256 = obj.load v42;
+        (v44.i256, v45.i1) = uaddo v32 v43;
+        br v45 block10 block9;
 
     block8:
         obj.store v28 v20;
-        v50.objref<i256> = obj.index v28 v34;
-        v51.i256 = obj.load v50;
-        (v52.i256, v53.i1) = uaddo v51 v33;
-        br v53 block10 block9;
+        v49.objref<i256> = obj.index v28 v33;
+        v50.i256 = obj.load v49;
+        (v51.i256, v52.i1) = uaddo v50 v32;
+        br v52 block10 block9;
 
     block9:
-        v55.i256 = phi (v45 block7) (v52 block8);
-        v70.i256 = add v34 1.i256;
-        mstore v56 v70 i256;
+        v54.i256 = phi (v44 block7) (v51 block8);
+        v63.i256 = add v33 1.i256;
+        mstore v55 v63 i256;
         jump block4;
 
     block10:

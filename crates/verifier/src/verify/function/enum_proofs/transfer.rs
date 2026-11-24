@@ -72,7 +72,7 @@ impl Outcome {
     }
 }
 
-// A strict use of an `undef` object reference, which names no location, has
+// A strict use of a null object reference, which names no location, has
 // no defined continuation. Ending the path keeps the transfer monotone: an
 // empty write would leave the pre-write state in a later join.
 const UNDEFINED_REFERENCE: &str = "object reference operand is undefined";

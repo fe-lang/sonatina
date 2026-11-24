@@ -4,9 +4,9 @@ input_file: test_files/enum_lowering/recursive_tags.sntn
 ---
 target = "evm-ethereum-osaka"
 
-type @__enum_lowered_Loop_0 = {i1, i1};
-type @__enum_lowered_Ping_1 = {i1, i8};
-type @__enum_lowered_Pong_2 = {i8, i1};
+type @__enum_lowered_Loop_0 = {i1, i256};
+type @__enum_lowered_Ping_1 = {i1, i256};
+type @__enum_lowered_Pong_2 = {i8, i256};
 type @Loop = enum {
     #Tagged(enumtag(@Loop)),
     #Plain,
@@ -24,15 +24,19 @@ type @Pong = enum {
 func private %retag(v0.@__enum_lowered_Loop_0) -> i1 {
     block0:
         v6.i1 = extract_value v0 0.i64;
-        v8.@__enum_lowered_Loop_0 = agg.make @__enum_lowered_Loop_0 0.i1 v6;
-        v10.i1 = extract_value v8 1.i64;
-        return v10;
+        v8.i256 = zext v6 i256;
+        v9.@__enum_lowered_Loop_0 = agg.make @__enum_lowered_Loop_0 0.i1 v8;
+        v11.i256 = extract_value v9 1.i64;
+        v12.i1 = trunc_nuw v11 i1;
+        return v12;
 }
 
 func private %bounce(v0.@__enum_lowered_Ping_1) -> i1 {
     block0:
         v6.i1 = extract_value v0 0.i64;
-        v7.@__enum_lowered_Pong_2 = agg.make @__enum_lowered_Pong_2 0.i8 v6;
-        v9.i1 = extract_value v7 1.i64;
-        return v9;
+        v7.i256 = zext v6 i256;
+        v8.@__enum_lowered_Pong_2 = agg.make @__enum_lowered_Pong_2 0.i8 v7;
+        v10.i256 = extract_value v8 1.i64;
+        v11.i1 = trunc_nuw v10 i1;
+        return v11;
 }

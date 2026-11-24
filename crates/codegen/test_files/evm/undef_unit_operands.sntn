@@ -5,7 +5,7 @@
 
 target = "evm-ethereum-osaka"
 
-# A scalar `unit` argument takes no stack word, so an `undef.unit` argument
+# A scalar `unit` argument takes no stack word, so an `zero.unit` argument
 # pushes nothing.
 
 func private %second(v0.unit, v1.i256) -> i256 {
@@ -22,8 +22,8 @@ func private %forward(v0.unit, v1.i256) -> i256 {
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
-        v1.i256 = call %second undef.unit v0;
-        v2.i256 = call %forward undef.unit v1;
+        v1.i256 = call %second zero.unit v0;
+        v2.i256 = call %forward zero.unit v1;
         mstore 0.i32 v1 i256;
         mstore 32.i32 v2 i256;
         evm_return 0.i32 64.i32;

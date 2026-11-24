@@ -122,7 +122,7 @@ impl Generator<'_> {
 
     fn array_value(&mut self) -> String {
         if self.pool.arrays.is_empty() || self.rng.below(4) == 0 {
-            let mut current = "undef.[i32; 4]".to_string();
+            let mut current = "zero.[i32; 4]".to_string();
             for k in 0..4 {
                 let element = self.pick(&self.pool.i32s.clone());
                 let n = self.name();

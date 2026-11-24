@@ -28,7 +28,7 @@ impl Interpret for Uaddo {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
-            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+            return smallvec::smallvec![EvalValue::Unknown, EvalValue::Unknown];
         };
 
         let (sum, overflow) = lhs.overflowing_uadd(rhs);
@@ -55,7 +55,7 @@ impl Interpret for Saddo {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
-            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+            return smallvec::smallvec![EvalValue::Unknown, EvalValue::Unknown];
         };
 
         let (sum, overflow) = lhs.overflowing_sadd(rhs);
@@ -95,7 +95,7 @@ impl Interpret for Usubo {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
-            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+            return smallvec::smallvec![EvalValue::Unknown, EvalValue::Unknown];
         };
 
         let (diff, overflow) = lhs.overflowing_usub(rhs);
@@ -122,7 +122,7 @@ impl Interpret for Ssubo {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
-            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+            return smallvec::smallvec![EvalValue::Unknown, EvalValue::Unknown];
         };
 
         let (diff, overflow) = lhs.overflowing_ssub(rhs);
@@ -161,7 +161,7 @@ impl Interpret for Umulo {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
-            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+            return smallvec::smallvec![EvalValue::Unknown, EvalValue::Unknown];
         };
 
         let (product, overflow) = lhs.overflowing_umul(rhs);
@@ -188,7 +188,7 @@ impl Interpret for Smulo {
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
-            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+            return smallvec::smallvec![EvalValue::Unknown, EvalValue::Unknown];
         };
 
         let (product, overflow) = lhs.overflowing_smul(rhs);
@@ -214,7 +214,7 @@ impl Interpret for Snego {
 
         let value = state.lookup_val(*self.arg());
         let EvalValue::Imm(value) = value else {
-            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+            return smallvec::smallvec![EvalValue::Unknown, EvalValue::Unknown];
         };
 
         let (negated, overflow) = value.overflowing_sneg();
@@ -231,7 +231,7 @@ impl Interpret for Sdiv {
 
         single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
             if rhs.is_zero() {
-                return EvalValue::Undef;
+                return EvalValue::Unknown;
             }
             lhs.sdiv(rhs).into()
         }))
@@ -247,7 +247,7 @@ impl Interpret for Udiv {
 
         single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
             if rhs.is_zero() {
-                return EvalValue::Undef;
+                return EvalValue::Unknown;
             }
             lhs.udiv(rhs).into()
         }))
@@ -263,7 +263,7 @@ impl Interpret for Umod {
 
         single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
             if rhs.is_zero() {
-                return EvalValue::Undef;
+                return EvalValue::Unknown;
             }
             lhs.urem(rhs).into()
         }))
@@ -279,7 +279,7 @@ impl Interpret for Smod {
 
         single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
             if rhs.is_zero() {
-                return EvalValue::Undef;
+                return EvalValue::Unknown;
             }
             lhs.srem(rhs).into()
         }))
@@ -333,7 +333,7 @@ mod tests {
     use crate::interpret::test_state::{TestHasInst, TestState};
 
     #[test]
-    fn div_mod_by_zero_returns_undef() {
+    fn div_mod_by_zero_returns_unknown() {
         let hi = TestHasInst;
         let lhs = crate::ValueId::from_u32(0);
         let rhs = crate::ValueId::from_u32(1);
@@ -345,19 +345,19 @@ mod tests {
 
         assert_eq!(
             Sdiv::new(&hi, lhs, rhs).interpret(&mut state),
-            super::single_result(EvalValue::Undef)
+            super::single_result(EvalValue::Unknown)
         );
         assert_eq!(
             Udiv::new(&hi, lhs, rhs).interpret(&mut state),
-            super::single_result(EvalValue::Undef)
+            super::single_result(EvalValue::Unknown)
         );
         assert_eq!(
             Umod::new(&hi, lhs, rhs).interpret(&mut state),
-            super::single_result(EvalValue::Undef)
+            super::single_result(EvalValue::Unknown)
         );
         assert_eq!(
             Smod::new(&hi, lhs, rhs).interpret(&mut state),
-            super::single_result(EvalValue::Undef)
+            super::single_result(EvalValue::Unknown)
         );
     }
 

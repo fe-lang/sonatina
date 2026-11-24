@@ -76,7 +76,6 @@ impl<'a> OperandRewriter<'a> {
         let mapped = match self.callee.dfg.value(old) {
             Value::Immediate { imm, .. } => self.caller.dfg.make_imm_value(*imm),
             Value::Global { gv, .. } => self.caller.dfg.make_global_value(*gv),
-            Value::Undef { ty } => self.caller.dfg.make_undef_value(*ty),
             Value::Zero { ty } => self.caller.dfg.make_zero_value(*ty),
             Value::Arg { .. } | Value::Inst { .. } => return None,
         };
@@ -85,9 +84,9 @@ impl<'a> OperandRewriter<'a> {
         Some(mapped)
     }
 
-    fn make_undef_for(&mut self, old: ValueId) -> ValueId {
+    fn make_placeholder_for(&mut self, old: ValueId) -> ValueId {
         let ty: Type = self.callee.dfg.value_ty(old);
-        self.caller.dfg.make_undef_value(ty)
+        self.caller.dfg.make_zero_const(ty)
     }
 
     fn in_phi_mode(&self) -> bool {
@@ -113,8 +112,8 @@ impl VisitorMut for OperandRewriter<'_> {
             }
             ValueRewriteMode::AllowForwardRefsInPhi => match self.callee.dfg.value(old) {
                 Value::Inst { .. } => {
-                    let undef = self.make_undef_for(old);
-                    *value = undef;
+                    let placeholder = self.make_placeholder_for(old);
+                    *value = placeholder;
                     self.phi_fixups.push(PhiFixup {
                         arg_index: self.phi_next_arg,
                         old_value: old,

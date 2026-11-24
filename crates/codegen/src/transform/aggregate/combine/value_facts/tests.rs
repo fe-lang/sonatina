@@ -1,5 +1,5 @@
 use super::{
-    super::{inst_const_index, is_explicit_undef, shape},
+    super::{inst_const_index, shape},
     AggregateValueFacts,
 };
 use rustc_hash::FxHashMap;
@@ -34,7 +34,7 @@ fn insertion_forests_match_independent_prefix_evaluation() {
             "target = \"evm-ethereum-osaka\"\nfunc private %f(v0.[i256; 4], v1.[i256; 4], v2.i8) {\nblock0:\n",
         );
         let mut bases = vec![
-            "undef.[i256; 4]".to_string(),
+            "zero.[i256; 4]".to_string(),
             "v0".to_string(),
             "v1".to_string(),
         ];
@@ -51,7 +51,7 @@ fn insertion_forests_match_independent_prefix_evaluation() {
                     ));
                     format!("v{field}")
                 }
-                2 => "undef.i256".to_string(),
+                2 => "0.i256".to_string(),
                 _ => format!("{step}.i256"),
             };
             let base = if step % 3 == 0 {
@@ -89,18 +89,18 @@ block0:
     v3.@pair = extract_value v0 0.i8;
     v4.i256 = extract_value v2 0.i8;
     v5.i256 = extract_value v3 1.i8;
-    v6.@pair = agg.make @pair v4 undef.i256;
+    v6.@pair = agg.make @pair v4 0.i256;
     v7.@pair = insert_value v6 1.i8 v5;
     v8.@pair = extract_value v0 1.i8;
-    v9.@outer = agg.make @outer v7 undef.@pair;
+    v9.@outer = agg.make @outer v7 zero.@pair;
     v10.@outer = insert_value v9 1.i8 v8;
-    v11.@pair = insert_value v6 1.i8 undef.i256;
+    v11.@pair = insert_value v6 1.i8 0.i256;
     v12.@outer = insert_value v9 1.i8 v11;
     v13.@pair = insert_value v6 0.i8 42.i256;
     v14.@pair = insert_value v13 1.i8 v5;
     v15.@outer = insert_value v9 0.i8 v14;
     v16.@outer = insert_value v15 1.i8 v8;
-    v17.[i256; 2] = insert_value undef.[i256; 2] v1 v4;
+    v17.[i256; 2] = insert_value zero.[i256; 2] v1 v4;
     v18.[i256; 2] = insert_value v17 0.i8 v4;
     v19.[i256; 2] = insert_value v18 1.i8 v5;
     v20.@pair = bitcast v19 @pair;
@@ -118,7 +118,7 @@ block2:
     jump block1;
 block1:
     v2.@pair = phi (v1 block0) (v5 block2);
-    v3.@pair = phi (undef.@pair block0) (v6 block2);
+    v3.@pair = phi (zero.@pair block0) (v6 block2);
     v4.@pair = phi (v1 block0) (v4 block2);
     br v0 block2 block3;
 block3:
@@ -154,7 +154,7 @@ fn try_reconstruct_original_aggregate(func: &Function, value: ValueId) -> Option
     }
 
     let source = source?;
-    (!is_explicit_undef(func, source) && func.dfg.value_ty(source) == agg_ty).then_some(source)
+    (func.dfg.value_ty(source) == agg_ty).then_some(source)
 }
 
 fn collect_insert_assignments(func: &Function, value: ValueId) -> Option<FxHashMap<u32, ValueId>> {

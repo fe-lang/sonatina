@@ -805,7 +805,7 @@ func public %f(v0.@P) -> i32 {
         "type @P = { i32, i32 };
 func public %g(v0.i32) -> @P {
     block0:
-        v1.@P = agg.make @P v0 undef.i32;
+        v1.@P = agg.make @P v0 0.i32;
         return v1;
 }",
     );
@@ -837,7 +837,7 @@ func public %g(v0.i32) -> @P {
         "type @P = { i32, i128 };
 func private %m(v0.i32) -> (i32, @P) {
     block0:
-        v1.@P = agg.make @P v0 undef.i128;
+        v1.@P = agg.make @P v0 0.i128;
         return (v0, v1);
 }
 func public %k(v0.i32) -> i32 {

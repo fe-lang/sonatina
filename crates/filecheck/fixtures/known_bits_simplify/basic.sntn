@@ -107,15 +107,6 @@ block0:
     return v3;
 }
 
-# sameln: func public %blocks_copy_fold_for_explicit_undef() -> i256 {
-# check:       v0.i256 = and undef.i256 4294967295.i256;
-# nextln:      return v0;
-func public %blocks_copy_fold_for_explicit_undef() -> i256 {
-block0:
-    v0.i256 = and undef.i256 4294967295.i256;
-    return v0;
-}
-
 # sameln: func public %folds_mask_when_only_low_bits_are_demanded(v0.i256) -> i256 {
 # not:         v1.i256 = and v0 4294967295.i256;
 # check:       v2.i32 = trunc v0 i32;

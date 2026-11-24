@@ -166,3 +166,52 @@ func public %do_not_sink_effectful_read(v0.i1, v1.*i256) -> i256 {
     block2:
         return 0.i256;
 }
+
+# The innermost loop exits to the outermost loop's latch, so `block2` is in
+# the outermost loop although it reaches the latch only through the middle
+# loop. `v5` must not sink into it.
+# sameln: func public %do_not_sink_into_outer_loop_of_deep_nest(v0.i256, v1.i256, v2.i256, v3.i1, v4.i256) -> i256 {
+# check:       block0:
+# nextln:          v5.i256 = mul v4 7.i256;
+# nextln:          jump block1;
+# check:       block2:
+# nextln:          evm_mstore v5 v6;
+func public %do_not_sink_into_outer_loop_of_deep_nest(v0.i256, v1.i256, v2.i256, v3.i1, v4.i256) -> i256 {
+    block0:
+        v5.i256 = mul v4 7.i256;
+        jump block1;
+
+    block1:
+        v6.i256 = phi (0.i256 block0) (v14 block7);
+        v7.i1 = lt v6 v0;
+        br v7 block7 block2;
+
+    block2:
+        evm_mstore v5 v6;
+        jump block3;
+
+    block3:
+        v8.i256 = phi (0.i256 block2) (v13 block6);
+        v9.i1 = lt v8 v1;
+        br v9 block4 block8;
+
+    block4:
+        v10.i256 = phi (0.i256 block3) (v12 block5);
+        v11.i1 = lt v10 v2;
+        br v11 block5 block7;
+
+    block5:
+        v12.i256 = add v10 1.i256;
+        br v3 block4 block6;
+
+    block6:
+        v13.i256 = add v8 1.i256;
+        jump block3;
+
+    block7:
+        v14.i256 = add v6 1.i256;
+        jump block1;
+
+    block8:
+        return v6;
+}

@@ -920,7 +920,7 @@ block0:
     fn raw_pointers_entering_objects_or_aggregates_publish_their_roots() {
         for publish in [
             "v2.objref<*i256> = obj.alloc *i256;\n    obj.store v2 v1;",
-            "v2.@Holder = insert_value undef.@Holder 0.i256 v1;",
+            "v2.@Holder = insert_value zero.@Holder 0.i256 v1;",
             "v2.@Holder = agg.make @Holder v1;",
         ] {
             check(
@@ -960,7 +960,7 @@ declare external %release(*i8);
 func private %f() {
 block0:
     v0.objref<i256> = obj.alloc i256;
-    call %release undef.*i8;
+    call %release zero.*i8;
     return;
 }
 "#,

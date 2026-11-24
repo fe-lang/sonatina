@@ -714,37 +714,6 @@ block0:
 }
 
 #[test]
-fn freeze_passes_values_through_and_fixes_undef() {
-    let source = r#"func public %frozen(v0.i64, v1.*i256, v2.*i256) -> i64 {
-block0:
-    v3.i64 = freeze v0;
-    v4.i256 = mload v1 i256;
-    v5.i256 = freeze v4;
-    mstore v2 v5 i256;
-    v6.i64 = freeze undef.i64;
-    v7.i64 = sub v6 v6;
-    v8.i64 = add v3 v7;
-    return v8;
-}
-"#;
-    for level in [OptLevel::O0, OptLevel::O2] {
-        let artifact = Compile::new(
-            parse_verified_native_module(source),
-            CraneliftJitBackend::new(),
-        )
-        .with_opt_level(level)
-        .compile()
-        .unwrap_or_else(|errors| panic!("{level:?}: {errors:?}"));
-        let frozen: unsafe extern "C" fn(i64, *const u64, *mut u64) -> i64 =
-            unsafe { std::mem::transmute(artifact.function_address("frozen").unwrap()) };
-        let input = [1u64, 2, 3, u64::MAX];
-        let mut output = [0u64; 4];
-        let result = unsafe { frozen(-7, input.as_ptr(), output.as_mut_ptr()) };
-        assert_eq!((result, output), (-7, input), "{level:?}");
-    }
-}
-
-#[test]
 fn shifts_by_masked_counts_match_wrapping_shifts() {
     // Counts masked below the width skip the oversized fallback.
     let source = r#"func public %shifts(v0.i64, v1.i64) -> i64 {

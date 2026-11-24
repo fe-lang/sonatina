@@ -15,9 +15,9 @@ use crate::{
     transform::{
         aggregate::{
             AggregateExpandAbi, AggregateLowerToMemoryLegalize, ObjectAggregateAbi,
-            assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,
+            assert_aggregate_legalized, check_fresh_aggregates_folded,
+            cleanup_dead_aggregate_alloca_trees, fresh::fold_fresh_aggregates_in,
         },
-        concrete::{check_concrete, concretize_function},
         evm::{
             ConstDataLower, erase_unit_values, legalize_evm_section, lower_keccak256_words,
             reuse_terminal_word_buffers,
@@ -115,9 +115,9 @@ impl<'a> EvmPipeline<'a> {
             )?;
         }
         ctx.run_phase(
-            "concretize",
+            "fold_fresh_aggregates",
             "mandatory",
-            EvmPipelineContext::run_concretize,
+            EvmPipelineContext::run_fold_fresh_aggregates,
         )?;
         ctx.run_phase(
             "keccak_words_lowering",
@@ -130,9 +130,9 @@ impl<'a> EvmPipeline<'a> {
             EvmPipelineContext::run_unit_erasure,
         )?;
         ctx.run_phase(
-            "check_concrete",
+            "check_fresh_aggregates_folded",
             "mandatory",
-            EvmPipelineContext::run_check_concrete,
+            EvmPipelineContext::run_check_fresh_aggregates_folded,
         )?;
 
         Ok(EvmPipelineArtifacts {
@@ -402,13 +402,13 @@ impl EvmPipelineContext<'_> {
         Ok(())
     }
 
-    /// Makes every value concrete (`transform::concrete`). Runs after the last
-    /// IR pass, which could take an unspecified value, or the argument of a
-    /// freeze, as any value. The phases after it make no `undef`, so the IR
-    /// prepare and machine lowering consume is concrete.
-    fn run_concretize(&mut self) -> Result<(), String> {
+    /// Folds the fresh insert chains the IR passes made into `agg.make`s.
+    /// Runs after the last IR pass; the phases after it make no such chain.
+    fn run_fold_fresh_aggregates(&mut self) -> Result<(), String> {
         for &func in &self.funcs {
-            self.module().func_store.modify(func, concretize_function);
+            self.module()
+                .func_store
+                .modify(func, fold_fresh_aggregates_in);
         }
         Ok(())
     }
@@ -440,17 +440,19 @@ impl EvmPipelineContext<'_> {
         Ok(())
     }
 
-    /// Checks the IR this pipeline leaves is concrete: no `undef` operand and
-    /// no `freeze`.
-    fn run_check_concrete(&mut self) -> Result<(), String> {
+    /// Checks the IR this pipeline leaves has no fresh insert chain.
+    fn run_check_fresh_aggregates_folded(&mut self) -> Result<(), String> {
         let module = self.module();
         for &func in &self.funcs {
             module
                 .func_store
-                .view(func, check_concrete)
+                .view(func, check_fresh_aggregates_folded)
                 .map_err(|error| {
                     let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
-                    format!("function %{name} is not concrete after the EVM pipeline: {error}")
+                    format!(
+                        "function %{name} has an unfolded fresh aggregate after the EVM \
+                         pipeline: {error}"
+                    )
                 })?;
         }
         Ok(())

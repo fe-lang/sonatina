@@ -125,10 +125,16 @@ impl Module {
         removed
     }
 
+    /// Copies the module with only `funcs` defined. A function inserted into
+    /// the copy gets a ref above every ref of this module, which the copied
+    /// context and objects may still name.
     pub fn clone_for_funcs(&self, funcs: &[FuncRef]) -> Self {
         let ctx = self.ctx.deep_clone();
         let cloned = Self {
-            func_store: FuncStore::new(),
+            func_store: FuncStore {
+                funcs: DashMap::new(),
+                next_func_ref: Mutex::new(*self.func_store.next_func_ref.lock().unwrap()),
+            },
             ctx,
             objects: self.objects.clone(),
         };
@@ -146,7 +152,7 @@ impl Module {
 
 pub struct FuncStore {
     funcs: DashMap<FuncRef, Function>,
-    _guard: Mutex<()>,
+    next_func_ref: Mutex<u32>,
 }
 
 impl FuncStore {
@@ -155,29 +161,32 @@ impl FuncStore {
     }
 
     pub fn restore(&self, func_ref: FuncRef, func: Function) {
-        let _guard = self._guard.lock().unwrap();
+        let mut next = self.next_func_ref.lock().unwrap();
         let prev = self.funcs.insert(func_ref, func);
         assert!(
             prev.is_none(),
             "restore expected vacant slot for {func_ref:?}"
         );
+        let after = func_ref.as_u32().checked_add(1).expect("func ref overflow");
+        if after > *next {
+            *next = after;
+        }
     }
 
     pub fn insert(&self, func: Function) -> FuncRef {
-        let _guard = self._guard.lock().unwrap();
-
-        let mut next = self.funcs.len() as u32;
-        while self.funcs.contains_key(&FuncRef::from_u32(next)) {
-            next += 1;
+        let mut next = self.next_func_ref.lock().unwrap();
+        while self.funcs.contains_key(&FuncRef::from_u32(*next)) {
+            *next = next.checked_add(1).expect("func ref overflow");
         }
 
-        let func_ref = FuncRef::from_u32(next);
+        let func_ref = FuncRef::from_u32(*next);
+        *next = next.checked_add(1).expect("func ref overflow");
         self.funcs.insert(func_ref, func);
         func_ref
     }
 
     pub fn remove(&self, func_ref: FuncRef) -> Option<Function> {
-        let _guard = self._guard.lock().unwrap();
+        let _guard = self.next_func_ref.lock().unwrap();
         self.funcs.remove(&func_ref).map(|(_, func)| func)
     }
 
@@ -250,7 +259,7 @@ impl FuncStore {
     }
 
     pub fn funcs(&self) -> Vec<FuncRef> {
-        let _guard = self._guard.lock().unwrap();
+        let _guard = self.next_func_ref.lock().unwrap();
         let mut funcs: Vec<_> = self.funcs.iter().map(|entry| *entry.key()).collect();
         funcs.sort_unstable();
         funcs
@@ -260,17 +269,10 @@ impl FuncStore {
         self.funcs.into_read_only()
     }
 
-    pub fn from_read_only(ro_fs: RoFuncStore) -> Self {
-        Self {
-            funcs: ro_fs.into_inner(),
-            _guard: Mutex::new(()),
-        }
-    }
-
     pub(crate) fn new() -> Self {
         Self {
             funcs: DashMap::new(),
-            _guard: Mutex::new(()),
+            next_func_ref: Mutex::new(0),
         }
     }
 }
@@ -693,6 +695,47 @@ mod tests {
         assert!(!module.func_store.contains(remove));
         assert!(module.ctx.get_sig(remove).is_none());
         assert!(module.ctx.get_sig(external).is_some());
+    }
+
+    #[test]
+    fn clone_for_funcs_never_reuses_source_func_refs() {
+        let builder = test_builder();
+        let funcs: Vec<_> = ["f0", "f1", "f2"]
+            .into_iter()
+            .map(|name| {
+                builder
+                    .declare_function(Signature::new_unit(name, Linkage::Private, &[]))
+                    .unwrap()
+            })
+            .collect();
+        let module = builder.build();
+
+        let copy = module.clone_for_funcs(&funcs[..2]);
+        let body = copy.func_store.view(funcs[0], Clone::clone);
+        let inserted = copy.func_store.insert(body);
+        assert!(
+            funcs.iter().all(|&func| inserted.as_u32() > func.as_u32()),
+            "{inserted:?} must be above every source ref {funcs:?}"
+        );
+    }
+
+    #[test]
+    fn func_store_never_reuses_removed_func_refs() {
+        let builder = test_builder();
+        let f0 = builder
+            .declare_function(Signature::new_unit("f0", Linkage::Private, &[]))
+            .unwrap();
+        let f1 = builder
+            .declare_function(Signature::new_unit("f1", Linkage::Private, &[]))
+            .unwrap();
+        let module = builder.build();
+
+        let removed = module.remove_func(f0).expect("f0 should exist");
+        let f2 = module.func_store.insert(removed);
+        assert!(
+            f2.as_u32() > f1.as_u32(),
+            "removed FuncRef {f0:?} must not be reused (got {f2:?}, prev max {f1:?})"
+        );
     }
 }
 

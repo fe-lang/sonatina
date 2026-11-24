@@ -61,9 +61,6 @@ pub(super) fn insert_clif_results(
     }
 }
 
-/// Why an `undef` is an error here.
-const NOT_CONCRETE: &str = "translation takes concrete IR: `concretize` leaves no `undef`";
-
 pub(super) fn resolve_value(
     function: &Function,
     value_id: ValueId,
@@ -88,7 +85,6 @@ pub(super) fn resolve_value(
                 Ok(val)
             }
         },
-        Value::Undef { .. } => Err(format!("v{}: {NOT_CONCRETE}", value_id.0)),
         Value::Zero { ty } => {
             let ctx = function.ctx();
             if is_aggregate(ctx, *ty) {

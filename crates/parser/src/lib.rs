@@ -475,10 +475,6 @@ impl BuildCtx {
                     ));
                     ir::ValueId(0)
                 }),
-            ast::ValueKind::Undef(ty) => {
-                let ty = self.type_(&fb.module_builder, ty);
-                fb.make_undef_value(ty)
-            }
             ast::ValueKind::Zero(ty) => {
                 let ty = self.type_(&fb.module_builder, ty);
                 fb.make_zero_value(ty)

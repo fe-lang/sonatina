@@ -5,7 +5,7 @@
 
 target = "evm-ethereum-osaka"
 
-# Loop phis of type unit that take `undef.unit` on entry and each other on the
+# Loop phis of type unit that take `zero.unit` on entry and each other on the
 # backedge hold nothing, so they take no stack word: nothing is pushed for them,
 # and nothing is loaded from a spill word nothing stores.
 
@@ -20,8 +20,8 @@ func public %entry() {
         jump block1;
 
     block1:
-        v1.unit = phi (undef.unit block0) (v2 block1);
-        v2.unit = phi (undef.unit block0) (v1 block1);
+        v1.unit = phi (zero.unit block0) (v2 block1);
+        v2.unit = phi (zero.unit block0) (v1 block1);
         v3.i256 = phi (0.i256 block0) (v4 block1);
         v4.i256 = add v3 1.i256;
         v5.i1 = lt v4 v0;

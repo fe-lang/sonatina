@@ -317,7 +317,7 @@ fn reconstructs_nested_aggregate_loads_and_shares_overlapping_fields() {
 fn retains_aggregate_loads_after_alias_writes_and_conditional_reads() {
     for prefix in [
         "obj.store v7 22.i256;",
-        "br 0.i1 block1 block2;\nblock2:\n    return undef.@Pair;\nblock1:",
+        "br 0.i1 block1 block2;\nblock2:\n    return zero.@Pair;\nblock1:",
     ] {
         let source = AGGREGATE_READS
             .replace(

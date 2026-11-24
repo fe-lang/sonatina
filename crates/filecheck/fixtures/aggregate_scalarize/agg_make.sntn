@@ -24,7 +24,7 @@ func public %scalarize_diamond(v0.i1, v1.i256, v2.i256, v3.i256) -> i256 {
 
     block2:
         v6.@slice = agg.make @slice v3 v1;
-        v7.@nested = agg.make @nested v6 undef.i256;
+        v7.@nested = agg.make @nested v6 0.i256;
         jump block3;
 
     block3:

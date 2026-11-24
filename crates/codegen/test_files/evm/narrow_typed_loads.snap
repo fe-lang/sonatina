@@ -1,0 +1,24 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/narrow_typed_loads.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 105 bytes
+  total: 105 bytes
+
+functions:
+  mem: global_dyn_base=0x10e0 arena_base=0x10e0 scratch_peak_words=0 stable_chain_peak_words=0
+  entry: ir_blocks=1 ir_insts=16 vcode_ops=48 fixups=7 imm_bytes=16
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  load_i8: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=0 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  load_offset: ir_blocks=1 ir_insts=3 vcode_ops=5 fixups=0 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  return_len: ir_blocks=4 ir_insts=9 vcode_ops=17 fixups=1 imm_bytes=5
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case well_formed_words: calldata_len=128 success reason=Return gas_used=22244 gas_refunded=0 logs=0 output=call len=96 tx_gas=21560 runtime_gas=684

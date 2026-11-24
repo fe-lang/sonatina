@@ -153,6 +153,9 @@ where
             changed = true;
         }
     }
+    if changed {
+        func.dfg.rebuild_value_caches();
+    }
 
     struct TypeVisitor<'a, R> {
         ctx: ModuleCtx,
