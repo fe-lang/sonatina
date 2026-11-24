@@ -291,6 +291,21 @@ fn canonicalize_binary_inst(
             lhs: Operand::Value(lhs),
             rhs: Operand::Value(arg),
         }),
+        BinaryInstKind::EvmExp if func.dfg.value_ty(lhs) == Type::I256 => {
+            let two = Immediate::I256(I256::from(2));
+            if func.dfg.value_imm(lhs) == Some(two) {
+                return Some(InstSpec::Binary {
+                    kind: BinaryInstKind::Shl,
+                    lhs: Operand::Value(rhs),
+                    rhs: Operand::Imm(Immediate::one(Type::I256)),
+                });
+            }
+            (func.dfg.value_imm(rhs) == Some(two)).then_some(InstSpec::Binary {
+                kind: BinaryInstKind::Mul,
+                lhs: Operand::Value(lhs),
+                rhs: Operand::Value(lhs),
+            })
+        }
         BinaryInstKind::Mul => mul_pow2_rewrite(func, lhs, rhs),
         BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar => {
             merge_shifts(func, kind, lhs, rhs)
@@ -741,6 +756,7 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
             match kind {
                 BinaryInstKind::Add => Some(Box::new(arith::Add::new(is.has_add()?, lhs, rhs))),
                 BinaryInstKind::Sub => Some(Box::new(arith::Sub::new(is.has_sub()?, lhs, rhs))),
+                BinaryInstKind::Mul => Some(Box::new(arith::Mul::new(is.has_mul()?, lhs, rhs))),
                 BinaryInstKind::Shl => Some(Box::new(arith::Shl::new(is.has_shl()?, lhs, rhs))),
                 BinaryInstKind::Shr => Some(Box::new(arith::Shr::new(is.has_shr()?, lhs, rhs))),
                 BinaryInstKind::Sar => Some(Box::new(arith::Sar::new(is.has_sar()?, lhs, rhs))),
@@ -824,6 +840,7 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
         InstSpec::Binary { kind, .. } => match kind {
             BinaryInstKind::Add => is.has_add().is_some(),
             BinaryInstKind::Sub => is.has_sub().is_some(),
+            BinaryInstKind::Mul => is.has_mul().is_some(),
             BinaryInstKind::Shl => is.has_shl().is_some(),
             BinaryInstKind::Shr => is.has_shr().is_some(),
             BinaryInstKind::Sar => is.has_sar().is_some(),
