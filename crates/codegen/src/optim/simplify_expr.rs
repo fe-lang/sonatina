@@ -6,6 +6,7 @@ use sonatina_ir::{
         BinaryInstKind, CastInstKind, InstClassKind, InstKeyExt, OwnedInstKey, UnaryInstKind, cast,
         evm::EvmKeccak256Words, logic::Select,
     },
+    interpret::evm_signextend,
 };
 
 use crate::{
@@ -355,29 +356,13 @@ pub(crate) fn simplify_evm_byte_known(
     fold_evm_byte(pos?, value?)
 }
 
-fn fold_evm_signextend_raw(byte: U256, value: U256, ty: Type) -> U256 {
-    let mask = type_mask(ty);
-    // From byte 31 on, the sign bit is bit 255 or above, and the word is left as it is.
-    if byte >= U256::from(31u8) {
-        return value & mask;
-    }
-
-    let sign_bit = (byte.as_usize() + 1) * 8 - 1;
-    let result = if value.bit(sign_bit) {
-        value | (!U256::zero() << (sign_bit + 1))
-    } else {
-        value & ((U256::one() << (sign_bit + 1)) - U256::one())
-    };
-    result & mask
-}
-
 pub(crate) fn fold_evm_signextend(byte: Immediate, value: Immediate) -> Option<Immediate> {
     let ty = value.ty();
     if ty != byte.ty() || !ty.is_integral() {
         return None;
     }
 
-    let result = fold_evm_signextend_raw(imm_to_u256(byte), imm_to_u256(value), ty);
+    let result = evm_signextend(imm_to_u256(byte), imm_to_u256(value)) & type_mask(ty);
     Some(Immediate::from_i256(I256::from(result), ty))
 }
 
