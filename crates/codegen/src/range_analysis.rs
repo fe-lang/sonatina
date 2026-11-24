@@ -1795,13 +1795,16 @@ fn transfer_compare_inst(func: &Function, env: &mut RangeEnv, inst: InstId, kind
         return;
     };
 
+    // In the result's type: a machine-IR compare gives a word 0 or 1, whose true is 1 when
+    // read as signed, not the `i1` true's -1.
     if let Some(value) = compare_truth_in_env(func, env, kind, *lhs, *rhs) {
-        set_env_fact(
-            func,
-            env,
-            result,
-            RangeFact::singleton(Immediate::from(value)),
-        );
+        let ty = func.dfg.value_ty(result);
+        let imm = if value {
+            Immediate::one(ty)
+        } else {
+            Immediate::zero(ty)
+        };
+        set_env_fact(func, env, result, RangeFact::singleton(imm));
     } else {
         env.remove(&result);
     }

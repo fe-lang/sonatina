@@ -1,17 +1,23 @@
 use std::{collections::BTreeSet, sync::Arc};
 
-use crate::isa::evm::test_util::osaka_triple;
+use crate::{
+    domtree::DomTree,
+    isa::evm::test_util::osaka_triple,
+    loop_analysis::LoopTree,
+    optim::known_bits_simplify::KnownBitsSimplify,
+    range_analysis::{RangeAnalysis, RangeFact},
+};
 use sonatina_ir::{
-    I256, Immediate, Linkage, Signature, Type,
+    ControlFlowGraph, I256, Immediate, Linkage, Signature, Type,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
-        arith::Add,
-        cmp::{IsZero, Lt},
+        arith::{Add, Mul},
+        cmp::{Eq, IsZero, Lt},
         control_flow::{Br, BrTable, BranchKind, Jump, Phi, Return},
         data::Alloca,
         evm::{EvmMload, EvmMstore, EvmMstore8},
-        logic::And,
+        logic::{And, Or},
     },
     ir_writer::FuncWriter,
     isa::{
@@ -835,4 +841,106 @@ block0:
     for src in cases {
         expect_machine_rejects(src);
     }
+}
+
+/// `lt (and y 15) (or z 16)` is always 1, so `eq` of it with 1 is 1, `mul` of that with `x`
+/// is `x`, and the result is `x & 255`.
+fn build_decided_compare_mask(name: &str) -> (sonatina_ir::Module, sonatina_ir::module::FuncRef) {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            name,
+            Linkage::Public,
+            &[Type::I256, Type::I256, Type::I256],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let entry = builder.append_block();
+    let [y, z, x] = builder.func.arg_values[..] else {
+        unreachable!()
+    };
+    let imm = |builder: &mut sonatina_ir::builder::FunctionBuilder<InstInserter>, value: u32| {
+        builder.make_imm_value(Immediate::from_i256(I256::from(value), Type::I256))
+    };
+    let fifteen = imm(&mut builder, 15);
+    let sixteen = imm(&mut builder, 16);
+    let one = imm(&mut builder, 1);
+    let byte = imm(&mut builder, 255);
+
+    builder.switch_to_block(entry);
+    let low = builder.insert_inst(And::new(is, y, fifteen), Type::I256);
+    let high = builder.insert_inst(Or::new(is, z, sixteen), Type::I256);
+    let lt = builder.insert_inst(Lt::new(is, low, high), Type::I256);
+    let is_one = builder.insert_inst(Eq::new(is, lt, one), Type::I256);
+    let scaled = builder.insert_inst(Mul::new(is, is_one, x), Type::I256);
+    let masked = builder.insert_inst(And::new(is, scaled, byte), Type::I256);
+    builder.insert_inst_no_result(Return::new_single(is, masked));
+    builder.seal_all();
+    builder.finish();
+    (mb.build(), func_ref)
+}
+
+#[test]
+fn machine_known_bits_keeps_mask_after_decided_word_compare() {
+    let (module, func_ref) = build_decided_compare_mask("machine_kb_decided_cmp");
+    module.func_store.modify(func_ref, |function| {
+        KnownBitsSimplify::new().run(function);
+        let dumped = FuncWriter::new(func_ref, function).dump_string();
+        assert!(dumped.contains("255.i256"), "{dumped}");
+    });
+}
+
+#[test]
+fn machine_pipeline_keeps_mask_after_decided_word_compare() {
+    let (module, func_ref) = build_decided_compare_mask("machine_pipeline_decided_cmp");
+    run_machine_opt_pipeline(
+        &module,
+        &[func_ref],
+        LateCleanupProfile::Speed,
+        SwitchLoweringStrategy::Auto,
+        16,
+    )
+    .expect("machine pipeline should run");
+    module.func_store.view(func_ref, |function| {
+        let dumped = FuncWriter::new(func_ref, function).dump_string();
+        assert!(dumped.contains("255.i256"), "{dumped}");
+    });
+}
+
+#[test]
+fn machine_range_of_decided_word_compare_is_one() {
+    let (module, func_ref) = build_decided_compare_mask("machine_range_decided_cmp");
+    module.func_store.view(func_ref, |function| {
+        let mut cfg = ControlFlowGraph::default();
+        cfg.compute(function);
+        let mut domtree = DomTree::default();
+        domtree.compute(&cfg);
+        let mut loops = LoopTree::new();
+        loops.compute(&cfg, &domtree);
+        let mut analysis = RangeAnalysis::default();
+        analysis.compute(function, &cfg, &domtree, &loops);
+
+        let entry = function.layout.entry_block().unwrap();
+        let results: Vec<_> = function
+            .layout
+            .iter_inst(entry)
+            .filter_map(|inst| function.dfg.inst_result(inst))
+            .collect();
+        let [_, _, lt, is_one, ..] = results[..] else {
+            unreachable!()
+        };
+        // Replay the block as `KnownBitsSimplify` does: the stored exit env keeps only the
+        // values later blocks read.
+        let mut env = analysis.entry_env(entry).clone();
+        for inst in function.layout.iter_inst(entry) {
+            analysis.transfer_inst(function, &mut env, inst);
+        }
+        let one = RangeFact::singleton(Immediate::one(Type::I256));
+        assert_eq!(env.get(&lt), Some(&one));
+        assert_eq!(env.get(&is_one), Some(&one));
+    });
 }

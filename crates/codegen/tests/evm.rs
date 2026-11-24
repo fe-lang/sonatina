@@ -3718,3 +3718,73 @@ object @Contract {
         }
     }
 }
+
+/// Runs `entry` of `body` on `calldata` at every optimization level and returns each level's
+/// 32-byte result, or its compile or execution failure.
+fn word_results_at_all_levels(
+    body: &str,
+    calldata: &[u8],
+) -> Vec<(OptLevel, Result<IrU256, String>)> {
+    let source = format!(
+        "target = \"evm-ethereum-osaka\"\n{body}\nobject @Contract {{ section runtime {{ entry %entry; }} }}\n"
+    );
+    [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os]
+        .into_iter()
+        .map(|level| {
+            let compiler = Compile::new(parse_sona(&source).module, EvmCompiler::default())
+                .with_opt_level(level);
+            let result = compiler
+                .compile()
+                .map_err(|err| format!("{err:?}"))
+                .and_then(|artifacts| {
+                    let runtime = artifacts[0]
+                        .sections
+                        .iter()
+                        .find(|(name, _)| name.0 == "runtime")
+                        .unwrap();
+                    match EvmHarness::from_runtime(&runtime.1.bytes).call(calldata) {
+                        ExecutionResult::Success {
+                            output: Output::Call(actual),
+                            ..
+                        } => Ok(IrU256::from_big_endian(&actual)),
+                        result => Err(format!("{result:?}")),
+                    }
+                });
+            (level, result)
+        })
+        .collect()
+}
+
+fn calldata_words(words: &[u64]) -> Vec<u8> {
+    words
+        .iter()
+        .flat_map(|&word| IrU256::from(word).to_big_endian())
+        .collect()
+}
+
+/// `lt (and y 15) (or z 16)` is always true, so `eq` of it with true is true and the result is
+/// `x & 255`: `0xff` for `x = 0x1ff`. On machine IR the compare is a word, whose true is 1.
+#[test]
+fn decided_word_compare_keeps_mask_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i256 = evm_calldata_load 64.i256;
+        v3.i256 = and v0 15.i256;
+        v4.i256 = or v1 16.i256;
+        v5.i1 = lt v3 v4;
+        v6.i1 = eq v5 1.i1;
+        v7.i256 = zext v6 i256;
+        v8.i256 = mul v7 v2;
+        v9.i256 = and v8 255.i256;
+        mstore 0.i256 v9 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &calldata_words(&[0, 0, 0x1ff]));
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::from(0xffu64)), "{level:?}");
+    }
+}
