@@ -31,7 +31,7 @@ use super::{
 use crate::{
     analysis::known_bits::KnownBitsQuery,
     cfg_edit::CfgEditor,
-    object::lowering::{StepFacts, StepKind},
+    object::lowering::{SccpFacts, StepFacts, StepKind},
     optim::steps::StepLog,
     transform::aggregate::fresh::fold_fresh_insert,
 };
@@ -136,6 +136,7 @@ impl SccpSolver {
 
         let facts = steps.is_some().then(|| StepFacts {
             known_bits: solve_known_bits.export(func),
+            sccp: Some(self.export(func)),
             ..StepFacts::default()
         });
         let edges_removed = self.remove_unreachable_edges(func);
@@ -151,6 +152,7 @@ impl SccpSolver {
         };
         let facts = steps.is_some().then(|| StepFacts {
             known_bits: fold_known_bits.export(func),
+            sccp: Some(self.export(func)),
             ..StepFacts::default()
         });
         changed |= self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
@@ -531,6 +533,32 @@ impl SccpSolver {
             }
         }
         changed
+    }
+
+    /// The solution, of the values and blocks of `func`.
+    fn export(&self, func: &Function) -> SccpFacts {
+        let layout = &func.layout;
+        let consts = layout
+            .iter_block()
+            .flat_map(|block| layout.iter_inst(block))
+            .flat_map(|inst| func.dfg.inst_results(inst))
+            .filter_map(|&value| Some((value, self.lattice[value].to_imm()?)))
+            .collect();
+        let dead_edges = layout
+            .iter_block()
+            .filter(|&block| self.reachable_blocks[block])
+            .filter_map(|block| Some((block, layout.last_inst_of(block)?)))
+            .flat_map(|(block, term)| {
+                let dests = func.dfg.branch_info(term).map(|branch| branch.dests());
+                dests
+                    .unwrap_or_default()
+                    .into_iter()
+                    .zip(0..)
+                    .filter(move |&(dest, _)| !self.is_reachable_edge(term, dest))
+                    .map(move |(_, slot)| (block, slot))
+            })
+            .collect();
+        SccpFacts { consts, dead_edges }
     }
 
     fn is_reachable_edge(&self, inst: InstId, dest: BlockId) -> bool {

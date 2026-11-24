@@ -117,7 +117,22 @@ fn func_values(text: &str) -> BTreeSet<u32> {
         .collect()
 }
 
-/// The facts of a step name values of its input,
+/// The number of destinations of each block's terminator in a function's
+/// text.
+fn block_dests(text: &str) -> BTreeMap<u32, u32> {
+    block_lines(text)
+        .iter()
+        .map(|(block, lines)| {
+            let term = lines.last().unwrap();
+            let dests = term
+                .split([' ', ';', ')'])
+                .filter(|word| word.starts_with("block"));
+            (*block, dests.count() as u32)
+        })
+        .collect()
+}
+
+/// The facts of a step name values and edges of its input,
 /// and its known bits are no more than the
 /// analysis finds of the input, parsed in the section's machine IR
 /// (`machine`) in place of the function's final text (`last`).
@@ -125,16 +140,30 @@ fn check_facts(input: &FuncSnap, facts: &StepFacts, machine: &str, last: &str) {
     let name = input.func.as_str();
     let values = func_values(&input.text);
     let demanded = facts.demanded_bits.iter().flatten();
+    let consts = facts.sccp.iter().flat_map(|sccp| &sccp.consts);
     for value in facts
         .known_bits
         .iter()
         .map(|(value, ..)| value)
         .chain(demanded.map(|(value, _)| value))
+        .chain(consts.map(|(value, _)| value))
     {
         assert!(
             values.contains(&value.as_u32()),
             "{name}: a fact of v{} not defined in the step input",
             value.as_u32()
+        );
+    }
+    let dests = block_dests(&input.text);
+    let sccp_edges = facts
+        .sccp
+        .iter()
+        .flat_map(|sccp| sccp.dead_edges.iter().copied());
+    for (block, slot) in sccp_edges {
+        assert!(
+            dests.get(&block.0).is_some_and(|&dests| slot < dests),
+            "{name}: an edge from slot {slot} of block{}, which the step input lacks",
+            block.0
         );
     }
     if facts.known_bits.is_empty() {

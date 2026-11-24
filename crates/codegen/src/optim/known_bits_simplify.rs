@@ -180,6 +180,7 @@ impl KnownBitsSimplify {
         let facts = steps.is_some().then(|| StepFacts {
             known_bits: scalar_facts.known_bits.export(func),
             demanded_bits: from_demand.then(|| scalar_facts.demanded_bits.export()),
+            ..StepFacts::default()
         });
 
         // These replacements retain the dividend and its full value semantics.

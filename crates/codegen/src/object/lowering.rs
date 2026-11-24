@@ -173,6 +173,20 @@ pub struct StepFacts {
     /// that rewrote values whose uses read only bits the rewrite keeps. A
     /// value not listed has no bit read.
     pub demanded_bits: Option<Vec<(ValueId, U256)>>,
+    /// For `SccpPrune` and `SccpFold`.
+    pub sccp: Option<SccpFacts>,
+}
+
+/// The solution of SCCP. A value without a constant may be anything.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SccpFacts {
+    /// The constant of each value that has one where it runs.
+    pub consts: Vec<(ValueId, Immediate)>,
+    /// The edges, as `(block, slot)`, of the blocks that may run that never
+    /// run. The slots of a terminator are numbered in the order of its
+    /// destinations: `br`'s nonzero then zero destination, `br_table`'s
+    /// default then its cases.
+    pub dead_edges: Vec<(BlockId, u32)>,
 }
 
 /// A function of the machine module at one point of the machine stage.
