@@ -365,6 +365,203 @@ block0:
 }
 
 #[test]
+fn enums_with_zero_sized_payloads_live_in_registers() {
+    // `@UnitOk` and `@WordErr` are results with a unit `#Ok`, and `@Three`
+    // has two variants of zero-sized fields beside `#B`: each is its tag and
+    // its one payload's parts. Private functions make, pass, merge in a phi
+    // and take apart every variant, including the zero-sized fields, read
+    // tags with `enum.tag`, also of the `@Fieldless` inside `#Err`. `%run`
+    // stores the values for the host to read.
+    let source = r#"
+type @Empty = {};
+type @Fieldless = enum { #Overflow, #OutOfRange };
+type @UnitOk = enum { #Ok(@Empty), #Err(@Fieldless) };
+type @WordErr = enum { #Ok(@Empty), #Err(i64) };
+type @Three = enum { #A(@Empty), #B(i64, i32), #C(@Empty, [i8; 0]) };
+func inline(never) private %unit_ok(v0.i64, v1.i64) -> @UnitOk {
+block0:
+    v2.i1 = gt v0 v1;
+    br v2 block1 block2;
+block1:
+    v3.@Fieldless = enum.make @Fieldless #OutOfRange ();
+    v4.@UnitOk = enum.make @UnitOk #Err (v3);
+    jump block3;
+block2:
+    v5.@UnitOk = enum.make @UnitOk #Ok (zero.@Empty);
+    jump block3;
+block3:
+    v6.@UnitOk = phi (v4 block1) (v5 block2);
+    return v6;
+}
+func inline(never) private %word_err(v0.i64, v1.i64) -> @WordErr {
+block0:
+    v2.i1 = gt v0 v1;
+    br v2 block1 block2;
+block1:
+    v3.@WordErr = enum.make @WordErr #Err (v1);
+    return v3;
+block2:
+    v4.@WordErr = enum.make @WordErr #Ok (zero.@Empty);
+    return v4;
+}
+func inline(never) private %three(v0.i64) -> @Three {
+block0:
+    br_table v0 block3 (0.i64 block1) (1.i64 block2);
+block1:
+    v1.@Three = enum.make @Three #A (zero.@Empty);
+    return v1;
+block2:
+    v2.@Three = enum.make @Three #C (zero.@Empty, zero.[i8; 0]);
+    return v2;
+block3:
+    v3.i32 = trunc v0 i32;
+    v4.@Three = enum.make @Three #B (v0, v3);
+    return v4;
+}
+func inline(never) private %rewrap(v0.@Three) -> @Three {
+block0:
+    v1.i1 = enum.is_variant v0 #A;
+    br v1 block1 block2;
+block1:
+    enum.assert_variant v0 #A;
+    v2.@Empty = enum.extract v0 #A 0.i8;
+    v3.@Three = enum.make @Three #C (v2, zero.[i8; 0]);
+    return v3;
+block2:
+    v4.i1 = enum.is_variant v0 #C;
+    br v4 block3 block4;
+block3:
+    enum.assert_variant v0 #C;
+    v5.@Empty = enum.extract v0 #C 0.i8;
+    v6.@Three = enum.make @Three #A (v5);
+    return v6;
+block4:
+    enum.assert_variant v0 #B;
+    v7.i64 = enum.extract v0 #B 0.i8;
+    v8.i32 = enum.extract v0 #B 1.i8;
+    v9.i64 = add v7 1.i64;
+    v10.i32 = add v8 2.i32;
+    v11.@Three = enum.make @Three #B (v9, v10);
+    return v11;
+}
+func inline(never) private %err_word(v0.@WordErr) -> i64 {
+block0:
+    v1.i1 = enum.is_variant v0 #Err;
+    br v1 block1 block2;
+block1:
+    enum.assert_variant v0 #Err;
+    v2.i64 = enum.extract v0 #Err 0.i8;
+    return v2;
+block2:
+    return -1.i64;
+}
+func inline(never) private %tag_code(v0.@Three) -> i64 {
+block0:
+    v1.enumtag(@Three) = enum.tag v0;
+    br_table v1 block4 (0.enumtag(@Three) block1) (1.enumtag(@Three) block2) (2.enumtag(@Three) block3);
+block1:
+    return 10.i64;
+block2:
+    return 11.i64;
+block3:
+    return 12.i64;
+block4:
+    return -1.i64;
+}
+func inline(never) private %err_kind(v0.@UnitOk) -> i64 {
+block0:
+    v1.i1 = enum.is_variant v0 #Err;
+    br v1 block1 block4;
+block1:
+    enum.assert_variant v0 #Err;
+    v2.@Fieldless = enum.extract v0 #Err 0.i8;
+    v3.enumtag(@Fieldless) = enum.tag v2;
+    br_table v3 block4 (0.enumtag(@Fieldless) block2) (1.enumtag(@Fieldless) block3);
+block2:
+    return 20.i64;
+block3:
+    return 21.i64;
+block4:
+    return -1.i64;
+}
+func public %run(v0.i64, v1.i64, v2.*i8) -> i64 {
+block0:
+    v3.@UnitOk = call %unit_ok v0 v1;
+    v4.*@UnitOk = bitcast v2 *@UnitOk;
+    mstore v4 v3 @UnitOk;
+    v5.@WordErr = call %word_err v0 v1;
+    v6.*i8 = gep v2 8.i64;
+    v7.*@WordErr = bitcast v6 *@WordErr;
+    mstore v7 v5 @WordErr;
+    v8.@Three = call %three v0;
+    v9.@Three = call %rewrap v8;
+    v10.*i8 = gep v2 24.i64;
+    v11.*@Three = bitcast v10 *@Three;
+    mstore v11 v9 @Three;
+    v12.i64 = call %err_word v5;
+    v13.i64 = call %tag_code v9;
+    v14.*i8 = gep v2 48.i64;
+    v15.*i64 = bitcast v14 *i64;
+    mstore v15 v13 i64;
+    v16.i64 = call %err_kind v3;
+    v17.*i8 = gep v2 56.i64;
+    v18.*i64 = bitcast v17 *i64;
+    mstore v18 v16 i64;
+    return v12;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let run: unsafe extern "C" fn(i64, i64, *mut u8) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        for (a, b) in [(0i64, 7i64), (1, 0), (5, 7), (9, 3)] {
+            let mut out = [0xa5u8; 64];
+            let error = unsafe { run(a, b, out.as_mut_ptr()) };
+            let failed = a > b;
+            assert_eq!(error, if failed { b } else { -1 }, "{level:?} {a} {b}");
+            let mut expected = [0u8; 64];
+            // `@UnitOk`: the tag, then `#Err`'s `#OutOfRange` tag at 1.
+            expected[0] = u8::from(failed);
+            expected[1] = u8::from(failed);
+            // `@WordErr` at 8: the tag, then `#Err`'s i64 at 16.
+            expected[8] = u8::from(failed);
+            expected[16..24].copy_from_slice(&b.to_le_bytes());
+            // `@Three` at 24: the tag, then `#B`'s i64 at 32 and i32 at 40.
+            // `%rewrap` turns `#A` into `#C`, `#C` into `#A` and adds to `#B`.
+            let (tag, fields) = match a {
+                0 => (2, None),
+                1 => (0, None),
+                _ => (1, Some((a + 1, a as i32 + 2))),
+            };
+            expected[24] = tag;
+            if let Some((word, small)) = fields {
+                expected[32..40].copy_from_slice(&word.to_le_bytes());
+                expected[40..44].copy_from_slice(&small.to_le_bytes());
+            }
+            // `%tag_code`'s and `%err_kind`'s results at 48 and 56.
+            expected[48..56].copy_from_slice(&(10 + i64::from(tag)).to_le_bytes());
+            expected[56..64].copy_from_slice(&(if failed { 21i64 } else { -1 }).to_le_bytes());
+            // Padding, and the payloads of `#Ok`, `#A` and `#C`, are not part
+            // of the values.
+            let mut padding = vec![2..8, 9..16, 25..32, 44..48];
+            if !failed {
+                padding.extend([1..2, 16..24]);
+            }
+            if fields.is_none() {
+                padding.push(32..44);
+            }
+            assert_fields_eq(&out, &expected, padding, format!("{level:?} {a} {b}"));
+        }
+    }
+}
+
+#[test]
 fn small_aggregates_in_registers_cast_load_constants_and_swap() {
     // `@B`'s i1 fields stay 0 or 1 through a private call, from a truncation
     // and from constant data; casts to and from i256 and between differently
