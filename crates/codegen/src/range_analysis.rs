@@ -18,6 +18,7 @@ use sonatina_ir::{
 };
 
 use crate::{
+    analysis::known_bits::low_mask,
     bitset::BitSet,
     domtree::{DomTree, DominatorTreeTraversable},
     liveness::Liveness,
@@ -47,6 +48,7 @@ pub struct RangeAnalysis {
 pub struct RangeFact {
     pub unsigned: UnsignedInterval,
     pub signed: SignedInterval,
+    pub low_bits: LowBits,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +61,17 @@ pub struct UnsignedInterval {
 pub struct SignedInterval {
     pub lo: I256,
     pub hi: I256,
+}
+
+/// A value's low `bits` bits, `residue`: the value is congruent to `residue`
+/// modulo `2**bits`, as a counter that starts at zero and steps by eight is
+/// modulo eight. `bits == 0` knows nothing. Arithmetic wraps modulo
+/// `2**width`, which only a power of two divides, so only a power-of-two
+/// congruence survives a wrapping add or multiply.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LowBits {
+    pub bits: u16,
+    pub residue: U256,
 }
 
 impl RangeAnalysis {
@@ -352,6 +365,7 @@ impl RangeFact {
                 lo: signed_min(ty),
                 hi: signed_max(ty),
             },
+            low_bits: LowBits::default(),
         }
     }
 
@@ -369,6 +383,7 @@ impl RangeFact {
                 lo: signed,
                 hi: signed,
             },
+            low_bits: LowBits::new(type_bits(ty), unsigned),
         }
     }
 
@@ -393,6 +408,62 @@ impl UnsignedInterval {
         let lo = self.lo.max(other.lo);
         let hi = self.hi.min(other.hi);
         (lo <= hi).then_some(Self { lo, hi })
+    }
+}
+
+impl LowBits {
+    fn new(bits: u16, residue: U256) -> Self {
+        Self {
+            bits,
+            residue: residue & low_mask(bits),
+        }
+    }
+
+    fn join(self, other: Self) -> Self {
+        let agree = (self.residue ^ other.residue).trailing_zeros() as u16;
+        Self::new(self.bits.min(other.bits).min(agree), self.residue)
+    }
+
+    fn add(self, other: Self) -> Self {
+        let residue = self.residue.overflowing_add(other.residue).0;
+        Self::new(self.bits.min(other.bits), residue)
+    }
+
+    fn sub(self, other: Self) -> Self {
+        let residue = self.residue.overflowing_sub(other.residue).0;
+        Self::new(self.bits.min(other.bits), residue)
+    }
+
+    /// `(r + a * 2**k) * (s + b * 2**l)` is `r * s` plus multiples of
+    /// `2**(k + tz(s))`, `2**(l + tz(r))` and `2**(k + l)`.
+    fn mul(self, other: Self, ty: Type) -> Self {
+        let zeros = |low: Self| (low.residue.trailing_zeros() as u16).min(low.bits);
+        let bits = (self.bits + zeros(other))
+            .min(other.bits + zeros(self))
+            .min(type_bits(ty));
+        Self::new(bits, self.residue.overflowing_mul(other.residue).0)
+    }
+
+    /// A bit of `x & y` is known where both operands' bits are, or where
+    /// either is a known zero.
+    fn and(self, other: Self) -> Self {
+        let zeros = |low: Self| low_mask(low.bits) & !low.residue;
+        let known = (low_mask(self.bits) & low_mask(other.bits)) | zeros(self) | zeros(other);
+        Self::new(
+            (!known).trailing_zeros() as u16,
+            self.residue & other.residue,
+        )
+    }
+
+    fn shl(self, shift: u16, ty: Type) -> Self {
+        Self::new(
+            (self.bits + shift).min(type_bits(ty)),
+            self.residue << usize::from(shift),
+        )
+    }
+
+    fn trunc(self, ty: Type) -> Self {
+        Self::new(self.bits.min(type_bits(ty)), self.residue)
     }
 }
 
@@ -579,6 +650,7 @@ fn evm_byte_len_fact(func: &Function, inst: InstId) -> Option<(ValueId, RangeFac
                 lo: I256::zero(),
                 hi: I256::from(hi),
             },
+            low_bits: LowBits::default(),
         };
         (result, trunc_fact(len, ty))
     })
@@ -1096,7 +1168,12 @@ fn refine_zero_test_edge(
         let zero_fact = RangeFact::singleton(zero);
         let unsigned = value_fact.unsigned.intersect(zero_fact.unsigned)?;
         let signed = value_fact.signed.intersect(zero_fact.signed)?;
-        set_env_fact(func, &mut refined, value, RangeFact { unsigned, signed });
+        let fact = RangeFact {
+            unsigned,
+            signed,
+            ..value_fact
+        };
+        set_env_fact(func, &mut refined, value, fact);
     } else {
         refine_not_equal_immediate_edge(func, &mut refined, value, value_fact, zero);
     }
@@ -1201,8 +1278,14 @@ fn refine_compare_edge_impl(
         BinaryInstKind::Eq if compare_truth => {
             let unsigned = lhs_fact.unsigned.intersect(rhs_fact.unsigned)?;
             let signed = lhs_fact.signed.intersect(rhs_fact.signed)?;
-            set_env_fact(func, &mut refined, lhs, RangeFact { unsigned, signed });
-            set_env_fact(func, &mut refined, rhs, RangeFact { unsigned, signed });
+            for (value, fact) in [(lhs, lhs_fact), (rhs, rhs_fact)] {
+                let fact = RangeFact {
+                    unsigned,
+                    signed,
+                    ..fact
+                };
+                set_env_fact(func, &mut refined, value, fact);
+            }
         }
         BinaryInstKind::Ne if compare_truth => {
             refine_not_equal_constant_edge(func, &mut refined, lhs, lhs_fact, rhs);
@@ -1603,13 +1686,12 @@ fn malloc_ptr_to_int_fact(func: &Function, value: ValueId) -> Option<RangeFact> 
     if size > U256::from(u32::MAX) {
         return None;
     }
-    let full = RangeFact::full_for(Type::I256);
     Some(RangeFact {
         unsigned: UnsignedInterval {
             lo: U256::zero(),
             hi: unsigned_max(Type::I256) - size,
         },
-        signed: full.signed,
+        ..RangeFact::full_for(Type::I256)
     })
 }
 
@@ -1825,7 +1907,11 @@ fn zext_fact(src: RangeFact, _dst_ty: Type) -> RangeFact {
         lo: I256::zero(),
         hi: I256::from(src.unsigned.hi),
     };
-    RangeFact { unsigned, signed }
+    RangeFact {
+        unsigned,
+        signed,
+        low_bits: src.low_bits,
+    }
 }
 
 fn sext_fact(src: RangeFact, dst_ty: Type) -> RangeFact {
@@ -1850,14 +1936,20 @@ fn sext_fact(src: RangeFact, dst_ty: Type) -> RangeFact {
                 hi: unsigned_max(dst_ty),
             },
             signed,
+            low_bits: src.low_bits,
         };
     };
 
-    RangeFact { unsigned, signed }
+    RangeFact {
+        unsigned,
+        signed,
+        low_bits: src.low_bits,
+    }
 }
 
 fn trunc_fact(src: RangeFact, dst_ty: Type) -> RangeFact {
     let mut fact = RangeFact::full_for(dst_ty);
+    fact.low_bits = src.low_bits.trunc(dst_ty);
 
     if src.unsigned.hi <= unsigned_max(dst_ty) {
         fact.unsigned = UnsignedInterval {
@@ -1895,7 +1987,11 @@ fn plain_add_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
     } else {
         full.signed
     };
-    RangeFact { unsigned, signed }
+    RangeFact {
+        unsigned,
+        signed,
+        low_bits: lhs.low_bits.add(rhs.low_bits),
+    }
 }
 
 fn plain_sub_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
@@ -1918,7 +2014,11 @@ fn plain_sub_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
     } else {
         full.signed
     };
-    RangeFact { unsigned, signed }
+    RangeFact {
+        unsigned,
+        signed,
+        low_bits: lhs.low_bits.sub(rhs.low_bits),
+    }
 }
 
 /// `lhs - rhs` where `lhs >= rhs` cannot wrap, so it lies between
@@ -1939,7 +2039,11 @@ fn guarded_sub_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
     } else {
         plain_sub_fact(lhs, rhs, ty).signed
     };
-    RangeFact { unsigned, signed }
+    RangeFact {
+        unsigned,
+        signed,
+        low_bits: lhs.low_bits.sub(rhs.low_bits),
+    }
 }
 
 fn plain_mul_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
@@ -1960,7 +2064,11 @@ fn plain_mul_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
     } else {
         full.signed
     };
-    RangeFact { unsigned, signed }
+    RangeFact {
+        unsigned,
+        signed,
+        low_bits: lhs.low_bits.mul(rhs.low_bits, ty),
+    }
 }
 
 /// A result in `[lo, hi]` read as unsigned, and as signed when `hi` fits.
@@ -1976,6 +2084,7 @@ fn unsigned_fact(lo: U256, hi: U256, ty: Type) -> RangeFact {
     RangeFact {
         unsigned: UnsignedInterval { lo, hi },
         signed,
+        low_bits: LowBits::default(),
     }
 }
 
@@ -1994,6 +2103,7 @@ fn and_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
             hi: fact.signed.hi.min(hi),
         };
     }
+    fact.low_bits = lhs.low_bits.and(rhs.low_bits);
     fact
 }
 
@@ -2014,19 +2124,25 @@ fn xor_fact(lhs: RangeFact, rhs: RangeFact, ty: Type) -> RangeFact {
     unsigned_fact(U256::zero(), bit_span(lhs, rhs), ty)
 }
 
-/// `value << bits` when no set bit can leave the type.
+/// `value << bits` when no set bit can leave the type, and its low bits for
+/// a known shift below the width, which wrapping keeps.
 fn shl_fact(bits: RangeFact, value: RangeFact, ty: Type) -> RangeFact {
     let width = usize::from(type_bits(ty));
-    if bits.unsigned.hi >= U256::from(width)
+    let mut fact = if bits.unsigned.hi >= U256::from(width)
         || value.unsigned.hi.bits() + bits.unsigned.hi.as_usize() > width
     {
-        return RangeFact::full_for(ty);
+        RangeFact::full_for(ty)
+    } else {
+        unsigned_fact(
+            value.unsigned.lo << bits.unsigned.lo.as_usize(),
+            value.unsigned.hi << bits.unsigned.hi.as_usize(),
+            ty,
+        )
+    };
+    if bits.unsigned.lo == bits.unsigned.hi && bits.unsigned.hi < U256::from(width) {
+        fact.low_bits = value.low_bits.shl(bits.unsigned.hi.as_u32() as u16, ty);
     }
-    unsigned_fact(
-        value.unsigned.lo << bits.unsigned.lo.as_usize(),
-        value.unsigned.hi << bits.unsigned.hi.as_usize(),
-        ty,
-    )
+    fact
 }
 
 /// `value >> bits`, which is zero once `bits` reaches the width.
@@ -2187,15 +2303,7 @@ fn set_env_unsigned(
     old: RangeFact,
     unsigned: UnsignedInterval,
 ) {
-    set_env_fact(
-        func,
-        env,
-        value,
-        RangeFact {
-            unsigned,
-            signed: old.signed,
-        },
-    );
+    set_env_fact(func, env, value, RangeFact { unsigned, ..old });
 }
 
 fn set_env_signed(
@@ -2205,15 +2313,7 @@ fn set_env_signed(
     old: RangeFact,
     signed: SignedInterval,
 ) {
-    set_env_fact(
-        func,
-        env,
-        value,
-        RangeFact {
-            unsigned: old.unsigned,
-            signed,
-        },
-    );
+    set_env_fact(func, env, value, RangeFact { signed, ..old });
 }
 
 fn set_env_fact(func: &Function, env: &mut RangeEnv, value: ValueId, fact: RangeFact) {
@@ -2221,11 +2321,44 @@ fn set_env_fact(func: &Function, env: &mut RangeEnv, value: ValueId, fact: Range
     if !supports_range_facts(ty) || matches!(func.dfg.value(value), Value::Immediate { .. }) {
         return;
     }
+    let fact = tighten(fact, ty);
     if fact.is_full_for(ty) {
         env.remove(&value);
     } else {
         env.insert(value, fact);
     }
+}
+
+/// `fact` with each bound moved inward to the nearest value its low bits
+/// allow, as a multiple of eight below 256 is at most 248, and with all its
+/// bits known once it is a single value. A value's low bits are the same read
+/// signed or unsigned, since `2**bits` divides `2**width`. Bounds that cross
+/// describe no value, so `fact` stays as it is.
+fn tighten(mut fact: RangeFact, ty: Type) -> RangeFact {
+    let LowBits { bits, residue } = fact.low_bits;
+    // The distance up from `from` to the next value congruent to `to`.
+    let step = |from: U256, to: U256| to.overflowing_sub(from).0 & low_mask(bits);
+    let UnsignedInterval { lo, hi } = fact.unsigned;
+    if let (lo, false) = lo.overflowing_add(step(lo, residue))
+        && let (hi, false) = hi.overflowing_sub(step(residue, hi))
+        && lo <= hi
+    {
+        fact.unsigned = UnsignedInterval { lo, hi };
+    }
+    // A step below `2**255` fits a signed value; a 256-bit residue makes the
+    // unsigned interval a single value anyway.
+    let SignedInterval { lo, hi } = fact.signed;
+    if bits < 256
+        && let (lo, false) = signed_add(lo, I256::from(step(lo.to_u256(), residue)), ty)
+        && let (hi, false) = signed_sub(hi, I256::from(step(residue, hi.to_u256())), ty)
+        && lo <= hi
+    {
+        fact.signed = SignedInterval { lo, hi };
+    }
+    if fact.unsigned.lo == fact.unsigned.hi {
+        fact.low_bits = LowBits::new(type_bits(ty), fact.unsigned.lo);
+    }
+    fact
 }
 
 fn join_envs(func: &Function, lhs: &RangeEnv, rhs: &RangeEnv) -> RangeEnv {
@@ -2284,6 +2417,7 @@ fn widen_env(func: &Function, old: &RangeEnv, new: &RangeEnv) -> RangeEnv {
         if new_fact.signed.hi > old_fact.signed.hi {
             widened_fact.signed.hi = signed_max(ty);
         }
+        widened_fact.low_bits = old_fact.low_bits.join(new_fact.low_bits);
 
         if !widened_fact.is_full_for(ty) {
             widened.insert(value, widened_fact);
@@ -2296,6 +2430,7 @@ fn join_facts(lhs: RangeFact, rhs: RangeFact, _ty: Type) -> RangeFact {
     RangeFact {
         unsigned: lhs.unsigned.join(rhs.unsigned),
         signed: lhs.signed.join(rhs.signed),
+        low_bits: lhs.low_bits.join(rhs.low_bits),
     }
 }
 
@@ -2449,6 +2584,125 @@ mod tests {
     use crate::domtree::DomTree;
 
     use super::*;
+
+    fn low(bits: u16, residue: u64) -> LowBits {
+        LowBits::new(bits, U256::from(residue))
+    }
+
+    fn unsigned_interval(lo: U256, hi: U256) -> UnsignedInterval {
+        UnsignedInterval { lo, hi }
+    }
+
+    fn signed_interval(lo: I256, hi: I256) -> SignedInterval {
+        SignedInterval { lo, hi }
+    }
+
+    fn with_low_bits(fact: RangeFact, low_bits: LowBits) -> RangeFact {
+        RangeFact { low_bits, ..fact }
+    }
+
+    #[test]
+    fn low_bit_operations_keep_what_they_know() {
+        // 4 and 12 agree in their low three bits.
+        assert_eq!(low(64, 4).join(low(64, 12)), low(3, 4));
+        // `(1 + 4a)(2 + 4b)` is 2 modulo 4, and `4a * 2b` is 0 modulo 8.
+        assert_eq!(low(2, 1).mul(low(2, 2), Type::I64), low(2, 2));
+        assert_eq!(low(2, 0).mul(low(1, 0), Type::I64), low(3, 0));
+        // A zero one side knows is a zero of the `and`.
+        assert_eq!(LowBits::default().and(low(8, 0xf8)), low(3, 0));
+        assert_eq!(low(2, 3).and(low(8, 0xfd)), low(2, 1));
+        // `8a - 3` wraps to 5 modulo 8.
+        assert_eq!(low(3, 0).sub(low(64, 3)), low(3, 5));
+        // A shift moves the known bits up, up to the width.
+        assert_eq!(low(2, 1).shl(3, Type::I64), low(5, 8));
+        assert_eq!(low(8, 1).shl(4, Type::I8), low(8, 16));
+        assert_eq!(low(16, 0x1234).trunc(Type::I8), low(8, 0x34));
+    }
+
+    #[test]
+    fn tighten_moves_bounds_to_the_residue() {
+        let fact = with_low_bits(
+            unsigned_fact(U256::one(), U256::from(255u8), Type::I64),
+            low(3, 0),
+        );
+        assert_eq!(
+            tighten(fact, Type::I64).unsigned,
+            unsigned_interval(U256::from(8u8), U256::from(248u8))
+        );
+
+        let signed = |lo: i64, hi: i64| signed_interval(I256::from(lo), I256::from(hi));
+        let negative = RangeFact {
+            signed: signed(-100, -5),
+            ..with_low_bits(RangeFact::full_for(Type::I8), low(3, 0))
+        };
+        assert_eq!(tighten(negative, Type::I8).signed, signed(-96, -8));
+        let around_zero = RangeFact {
+            signed: signed(-5, 5),
+            ..negative
+        };
+        let fact = tighten(around_zero, Type::I8);
+        assert_eq!(fact.signed, signed(0, 0));
+        assert_eq!(
+            fact.unsigned,
+            unsigned_interval(U256::zero(), U256::from(248u8))
+        );
+
+        let fact = tighten(
+            with_low_bits(RangeFact::full_for(Type::I1), low(1, 1)),
+            Type::I1,
+        );
+        assert_eq!(fact.unsigned, unsigned_interval(U256::one(), U256::one()));
+        assert_eq!(fact.signed, signed(-1, -1));
+
+        let fact = tighten(
+            with_low_bits(RangeFact::full_for(Type::I8), low(8, 0xfb)),
+            Type::I8,
+        );
+        let byte = U256::from(0xfbu8);
+        assert_eq!(fact.unsigned, unsigned_interval(byte, byte));
+        assert_eq!(fact.signed, signed(-5, -5));
+
+        // 1 modulo `2**255`: 1 and `2**255 + 1`, read signed `1 - 2**255`
+        // and 1.
+        let half = U256::one() << 255;
+        let fact = tighten(
+            with_low_bits(RangeFact::full_for(Type::I256), low(255, 1)),
+            Type::I256,
+        );
+        assert_eq!(
+            fact.unsigned,
+            unsigned_interval(U256::one(), half + U256::one())
+        );
+        assert_eq!(
+            fact.signed,
+            signed_interval(I256::from(half + U256::one()), I256::one())
+        );
+
+        // All 256 bits make the unsigned interval one value; the signed one
+        // stays.
+        let full = RangeFact::full_for(Type::I256);
+        let fact = tighten(with_low_bits(full, low(256, 5)), Type::I256);
+        let five = U256::from(5u8);
+        assert_eq!(fact.unsigned, unsigned_interval(five, five));
+        assert_eq!(fact.signed, full.signed);
+    }
+
+    #[test]
+    fn tighten_keeps_crossing_bounds_and_knows_a_single_value() {
+        // No multiple of eight lies in `[1, 6]`, so the fact describes no
+        // value and stays.
+        let fact = with_low_bits(
+            unsigned_fact(U256::one(), U256::from(6u8), Type::I64),
+            low(3, 0),
+        );
+        assert_eq!(tighten(fact, Type::I64), fact);
+
+        let nine = U256::from(9u8);
+        assert_eq!(
+            tighten(unsigned_fact(nine, nine, Type::I64), Type::I64).low_bits,
+            low(64, 9)
+        );
+    }
 
     #[test]
     fn interval_helpers_handle_join_intersect_singleton_and_extrema() {
@@ -2614,6 +2868,7 @@ mod tests {
                         lo: I256::from(5i8),
                         hi: I256::from(10i8),
                     },
+                    low_bits: LowBits::default(),
                 },
             );
 
@@ -2629,6 +2884,7 @@ mod tests {
                         lo: I256::from(4i8),
                         hi: I256::from(11i8),
                     },
+                    low_bits: LowBits::default(),
                 },
             );
 
@@ -2671,6 +2927,7 @@ mod tests {
                         lo: I256::zero(),
                         hi: I256::from(10i8),
                     },
+                    low_bits: LowBits::default(),
                 },
             );
 
@@ -2686,6 +2943,7 @@ mod tests {
                         lo: I256::from(5i8),
                         hi: I256::from(8i8),
                     },
+                    low_bits: LowBits::default(),
                 },
             );
 
@@ -2723,6 +2981,7 @@ mod tests {
                         lo: I256::from(1i8),
                         hi: I256::from(10i8),
                     },
+                    low_bits: LowBits::default(),
                 },
             );
             let mut right = RangeEnv::default();
@@ -2737,6 +2996,7 @@ mod tests {
                         lo: I256::from(2i8),
                         hi: I256::from(9i8),
                     },
+                    low_bits: LowBits::default(),
                 },
             );
 

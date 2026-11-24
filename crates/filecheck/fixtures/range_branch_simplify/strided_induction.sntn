@@ -1,0 +1,92 @@
+#! A counter that starts at a multiple of eight and steps by eight stays a
+#! multiple of eight, so below 256 it is at most 248 and `t + 7 < 256`. The
+#! congruence modulo a power of two survives wrapping arithmetic.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %strided_counter_offsets_stay_below_the_bound() -> i64 {
+# not:         br v3
+# not:         br v7
+# check:       br v8 block1 block5;
+func public %strided_counter_offsets_stay_below_the_bound() -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v0.i64 = phi (0.i64 block0) (v6 block3);
+    v1.i64 = phi (0.i64 block0) (v5 block3);
+    v2.i64 = add v0 1.i64;
+    v3.i1 = lt v2 256.i64;
+    br v3 block2 block4;
+
+block2:
+    v4.i64 = add v0 7.i64;
+    v7.i1 = lt v4 256.i64;
+    br v7 block3 block4;
+
+block3:
+    v5.i64 = add v1 v4;
+    v6.i64 = add v0 8.i64;
+    v8.i1 = lt v6 256.i64;
+    br v8 block1 block5;
+
+block4:
+    return 999.i64;
+
+block5:
+    return v5;
+}
+
+# sameln: func public %odd_strided_counter_keeps_its_last_check() -> i64 {
+# not:         br v3
+# check:       br v7 block3 block4;
+# check:       br v8 block1 block5;
+func public %odd_strided_counter_keeps_its_last_check() -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v0.i64 = phi (1.i64 block0) (v6 block3);
+    v1.i64 = phi (0.i64 block0) (v5 block3);
+    v2.i64 = add v0 6.i64;
+    v3.i1 = lt v2 256.i64;
+    br v3 block2 block4;
+
+block2:
+    v4.i64 = add v0 7.i64;
+    v7.i1 = lt v4 256.i64;
+    br v7 block3 block4;
+
+block3:
+    v5.i64 = add v1 v4;
+    v6.i64 = add v0 8.i64;
+    v8.i1 = lt v6 256.i64;
+    br v8 block1 block5;
+
+block4:
+    return 999.i64;
+
+block5:
+    return v5;
+}
+
+# sameln: func public %wrapped_multiple_keeps_its_residue(v0.i8) -> i8 {
+# check:       br v3 block1 block2;
+# not:         br v4
+func public %wrapped_multiple_keeps_its_residue(v0.i8) -> i8 {
+block0:
+    v1.i8 = mul v0 8.i8;
+    v2.i8 = add v1 250.i8;
+    v3.i1 = lt v2 3.i8;
+    br v3 block1 block2;
+
+block1:
+    v4.i1 = eq v2 2.i8;
+    br v4 block2 block3;
+
+block2:
+    return 1.i8;
+
+block3:
+    return 0.i8;
+}

@@ -43,7 +43,7 @@ func public %entry() {
         v12.*i256 = gep v8 0.i256 1.i256;
         v13.i256 = mload v12 i256;
         mstore 0.i256 v13 i256;
-        v18.i256 = add v2 6.i256;
+        v18.i256 = add v2 7.i256;
         jump block1;
 
     block8:

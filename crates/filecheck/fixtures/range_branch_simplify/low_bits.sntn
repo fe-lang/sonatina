@@ -1,0 +1,242 @@
+#! Each transfer keeps the low bits it can: below 8, a multiple of eight is
+#! zero, and below 6, a value congruent to 5 modulo 8 is 5. A transfer that
+#! claimed more bits than it knows would fold a branch that must stay.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %sub_keeps_the_difference_of_residues(v0.i64) -> i64 {
+# not:         br v4
+func public %sub_keeps_the_difference_of_residues(v0.i64) -> i64 {
+block0:
+    v1.i64 = mul v0 8.i64;
+    v2.i64 = sub v1 3.i64;
+    v3.i1 = lt v2 6.i64;
+    br v3 block1 block2;
+block1:
+    v4.i1 = eq v2 5.i64;
+    br v4 block2 block3;
+block2:
+    return 1.i64;
+block3:
+    return 0.i64;
+}
+
+# sameln: func public %and_with_known_zeros_clears_them(v0.i8) -> i8 {
+# not:         br v3
+func public %and_with_known_zeros_clears_them(v0.i8) -> i8 {
+block0:
+    v1.i8 = and v0 248.i8;
+    v2.i1 = lt v1 8.i8;
+    br v2 block1 block2;
+block1:
+    v3.i1 = eq v1 0.i8;
+    br v3 block2 block3;
+block2:
+    return 1.i8;
+block3:
+    return 0.i8;
+}
+
+# sameln: func public %shl_clears_the_shifted_in_bits(v0.i64) -> i64 {
+# not:         br v3
+func public %shl_clears_the_shifted_in_bits(v0.i64) -> i64 {
+block0:
+    v1.i64 = shl 3.i64 v0;
+    v2.i1 = lt v1 8.i64;
+    br v2 block1 block2;
+block1:
+    v3.i1 = eq v1 0.i64;
+    br v3 block2 block3;
+block2:
+    return 1.i64;
+block3:
+    return 0.i64;
+}
+
+# sameln: func public %extensions_keep_the_low_bits(v0.i8) -> i32 {
+# not:         br v6
+# not:         br v7
+func public %extensions_keep_the_low_bits(v0.i8) -> i32 {
+block0:
+    v1.i8 = mul v0 8.i8;
+    v2.i32 = zext v1 i32;
+    v3.i32 = sext v1 i32;
+    v4.i1 = lt v2 8.i32;
+    br v4 block1 block4;
+block1:
+    v5.i1 = lt v3 8.i32;
+    br v5 block2 block4;
+block2:
+    v6.i1 = eq v2 0.i32;
+    br v6 block3 block4;
+block3:
+    v7.i1 = eq v3 0.i32;
+    br v7 block4 block5;
+block4:
+    return 1.i32;
+block5:
+    return 0.i32;
+}
+
+# sameln: func public %trunc_keeps_the_low_bits_that_fit(v0.i32) -> i8 {
+# not:         br v4
+# not:         br v6
+func public %trunc_keeps_the_low_bits_that_fit(v0.i32) -> i8 {
+block0:
+    v1.i32 = mul v0 8.i32;
+    v2.i8 = trunc v1 i8;
+    v3.i1 = lt v2 8.i8;
+    br v3 block1 block2;
+block1:
+    v4.i1 = eq v2 0.i8;
+    br v4 block2 block3;
+block2:
+    v5.i1 = trunc v1 i1;
+    v6.i1 = is_zero v5;
+    br v6 block4 block3;
+block3:
+    return 1.i8;
+block4:
+    return 0.i8;
+}
+
+# sameln: func public %select_joins_both_low_bits(v0.i1, v1.i64, v2.i64) -> i64 {
+# not:         br v7
+func public %select_joins_both_low_bits(v0.i1, v1.i64, v2.i64) -> i64 {
+block0:
+    v3.i64 = mul v1 8.i64;
+    v4.i64 = shl 4.i64 v2;
+    v5.i64 = select v0 v3 v4;
+    v6.i1 = lt v5 8.i64;
+    br v6 block1 block2;
+block1:
+    v7.i1 = eq v5 0.i64;
+    br v7 block2 block3;
+block2:
+    return 1.i64;
+block3:
+    return 0.i64;
+}
+
+# sameln: func public %product_adds_the_trailing_zeros(v0.i64, v1.i64) -> i64 {
+# not:         br v6
+func public %product_adds_the_trailing_zeros(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i64 = mul v0 4.i64;
+    v3.i64 = mul v1 2.i64;
+    v4.i64 = mul v2 v3;
+    v5.i1 = lt v4 8.i64;
+    br v5 block1 block2;
+block1:
+    v6.i1 = eq v4 0.i64;
+    br v6 block2 block3;
+block2:
+    return 1.i64;
+block3:
+    return 0.i64;
+}
+
+#! `4a * 2b` is a multiple of 8, not of 16: below 16 it may be 8.
+# sameln: func public %product_keeps_no_more_zeros(v0.i64, v1.i64) -> i64 {
+# check:       br v6 block2 block3;
+func public %product_keeps_no_more_zeros(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i64 = mul v0 4.i64;
+    v3.i64 = mul v1 2.i64;
+    v4.i64 = mul v2 v3;
+    v5.i1 = lt v4 16.i64;
+    br v5 block1 block2;
+block1:
+    v6.i1 = eq v4 0.i64;
+    br v6 block2 block3;
+block2:
+    return 1.i64;
+block3:
+    return 0.i64;
+}
+
+#! 4 and 12 agree in their low three bits, so a value among them that is not
+#! 4 is 12.
+# sameln: func public %join_keeps_the_agreeing_bits(v0.i1) -> i64 {
+# not:         br v3
+func public %join_keeps_the_agreeing_bits(v0.i1) -> i64 {
+block0:
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v1.i64 = phi (4.i64 block1) (12.i64 block2);
+    v2.i1 = ne v1 4.i64;
+    br v2 block4 block5;
+block4:
+    v3.i1 = eq v1 12.i64;
+    br v3 block5 block6;
+block5:
+    return 1.i64;
+block6:
+    return 0.i64;
+}
+
+#! A multiple of eight below -4 is at most -8; one between -5 and 5 is 0.
+# sameln: func public %signed_bounds_move_to_multiples(v0.i8) -> i8 {
+# not:         br v3
+# not:         br v6
+func public %signed_bounds_move_to_multiples(v0.i8) -> i8 {
+block0:
+    v1.i8 = mul v0 8.i8;
+    v2.i1 = slt v1 -4.i8;
+    br v2 block1 block2;
+block1:
+    v3.i1 = slt v1 -7.i8;
+    br v3 block5 block6;
+block2:
+    v4.i1 = sgt v1 -5.i8;
+    br v4 block3 block5;
+block3:
+    v5.i1 = slt v1 5.i8;
+    br v5 block4 block5;
+block4:
+    v6.i1 = eq v1 0.i8;
+    br v6 block5 block6;
+block5:
+    return 1.i8;
+block6:
+    return 0.i8;
+}
+
+#! A counter that steps by 4 or by 6 is even, not a multiple of four, so it
+#! reaches 254 and its `t + 3` check stays.
+# sameln: func public %loop_join_degrades_the_low_bits(v0.i1) -> i64 {
+# not:         br v3
+# check:       br v5 block3 block8;
+func public %loop_join_degrades_the_low_bits(v0.i1) -> i64 {
+block0:
+    jump block1;
+block1:
+    v1.i64 = phi (0.i64 block0) (v9 block6);
+    v2.i64 = add v1 1.i64;
+    v3.i1 = lt v2 256.i64;
+    br v3 block2 block8;
+block2:
+    v4.i64 = add v1 3.i64;
+    v5.i1 = lt v4 256.i64;
+    br v5 block3 block8;
+block3:
+    br v0 block4 block5;
+block4:
+    v7.i64 = add v1 2.i64;
+    jump block5;
+block5:
+    v8.i64 = phi (v1 block3) (v7 block4);
+    jump block6;
+block6:
+    v9.i64 = add v8 4.i64;
+    v10.i1 = lt v9 256.i64;
+    br v10 block1 block7;
+block7:
+    return v9;
+block8:
+    return 999.i64;
+}
