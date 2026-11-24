@@ -1207,7 +1207,61 @@ mod tests {
     use sonatina_parser::parse_module;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
 
-    use crate::analysis::known_bits::count_query_news_for_test;
+    use crate::{analysis::known_bits::count_query_news_for_test, object::lowering::FuncSnap};
+
+    /// SCCP finds `v1` is 3, so `block0` never takes the zero edge of `v2`.
+    #[test]
+    fn prune_step_lists_constants_and_dead_edges() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+    block0:
+        v1.i256 = add 1.i256 2.i256;
+        v2.i1 = eq v1 3.i256;
+        br v2 block1 block2;
+
+    block1:
+        return v0;
+
+    block2:
+        return v1;
+}
+"#,
+        )
+        .unwrap();
+        let func_ref = parsed.module.funcs()[0];
+        let value = |name| parsed.debug.value(func_ref, name).unwrap();
+        let mut log = parsed.module.func_store.view(func_ref, |func| {
+            StepLog::new(FuncSnap::capture(func_ref, func))
+        });
+        parsed.module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            SccpSolver::new().run_with_steps(func, &mut cfg, Some(&mut log));
+        });
+        let (_, _, _, step) = log
+            .steps
+            .iter()
+            .find(|(kind, ..)| *kind == StepKind::SccpPrune)
+            .unwrap();
+        let sccp = step
+            .as_ref()
+            .expect("the prune changes `block0`")
+            .facts
+            .sccp
+            .clone();
+        let sccp = sccp.unwrap();
+        assert_eq!(sccp.dead_edges, [(BlockId(0), 1)]);
+        assert_eq!(
+            sccp.consts,
+            [
+                (value("v1"), Immediate::I256(3.into())),
+                (value("v2"), Immediate::I1(true))
+            ]
+        );
+    }
 
     #[derive(Clone, Copy)]
     struct XorShift64(u64);

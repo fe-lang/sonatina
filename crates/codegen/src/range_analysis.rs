@@ -3101,6 +3101,39 @@ mod tests {
         }
     }
 
+    /// `v0 - v1` runs only once `v1 < v0`, so it cannot wrap.
+    #[test]
+    fn export_lists_guarded_subtractions_and_the_entry_facts_of_each_block() {
+        let parsed = sonatina_parser::parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i1 = lt v1 v0;
+        br v2 block1 block2;
+
+    block1:
+        v3.i256 = sub v0 v1;
+        return v3;
+
+    block2:
+        return 0.i256;
+}
+"#,
+        )
+        .unwrap();
+        let func_ref = parsed.module.funcs()[0];
+        let sub = parsed.debug.value(func_ref, "v3").unwrap();
+        parsed.module.func_store.view(func_ref, |func| {
+            let facts = compute_analysis(func).export(func);
+            assert_eq!(facts.guarded_subs, [func.dfg.value_inst(sub).unwrap()]);
+            assert!(facts.unreachable.is_empty());
+            let blocks: Vec<_> = facts.entry.iter().map(|(block, _)| *block).collect();
+            assert_eq!(blocks, [BlockId(0), BlockId(1), BlockId(2)]);
+        });
+    }
+
     #[test]
     fn true_edge_of_lt_refines_upper_bound() {
         let mb = test_module_builder();
