@@ -2273,6 +2273,11 @@ struct RedundantCodeRemover<'a> {
     post_domtree: OnceCell<PostDomTree>,
 
     renames: FxHashMap<ValueId, ValueId>,
+
+    /// Instructions with a replaced result, in visit order, erased once value phis are resolved
+    /// if their results are still dead. Until then lookups may hand out, and value phis may
+    /// name, any result the solver numbered.
+    replaced: Vec<InstId>,
     changed: bool,
 }
 
@@ -2284,6 +2289,7 @@ impl<'a> RedundantCodeRemover<'a> {
             resolved_value_phis: FxHashMap::default(),
             post_domtree: OnceCell::new(),
             renames: FxHashMap::default(),
+            replaced: Vec::new(),
             changed: false,
         }
     }
@@ -2358,6 +2364,7 @@ impl<'a> RedundantCodeRemover<'a> {
     /// 3. Removes redundant code.
     /// 4. Resolves value phis and insert phi insns to the appropriate blocks. If value phi
     ///    resolution fails, then the value and its defining insn is left as is.
+    /// 5. Erases the instructions whose results were all replaced.
     fn remove_redundant_code(
         &mut self,
         func: &mut Function,
@@ -2389,6 +2396,16 @@ impl<'a> RedundantCodeRemover<'a> {
         while let Some(block) = next_block {
             self.resolve_value_phi_in_block(func, cfg, domtree, block);
             next_block = func.layout.next_block_of(block);
+        }
+
+        for inst in std::mem::take(&mut self.replaced) {
+            if self.inst_results_are_dead(func, inst) {
+                if func.layout.is_inst_inserted(inst) {
+                    func.layout.remove_inst(inst);
+                }
+                func.erase_inst(inst);
+                self.changed = true;
+            }
         }
         self.changed
     }
@@ -2450,9 +2467,11 @@ impl<'a> RedundantCodeRemover<'a> {
                         }
                     }
 
+                    // Only out of the layout for now: see `replaced`.
                     if changed && self.inst_results_are_dead(func, insn) {
-                        self.changed = true;
-                        inserter.remove_inst(func);
+                        inserter.proceed(func);
+                        func.layout.remove_inst(insn);
+                        self.replaced.push(insn);
                         continue;
                     }
 
@@ -2540,12 +2559,10 @@ impl<'a> RedundantCodeRemover<'a> {
                         }
                     }
 
-                    if changed && self.inst_results_are_dead(func, insn) {
-                        self.changed = true;
-                        inserter.remove_inst(func);
-                        continue;
+                    // A result left unreplaced may still be looked up: see `replaced`.
+                    if changed {
+                        self.replaced.push(insn);
                     }
-
                     inserter.proceed(func);
                 }
             }
@@ -3093,6 +3110,71 @@ func public %f(v0.i1, v1.i32) -> i32 {
             FuncWriter::new(func_ref, func).dump_string()
         });
         assert!(dumped.contains("mstore 0.i256 v8 i32"), "{dumped}");
+    }
+
+    /// `block4`'s `uaddo` resolves its sum to a value phi and is erased; its overflow flag, which
+    /// nothing uses, stays unresolved. `v13` in `block8` is that flag's value and must not be
+    /// replaced by the erased `v9`.
+    #[test]
+    fn erased_multi_result_inst_is_not_available() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i1, v2.i1, v3.i32, v4.i32) -> i32 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    (v5.i32, v6.i1) = uaddo v3 v4;
+    jump block3;
+
+block3:
+    v7.i32 = phi (0.i32 block1) (v4 block2);
+    br v1 block4 block7;
+
+block7:
+    return 0.i32;
+
+block4:
+    (v8.i32, v9.i1) = uaddo v3 v7;
+    br v2 block5 block6;
+
+block5:
+    jump block8;
+
+block6:
+    jump block8;
+
+block8:
+    v10.i32 = phi (v3 block5) (v7 block6);
+    v11.i32 = phi (v7 block5) (v3 block6);
+    (v12.i32, v13.i1) = uaddo v10 v11;
+    v14.i32 = zext v13 i32;
+    v15.i32 = add v8 v14;
+    return v15;
+}
+"#,
+        )
+        .expect("module parses")
+        .module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            GvnSolver::new().run(func, &mut cfg, &mut domtree);
+        });
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        let dumped = module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        });
+        assert!(dumped.contains("uaddo v3 v7"), "{dumped}");
+        assert!(dumped.contains("zext v9 i32"), "{dumped}");
     }
 
     /// Two phis of one block with the same incoming values are one value.
