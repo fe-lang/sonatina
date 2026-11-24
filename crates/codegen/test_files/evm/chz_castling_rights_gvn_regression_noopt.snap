@@ -6,8 +6,8 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression_noopt.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 3394 bytes
-  total: 3394 bytes
+  section runtime: 3399 bytes
+  total: 3399 bytes
 
 functions:
   mem: global_dyn_base=0xc40 arena_base=0xa0 scratch_peak_words=7 stable_chain_peak_words=86

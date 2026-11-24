@@ -1487,9 +1487,42 @@ object @O {{
         )));
     }
 
+    fn emission_order_names(src: &str) -> Vec<String> {
+        let parsed = parse_module(src).unwrap();
+        let program = ResolvedProgram::resolve(&parsed.module).unwrap();
+        let section_id = SectionId {
+            object: ObjectId(0),
+            section: 0,
+        };
+        let section = program.section(section_id);
+        let mut section_data: Vec<GlobalVariableRef> = section.data.iter().copied().collect();
+        section_data.sort_unstable();
+        let membership = build_section_membership(
+            &parsed.module,
+            section.entry,
+            &section.includes,
+            &section_data,
+        );
+        let order = compute_section_function_emission_order(
+            &parsed.module,
+            section.entry,
+            &section.includes,
+            &membership,
+        );
+        order
+            .into_iter()
+            .map(|func| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(func, |sig| sig.name().to_string())
+            })
+            .collect()
+    }
+
     #[test]
     fn emits_functions_in_call_graph_dfs_order() {
-        let parsed = parse_module(
+        let names = emission_order_names(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1529,37 +1562,51 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let program = ResolvedProgram::resolve(&parsed.module).unwrap();
-        let section_id = SectionId {
-            object: ObjectId(0),
-            section: 0,
-        };
-        let section = program.section(section_id);
-        let mut section_data: Vec<GlobalVariableRef> = section.data.iter().copied().collect();
-        section_data.sort_unstable();
-        let membership = build_section_membership(
-            &parsed.module,
-            section.entry,
-            &section.includes,
-            &section_data,
         );
-        let order = compute_section_function_emission_order(
-            &parsed.module,
-            section.entry,
-            &section.includes,
-            &membership,
-        );
-        let names: Vec<_> = order
-            .into_iter()
-            .map(|func| {
-                parsed
-                    .module
-                    .ctx
-                    .func_sig(func, |sig| sig.name().to_string())
-            })
-            .collect();
         assert_eq!(names, vec!["main", "c", "b", "d", "e"]);
+    }
+
+    // Callees follow the call order, not their names, so renaming a function
+    // does not move code around.
+    #[test]
+    fn callee_order_does_not_depend_on_symbol_names() {
+        let module = |first: &str, second: &str| {
+            format!(
+                r#"
+target = "evm-ethereum-osaka"
+
+func public %main() {{
+    block0:
+        call %{first};
+        call %{second};
+        return;
+}}
+
+func private %{first}() {{
+    block0:
+        return;
+}}
+
+func private %{second}() {{
+    block0:
+        return;
+}}
+
+object @O {{
+  section runtime {{
+    entry %main;
+  }}
+}}
+"#
+            )
+        };
+        assert_eq!(
+            emission_order_names(&module("zz_helper", "aa_helper")),
+            vec!["main", "zz_helper", "aa_helper"]
+        );
+        assert_eq!(
+            emission_order_names(&module("aa_helper", "zz_helper")),
+            vec!["main", "aa_helper", "zz_helper"]
+        );
     }
 }
