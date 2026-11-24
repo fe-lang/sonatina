@@ -2871,3 +2871,66 @@ block0:
         }
     }
 }
+
+#[test]
+fn loop_objects_loaded_after_their_writes_read_what_was_loaded() {
+    // Each iteration writes `i` and `i + 1` into the object, then loads it
+    // and sums the product of the two words. `%copied` writes the object
+    // again between the load and the reads, which still see the load.
+    let function = |name: &str, between: &str| {
+        format!(
+            r#"
+func public %{name}(v0.i64) -> i64 {{
+block0:
+    v1.objref<[i64; 32]> = obj.alloc [i64; 32];
+    v2.objref<i64> = obj.index v1 0.i64;
+    v3.objref<i64> = obj.index v1 31.i64;
+    jump block1;
+block1:
+    v4.i64 = phi (0.i64 block0) (v5 block2);
+    v6.i64 = phi (0.i64 block0) (v12 block2);
+    v5.i64 = add v4 1.i64;
+    obj.store v1 zero.[i64; 32];
+    obj.store v2 v4;
+    obj.store v3 v5;
+    jump block2;
+block2:
+    v7.[i64; 32] = obj.load v1;
+{between}    v8.i64 = extract_value v7 0.i64;
+    v9.i64 = extract_value v7 31.i64;
+    v10.i64 = mul v8 v9;
+    v12.i64 = add v6 v10;
+    v11.i1 = lt v5 v0;
+    br v11 block1 block3;
+block3:
+    return v12;
+}}
+"#
+        )
+    };
+    let source = format!(
+        "{}{}",
+        function("forwarded", ""),
+        function(
+            "copied",
+            "    obj.store v2 100.i64;\n    obj.store v3 100.i64;\n"
+        ),
+    );
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(&source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        for name in ["forwarded", "copied"] {
+            let sum: unsafe extern "C" fn(i64) -> i64 =
+                unsafe { std::mem::transmute(artifact.function_address(name).unwrap()) };
+            for count in [1, 2, 7] {
+                let expected: i64 = (0..count).map(|i| i * (i + 1)).sum();
+                assert_eq!(unsafe { sum(count) }, expected, "{level:?} {name} {count}");
+            }
+        }
+    }
+}
