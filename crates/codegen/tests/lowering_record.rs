@@ -4,16 +4,16 @@
 use dir_test::{Fixture, dir_test};
 use sonatina_codegen::{
     EvmCompile, OptLevel,
-    isa::evm::opcode::OpCode,
+    isa::evm::{EvmBackend, opcode::OpCode},
     object::{
-        ObjectArtifact, encode_gv_initializer_to_bytes,
+        CompileOptions, ObjectArtifact, compile_all_objects, encode_gv_initializer_to_bytes,
         lowering::{
             CodeLabel, CodePoint, FuncLowering, SectionLowering, SpillLocation, StableLowering,
             StackSlot,
         },
     },
 };
-use sonatina_ir::BlockId;
+use sonatina_ir::{BlockId, isa::evm::Evm};
 use sonatina_parser::parse_module;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -439,12 +439,15 @@ object @Table {
     }
 }
 
-/// The stores and reloads of each spill of the function `name` of the
-/// fixture `file` compiled at O0, as `(value, location, stores, reloads)`.
-fn spill_points(file: &str, name: &str) -> Vec<String> {
+/// The source of the EVM fixture `file`.
+fn evm_fixture(file: &str) -> String {
     let path = format!("{}/test_files/evm/{file}", env!("CARGO_MANIFEST_DIR"));
-    let source = std::fs::read_to_string(path).expect("fixture reads");
-    let artifacts = compile(&source, OptLevel::O0, true);
+    std::fs::read_to_string(path).expect("fixture reads")
+}
+
+/// The stores and reloads of each spill of the function `name` of the first
+/// section of `artifacts`, as `(value, location, stores, reloads)`.
+fn spill_points(artifacts: &[ObjectArtifact], name: &str) -> Vec<String> {
     let section = artifacts[0].sections.values().next().expect("a section");
     let lowering = section.lowering.as_ref().expect("a lowering record");
     let starts = instruction_starts(&section.bytes, lowering.code_size as usize);
@@ -497,7 +500,10 @@ fn lowering_record_lists_argument_stores_and_reloads() {
         )
     };
     assert_eq!(
-        spill_points("spill.sntn", "spill"),
+        spill_points(
+            &compile(&evm_fixture("spill.sntn"), OptLevel::O0, true),
+            "spill"
+        ),
         (1..=7).map(word).collect::<Vec<_>>()
     );
 }
@@ -509,7 +515,14 @@ fn lowering_record_lists_argument_stores_and_reloads() {
 /// reloaded values are stored.
 #[test]
 fn lowering_record_lists_phi_edge_stores_and_reloads() {
-    let spills = spill_points("spilled_phi_edge_rotation.sntn", "rotate");
+    let spills = spill_points(
+        &compile(
+            &evm_fixture("spilled_phi_edge_rotation.sntn"),
+            OptLevel::O0,
+            true,
+        ),
+        "rotate",
+    );
     for expected in [
         "v0 Memory(0) stores [entry] reloads [before block1:21]",
         "v1 Memory(32) stores [before block0:0, before block2:1] reloads [before block2:1]",
@@ -614,4 +627,54 @@ object @Contract {
             .count();
         assert_eq!(sourceless, 3, "{opt:?}: {}", runtime.machine_ir);
     }
+}
+
+/// At stack reach 4, `%rotate`'s phis `v2` to `v16` share the words of their
+/// sources on the entry edge, `v25` to `v53`, which die there. The edge would
+/// reload each source only to store it back as its phi, and final spills drop
+/// both: the record lists each source's store and no reload, and no store of
+/// its phi on the entry edge.
+#[test]
+fn lowering_record_omits_stores_back_to_a_shared_word() {
+    let module = parse_module(&evm_fixture("spilled_phi_shares_source_word.sntn"))
+        .expect("fixture parses")
+        .module;
+    let compile = |record| {
+        let backend = EvmBackend::new(Evm::new(module.ctx.triple))
+            .with_stackify_reach_depth(4)
+            .with_lowering_record(record);
+        let opts = CompileOptions {
+            emit_lowering: record,
+            ..CompileOptions::default()
+        };
+        compile_all_objects(&module, &backend, &opts).expect("fixture compiles")
+    };
+    let (plain, recorded) = (compile(false), compile(true));
+    let section = recorded[0].sections.values().next().expect("a section");
+    let plain = plain[0].sections.values().next().expect("a section");
+    assert_eq!(plain.bytes, section.bytes);
+    check_record(
+        section.lowering.as_ref().expect("a lowering record"),
+        &section.bytes,
+    );
+    let spills = spill_points(&recorded, "rotate");
+    for expected in [
+        "v2 Memory(96) stores [before block2:1] reloads [before block2:1]",
+        "v25 Memory(96) stores [after block0:1] reloads []",
+        "v16 Memory(544) stores [before block2:1] reloads [before block2:1]",
+        "v53 Memory(544) stores [after block0:15] reloads []",
+    ] {
+        assert!(
+            spills.iter().any(|spill| spill == expected),
+            "{expected} in {spills:#?}"
+        );
+    }
+    assert_eq!(
+        spills
+            .iter()
+            .filter(|spill| spill.ends_with("reloads []"))
+            .count(),
+        15,
+        "{spills:#?}"
+    );
 }
