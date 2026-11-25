@@ -1,0 +1,58 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/msb_search.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 18 bytes
+  total: 18 bytes
+
+functions:
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
+  scan: ir_blocks=1 ir_insts=5 vcode_ops=9 fixups=0 imm_bytes=3
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=14 fixups=0 imm_bytes=4
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case zero: calldata_len=32 success reason=Return gas_used=21169 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=41
+  case one: calldata_len=32 success reason=Return gas_used=21181 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=41
+  case sparse: calldata_len=32 success reason=Return gas_used=21181 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=41
+  case top: calldata_len=32 success reason=Return gas_used=21193 gas_refunded=0 logs=0 output=call len=32 tx_gas=21152 runtime_gas=41
+  case all: calldata_len=32 success reason=Return gas_used=21553 gas_refunded=0 logs=0 output=call len=32 tx_gas=21512 runtime_gas=41
+
+
+--------------- DEBUG ---------------
+
+// func public %scan(v0.i256) -> i256
+scan:
+  block0:
+    PUSH1 0x1 (1)  // v3.i256 = or v0 v2;
+    OR
+    CLZ  // v4.i256 = clz v3;
+    PUSH1 0xff (255)  // v6.i256 = xor v4 v5;
+    XOR
+    PUSH1 0xff (255)  // v7.i256 = and v6 v5;
+    AND
+    SWAP1  // return v7;
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    PUSH1 0x1 (1)  // v3.i256 = or v1 v2;
+    OR
+    CLZ  // v4.i256 = clz v3;
+    PUSH1 0xff (255)  // v6.i256 = xor v4 255.i256;
+    XOR
+    PUSH1 0xff (255)  // v7.i256 = and v6 255.i256;
+    AND
+    PUSH0  // evm_mstore v0 v7;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
+    PUSH0
+    RETURN

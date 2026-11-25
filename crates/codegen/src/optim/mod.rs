@@ -1,5 +1,6 @@
 pub mod adce;
 pub mod aggregate;
+mod bit_scan;
 pub mod bool_phi_fold;
 pub mod branch_canonicalize;
 pub(crate) mod call_purity;
