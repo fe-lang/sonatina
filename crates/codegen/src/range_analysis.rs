@@ -2530,7 +2530,7 @@ fn unsigned_mul(lhs: U256, rhs: U256, ty: Type) -> (U256, bool) {
 
 fn signed_add(lhs: I256, rhs: I256, ty: Type) -> (I256, bool) {
     let result = lhs.overflowing_add(rhs).0;
-    let overflow = if ty == Type::I256 {
+    let overflow = if type_bits(ty) == 256 {
         lhs.is_negative() == rhs.is_negative() && result.is_negative() != lhs.is_negative()
     } else {
         result < signed_min(ty) || result > signed_max(ty)
@@ -2540,7 +2540,7 @@ fn signed_add(lhs: I256, rhs: I256, ty: Type) -> (I256, bool) {
 
 fn signed_sub(lhs: I256, rhs: I256, ty: Type) -> (I256, bool) {
     let result = lhs.overflowing_sub(rhs).0;
-    let overflow = if ty == Type::I256 {
+    let overflow = if type_bits(ty) == 256 {
         lhs.is_negative() != rhs.is_negative() && result.is_negative() != lhs.is_negative()
     } else {
         result < signed_min(ty) || result > signed_max(ty)
@@ -2796,6 +2796,9 @@ mod tests {
             signed_max(tag_ty),
             I256::from((U256::one() << 255) - U256::one())
         );
+        assert!(signed_add(signed_max(tag_ty), I256::one(), tag_ty).1);
+        assert!(signed_sub(signed_min(tag_ty), I256::one(), tag_ty).1);
+        assert!(!signed_add(signed_max(tag_ty), I256::zero(), tag_ty).1);
     }
 
     #[test]
