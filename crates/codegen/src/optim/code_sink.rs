@@ -168,7 +168,7 @@ fn plan_sink_inst(
     if !collect_use_sites(func, inst, use_sites) {
         return None;
     }
-    let dest_block = nearest_common_dominator(domtree, use_sites.iter().map(|site| site.block))?;
+    let dest_block = domtree.common_dominator(use_sites.iter().map(|site| site.block))?;
 
     // Calldata is immutable and its loads do not trap on out-of-range offsets.
     // Constant offsets also avoid extending an address operand's live range.
@@ -302,39 +302,6 @@ fn collect_use_sites(func: &Function, inst: InstId, sites: &mut Vec<UseSite>) ->
     }
 
     !sites.is_empty()
-}
-
-fn nearest_common_dominator(
-    domtree: &DomTree,
-    mut blocks: impl Iterator<Item = BlockId>,
-) -> Option<BlockId> {
-    let mut common = blocks.next()?;
-    for block in blocks {
-        common = common_dominator(domtree, common, block)?;
-    }
-    Some(common)
-}
-
-fn common_dominator(domtree: &DomTree, a: BlockId, b: BlockId) -> Option<BlockId> {
-    let mut a = a;
-    let mut b = b;
-    let mut a_depth = domtree.depth_of(a)?;
-    let mut b_depth = domtree.depth_of(b)?;
-
-    while a_depth > b_depth {
-        a = domtree.idom_of(a)?;
-        a_depth -= 1;
-    }
-    while b_depth > a_depth {
-        b = domtree.idom_of(b)?;
-        b_depth -= 1;
-    }
-    while a != b {
-        a = domtree.idom_of(a)?;
-        b = domtree.idom_of(b)?;
-    }
-
-    Some(a)
 }
 
 fn insertion_anchor(func: &Function, block: BlockId, use_sites: &[UseSite]) -> Option<InstId> {

@@ -240,3 +240,41 @@ func public %entry_may_skip(v0.i64, v1.i64, v2.i64, v3.i1) -> i64 {
         v10.i64 = phi (0.i64 block0) (v7 block1);
         return v10;
 }
+
+# A block between the header and the nearest common dominator of two latches
+# and two exits runs in every iteration.
+# check:  block0:
+# nextln:      v5.i64 = call %quotient v0 v1;
+# nextln:      jump block1;
+func public %before_the_common_dominator(v0.i64, v1.i64, v2.i64, v3.i1) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i64 = phi (0.i64 block0) (v6 block2) (v6 block3);
+        v7.i64 = phi (0.i64 block0) (v8 block2) (v8 block3);
+        jump block6;
+
+    block6:
+        v5.i64 = call %quotient v0 v1;
+        v6.i64 = add v4 v5;
+        jump block7;
+
+    block7:
+        v8.i64 = add v7 1.i64;
+        br v3 block2 block3;
+
+    block2:
+        v9.i1 = lt v8 v2;
+        br v9 block1 block4;
+
+    block3:
+        v10.i1 = lt v8 10.i64;
+        br v10 block1 block5;
+
+    block4:
+        return v6;
+
+    block5:
+        return 0.i64;
+}

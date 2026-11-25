@@ -55,6 +55,30 @@ impl DomTree {
         false
     }
 
+    /// The nearest block that dominates every one of `blocks`, if they are
+    /// all reachable and there is one.
+    pub fn common_dominator(&self, blocks: impl IntoIterator<Item = BlockId>) -> Option<BlockId> {
+        let mut blocks = blocks.into_iter();
+        let mut common = blocks.next()?;
+        for mut block in blocks {
+            let mut common_depth = self.depth_of(common)?;
+            let mut depth = self.depth_of(block)?;
+            while common_depth > depth {
+                common = self.idom_of(common)?;
+                common_depth -= 1;
+            }
+            while depth > common_depth {
+                block = self.idom_of(block)?;
+                depth -= 1;
+            }
+            while common != block {
+                common = self.idom_of(common)?;
+                block = self.idom_of(block)?;
+            }
+        }
+        Some(common)
+    }
+
     /// Returns `true` if block1 dominates block2.
     pub fn dominates(&self, block1: BlockId, block2: BlockId) -> bool {
         if block1 == block2 {
