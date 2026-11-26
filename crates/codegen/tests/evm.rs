@@ -3924,3 +3924,166 @@ func public %entry() {
         assert_eq!(result, Ok(IrU256::from(5u64)), "{level:?}");
     }
 }
+
+/// No constant-address write here reserves memory, so nothing kept allocations off address 0:
+/// the `alloca` landed there and its pointer tested null.
+#[test]
+fn alloca_pointer_is_not_null_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.i256 = ptr_to_int v0 i256;
+        v2.i1 = is_zero v1;
+        br v2 block1 block2;
+
+    block1:
+        mstore 0.i256 1.i256 i256;
+        evm_revert 0.i256 32.i256;
+
+    block2:
+        evm_return 0.i256 0.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &[]);
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::zero()), "{level:?}");
+    }
+}
+
+/// As above, with the `alloca` stored through and returned, so that it stays at every level.
+#[test]
+fn stored_alloca_pointer_is_not_null_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.i256 = ptr_to_int v0 i256;
+        mstore v1 7.i256 i256;
+        v2.i1 = is_zero v1;
+        br v2 block1 block2;
+
+    block1:
+        mstore 0.i256 1.i256 i256;
+        evm_revert 0.i256 32.i256;
+
+    block2:
+        evm_return v1 32.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &[]);
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::from(7u64)), "{level:?}");
+    }
+}
+
+/// The sum of a malloc's pointer and `2**256 - 1` carries, since no allocation is at address 0.
+/// The malloc is placed at a fixed address, and the carry is decided from it.
+#[test]
+fn malloc_pointer_plus_max_carries_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        (v2.i256, v3.i1) = uaddo v1 -1.i256;
+        br v3 block2 block1;
+
+    block1:
+        mstore 0.i256 1.i256 i256;
+        evm_revert 0.i256 32.i256;
+
+    block2:
+        evm_return 0.i256 0.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &[]);
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::zero()), "{level:?}");
+    }
+}
+
+/// As above, with the null test in a callee the pointer is passed to.
+#[test]
+fn alloca_pointer_passed_to_a_callee_is_not_null_at_all_levels() {
+    let body = r#"
+func private %is_null(v0.*i256) -> i1 {
+    block0:
+        v1.i256 = ptr_to_int v0 i256;
+        v2.i1 = is_zero v1;
+        return v2;
+}
+
+func public %entry() {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.i1 = call %is_null v0;
+        br v1 block1 block2;
+
+    block1:
+        mstore 0.i256 1.i256 i256;
+        evm_revert 0.i256 32.i256;
+
+    block2:
+        evm_return 0.i256 0.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &[]);
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::zero()), "{level:?}");
+    }
+}
+
+/// A phi of an `alloca` and the null pointer is null only on the null path.
+#[test]
+fn phi_of_alloca_and_null_is_null_only_on_null_path_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i1 = is_zero v0;
+        br v1 block1 block2;
+
+    block1:
+        v2.*i256 = alloca i256;
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.*i256 = phi (v2 block1) (zero.*i256 block2);
+        v4.i256 = ptr_to_int v3 i256;
+        v5.i1 = is_zero v4;
+        v6.i256 = zext v5 i256;
+        mstore 0.i256 v6 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    for (word, expected) in [(0, 0u64), (1, 1)] {
+        for (level, result) in word_results_at_all_levels(body, &calldata_words(&[word])) {
+            assert_eq!(result, Ok(IrU256::from(expected)), "{level:?} {word}");
+        }
+    }
+}
+
+/// A zero-sized `alloca` is placed at the arena base, which is above address 0 too.
+#[test]
+fn zero_sized_alloca_pointer_is_not_null_at_all_levels() {
+    let body = r#"
+type @empty = {};
+
+func public %entry() {
+    block0:
+        v0.*@empty = alloca @empty;
+        v1.i256 = ptr_to_int v0 i256;
+        v2.i1 = is_zero v1;
+        v3.i256 = zext v2 i256;
+        mstore 0.i256 v3 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    for (level, result) in word_results_at_all_levels(body, &[]) {
+        assert_eq!(result, Ok(IrU256::zero()), "{level:?}");
+    }
+}

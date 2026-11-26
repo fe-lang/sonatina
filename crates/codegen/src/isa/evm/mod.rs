@@ -1,3 +1,4 @@
+mod address_observation;
 mod backend;
 pub(crate) mod dyn_sp;
 mod emit;

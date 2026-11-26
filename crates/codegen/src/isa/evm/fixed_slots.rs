@@ -178,7 +178,7 @@ pub(crate) fn machine_allocation_addresses(
     addrs
 }
 
-fn func_address_taken(function: &Function, inst: InstId) -> Option<FuncRef> {
+pub(crate) fn func_address_taken(function: &Function, inst: InstId) -> Option<FuncRef> {
     if let Some(ptr) = function.dfg.downcast::<&GetFunctionPtr>(inst) {
         return Some(*ptr.func());
     }

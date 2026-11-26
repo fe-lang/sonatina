@@ -2629,9 +2629,15 @@ block0:
         },
     )]);
     let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
-    let fixed_reservations =
-        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses)
-            .expect("fixed reservations");
+    let fixed_reservations = prepare::scan_fixed_reservations(
+        &parsed.module,
+        &funcs,
+        names["main"],
+        &[],
+        &backend,
+        &analyses,
+    )
+    .expect("fixed reservations");
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
@@ -2704,8 +2710,9 @@ fn compute_test_memory_placement(
         });
     }
     let schedule = CallGraphSchedule::compute(module, &funcs);
-    let fixed_reservations = prepare::scan_fixed_reservations(module, &funcs, backend, &analyses)
-        .expect("fixed reservations");
+    let fixed_reservations =
+        prepare::scan_fixed_reservations(module, &funcs, entry, includes, backend, &analyses)
+            .expect("fixed reservations");
     compute_semantic_memory_placement(
         module,
         MemoryPlacementSection {
