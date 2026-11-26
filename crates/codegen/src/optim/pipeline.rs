@@ -1086,7 +1086,10 @@ fn run_pass(
             let _span = trace_span!("sonatina.optim.pipeline.pass.scalar_canonicalize").entered();
             ScalarCanonicalize::new().run(func)
         }
-        Pass::BitScan => super::bit_scan::run(func),
+        Pass::BitScan => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.bit_scan").entered();
+            super::bit_scan::run(func)
+        }
         Pass::KnownBitsSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.known_bits_simplify").entered();
             KnownBitsSimplify::new().run(func)

@@ -99,10 +99,10 @@ fn recognize(edit: &CfgEditor<'_>, update: BlockId) -> Option<Scan> {
     let header_br = f.dfg.downcast::<&Br>(header_term)?;
     if *header_br.nz_dest() != latch
         || *header_br.z_dest() != update
-        || *header_br.cond() != f.dfg.inst_result_at(check, 0)?
         || *f.dfg.downcast::<&IsZero>(check)?.lhs() != f.dfg.inst_result(shifted)?
+        || *header_br.cond() != f.dfg.inst_result(check)?
         || *update_br.cond() != overflow
-        || *update_br.nz_dest() == latch
+        || [header, update, latch].contains(update_br.nz_dest())
     {
         return None;
     }
@@ -266,5 +266,24 @@ mod tests {
             assert!(SEARCH.contains(from));
             check(&SEARCH.replace(from, to), false);
         }
+    }
+
+    #[test]
+    fn rejects_unreachable_cycle_entered_from_update() {
+        // block2's overflow edge re-enters block1, which is otherwise
+        // unreachable, so block2 must not be taken as the loop entry.
+        let source = [
+            ("jump block1;", "return 0.i8;"),
+            ("128.i256 block0", "128.i256 block2"),
+            ("(v0 block0)", "(v0 block2)"),
+            ("0.i8 block0", "0.i8 block2"),
+            ("br v13 block6 block3;", "br v13 block1 block3;"),
+        ]
+        .into_iter()
+        .fold(SEARCH.to_string(), |source, (from, to)| {
+            assert!(source.contains(from));
+            source.replace(from, to)
+        });
+        check(&source, false);
     }
 }
