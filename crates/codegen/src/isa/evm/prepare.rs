@@ -61,6 +61,7 @@ use super::{
     pipeline::EvmPipeline,
     ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, compute_provenance},
+    stack_plan::StackPlan,
 };
 
 const FREE_PTR_SLOT_START: u32 = FREE_PTR_SLOT as u32;
@@ -104,6 +105,15 @@ impl EvmPreparedSection {
             .and_then(|plan| plan.stackify_trace.as_deref())
     }
 
+    /// The operand stack plan of `func`, when the backend captured it (see
+    /// [`EvmBackend::with_stackify_trace_capture`]). The plan is the structured form of
+    /// [`Self::stackify_trace`], from the same planning.
+    pub fn stack_plan(&self, func: FuncRef) -> Option<&StackPlan> {
+        self.function_plans
+            .get(&func)
+            .and_then(|plan| plan.stack_plan.as_ref())
+    }
+
     pub(crate) fn section_plan(&self) -> &EvmSectionPlan {
         &self.section_plan
     }
@@ -130,6 +140,8 @@ pub(crate) struct EvmFunctionPlan {
     pub(crate) entry_free_ptr: Option<u32>,
     pub(crate) function_entry_jumpdest: bool,
     pub(crate) stackify_trace: Option<String>,
+    /// The structured form of the trace, captured with it.
+    pub(crate) stack_plan: Option<StackPlan>,
 }
 
 #[derive(Clone, Copy)]
@@ -1116,13 +1128,19 @@ fn prepare_machine_section_after_pipeline(
                 } else {
                     emitted_block_order
                 };
-                let stackify_trace = stackify_trace.map(|trace| {
-                    machine
-                        .work
-                        .module()
-                        .func_store
-                        .view(func, |function| trace.render(function, &final_spills.alloc))
-                });
+                let (stackify_trace, stack_plan) = match stackify_trace {
+                    Some(trace) => {
+                        let (text, plan) =
+                            machine.work.module().func_store.view(func, |function| {
+                                (
+                                    trace.render(function, &final_spills.alloc),
+                                    trace.stack_plan(function),
+                                )
+                            });
+                        (Some(text), Some(plan))
+                    }
+                    None => (None, None),
+                };
                 Ok::<_, String>((
                     func,
                     final_spills.required_reserve,
@@ -1138,6 +1156,7 @@ fn prepare_machine_section_after_pipeline(
                         entry_free_ptr: None,
                         function_entry_jumpdest: function_entry_jump_targets.contains(&func),
                         stackify_trace,
+                        stack_plan,
                     },
                 ))
             },

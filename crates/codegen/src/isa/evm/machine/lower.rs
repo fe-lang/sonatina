@@ -198,6 +198,7 @@ impl FuncLowerCtx<'_> {
                 ));
             };
             self.map.values[source_arg] = Some(machine_arg);
+            self.carry_value_labels(source_arg, machine_arg);
         }
         Ok(())
     }
@@ -1170,6 +1171,14 @@ impl FuncLowerCtx<'_> {
             .import_inst_attribution_from(self.source, source_inst, machine_inst);
     }
 
+    /// Gives `machine_value` the front-end labels of `source_value`, so a label survives machine
+    /// lowering. Immediates lowered by `lower_value` take no labels: they are shared by every use.
+    fn carry_value_labels(&mut self, source_value: ValueId, machine_value: ValueId) {
+        self.machine
+            .dfg
+            .import_value_labels_from(&self.source.dfg, source_value, machine_value);
+    }
+
     fn map_inst_results(
         &mut self,
         source_inst: sonatina_ir::InstId,
@@ -1185,6 +1194,7 @@ impl FuncLowerCtx<'_> {
             .zip(results)
         {
             self.map.values[source_value] = Some(machine_value);
+            self.carry_value_labels(source_value, machine_value);
         }
     }
 
@@ -1203,6 +1213,7 @@ impl FuncLowerCtx<'_> {
         }
         self.map.insts[source_inst] = None;
         self.map.values[results[0]] = Some(value);
+        self.carry_value_labels(results[0], value);
         Ok(())
     }
 

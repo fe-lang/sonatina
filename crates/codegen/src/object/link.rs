@@ -20,8 +20,8 @@ use tracing::{debug_span, info_span, trace_span};
 use super::{
     CompileOptions,
     artifact::{
-        MachineInstId, OBSERVABILITY_SCHEMA_VERSION, PcAttribution, PcMapEntry, PcMapUnit,
-        SectionArtifact, SectionObservability, SymbolDef, SymbolId, UnmappedReason,
+        FunctionStackPlan, MachineInstId, OBSERVABILITY_SCHEMA_VERSION, PcAttribution, PcMapEntry,
+        PcMapUnit, SectionArtifact, SectionObservability, SymbolDef, SymbolId, UnmappedReason,
         UnmappedReasonCoverage,
     },
 };
@@ -43,6 +43,7 @@ struct BuildSectionObservabilityInput<'a, Op> {
     embeds: &'a [(EmbedSymbol, Vec<u8>)],
     section: &'a SectionName,
     section_bytes: u32,
+    stack_plans: Vec<FunctionStackPlan>,
 }
 
 #[derive(Debug)]
@@ -364,6 +365,7 @@ pub(crate) fn link_section(
                         embeds,
                         section,
                         section_bytes,
+                        stack_plans: collect_stack_plans(prepared, &layout_func_refs, module),
                     })
                     .map_err(LinkSectionError::Link)?
                 })
@@ -501,6 +503,26 @@ fn symbol_id(sym: &SymbolRef) -> SymbolId {
     }
 }
 
+/// The stack plans that the prepared section captured, for the functions that were laid out, in
+/// the order of `funcs`. Empty when no plan was captured.
+fn collect_stack_plans(
+    prepared: &EvmPreparedSection,
+    funcs: &[FuncRef],
+    module: &Module,
+) -> Vec<FunctionStackPlan> {
+    funcs
+        .iter()
+        .filter_map(|&func| {
+            let plan = prepared.stack_plan(func)?;
+            Some(FunctionStackPlan {
+                func,
+                func_name: module.ctx.func_sig(func, |sig| sig.name().to_string()),
+                plan: plan.clone(),
+            })
+        })
+        .collect()
+}
+
 fn build_section_observability<Op>(
     input: BuildSectionObservabilityInput<'_, Op>,
 ) -> Result<SectionObservability, String> {
@@ -514,6 +536,7 @@ fn build_section_observability<Op>(
         embeds,
         section,
         section_bytes,
+        stack_plans,
     } = input;
 
     let code_bytes = layout.code_end();
@@ -754,6 +777,7 @@ fn build_section_observability<Op>(
         unmapped_code_bytes,
         unmapped_reason_coverage,
         pc_map,
+        stack_plans,
     })
 }
 

@@ -120,6 +120,10 @@ impl EvmBackend {
         self
     }
 
+    /// Record what the stack allocator plans for each function: the text trace of
+    /// [`EvmPreparedSection::stackify_trace`] and the structured
+    /// [`EvmPreparedSection::stack_plan`]. Recording observes the allocation and does not change
+    /// generated code. It is off by default and costs nothing then.
     pub fn with_stackify_trace_capture(mut self, enable: bool) -> Self {
         self.capture_stackify_trace = enable;
         self

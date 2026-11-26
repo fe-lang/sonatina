@@ -18,10 +18,10 @@ functions:
 
 --------------- OBSERVABILITY ---------------
 
-object schema=0.3.0
+object schema=0.4.0
 totals section_bytes=192 code=32 data=160 embed=0 mapped=0 unmapped=32
 
-section runtime schema=0.3.0
+section runtime schema=0.4.0
 bytes total=192 code=32 data=160 embed=0
 coverage mapped=0 unmapped=32
 unmapped missing_provenance=31 no_machine_inst=0 label_or_fixup_only=0 synthetic=1 unknown=0

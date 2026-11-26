@@ -158,6 +158,7 @@ impl<B: Backend> Compile<B> {
 pub struct EvmCompiler {
     emit_symbol_table: bool,
     emit_observability: bool,
+    emit_stack_plans: bool,
 }
 
 impl EvmCompiler {
@@ -168,6 +169,20 @@ impl EvmCompiler {
 
     pub fn with_observability(mut self, on: bool) -> Self {
         self.emit_observability = on;
+        self
+    }
+
+    /// Capture the operand stack plan of every function and export it in
+    /// [`SectionObservability::stack_plans`](crate::object::SectionObservability::stack_plans).
+    ///
+    /// The plan only appears in observability data, so this has an effect only together with
+    /// [`Self::with_observability`]: without it nothing is captured. Capturing records what the
+    /// stack allocator decided and does not change a decision: section bytes and PC maps are the
+    /// same with it on and off, which the tests check over the EVM test fixtures. It is off by
+    /// default and costs nothing then. The plans are meant for code compiled at
+    /// [`OptLevel::O0`]; see [`StackPlan`](crate::isa::evm::stack_plan::StackPlan) for the scope.
+    pub fn with_stack_plans(mut self, on: bool) -> Self {
+        self.emit_stack_plans = on;
         self
     }
 }
@@ -189,7 +204,8 @@ impl Backend for EvmCompiler {
         module: &Module,
         options: &BackendOptions,
     ) -> Result<Self::Artifact, Vec<Self::Error>> {
-        let backend = evm_backend_for_module(module, options.opt_level)?;
+        let backend = evm_backend_for_module(module, options.opt_level)?
+            .with_stackify_trace_capture(self.emit_stack_plans && self.emit_observability);
         let opts = CompileOptions {
             emit_symtab: self.emit_symbol_table,
             emit_observability: self.emit_observability,
@@ -218,6 +234,13 @@ impl EvmCompile {
 
     pub fn with_observability(mut self, on: bool) -> Self {
         self.inner.backend = self.inner.backend.with_observability(on);
+        self
+    }
+
+    /// Export the operand stack plan; see [`EvmCompiler::with_stack_plans`]. Has an effect only
+    /// together with [`Self::with_observability`].
+    pub fn with_stack_plans(mut self, on: bool) -> Self {
+        self.inner.backend = self.inner.backend.with_stack_plans(on);
         self
     }
 

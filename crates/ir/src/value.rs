@@ -16,6 +16,16 @@ use crate::{
 pub struct ValueId(pub u32);
 cranelift_entity::entity_impl!(ValueId);
 
+/// An opaque label that a front end attaches to a value.
+///
+/// Sonatina stores, merges and exports labels but never interprets them: the
+/// number means whatever the front end decides, such as an index into the
+/// front end's own table of source variables. No pass reads a label except to
+/// carry it, so labels never change the generated code. See
+/// [`DataFlowGraph::add_value_label`](crate::DataFlowGraph::add_value_label).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ValueLabel(pub u32);
+
 impl IrWrite<FuncWriteCtx<'_>> for ValueId {
     fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
     where
