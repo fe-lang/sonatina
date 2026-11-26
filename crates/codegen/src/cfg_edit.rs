@@ -612,8 +612,20 @@ impl<'f> CfgEditor<'f> {
                 return false;
             }
 
+            // Only a successor phi's input on the edge from `block` is rewritten. A use anywhere
+            // else would lose the predecessor the value came from once the edges bypass `block`.
             for user in self.func.dfg.users(phi_res).copied() {
-                if self.func.layout.is_inst_inserted(user) && !succ_phi_set.contains(&user) {
+                if self.func.layout.is_inst_inserted(user)
+                    && (!succ_phi_set.contains(&user)
+                        || self
+                            .func
+                            .dfg
+                            .cast_phi(user)
+                            .unwrap()
+                            .args()
+                            .iter()
+                            .any(|&(value, pred)| value == phi_res && pred != block))
+                {
                     return false;
                 }
             }
@@ -2063,6 +2075,154 @@ block4:
             let b4_preds: BTreeSet<_> = editor.cfg().preds_of(*b4).copied().collect();
             assert_eq!(b4_preds, BTreeSet::from([*b3]));
         });
+    }
+
+    /// Asserts that `forward_bridge_block` leaves the function as is for its block at `index` in
+    /// layout order.
+    fn assert_bridge_block_kept(src: &str, index: usize) {
+        let module = parse_test_module(src);
+        let func_ref = module.funcs()[0];
+        let before = dump_func(&module, func_ref);
+        module.func_store.modify(func_ref, |func| {
+            let block = func.layout.iter_block().nth(index).unwrap();
+            assert!(!CfgEditor::new(func).forward_bridge_block(block));
+        });
+        assert_eq!(dump_func(&module, func_ref), before);
+    }
+
+    /// `v4` takes `v3` from `block5`. Forwarding `block3` dropped `block1`'s input to `v3`,
+    /// which then folded to `2` on that edge too.
+    #[test]
+    fn forward_bridge_block_rejects_phi_results_used_on_other_edges() {
+        assert_bridge_block_kept(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1) -> i32 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v3.i32 = phi (1.i32 block1) (2.i32 block2);
+    jump block4;
+
+block4:
+    v4.i32 = phi (0.i32 block3) (v3 block5);
+    v5.i1 = eq v4 0.i32;
+    br v5 block5 block6;
+
+block5:
+    jump block4;
+
+block6:
+    return v4;
+}
+"#,
+            3,
+        );
+    }
+
+    /// With one predecessor, forwarding `block3` left `v3` without inputs but still used by `v4`,
+    /// and deleting `block3` panicked.
+    #[test]
+    fn forward_bridge_block_rejects_single_input_phi_used_on_other_edges() {
+        assert_bridge_block_kept(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i32) -> i32 {
+block0:
+    jump block1;
+
+block1:
+    jump block3;
+
+block3:
+    v3.i32 = phi (v0 block1);
+    jump block4;
+
+block4:
+    v4.i32 = phi (0.i32 block3) (v3 block5);
+    v5.i1 = eq v4 0.i32;
+    br v5 block5 block6;
+
+block5:
+    jump block4;
+
+block6:
+    return v4;
+}
+"#,
+            2,
+        );
+    }
+
+    /// A phi left without inputs goes with its block when its only use is on the forwarded edge.
+    #[test]
+    fn forward_bridge_block_forwards_single_input_phi() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i32) -> i32 {
+block0:
+    jump block1;
+
+block1:
+    jump block3;
+
+block3:
+    v3.i32 = phi (v0 block1);
+    jump block4;
+
+block4:
+    v4.i32 = phi (v3 block3) (v6 block5);
+    v5.i1 = eq v4 0.i32;
+    br v5 block5 block6;
+
+block5:
+    v6.i32 = add v4 1.i32;
+    jump block4;
+
+block6:
+    return v4;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let b3 = func.layout.iter_block().nth(2).unwrap();
+            assert!(CfgEditor::new(func).forward_bridge_block(b3));
+        });
+        assert_eq!(
+            dump_func(&module, func_ref),
+            "func private %f(v0.i32) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        jump block4;
+
+    block4:
+        v2.i32 = phi (v4 block5) (v0 block1);
+        v3.i1 = eq v2 0.i32;
+        br v3 block5 block6;
+
+    block5:
+        v4.i32 = add v2 1.i32;
+        jump block4;
+
+    block6:
+        return v2;
+}
+"
+        );
     }
 
     #[test]

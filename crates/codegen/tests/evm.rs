@@ -3230,6 +3230,47 @@ object @Contract { section runtime { entry %entry; } }
     }
 }
 
+/// `v4` takes `v3` on the back edge from `block5`, so the loop returns `v3`: 10 through `block1`,
+/// 20 through `block2`. CFG cleanup must not forward the bridge `block3` past that use.
+#[test]
+fn bridge_phi_used_on_back_edge_runs_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v9.i1 = ne v0 0.i256;
+        br v9 block1 block2;
+    block1:
+        evm_sstore 0.i256 1.i256;
+        jump block3;
+    block2:
+        evm_sstore 0.i256 2.i256;
+        jump block3;
+    block3:
+        v3.i256 = phi (10.i256 block1) (20.i256 block2);
+        jump block4;
+    block4:
+        v4.i256 = phi (0.i256 block3) (v3 block5);
+        v5.i1 = eq v4 0.i256;
+        br v5 block5 block6;
+    block5:
+        jump block4;
+    block6:
+        mstore 0.i256 v4 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    for (input, expected) in [(1, 10u64), (0, 20)] {
+        for (level, result) in word_results_at_all_levels(body, &calldata_words(&[input])) {
+            assert_eq!(
+                result,
+                Ok(IrU256::from(expected)),
+                "{level:?}, input={input}"
+            );
+        }
+    }
+}
+
 #[test]
 fn section_entry_loop_header_keeps_earlier_heap_allocations() {
     // The section entry's first block is a loop header. The first pass keeps
