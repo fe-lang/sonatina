@@ -1,0 +1,104 @@
+#! CFG cleanup tests for bridge blocks whose phis are used on edges that bypass the bridge.
+
+target = "evm-ethereum-london"
+
+#! Assert a bridge is kept when a successor phi takes its phi on a back edge.
+# sameln: func public %preserve_phi_bridge_with_back_edge_use(v0.i1) -> i8 {
+# nextln:     block0:
+# nextln:         br v0 block3 block2;
+# nextln:
+# nextln:     block2:
+# nextln:         jump block3;
+# nextln:
+# nextln:     block3:
+# nextln:         v3.i8 = phi (10.i8 block0) (20.i8 block2);
+# nextln:         jump block4;
+# nextln:
+# nextln:     block4:
+# nextln:         v4.i8 = phi (0.i8 block3) (v3 block5);
+# nextln:         v5.i1 = eq v4 0.i8;
+# nextln:         br v5 block5 block6;
+# nextln:
+# nextln:     block5:
+# nextln:         jump block4;
+# nextln:
+# nextln:     block6:
+# nextln:         return v4;
+# nextln: }
+func public %preserve_phi_bridge_with_back_edge_use(v0.i1) -> i8 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.i8 = phi (10.i8 block1) (20.i8 block2);
+        jump block4;
+
+    block4:
+        v4.i8 = phi (0.i8 block3) (v3 block5);
+        v5.i1 = eq v4 0.i8;
+        br v5 block5 block6;
+
+    block5:
+        jump block4;
+
+    block6:
+        return v4;
+}
+
+#! Assert a bridge is kept when the back edge's use would otherwise take a value
+#! defined in a predecessor that does not dominate it.
+# sameln: func public %preserve_phi_bridge_with_back_edge_use_of_pred_value(v0.i1, v1.i8) -> i8 {
+# nextln:     block0:
+# nextln:         br v0 block3 block2;
+# nextln:
+# nextln:     block2:
+# nextln:         v2.i8 = add v1 1.i8;
+# nextln:         jump block3;
+# nextln:
+# nextln:     block3:
+# nextln:         v3.i8 = phi (10.i8 block0) (v2 block2);
+# nextln:         jump block4;
+# nextln:
+# nextln:     block4:
+# nextln:         v4.i8 = phi (0.i8 block3) (v3 block5);
+# nextln:         v5.i1 = eq v4 0.i8;
+# nextln:         br v5 block5 block6;
+# nextln:
+# nextln:     block5:
+# nextln:         jump block4;
+# nextln:
+# nextln:     block6:
+# nextln:         return v4;
+# nextln: }
+func public %preserve_phi_bridge_with_back_edge_use_of_pred_value(v0.i1, v1.i8) -> i8 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        v2.i8 = add v1 1.i8;
+        jump block3;
+
+    block3:
+        v3.i8 = phi (10.i8 block1) (v2 block2);
+        jump block4;
+
+    block4:
+        v4.i8 = phi (0.i8 block3) (v3 block5);
+        v5.i1 = eq v4 0.i8;
+        br v5 block5 block6;
+
+    block5:
+        jump block4;
+
+    block6:
+        return v4;
+}
