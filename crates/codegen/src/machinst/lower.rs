@@ -182,22 +182,28 @@ pub fn compute_section_function_emission_order(
 
     let mut adjacency: FxHashMap<FuncRef, Vec<FuncRef>> = FxHashMap::default();
     for &func_ref in &membership.funcs {
-        let mut callees: FxHashSet<FuncRef> = FxHashSet::default();
+        // Callees in the order of their first call in the caller's layout.
+        // Symbol names stay out of it: a frontend may put names into symbols
+        // that do not change the code (e.g. a package name), and the emitted
+        // bytecode should not depend on them.
+        let mut seen: FxHashSet<FuncRef> = FxHashSet::default();
+        let mut callees: Vec<FuncRef> = Vec::new();
         module.func_store.view(func_ref, |func| {
             for block in func.layout.iter_block() {
                 for inst_id in func.layout.iter_inst(block) {
                     if let Some(call) = func.dfg.call_info(inst_id) {
                         let callee = call.callee();
-                        if membership.funcs.contains(&callee) {
-                            callees.insert(callee);
+                        if membership.funcs.contains(&callee) && seen.insert(callee) {
+                            callees.push(callee);
                         }
                     }
                 }
             }
         });
 
-        let mut callees: Vec<_> = callees.into_iter().collect();
-        callees.sort_by(|a, b| compare_section_func(*a, *b, &include_priority, &func_names));
+        // Section includes still come first, in include order. The sort is
+        // stable, so the other callees keep their call order.
+        callees.sort_by_key(|callee| include_priority.get(callee).copied().unwrap_or(usize::MAX));
         adjacency.insert(func_ref, callees);
     }
 
