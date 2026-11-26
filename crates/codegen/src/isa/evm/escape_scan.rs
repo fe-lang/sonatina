@@ -210,7 +210,7 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
                 let Some(&value) = call.args().get(arg_index) else {
                     continue;
                 };
-                let stored = ctx.prov_info.resolve_argument(call.args(), origin);
+                let stored = ctx.prov_info.resolve_argument(call.args(), origin, None);
                 if effect.stores.may_store_nonlocal() {
                     visit(PtrTransferEvent::CallArgEscape {
                         callee,
@@ -220,7 +220,7 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
                     });
                 }
                 for &dest in &effect.arg_store_targets {
-                    let dest_prov = ctx.prov_info.resolve_argument(call.args(), dest);
+                    let dest_prov = ctx.prov_info.resolve_argument(call.args(), dest, None);
                     visit(PtrTransferEvent::CallArgStore {
                         callee,
                         arg_index,

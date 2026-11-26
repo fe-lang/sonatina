@@ -5403,3 +5403,58 @@ block0:
         });
     });
 }
+
+/// A parameter names an allocation only if no call passes the null pointer, which the callee may
+/// convert to the integer 0.
+#[test]
+fn parameter_passed_the_null_pointer_names_no_allocation() {
+    for (arg, names) in [("v0", true), ("v3", false)] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+func private %read(v0.*i256) -> i256 {{
+block0:
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = mload v1 i256;
+    return v2;
+}}
+func public %entry(v9.i1) -> i256 {{
+block0:
+    v0.*i256 = alloca i256;
+    br v9 block1 block2;
+block1:
+    jump block2;
+block2:
+    v3.*i256 = phi (v0 block0) (zero.*i256 block1);
+    v4.i256 = call %read {arg};
+    return v4;
+}}
+"#
+        );
+        let parsed = parse_module(&source).expect("module parses");
+        let module = &parsed.module;
+        let backend = osaka_backend();
+        let funcs = module.funcs();
+        let named = |name: &str| {
+            funcs
+                .iter()
+                .copied()
+                .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == name))
+                .expect("function")
+        };
+        let ptr_escape = compute_ptr_escape_summaries(module, &funcs, &backend.isa);
+        let mut analyses = FxHashMap::default();
+        for &func in &funcs {
+            module.func_store.modify(func, |function| {
+                analyses.insert(
+                    func,
+                    compute_test_pre_analysis(function, &module.ctx, &backend, &ptr_escape),
+                );
+            });
+        }
+        let read = named("read");
+        let addrs = fixed_slots::allocation_addresses(module, &funcs, named("entry"), &analyses);
+        let addr = parsed.debug.value(read, "v1").expect("v1");
+        assert_eq!(addrs[&read].contains(addr), names, "{arg}");
+    }
+}
