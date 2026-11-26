@@ -1307,6 +1307,11 @@ pub(crate) fn compute_provenance(
                             let _ = next.union_with(&info.value[*val]);
                         }
                     }
+                    EvmInstKind::Select(select) => {
+                        for val in [select.then_value(), select.else_value()] {
+                            let _ = next.union_with(&info.value[*val]);
+                        }
+                    }
                     EvmInstKind::Gep(gep) => {
                         let Some(&base) = gep.values().first() else {
                             continue;
@@ -1549,6 +1554,25 @@ mod tests {
 
             panic!("no return value in function");
         })
+    }
+
+    #[test]
+    fn selects_name_both_allocations() {
+        let provenance = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+func public %f(v0.i1) -> *i256 {
+block0:
+    v1.*i256 = evm_malloc 32.i256;
+    v2.*i256 = evm_malloc 32.i256;
+    v3.*i256 = select v0 v1 v2;
+    return v3;
+}
+"#,
+            "f",
+        );
+        assert_eq!(provenance.malloc_insts().count(), 2, "{provenance:?}");
+        assert!(!provenance.raw, "{provenance:?}");
     }
 
     #[test]

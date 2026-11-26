@@ -308,7 +308,6 @@ fn gives_wider_word(kind: EvmInstKind<'_>, width: ScalarWidth) -> bool {
         | EvmInstKind::Bitcast(_)
         | EvmInstKind::PtrToInt(_)
         | EvmInstKind::Not(_)
-        | EvmInstKind::Select(_)
         | EvmInstKind::Bswap(_)
         | EvmInstKind::Clz(_)
         | EvmInstKind::Ctz(_)
@@ -354,9 +353,10 @@ fn gives_wider_word(kind: EvmInstKind<'_>, width: ScalarWidth) -> bool {
         | EvmInstKind::EvmDelegateCall(_)
         | EvmInstKind::EvmStaticCall(_) => false,
         // A value passed on from elsewhere, which its producer made a value of its type: a phi
-        // input, a returned value, the argument of `black_box`, or a member an insert or a typed
-        // store put there.
+        // input, a selected value, a returned value, the argument of `black_box`, or a member an
+        // insert or a typed store put there.
         EvmInstKind::Phi(_)
+        | EvmInstKind::Select(_)
         | EvmInstKind::Call(_)
         | EvmInstKind::BlackBox(_)
         | EvmInstKind::ExtractValue(_) => false,
@@ -908,11 +908,6 @@ impl<'a> FunctionLegalizer<'a> {
             downcast::<&arith::Sar>(is, self.func.dfg.inst(inst)).map(|i| (*i.bits(), *i.value()))
         {
             self.rewrite_sar(inst, bits, value);
-        } else if let Some((cond, then, otherwise)) =
-            downcast::<&logic::Select>(is, self.func.dfg.inst(inst))
-                .map(|i| (*i.cond(), *i.then_value(), *i.else_value()))
-        {
-            self.rewrite_select(inst, cond, then, otherwise);
         } else if let Some(arg) =
             downcast::<&logic::Not>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
         {
@@ -2567,35 +2562,6 @@ impl<'a> FunctionLegalizer<'a> {
         }
     }
 
-    /// `else ^ ((then ^ else) & -cond)`. The operands are normalized to the
-    /// result's width, and so is their masked difference.
-    fn rewrite_select(&mut self, inst: InstId, cond: ValueId, then: ValueId, otherwise: ValueId) {
-        let Some(width) = self.single_result_width(inst) else {
-            return;
-        };
-        let ty = self.func.dfg.value_ty(then);
-        let mask = self.bool_to_mask_i256(inst, cond);
-        let delta = self.insert_before_one(
-            inst,
-            Xor::new(self.evm_inst_set(), then, otherwise),
-            ty,
-            Some(width),
-        );
-        let masked = self.insert_before_one(
-            inst,
-            And::new(self.evm_inst_set(), delta, mask),
-            ty,
-            Some(width),
-        );
-        let result = self.insert_before_one(
-            inst,
-            Xor::new(self.evm_inst_set(), otherwise, masked),
-            ty,
-            Some(width),
-        );
-        self.replace_with_aliases(inst, &[result]);
-    }
-
     fn rewrite_not(&mut self, inst: InstId, arg: ValueId) {
         let width = match self.single_result_width(inst) {
             Some(width) => width,
@@ -3171,6 +3137,7 @@ mod tests {
     use super::legalize_evm_section;
     use sonatina_ir::{Function, ir_writer::FuncWriter, module::FuncRef};
     use sonatina_parser::{ParsedModule, parse_module};
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     fn parse(src: &str) -> ParsedModule {
         parse_module(src).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
@@ -3204,6 +3171,51 @@ mod tests {
             .module
             .func_store
             .view(func_ref, |function| dump_func(function, func_ref))
+    }
+
+    /// Machine lowering chooses a `select`'s word, so legalization keeps it, at the
+    /// legalized type of its values.
+    #[test]
+    fn selects_stay_well_typed_through_legalization() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1, v1.i1, v2.i1, v3.i8, v4.i8, v5.i256, v6.i256) -> i256 {
+block0:
+    v7.*i256 = alloca i256;
+    v8.*i256 = alloca i256;
+    v9.i1 = select v0 v1 v2;
+    v10.i8 = select v0 v3 v4;
+    v11.i256 = select v0 v5 v6;
+    v12.*i256 = select v9 v7 v8;
+    mstore v12 v11 i256;
+    v13.i256 = zext v10 i256;
+    return v13;
+}
+"#,
+        );
+        let funcs = parsed.module.funcs();
+        legalize_evm_section(&parsed.module, &funcs);
+
+        let report = verify_module(
+            &parsed.module,
+            &VerifierConfig::for_level(VerificationLevel::Full),
+        );
+        assert!(!report.has_errors(), "{report}");
+        let func_ref = find_func(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(func_ref, |function| dump_func(function, func_ref));
+        for select in [
+            "v9.i1 = select v0 v1 v2;",
+            "v10.i256 = select v0 v3 v4;",
+            "v11.i256 = select v0 v5 v6;",
+            "v12.*i256 = select v9 v7 v8;",
+        ] {
+            assert!(dumped.contains(select), "missing `{select}`:\n{dumped}");
+        }
     }
 
     #[test]
