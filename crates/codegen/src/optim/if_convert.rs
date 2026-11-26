@@ -3,10 +3,10 @@
 //! straight to the join or through a block of its own holding a few
 //! instructions that can run on either path, which run before the jump.
 //!
-//! What both paths run is bounded in 64-bit word operations: a call, whose
-//! cost is its callee's, a division, a multiplication wider than a word or
-//! an EVM arithmetic operation never runs where its path would not, and a
-//! select costs a move per word.
+//! What both paths run is bounded in 64-bit word operations: a division, a
+//! multiplication wider than a word or an EVM arithmetic operation never runs
+//! where its path would not, and a select costs a move per word. A call,
+//! whose cost is its callee's, cannot be speculated at all.
 //!
 //! A native target chooses with a conditional move instead of a branch that
 //! mispredicts when the condition depends on data: a modular reduction keeps
@@ -187,13 +187,12 @@ fn arm_join(
 }
 
 /// What running `inst` where its path would not costs, in word operations:
-/// nothing for a call, a division, a multiplication wider than a word, an
-/// EVM arithmetic operation or an aggregate, which are too costly.
+/// nothing for a division, a multiplication wider than a word, an EVM
+/// arithmetic operation or an aggregate, which are too costly.
 fn speculation_cost(func: &Function, inst: InstId) -> Option<usize> {
     let ty = func.dfg.value_ty(*func.dfg.inst_results(inst).first()?);
     let wide = !ty.is_integral() || words(ty) > 1;
     match func.dfg.inst(inst).kind() {
-        _ if func.dfg.is_call(inst) => None,
         InstClassKind::Binary(
             BinaryInstKind::Sdiv
             | BinaryInstKind::Udiv

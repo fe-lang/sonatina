@@ -203,9 +203,10 @@ fn plan(
         }
         // The copies run exactly where the header did, so a read would be
         // safe to copy; but the body could then no longer reuse the header's
-        // one read through load forwarding. Calls are too large to copy.
+        // one read through load forwarding. A call, which `can_speculate`
+        // refuses, is too large to copy.
         size += inst_size(func, inst);
-        if size > MAX_HEADER_INSTS || func.dfg.is_call(inst) || !func.dfg.can_speculate(inst) {
+        if size > MAX_HEADER_INSTS || !func.dfg.can_speculate(inst) {
             return None;
         }
         insts.push(inst);

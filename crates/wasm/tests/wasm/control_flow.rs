@@ -437,8 +437,51 @@ fn the_optimizer_does_not_change_results() {
 #[test]
 fn the_optimizer_keeps_faulting_instructions_under_their_guards() {
     // A division by zero and a load outside a constant trap, so neither may
-    // move above the test that guards it, at 64 and at 256 bits.
+    // move above the test that guards it, at 64 and at 256 bits, nor may a
+    // call to a function that divides, under a guard or in a loop that runs
+    // zero times.
     let source = "global private const [i64; 4] $table = [11, 22, 33, 44];
+func inline(never) private %quotient(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.i64 = udiv v0 v1;
+        return v2;
+}
+func public %divide_while(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+    block1:
+        v3.i64 = phi (0.i64 block0) (v7 block2);
+        v4.i64 = phi (0.i64 block0) (v8 block2);
+        v5.i1 = lt v4 v2;
+        br v5 block2 block3;
+    block2:
+        v6.i64 = call %quotient v0 v1;
+        v7.i64 = add v3 v6;
+        v8.i64 = add v4 1.i64;
+        jump block1;
+    block3:
+        return v3;
+}
+func public %divide_call(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+    block1:
+        v3.i64 = phi (0.i64 block0) (v8 block3);
+        v4.i64 = phi (0.i64 block0) (v9 block3);
+        v5.i1 = ne v1 0.i64;
+        br v5 block2 block3;
+    block2:
+        v6.i64 = call %quotient v0 v1;
+        v7.i64 = add v3 v6;
+        jump block3;
+    block3:
+        v8.i64 = phi (v3 block1) (v7 block2);
+        v9.i64 = add v4 1.i64;
+        v10.i1 = lt v9 v2;
+        br v10 block1 block4;
+    block4:
+        return v8;
+}
 func public %divide(v0.i64, v1.i64, v2.i64) -> i64 {
     block0:
         jump block1;
@@ -542,10 +585,10 @@ func public %element(v0.i64, v1.i64) -> i64 {{
                 "{level:?}: element({index}, 3)"
             );
         }
-        for name in ["divide", "divide_wide"] {
+        for name in ["divide", "divide_wide", "divide_call"] {
             let func = machine.func(name);
-            for (value, divisor, want) in [(7, 0, 0), (7, 2, if name == "divide" { 9 } else { 3 })]
-            {
+            let quotient_sum = if name == "divide_wide" { 3 } else { 9 };
+            for (value, divisor, want) in [(7, 0, 0), (7, 2, quotient_sum)] {
                 let args = [Val::I64(value), Val::I64(divisor), Val::I64(3)];
                 assert_eq!(
                     machine.call(&func, &args)[0].unwrap_i64(),
@@ -553,6 +596,15 @@ func public %element(v0.i64, v1.i64) -> i64 {{
                     "{level:?}: {name}({value}, {divisor}, 3)"
                 );
             }
+        }
+        let divide_while = machine.func("divide_while");
+        for (divisor, trips, want) in [(0, 0, 0), (2, 3, 9)] {
+            let args = [Val::I64(7), Val::I64(divisor), Val::I64(trips)];
+            assert_eq!(
+                machine.call(&divide_while, &args)[0].unwrap_i64(),
+                want,
+                "{level:?}: divide_while(7, {divisor}, {trips})"
+            );
         }
         let pick = machine.func("pick");
         for (index, want) in [(1, 66), (4, 0), (1 << 28, 0), (-1, 0)] {

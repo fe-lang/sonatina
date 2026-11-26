@@ -1,0 +1,280 @@
+#! Which blocks the first iteration of every entry runs, for loops with
+#! several latches and exits, an irreducible cycle, an entry edge that may
+#! skip the loop, and calls that may not return. `%quotient` traps on a zero
+#! divisor.
+
+target = "x86_64-unknown-native"
+
+func private %quotient(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.i64 = udiv v0 v1;
+        return v2;
+}
+
+func private %check(v0.i64) {
+    block0:
+        v1.i1 = eq v0 0.i64;
+        br v1 block1 block2;
+
+    block1:
+        unreachable;
+
+    block2:
+        return;
+}
+
+# Returns only when its loop ends, which it may never do.
+func private %spin(v0.i64) {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i64 = phi (v0 block0) (v2 block1);
+        v2.i64 = shr 1.i64 v1;
+        v3.i1 = ne v2 0.i64;
+        br v3 block1 block2;
+
+    block2:
+        return;
+}
+
+# A call before one that may not return leaves the loop; one after it stays.
+# check:  block0:
+# nextln:      v5.i64 = call %quotient v0 v2;
+# nextln:      jump block1;
+# check:      call %check v1;
+# nextln:      v6.i64 = call %quotient v0 v1;
+func public %around_check(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i64 = phi (0.i64 block0) (v8 block1);
+        v4.i64 = phi (0.i64 block0) (v9 block1);
+        v5.i64 = call %quotient v0 v2;
+        call %check v1;
+        v6.i64 = call %quotient v0 v1;
+        v7.i64 = add v5 v6;
+        v8.i64 = add v3 v7;
+        v9.i64 = add v4 1.i64;
+        v10.i1 = lt v9 v2;
+        br v10 block1 block2;
+
+    block2:
+        return v8;
+}
+
+# A call to a function that may loop forever comes first.
+# check:  block0:
+# nextln:      jump block1;
+# check:      call %spin v1;
+# nextln:      v5.i64 = call %quotient v0 v1;
+func public %after_spin(v0.i64, v1.i64, v2.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i64 = phi (0.i64 block0) (v6 block1);
+        v4.i64 = phi (0.i64 block0) (v7 block1);
+        call %spin v1;
+        v5.i64 = call %quotient v0 v1;
+        v6.i64 = add v3 v5;
+        v7.i64 = add v4 1.i64;
+        v8.i1 = lt v7 v2;
+        br v8 block1 block2;
+
+    block2:
+        return v6;
+}
+
+# Of two latches, the block of the call reaches only one.
+# check:  block0:
+# nextln:      jump block1;
+# check:  block2:
+# nextln:      v6.i64 = call %quotient v0 v1;
+func public %one_of_two_latches(v0.i64, v1.i64, v2.i64, v3.i1) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i64 = phi (0.i64 block0) (v7 block2) (v4 block3);
+        v5.i64 = phi (0.i64 block0) (v8 block2) (v9 block3);
+        br v3 block2 block3;
+
+    block2:
+        v6.i64 = call %quotient v0 v1;
+        v7.i64 = add v4 v6;
+        v8.i64 = add v5 1.i64;
+        v10.i1 = lt v8 v2;
+        br v10 block1 block4;
+
+    block3:
+        v9.i64 = add v5 2.i64;
+        jump block1;
+
+    block4:
+        return v7;
+}
+
+# A block after the header, before both latches and both exits, runs in
+# every iteration.
+# check:  block0:
+# nextln:      v5.i64 = call %quotient v0 v1;
+# nextln:      jump block1;
+func public %before_all_ends(v0.i64, v1.i64, v2.i64, v3.i1) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i64 = phi (0.i64 block0) (v6 block2) (v6 block3);
+        v7.i64 = phi (0.i64 block0) (v8 block2) (v8 block3);
+        jump block6;
+
+    block6:
+        v5.i64 = call %quotient v0 v1;
+        v6.i64 = add v4 v5;
+        v8.i64 = add v7 1.i64;
+        br v3 block2 block3;
+
+    block2:
+        v9.i1 = lt v8 v2;
+        br v9 block1 block4;
+
+    block3:
+        v10.i1 = lt v8 10.i64;
+        br v10 block1 block5;
+
+    block4:
+        return v6;
+
+    block5:
+        return 0.i64;
+}
+
+# An exit on a path that skips the block of the call.
+# check:  block0:
+# nextln:      jump block1;
+# check:  block3:
+# nextln:      v6.i64 = call %quotient v0 v1;
+func public %skipped_by_an_exit(v0.i64, v1.i64, v2.i64, v3.i1) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i64 = phi (0.i64 block0) (v7 block3);
+        v5.i64 = phi (0.i64 block0) (v8 block3);
+        br v3 block2 block3;
+
+    block2:
+        v9.i1 = eq v5 7.i64;
+        br v9 block4 block3;
+
+    block3:
+        v6.i64 = call %quotient v0 v1;
+        v7.i64 = add v4 v6;
+        v8.i64 = add v5 1.i64;
+        v10.i1 = lt v8 v2;
+        br v10 block1 block4;
+
+    block4:
+        return v4;
+}
+
+# The two blocks between the header and the call form a cycle with two
+# entries, which may not terminate.
+# check:  block0:
+# nextln:      jump block1;
+# check:  block4:
+# nextln:      v8.i64 = call %quotient v0 v1;
+func public %after_irreducible_cycle(v0.i64, v1.i64, v2.i64, v3.i1) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i64 = phi (0.i64 block0) (v9 block4);
+        v5.i64 = phi (0.i64 block0) (v10 block4);
+        br v3 block2 block3;
+
+    block2:
+        v6.i64 = phi (v5 block1) (v7 block3);
+        v11.i1 = lt v6 v2;
+        br v11 block3 block4;
+
+    block3:
+        v7.i64 = phi (v5 block1) (v6 block2);
+        v12.i1 = gt v7 v2;
+        br v12 block2 block4;
+
+    block4:
+        v8.i64 = call %quotient v0 v1;
+        v9.i64 = add v4 v8;
+        v10.i64 = add v5 1.i64;
+        v13.i1 = lt v10 v2;
+        br v13 block1 block5;
+
+    block5:
+        return v9;
+}
+
+# The entry edge may skip the loop, so the call moves to a new preheader
+# rather than to the block that branches.
+# check:  block0:
+# nextln:      br v3 block3 block2;
+# check:  block3:
+# nextln:      v6.i64 = call %quotient v0 v1;
+# nextln:      jump block1;
+func public %entry_may_skip(v0.i64, v1.i64, v2.i64, v3.i1) -> i64 {
+    block0:
+        br v3 block1 block2;
+
+    block1:
+        v4.i64 = phi (0.i64 block0) (v7 block1);
+        v5.i64 = phi (0.i64 block0) (v8 block1);
+        v6.i64 = call %quotient v0 v1;
+        v7.i64 = add v4 v6;
+        v8.i64 = add v5 1.i64;
+        v9.i1 = lt v8 v2;
+        br v9 block1 block2;
+
+    block2:
+        v10.i64 = phi (0.i64 block0) (v7 block1);
+        return v10;
+}
+
+# A block between the header and the nearest common dominator of two latches
+# and two exits runs in every iteration.
+# check:  block0:
+# nextln:      v5.i64 = call %quotient v0 v1;
+# nextln:      jump block1;
+func public %before_the_common_dominator(v0.i64, v1.i64, v2.i64, v3.i1) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i64 = phi (0.i64 block0) (v6 block2) (v6 block3);
+        v7.i64 = phi (0.i64 block0) (v8 block2) (v8 block3);
+        jump block6;
+
+    block6:
+        v5.i64 = call %quotient v0 v1;
+        v6.i64 = add v4 v5;
+        jump block7;
+
+    block7:
+        v8.i64 = add v7 1.i64;
+        br v3 block2 block3;
+
+    block2:
+        v9.i1 = lt v8 v2;
+        br v9 block1 block4;
+
+    block3:
+        v10.i1 = lt v8 10.i64;
+        br v10 block1 block5;
+
+    block4:
+        return v6;
+
+    block5:
+        return 0.i64;
+}

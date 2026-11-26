@@ -1,5 +1,28 @@
+//! Loop-invariant code motion: moves an instruction whose operands the loop
+//! does not compute to the loop's preheader, which runs once each time the
+//! loop is entered.
+//!
+//! An instruction that can be speculated moves from any block of the loop.
+//! One that cannot, such as a call or an instruction that may fault, moves
+//! only from where the first iteration of every entry runs it: a block that
+//! dominates every block that leaves the loop or jumps back to its header,
+//! and that the header reaches through no cycle, which may not terminate, and
+//! no instruction that may not return, nor one before it in the block. In the
+//! preheader it then runs once where it ran at least once.
+//!
+//! Such an instruction is undefined, not trapping, for the operands that keep
+//! it from being speculated (U4 and U5 in `docs/memory.md`), so an execution
+//! that reaches it with them has no required behavior, including for what it
+//! ran before. It may therefore move above a store or another undefined
+//! instruction of the loop. What may not return in a defined way is an
+//! `unreachable`, a revert or a loop, and those keep it below them, as an
+//! `enum.assert_variant` does, which refines the value a payload read is
+//! proved against.
+
 // TODO: Add control flow hoisting.
-use rustc_hash::FxHashSet;
+use std::iter;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId, ValueId};
 
 use crate::{
@@ -89,14 +112,58 @@ impl LicmSolver {
             ctx.lpt.iter_blocks_post_order(ctx.cfg, ctx.lp).collect();
         block_in_loop_rpo.reverse();
 
+        let header = ctx.lpt.loop_header(ctx.lp);
+        let order: FxHashMap<_, _> = block_in_loop_rpo
+            .iter()
+            .enumerate()
+            .map(|(index, &block)| (block, index))
+            .collect();
+        // The blocks that dominate every block that leaves the loop or jumps
+        // back to its header: those from the ends' nearest common dominator
+        // up to the header. Found the first time an instruction needs them.
+        let mut run_every_iteration: Option<FxHashSet<BlockId>> = None;
+        let dominators_of_ends = || {
+            let ends = block_in_loop_rpo.iter().copied().filter(|&block| {
+                ctx.cfg
+                    .succs_of(block)
+                    .any(|&succ| succ == header || !ctx.lpt.is_in_loop(succ, ctx.lp))
+            });
+            iter::successors(ctx.domtree.common_dominator(ends), |&block| {
+                (block != header)
+                    .then(|| ctx.domtree.idom_of(block))
+                    .flatten()
+            })
+            .collect()
+        };
+        // The blocks whose end an iteration may not reach: through a cycle,
+        // which may not terminate, or an instruction that may not return.
+        let mut may_stall = FxHashSet::default();
+
         let mut loop_var = FxHashSet::default();
-        for block in block_in_loop_rpo {
+        for &block in &block_in_loop_rpo {
+            // A predecessor later in reverse post order closes a cycle.
+            let mut reached = block == header
+                || !ctx.cfg.preds_of(block).any(|pred| {
+                    order
+                        .get(pred)
+                        .is_some_and(|&index| index >= order[&block] || may_stall.contains(pred))
+                });
             for inst in func.layout.iter_inst(block) {
-                if self.is_invariant(func, ctx, &loop_var, inst) {
+                let guaranteed = || {
+                    reached
+                        && run_every_iteration
+                            .get_or_insert_with(dominators_of_ends)
+                            .contains(&block)
+                };
+                if self.is_invariant(func, ctx, &loop_var, inst, guaranteed) {
                     self.invariants.push(inst);
                 } else {
                     loop_var.extend(func.dfg.inst_results(inst).iter().copied());
                 }
+                reached &= !func.dfg.may_transfer_control(inst);
+            }
+            if !reached {
+                may_stall.insert(block);
             }
         }
     }
@@ -108,23 +175,22 @@ impl LicmSolver {
         ctx: LoopInvariantCtx<'_>,
         loop_var: &FxHashSet<ValueId>,
         inst_id: InstId,
+        guaranteed: impl FnOnce() -> bool,
     ) -> bool {
-        if !self.is_safe_to_hoist(func, ctx, inst_id) {
-            return false;
-        }
-
         let mut invariant = true;
         let inst = func.dfg.inst(inst_id);
         inst.for_each_value(&mut |value| invariant &= !loop_var.contains(&value));
-        invariant
+        invariant && self.is_safe_to_hoist(func, ctx, inst_id, guaranteed)
     }
 
-    /// Returns `true` if the `inst` is safe to hoist.
+    /// Returns `true` if the `inst` is safe to hoist, given whether the first
+    /// iteration of every entry runs it, which is asked only if it matters.
     fn is_safe_to_hoist(
         &self,
         func: &Function,
         ctx: LoopInvariantCtx<'_>,
         inst_id: InstId,
+        guaranteed: impl FnOnce() -> bool,
     ) -> bool {
         if ctx.object_memory.is_some_and(|object_memory| {
             object_memory.read_is_loop_invariant(
@@ -139,7 +205,7 @@ impl LicmSolver {
             return true;
         }
 
-        func.dfg.can_speculate(inst_id)
+        func.dfg.can_speculate(inst_id) || func.dfg.has_value_semantics(inst_id) && guaranteed()
     }
 
     /// Returns preheader of the loop, if one can be used/created.

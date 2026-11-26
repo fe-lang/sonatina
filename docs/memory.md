@@ -108,7 +108,9 @@ frontend contract.
   - `udiv`, `sdiv`, `umod`, or `smod` with a zero divisor. Targets differ: EVM
     lowers them to its total division and yields `0`, WebAssembly traps,
     Cranelift traps up to 128 bits and at 256 bits yields an all-ones quotient
-    and the dividend as remainder, and the interpreter yields no value.
+    and the dividend as remainder, and the interpreter yields no value;
+  - `gep`, `obj.index`, `const.index` or `int_to_ptr` with an integer operand
+    wider than a pointer whose value does not fit in one (WebAssembly traps).
 
 ## Defined Operations
 
@@ -143,6 +145,13 @@ Because every SSA value is concrete (V1), value equivalence is exact equality
   `check_fresh_aggregates_folded` verifies none reach the backends.
 - Operations with UB preconditions (`trunc_nuw`, `enum.extract`,
   `enum.assert_variant*`, memory accesses) must not be speculated above guards
-  that establish their preconditions (`DataFlowGraph::can_speculate`).
+  that establish their preconditions (`DataFlowGraph::can_speculate`). Nor
+  may a call, whose callee may have them and costs what it does.
+- LICM hoists an instruction that cannot be speculated only from a block that
+  the first iteration of every loop entry runs, reached through no cycle and
+  no instruction that may not return (`may_transfer_control`) or that is an
+  `enum.assert_variant`. Since the instruction is undefined, not trapping, for
+  the excluded operands, it may move above stores and other undefined
+  instructions of the loop.
 - Demanded-bits simplification must treat `trunc_nuw` as demanding all input
   bits so masks clearing discarded high bits are never dropped before it.
