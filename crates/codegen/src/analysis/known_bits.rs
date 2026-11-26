@@ -383,16 +383,28 @@ impl KnownBitsQuery {
                     bswap_bits(ty, arg_known.known_one),
                 )
             }
-            // A count is at most the width, so only the bits that hold the
-            // width can be set.
+            // The count is at least that of the bits that may be one and at
+            // most that of the bits that must be one, so the bits above the
+            // highest bit where those bounds differ are known.
             UnaryInstKind::Clz | UnaryInstKind::Ctz => {
                 if !supports_known_bits(ty) {
                     return KnownBits::unknown(ty);
                 }
 
-                let bits = type_bits(ty);
-                let count_bits = (u16::BITS - bits.leading_zeros()) as u16;
-                KnownBits::normalized(ty, !low_mask(count_bits), U256::zero())
+                let width = type_bits(ty);
+                let count = |bits: U256| {
+                    let bits = bits & type_mask(ty);
+                    if kind == UnaryInstKind::Clz {
+                        bits.leading_zeros() as u16 - (256 - width)
+                    } else {
+                        (bits.trailing_zeros() as u16).min(width)
+                    }
+                };
+                let min = count(!arg_known.known_zero);
+                let max = count(arg_known.known_one);
+                let known = !low_mask((u16::BITS - (min ^ max).leading_zeros()) as u16);
+                let min = U256::from(min);
+                KnownBits::normalized(ty, !min & known, min & known)
             }
             UnaryInstKind::Neg | UnaryInstKind::Snego => KnownBits::unknown(ty),
         }
@@ -746,11 +758,11 @@ mod tests {
         builder::test_util::*,
         inst::{
             InstClassKind,
-            arith::{Sar, Shr},
+            arith::{Sar, Shl, Shr},
             cast::{Sext, Trunc, Zext},
             control_flow::{Br, Jump, Phi, Return},
             evm::{EvmByte, EvmSignExtend},
-            logic::{And, Not, Or, Select, Xor},
+            logic::{And, Clz, Ctz, Not, Or, Select, Xor},
         },
         isa::Isa,
     };
@@ -961,6 +973,130 @@ mod tests {
             query.for_value(&func, neg_shifted).exact_imm(Type::I32),
             Some(Immediate::from_i256(I256::from(-0x0000_8000i32), Type::I32))
         );
+    }
+
+    #[test]
+    fn bit_counts_lie_between_counts_of_possible_and_required_ones() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256], Type::I256);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let arg = builder.args()[0];
+        let [one, bit_200, low_byte, bit_7, eight, bit_9] = [
+            U256::one(),
+            U256::one() << 200,
+            U256::from(0xffu8),
+            U256::from(0x80u8),
+            U256::from(8u8),
+            U256::from(0x200u16),
+        ]
+        .map(|value| builder.make_imm_value(imm_i256(value)));
+        let odd = builder.insert_inst_with(|| Or::new(is, arg, one), Type::I256);
+        let high = builder.insert_inst_with(|| Or::new(is, arg, bit_200), Type::I256);
+        let byte = builder.insert_inst_with(|| And::new(is, arg, low_byte), Type::I256);
+        let top = builder.insert_inst_with(|| Or::new(is, byte, bit_7), Type::I256);
+        let shifted = builder.insert_inst_with(|| Shl::new(is, eight, arg), Type::I256);
+        let low = builder.insert_inst_with(|| Or::new(is, shifted, bit_9), Type::I256);
+        // (input index, whether the count is leading)
+        let shapes = [
+            (0, true),
+            (0, false),
+            (1, true),
+            (1, false),
+            (2, true),
+            (3, true),
+            (4, false),
+        ];
+        let counts = shapes.map(|(input, leading)| {
+            let value = [odd, high, byte, top, low][input];
+            if leading {
+                builder.insert_inst_with(|| Clz::new(is, value), Type::I256)
+            } else {
+                builder.insert_inst_with(|| Ctz::new(is, value), Type::I256)
+            }
+        });
+        builder.insert_inst_no_result_with(|| Return::new_single(is, counts[0]));
+        builder.seal_all();
+        builder.finish();
+
+        let func = only_func(&mb);
+        let query = KnownBitsQuery::new(&func);
+        let [
+            clz_odd,
+            ctz_odd,
+            clz_high,
+            ctz_high,
+            clz_byte,
+            clz_top,
+            ctz_low,
+        ] = counts;
+        let exact = |value| query.for_value(&func, value).exact_imm(Type::I256);
+        assert!(query.fits_in_low_bits(&func, clz_odd, 8));
+        assert!(!query.fits_in_low_bits(&func, clz_odd, 7));
+        assert_eq!(exact(ctz_odd), Some(imm_i256(U256::zero())));
+        assert!(query.fits_in_low_bits(&func, clz_high, 6));
+        assert!(query.fits_in_low_bits(&func, ctz_high, 8));
+        assert!(query.fits_in_low_bits(&func, clz_byte, 9));
+        assert!(!query.fits_in_low_bits(&func, clz_byte, 8));
+        assert_eq!(exact(clz_top), Some(imm_i256(U256::from(248u8))));
+        let ctz_low_known = query.for_value(&func, ctz_low);
+        assert!(ctz_low_known.all_one_in(U256::from(8u8)));
+        assert!(ctz_low_known.all_zero_in(!U256::from(9u8)));
+
+        let mut rng = XorShift64(5);
+        for _ in 0..256 {
+            let arg_imm = imm_i256(next_u256(&mut rng));
+            let byte_imm = arg_imm & imm_i256(U256::from(0xffu8));
+            let inputs = [
+                arg_imm | imm_i256(U256::one()),
+                arg_imm | imm_i256(U256::one() << 200),
+                byte_imm,
+                byte_imm | imm_i256(U256::from(0x80u8)),
+                (arg_imm << imm_i256(U256::from(8u8))) | imm_i256(U256::from(0x200u16)),
+            ];
+            for ((input, leading), count) in shapes.into_iter().zip(counts) {
+                let input = inputs[input];
+                let expected = if leading { input.clz() } else { input.ctz() };
+                assert_sound(query.for_value(&func, count), Type::I256, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn subword_bit_counts_follow_type_width() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I8], Type::I8);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let arg = builder.args()[0];
+        let one = builder.make_imm_value(Immediate::from_i256(I256::from(1u8), Type::I8));
+        let zero = builder.make_imm_value(Immediate::zero(Type::I8));
+        let odd = builder.insert_inst_with(|| Or::new(is, arg, one), Type::I8);
+        let cleared = builder.insert_inst_with(|| And::new(is, arg, zero), Type::I8);
+        let clz_odd = builder.insert_inst_with(|| Clz::new(is, odd), Type::I8);
+        let ctz_zero = builder.insert_inst_with(|| Ctz::new(is, cleared), Type::I8);
+        let clz_arg = builder.insert_inst_with(|| Clz::new(is, arg), Type::I8);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, clz_odd));
+        builder.seal_all();
+        builder.finish();
+
+        let func = only_func(&mb);
+        let query = KnownBitsQuery::new(&func);
+        assert!(query.fits_in_low_bits(&func, clz_odd, 3));
+        assert_eq!(
+            query.for_value(&func, ctz_zero).exact_imm(Type::I8),
+            Some(Immediate::from_i256(I256::from(8u8), Type::I8))
+        );
+        assert!(query.fits_in_low_bits(&func, clz_arg, 4));
+        assert!(!query.fits_in_low_bits(&func, clz_arg, 3));
+        for byte in 0..=u8::MAX {
+            let arg_imm = Immediate::from_i256(I256::from(byte), Type::I8);
+            let odd_imm = arg_imm | Immediate::from_i256(I256::from(1u8), Type::I8);
+            assert_sound(query.for_value(&func, clz_odd), Type::I8, odd_imm.clz());
+            assert_sound(query.for_value(&func, clz_arg), Type::I8, arg_imm.clz());
+        }
     }
 
     #[test]

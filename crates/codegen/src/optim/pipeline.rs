@@ -121,6 +121,8 @@ pub enum Pass {
     CodeSink,
     /// Complete Global Value Numbering (legacy sparse predicated solver).
     Gvn,
+    /// Replace a binary MSB search with a bit count on Osaka.
+    BitScan,
     /// Turn a phi of 1 and 0 at the join of a branch into a `zext` of its
     /// condition (native pipelines only).
     BoolPhiFold,
@@ -240,6 +242,11 @@ impl Pass {
             Pass::Licm => PassInfo {
                 name: "licm",
                 needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::BitScan => PassInfo {
+                name: "bit_scan",
+                needs_func_behavior: false,
                 invalidates_func_behavior: true,
             },
             Pass::LoopRotate => PassInfo {
@@ -426,6 +433,7 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::Sccp,
     Pass::BranchCanonicalize,
     Pass::CodeSink,
+    Pass::BitScan,
     Pass::CfgCleanup,
 ];
 
@@ -456,6 +464,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::Gvn,
     Pass::BranchCanonicalize,
     Pass::CodeSink,
+    Pass::BitScan,
     Pass::CfgCleanup,
 ];
 
@@ -1076,6 +1085,10 @@ fn run_pass(
         Pass::ScalarCanonicalize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.scalar_canonicalize").entered();
             ScalarCanonicalize::new().run(func)
+        }
+        Pass::BitScan => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.bit_scan").entered();
+            super::bit_scan::run(func)
         }
         Pass::KnownBitsSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.known_bits_simplify").entered();

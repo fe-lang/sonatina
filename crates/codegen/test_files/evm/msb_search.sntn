@@ -1,0 +1,54 @@
+#! evm.config: { vcode: true, opt: 2, stackify_trace: false }
+#! evm.case: zero
+#!   calldata: u256(0)
+#!   expect: return u256(0)
+#! evm.case: one
+#!   calldata: u256(1)
+#!   expect: return u256(0)
+#! evm.case: sparse
+#!   calldata: u256(340282366920938463463374607431768211456)
+#!   expect: return u256(128)
+#! evm.case: top
+#!   calldata: u256(57896044618658097711785492504343953926634992332820282019728792003956564819985)
+#!   expect: return u256(255)
+#! evm.case: all
+#!   calldata: u256(115792089237316195423570985008687907853269984665640564039457584007913129639935)
+#!   expect: return u256(255)
+
+target = "evm-ethereum-osaka"
+func public %scan(v0.i256) -> i8 {
+block0:
+ jump block1;
+block1:
+ v2.i256 = phi (128.i256 block0) (v11 block3);
+ v3.i256 = phi (v0 block0) (v10 block3);
+ v4.i8 = phi (0.i8 block0) (v9 block3);
+ v5.i256 = shr v2 v3;
+ v6.i1 = is_zero v5;
+ br v6 block3 block2;
+block2:
+ v7.i8 = trunc v2 i8;
+ (v8.i8, v13.i1) = uaddo v4 v7;
+ br v13 block6 block3;
+block3:
+ v9.i8 = phi (v4 block1) (v8 block2);
+ v10.i256 = phi (v3 block1) (v5 block2);
+ v11.i256 = shr 1.i256 v2;
+ v12.i1 = is_zero v11;
+ br v12 block4 block1;
+block4:
+ return v9;
+block6:
+ evm_revert 0.i256 0.i256;
+}
+func public %entry() {
+block0:
+ v0.i256 = evm_calldata_load 0.i256;
+ v1.i8 = call %scan v0;
+ v2.i256 = zext v1 i256;
+ mstore 0.i256 v2 i256;
+ evm_return 0.i256 32.i256;
+}
+object @Contract {
+ section runtime { entry %entry; }
+}
