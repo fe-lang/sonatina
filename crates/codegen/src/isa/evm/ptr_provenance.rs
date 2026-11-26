@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    Function, InstId, InstSetExt, Type, Value, ValueId,
+    BlockId, ControlFlowGraph, Function, InstId, InstSetExt, Type, Value, ValueId,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
     module::ModuleCtx,
@@ -160,9 +162,14 @@ pub(crate) struct Provenance {
     /// through stores the escape scan already sees.
     unknown_heap: bool,
     /// The value may also be an integer that addresses no allocation, such as
-    /// a literal or a word from calldata or untracked memory. Origins alone are
-    /// a may-fact; this marks the paths on which none of them applies.
+    /// a literal, a word too narrow for an address, or a word from calldata,
+    /// untracked memory or bytes no write has set. Origins alone are a
+    /// may-fact; this marks the paths on which none of them applies.
     raw: bool,
+    /// The value may hold the null pointer, `zero.*T`. An access through it is
+    /// undefined (U1), so the value still names its allocations, but the
+    /// integer 0 it converts to is raw.
+    null: bool,
 }
 
 impl Provenance {
@@ -188,6 +195,10 @@ impl Provenance {
 
     pub(crate) fn may_be_raw(&self) -> bool {
         self.raw
+    }
+
+    pub(crate) fn may_be_null(&self) -> bool {
+        self.null
     }
 
     fn insert_arg_index(indices: &mut SmallVec<[u32; 4]>, idx: u32) -> bool {
@@ -274,6 +285,8 @@ impl Provenance {
         self.unknown_heap |= other.unknown_heap;
         changed |= other.raw && !self.raw;
         self.raw |= other.raw;
+        changed |= other.null && !self.null;
+        self.null |= other.null;
         changed
     }
 
@@ -386,6 +399,7 @@ fn stored_by_callee(effect: &PtrArgEscape) -> Provenance {
         unknown_heap: effect.stored_heap_pointer,
         unknown_non_arg: effect.stored_unknown_pointer,
         raw: effect.stored_raw,
+        null: effect.stored_null,
         ..Provenance::default()
     }
 }
@@ -471,8 +485,8 @@ fn untracked_pointer(untracked: UntrackedMemory) -> Option<Provenance> {
     }
 }
 
-/// Calldata is fixed before the frame allocates anything, so, like
-/// `evm_calldata_load`, a copy of it holds no pointer to the frame's memory.
+/// Calldata and code are fixed before the frame allocates anything, so, like
+/// `evm_calldata_load`, a copy of either holds no pointer to the frame's memory.
 fn unmodeled_write(data: &EvmInstKind, untracked: UntrackedMemory) -> Option<UnmodeledWrite> {
     let write = |addr, untracked| match untracked_pointer(untracked) {
         Some(pointer) => UnmodeledWrite::MayFormPointer(addr, pointer),
@@ -486,6 +500,7 @@ fn unmodeled_write(data: &EvmInstKind, untracked: UntrackedMemory) -> Option<Unm
         EvmInstKind::EvmMcopy(mcopy) => Some(fragments(*mcopy.dest())),
         EvmInstKind::Memzero(memzero) => Some(fragments(*memzero.dest())),
         EvmInstKind::EvmCalldataCopy(copy) => Some(UnmodeledWrite::PointerFree(*copy.dst_addr())),
+        EvmInstKind::EvmCodeCopy(copy) => Some(UnmodeledWrite::PointerFree(*copy.dst_addr())),
         EvmInstKind::EvmExtCodeCopy(copy) => Some(external(*copy.dst_addr())),
         EvmInstKind::EvmReturnDataCopy(copy) => Some(external(*copy.dst_addr())),
         EvmInstKind::EvmCall(call) => Some(external(*call.ret_addr())),
@@ -538,6 +553,17 @@ fn type_can_carry_pointer_provenance_inner(
     }
 }
 
+/// A value of `ty` too narrow for an address forwards no argument and may be
+/// an integer that addresses no allocation, whatever it was computed from. So
+/// may an integer or enum tag that holds the bits of a null pointer.
+fn restrict_to_type(prov: &mut Provenance, module: &ModuleCtx, ty: Type) {
+    if !type_can_carry_pointer_provenance(module, ty) {
+        prov.forwarded_args.clear();
+        prov.raw |= ty != Type::Unit;
+    }
+    prov.raw |= prov.null && !matches!(ty, Type::Compound(_));
+}
+
 #[derive(Clone, Copy)]
 struct AllocationAddress {
     base: InstId,
@@ -551,6 +577,56 @@ struct MemoryCell {
     stored: Provenance,
 }
 
+/// The byte ranges `[start, end)` of each allocation that every path has
+/// written since the allocation was made, sorted and disjoint. Its other bytes
+/// still hold the arbitrary ones it started with (R2), which name no
+/// allocation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct WrittenBytes(FxHashMap<InstId, SmallVec<[(i64, i64); 2]>>);
+
+impl WrittenBytes {
+    fn covers(&self, base: InstId, start: i64, end: i64) -> bool {
+        start >= end
+            || self.0.get(&base).is_some_and(|ranges| {
+                ranges.iter().any(|&(written_start, written_end)| {
+                    written_start <= start && end <= written_end
+                })
+            })
+    }
+
+    fn insert(&mut self, base: InstId, mut start: i64, mut end: i64) {
+        let ranges = self.0.entry(base).or_default();
+        ranges.retain(|&mut (written_start, written_end)| {
+            let disjoint = written_end < start || end < written_start;
+            if !disjoint {
+                start = start.min(written_start);
+                end = end.max(written_end);
+            }
+            disjoint
+        });
+        let idx = ranges.partition_point(|&(written_start, _)| written_start < start);
+        ranges.insert(idx, (start, end));
+    }
+
+    fn intersect(&mut self, other: &Self) {
+        self.0.retain(|base, ranges| {
+            let Some(others) = other.0.get(base) else {
+                return false;
+            };
+            *ranges = ranges
+                .iter()
+                .flat_map(|&(start, end)| {
+                    others.iter().filter_map(move |&(other_start, other_end)| {
+                        let (start, end) = (start.max(other_start), end.min(other_end));
+                        (start < end).then_some((start, end))
+                    })
+                })
+                .collect();
+            !ranges.is_empty()
+        });
+    }
+}
+
 pub(crate) struct ProvenanceInfo {
     pub(crate) value: SecondaryMap<ValueId, Provenance>,
     pub(crate) local_mem: FxHashMap<InstId, Provenance>,
@@ -561,6 +637,9 @@ pub(crate) struct ProvenanceInfo {
     /// from arg-addressed memory.
     pub(crate) arg_mem: Vec<(ArgumentOrigin, Provenance)>,
     exact_addresses: SecondaryMap<ValueId, Option<AllocationAddress>>,
+    allocation_bytes: FxHashMap<InstId, u32>,
+    /// What every path to each memory load and call has written.
+    written: FxHashMap<InstId, Arc<WrittenBytes>>,
     cells: FxHashMap<InstId, Vec<MemoryCell>>,
     imprecise_mem: FxHashMap<InstId, Provenance>,
     untracked_memory: UntrackedMemory,
@@ -591,33 +670,169 @@ impl ProvenanceInfo {
         out
     }
 
-    fn covers_allocation(&self, function: &Function, addr: ValueId, len: ValueId) -> bool {
-        self.exact_addresses[addr].is_some_and(|addr| {
-            addr.offset_bytes == 0
-                && value_imm_u32(function, len)
-                    .is_some_and(|bytes| addr.allocation_bytes == Some(bytes))
-        })
+    /// The allocation that `addr` and `len` cover entirely, if any.
+    fn covered_allocation(
+        &self,
+        function: &Function,
+        addr: ValueId,
+        len: ValueId,
+    ) -> Option<InstId> {
+        self.exact_addresses[addr]
+            .filter(|addr| {
+                addr.offset_bytes == 0
+                    && value_imm_u32(function, len)
+                        .is_some_and(|bytes| addr.allocation_bytes == Some(bytes))
+            })
+            .map(|addr| addr.base)
+    }
+
+    /// What every path to each memory load and call has written. An
+    /// instruction missing from the result is unreachable.
+    fn compute_written(
+        &self,
+        function: &Function,
+        module: &ModuleCtx,
+        isa: &Evm,
+    ) -> FxHashMap<InstId, Arc<WrittenBytes>> {
+        let mut cfg = ControlFlowGraph::new();
+        cfg.compute(function);
+        let mut order: Vec<BlockId> = cfg.post_order().collect();
+        order.reverse();
+        let mut outs: SecondaryMap<BlockId, Option<Arc<WrittenBytes>>> = SecondaryMap::new();
+        let mut at = FxHashMap::default();
+        // Greatest fixed point: a block's predecessors not yet visited have
+        // written everything.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block in &order {
+                let mut written = if cfg.entry() == Some(block) {
+                    Arc::default()
+                } else {
+                    let mut preds = cfg.preds_of(block).filter_map(|&pred| outs[pred].clone());
+                    let Some(mut written) = preds.next() else {
+                        continue;
+                    };
+                    for pred in preds {
+                        if pred != written {
+                            Arc::make_mut(&mut written).intersect(&pred);
+                        }
+                    }
+                    written
+                };
+                for inst in function.layout.iter_inst(block) {
+                    let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
+                    if memory_load(&data, module).is_some()
+                        || matches!(data, EvmInstKind::EvmMloadBytes(_) | EvmInstKind::Call(_))
+                    {
+                        at.insert(inst, written.clone());
+                    }
+                    match data {
+                        EvmInstKind::Alloca(_) | EvmInstKind::EvmMalloc(_) => {
+                            if written.0.contains_key(&inst) {
+                                Arc::make_mut(&mut written).0.remove(&inst);
+                            }
+                        }
+                        // A complete copy replaces the destination's bytes
+                        // with the source's, written or not. Any other copy
+                        // leaves every load of its destination raw.
+                        EvmInstKind::EvmMcopy(copy) => {
+                            if let Some(dest) =
+                                self.covered_allocation(function, *copy.dest(), *copy.len())
+                                && let Some(src) =
+                                    self.covered_allocation(function, *copy.addr(), *copy.len())
+                                && written.0.get(&dest) != written.0.get(&src)
+                            {
+                                let written = Arc::make_mut(&mut written);
+                                match written.0.get(&src).cloned() {
+                                    Some(ranges) => written.0.insert(dest, ranges),
+                                    None => written.0.remove(&dest),
+                                };
+                            }
+                        }
+                        // Only a store sets bytes at a known offset. Other
+                        // writes count as setting none.
+                        _ => {
+                            if let Some((addr, _, bytes)) = memory_store(&data, module)
+                                && let Some(exact) = self.exact_addresses[addr]
+                            {
+                                let start = exact.offset_bytes;
+                                if let Some(end) = i64::try_from(bytes)
+                                    .ok()
+                                    .and_then(|bytes| start.checked_add(bytes))
+                                    && !written.covers(exact.base, start, end)
+                                {
+                                    Arc::make_mut(&mut written).insert(exact.base, start, end);
+                                }
+                            }
+                        }
+                    }
+                }
+                if outs[block].as_ref() != Some(&written) {
+                    outs[block] = Some(written);
+                    changed = true;
+                }
+            }
+        }
+        at
+    }
+
+    /// Whether `at` may read bytes of `base` that some path to it has not
+    /// written: of the `bytes` at `offset`, or of all of `base` for `None`.
+    fn may_read_unwritten(&self, at: InstId, base: InstId, read: Option<(i64, usize)>) -> bool {
+        let read = read.or_else(|| {
+            self.allocation_bytes
+                .get(&base)
+                .map(|&bytes| (0, bytes as usize))
+        });
+        !self
+            .written
+            .get(&at)
+            .zip(read)
+            .is_some_and(|(written, (offset, bytes))| {
+                i64::try_from(bytes)
+                    .ok()
+                    .and_then(|bytes| offset.checked_add(bytes))
+                    .is_some_and(|end| written.covers(base, offset, end))
+            })
     }
 
     /// Join all contents for a copy or other access with no known width.
     pub(crate) fn load_memory(&self, addr: &Provenance) -> Provenance {
-        self.load_provenance_memory(addr, None)
+        self.load_provenance_memory(addr, None, None)
     }
 
-    fn load_provenance_memory(&self, addr: &Provenance, bytes: Option<usize>) -> Provenance {
+    /// The contents `bytes` at `addr` may hold, all of them for `None`. A word
+    /// read by `at` from bytes some path to it has not written is raw.
+    fn load_provenance_memory(
+        &self,
+        addr: &Provenance,
+        bytes: Option<usize>,
+        at: Option<InstId>,
+    ) -> Provenance {
         let mut out = Provenance::default();
         for base in addr.alloca_insts().chain(addr.malloc_insts()) {
             if let Some(bytes) = bytes.filter(|_| !addr.imprecise) {
                 // Exact allocation roots denote offset zero, even when the
                 // pointer itself arrived through a load or a call result.
-                out.union_with(&self.load_allocation_memory(base, 0, bytes));
-            } else if let Some(stored) = self
+                out.union_with(&self.load_allocation_memory(base, 0, bytes, at));
+                continue;
+            }
+            if let Some(stored) = self
                 .local_mem
                 .get(&base)
                 .or_else(|| self.malloc_mem.get(&base))
             {
                 out.union_with(stored);
             }
+            // A word at an unknown offset, or copied to the same offset of
+            // another allocation, may straddle a word stored off alignment.
+            out.raw |= self.cells.get(&base).is_some_and(|cells| {
+                cells
+                    .iter()
+                    .any(|cell| cell.offset.rem_euclid(32) != 0 || !cell.bytes.is_multiple_of(32))
+            });
+            out.raw |= at.is_some_and(|at| self.may_read_unwritten(at, base, None));
         }
         for origin in addr.argument_origins() {
             ArgumentOrigin::join_into(&mut out.arg_memory, origin.loaded());
@@ -649,7 +864,13 @@ impl ProvenanceInfo {
         out
     }
 
-    fn load_allocation_memory(&self, base: InstId, offset: i64, bytes: usize) -> Provenance {
+    fn load_allocation_memory(
+        &self,
+        base: InstId,
+        offset: i64,
+        bytes: usize,
+        at: Option<InstId>,
+    ) -> Provenance {
         let mut out = self.imprecise_mem.get(&base).cloned().unwrap_or_default();
         if let Some(cells) = self.cells.get(&base) {
             for cell in cells {
@@ -657,20 +878,26 @@ impl ProvenanceInfo {
                     && i128::from(offset) < i128::from(cell.offset) + cell.bytes as i128
                 {
                     out.union_with(&cell.stored);
+                    // A read at another offset than a stored word's, or of
+                    // part of one, holds a stored pointer's bytes shifted.
+                    out.raw |= cell.offset.wrapping_sub(offset) % 32 != 0
+                        || !cell.bytes.is_multiple_of(32)
+                        || !bytes.is_multiple_of(32);
                 }
             }
         }
+        out.raw |= at.is_some_and(|at| self.may_read_unwritten(at, base, Some((offset, bytes))));
         if bytes != 32 {
             out.imprecise = true;
         }
         out
     }
 
-    fn load_value_memory(&self, value: ValueId, bytes: usize) -> Provenance {
+    fn load_value_memory(&self, value: ValueId, bytes: usize, at: Option<InstId>) -> Provenance {
         if let Some(addr) = self.exact_addresses[value] {
-            self.load_allocation_memory(addr.base, addr.offset_bytes, bytes)
+            self.load_allocation_memory(addr.base, addr.offset_bytes, bytes, at)
         } else {
-            self.load_provenance_memory(&self.value[value], Some(bytes))
+            self.load_provenance_memory(&self.value[value], Some(bytes), at)
         }
     }
 
@@ -705,7 +932,14 @@ impl ProvenanceInfo {
         changed
     }
 
-    pub(crate) fn resolve_argument(&self, args: &[ValueId], origin: ArgumentOrigin) -> Provenance {
+    /// What `origin` denotes at a call with `args`. Words read by the call
+    /// `at` from bytes some path to it has not written are raw.
+    pub(crate) fn resolve_argument(
+        &self,
+        args: &[ValueId],
+        origin: ArgumentOrigin,
+        at: Option<InstId>,
+    ) -> Provenance {
         let Some(&value) = args.get(origin.index as usize) else {
             return Provenance::default();
         };
@@ -716,14 +950,14 @@ impl ProvenanceInfo {
         }
         for step in 0..origin.depth {
             out = if step == 0 && origin.exact {
-                self.load_value_memory(value, 32)
+                self.load_value_memory(value, 32, at)
             } else {
-                self.load_provenance_memory(&out, origin.exact.then_some(32))
+                self.load_provenance_memory(&out, origin.exact.then_some(32), at)
             };
         }
         if origin.transitive {
             loop {
-                let loaded = self.load_memory(&out);
+                let loaded = self.load_provenance_memory(&out, None, at);
                 if !out.union_with(&loaded) {
                     break;
                 }
@@ -749,14 +983,16 @@ impl ProvenanceInfo {
         args: &[ValueId],
         summary: &PtrEscapeSummary,
         ret_idx: usize,
+        at: InstId,
     ) -> Provenance {
         let mut next = Provenance::default();
         if let Some(ret) = summary.returns.get(ret_idx) {
             for &origin in &ret.origins {
-                next.union_with(&self.resolve_argument(args, origin));
+                next.union_with(&self.resolve_argument(args, origin, Some(at)));
             }
             next.unknown_heap |= ret.heap_pointer;
             next.raw |= ret.raw;
+            next.null |= ret.null;
             if ret.unknown_pointer {
                 next.mark_unknown_non_arg();
             }
@@ -811,10 +1047,10 @@ fn non_code_address_uses(function: &Function, isa: &Evm) -> FxHashSet<ValueId> {
 
 /// The provenance of `zero.ty`, that of the `agg.make` of its leaves' zeros.
 /// An integer or enum tag is raw, as the immediate 0 is. A null pointer or
-/// object reference has none: an access through `zero.*T` is undefined
-/// behavior (U1), and the analyses take it to reach no memory. To make the
-/// null pointer a raw address instead, which may reach the low fixed slots,
-/// give it `raw: true` here.
+/// object reference is only null: an access through `zero.*T` is undefined
+/// behavior (U1), and the analyses take it to reach no memory, but the
+/// integer it converts to is raw. To make the null pointer a raw address
+/// instead, which may reach the low fixed slots, give it `raw: true` here.
 fn zero_provenance(module: &ModuleCtx, ty: Type) -> Provenance {
     let raw = Provenance {
         raw: true,
@@ -831,7 +1067,12 @@ fn zero_provenance(module: &ModuleCtx, ty: Type) -> Provenance {
         CompoundType::Ptr(_)
         | CompoundType::ObjRef(_)
         | CompoundType::ConstRef(_)
-        | CompoundType::Func { .. } => return Provenance::default(),
+        | CompoundType::Func { .. } => {
+            return Provenance {
+                null: true,
+                ..Provenance::default()
+            };
+        }
         // The tag is raw, and a field adds no more.
         CompoundType::Enum(_) => return raw,
         CompoundType::Array { elem, len } => {
@@ -870,30 +1111,34 @@ pub(crate) fn compute_provenance(
 
     for (idx, &arg) in function.arg_values.iter().enumerate() {
         let ty = function.dfg.value_ty(arg);
-        if type_can_carry_pointer_provenance(module, ty) {
-            prov[arg].forwarded_args.push(idx as u32);
-        }
+        prov[arg].forwarded_args.push(idx as u32);
+        restrict_to_type(&mut prov[arg], module, ty);
         if ty.is_pointer(module) {
             prov[arg].bases.push(PtrBase::Arg(idx as u32));
         }
     }
 
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            let [def] = function.dfg.inst_results(inst) else {
-                continue;
-            };
-            match data {
-                EvmInstKind::Alloca(_) => prov[*def].bases.push(PtrBase::Alloca(inst)),
-                EvmInstKind::EvmMalloc(_) => prov[*def].bases.push(PtrBase::Malloc(inst)),
-                _ => {}
+    for inst in function.layout.iter_all_insts() {
+        let results = function.dfg.inst_results(inst);
+        match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
+            EvmInstKind::Alloca(_) => prov[results[0]].bases.push(PtrBase::Alloca(inst)),
+            EvmInstKind::EvmMalloc(_) => prov[results[0]].bases.push(PtrBase::Malloc(inst)),
+            EvmInstKind::Call(_) => {}
+            // Checked arithmetic, legalized away before EVM lowering. The
+            // fixpoint below skips it, so mark its results raw for IR that is
+            // not yet legalized.
+            _ if results.len() > 1 => {
+                for &result in results {
+                    prov[result].raw = true;
+                }
             }
+            _ => {}
         }
     }
 
     let mut addresses = MemoryAccessAnalysis::new();
     let mut exact_addresses = SecondaryMap::new();
+    let mut allocation_bytes_by_base = FxHashMap::default();
     for value in function.dfg.value_ids() {
         let address = addresses.canonical_linear_addr(function, value);
         exact_addresses[value] = match address.base {
@@ -905,6 +1150,9 @@ pub(crate) fn compute_provenance(
                     EvmInstKind::EvmMalloc(malloc) => value_imm_u32(function, *malloc.size()),
                     _ => unreachable!("canonical allocation must be alloca or malloc"),
                 };
+                if let Some(bytes) = allocation_bytes {
+                    allocation_bytes_by_base.insert(base, bytes);
+                }
                 Some(AllocationAddress {
                     base,
                     offset_bytes: address.offset,
@@ -920,10 +1168,13 @@ pub(crate) fn compute_provenance(
         malloc_mem: FxHashMap::default(),
         arg_mem: Vec::new(),
         exact_addresses,
+        allocation_bytes: allocation_bytes_by_base,
+        written: FxHashMap::default(),
         cells: FxHashMap::default(),
         imprecise_mem: FxHashMap::default(),
         untracked_memory: summaries.untracked_memory,
     };
+    info.written = info.compute_written(function, module, isa);
 
     let mut changed = true;
     while changed {
@@ -944,20 +1195,32 @@ pub(crate) fn compute_provenance(
                     changed |= info.store_memory(&dest, &stored);
                 }
 
-                // Complete zeroing cannot create pointer fragments; a complete
-                // copy carries the source contents already joined above. Keep
-                // all earlier may-writes, including unknown contributors. Partial
-                // or unproved ranges still need the conservative clobber below.
+                // Complete zeroing cannot create pointer fragments, but leaves
+                // zero words, which name no allocation; a complete copy carries
+                // the source contents already joined above. Keep all earlier
+                // may-writes, including unknown contributors. Partial or
+                // unproved ranges still need the conservative clobber below.
                 let complete_write = match &data {
-                    EvmInstKind::Memzero(write) => {
-                        info.covers_allocation(function, *write.dest(), *write.len())
-                    }
+                    EvmInstKind::Memzero(write) => info
+                        .covered_allocation(function, *write.dest(), *write.len())
+                        .is_some(),
                     EvmInstKind::EvmMcopy(copy) => {
-                        info.covers_allocation(function, *copy.dest(), *copy.len())
-                            && info.covers_allocation(function, *copy.addr(), *copy.len())
+                        info.covered_allocation(function, *copy.dest(), *copy.len())
+                            .is_some()
+                            && info
+                                .covered_allocation(function, *copy.addr(), *copy.len())
+                                .is_some()
                     }
                     _ => false,
                 };
+                if complete_write && let EvmInstKind::Memzero(write) = &data {
+                    let dest = info.value[*write.dest()].clone();
+                    let zeros = Provenance {
+                        raw: true,
+                        ..Provenance::default()
+                    };
+                    changed |= info.store_memory(&dest, &zeros);
+                }
                 match unmodeled_write(&data, info.untracked_memory).filter(|_| !complete_write) {
                     Some(UnmodeledWrite::MayFormPointer(dst, pointer)) => {
                         let dest = info.value[dst].clone();
@@ -981,25 +1244,23 @@ pub(crate) fn compute_provenance(
                     let summary = summaries.get_or_conservative(module, *call.callee());
                     let args = call.args();
                     summary.for_each_store_effect(|source, dest| {
-                        let src_prov = info.resolve_argument(args, source);
-                        let dst_prov = info.resolve_argument(args, dest);
+                        let src_prov = info.resolve_argument(args, source, Some(inst));
+                        let dst_prov = info.resolve_argument(args, dest, Some(inst));
                         changed |= info.store_memory(&dst_prov, &src_prov);
                     });
                     for (origin, effect) in summary.argument_effects() {
                         let stored = stored_by_callee(effect);
                         if stored != Provenance::default() {
-                            let dest = info.resolve_argument(args, origin);
+                            let dest = info.resolve_argument(args, origin, Some(inst));
                             changed |= info.store_memory(&dest, &stored);
                         }
                     }
                     for (ret_idx, &def) in function.dfg.inst_results(inst).iter().enumerate() {
-                        let mut next = info.call_result(args, &summary, ret_idx);
+                        let mut next = info.call_result(args, &summary, ret_idx, inst);
                         if function.dfg.value_ty(def).is_pointer(module) && next.is_empty() {
                             next.mark_unknown_non_arg();
                         }
-                        if !type_can_carry_pointer_provenance(module, function.dfg.value_ty(def)) {
-                            next.forwarded_args.clear();
-                        }
+                        restrict_to_type(&mut next, module, function.dfg.value_ty(def));
                         if info.value[def] != next {
                             info.value[def] = next;
                             changed = true;
@@ -1024,16 +1285,22 @@ pub(crate) fn compute_provenance(
                     EvmInstKind::Mload(_) | EvmInstKind::EvmMload(_) => {
                         let (addr, bytes) =
                             memory_load(&data, module).expect("matched a memory load");
-                        next.union_with(&info.load_value_memory(addr, bytes));
+                        next.union_with(&info.load_value_memory(addr, bytes, Some(inst)));
                     }
                     EvmInstKind::EvmMloadBytes(load) => {
-                        let bytes =
-                            value_imm_u32(function, *load.len()).map(|len| (len as usize).min(32));
+                        let len = value_imm_u32(function, *load.len());
+                        let bytes = len.map(|len| (len as usize).min(32));
                         if bytes != Some(0) {
-                            next.union_with(
-                                &info.load_value_memory(*load.addr(), bytes.unwrap_or(32)),
-                            );
+                            next.union_with(&info.load_value_memory(
+                                *load.addr(),
+                                bytes.unwrap_or(32),
+                                Some(inst),
+                            ));
                         }
+                        // Any length but a word's, which a dynamic one may be,
+                        // shifts the bytes read down: a zero one yields 0, and
+                        // a shorter one keeps only a stored pointer's high bytes.
+                        next.raw |= len != Some(32);
                     }
                     EvmInstKind::Phi(phi) => {
                         for (val, _) in phi.args().iter() {
@@ -1127,9 +1394,7 @@ pub(crate) fn compute_provenance(
                     _ => next.raw = true,
                 }
 
-                if !type_can_carry_pointer_provenance(module, function.dfg.value_ty(*def)) {
-                    next.forwarded_args.clear();
-                }
+                restrict_to_type(&mut next, module, function.dfg.value_ty(*def));
                 if info.value[*def] != next {
                     info.value[*def] = next;
                     changed = true;
@@ -1214,16 +1479,16 @@ pub(crate) fn compute_exposure(
                 let args = call.args();
                 exposure.pointers = exposure.pointers.max(summary.exposure.pointers);
                 for &origin in &summary.exposure.origins {
-                    exposure.add(&info.resolve_argument(args, origin));
+                    exposure.add(&info.resolve_argument(args, origin, None));
                 }
                 summary.for_each_store_effect(|source, dest| {
-                    if untracked(&info.resolve_argument(args, dest)) {
-                        exposure.add(&info.resolve_argument(args, source));
+                    if untracked(&info.resolve_argument(args, dest, None)) {
+                        exposure.add(&info.resolve_argument(args, source, None));
                     }
                 });
                 for (origin, effect) in summary.argument_effects() {
                     let stored = stored_by_callee(effect);
-                    if !stored.is_empty() && untracked(&info.resolve_argument(args, origin)) {
+                    if !stored.is_empty() && untracked(&info.resolve_argument(args, origin, None)) {
                         exposure.add(&stored);
                     }
                 }
@@ -2082,6 +2347,185 @@ block3:
         }
     }
 
+    /// The provenance of a phi of `v1`'s address and the `v3` that `word` defines.
+    fn alloca_address_or(word: &str) -> Provenance {
+        ret_provenance(
+            &format!(
+                r#"
+target = "evm-ethereum-osaka"
+type @ptr = {{*i256}};
+func private %maybe(v0.*i256, v1.i1) -> *i256 {{
+block0:
+    br v1 block1 block2;
+block1:
+    jump block2;
+block2:
+    v2.*i256 = phi (zero.*i256 block0) (v0 block1);
+    return v2;
+}}
+func private %store_null(v0.**i256) {{
+block0:
+    mstore v0 zero.*i256 *i256;
+    return;
+}}
+func private %get(v0.*i256) -> i256 {{
+block0:
+    v1.i256 = mload v0 i256;
+    return v1;
+}}
+func private %narrow(v0.i256) -> i1 {{
+block0:
+    v1.i1 = trunc_nuw v0 i1;
+    return v1;
+}}
+func public %f(v0.i1, v9.i256) -> i256 {{
+block0:
+    v1.*i256 = alloca i256;
+    v2.i256 = ptr_to_int v1 i256;
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    {word}
+    jump block3;
+block3:
+    v4.i256 = phi (v2 block1) (v3 block2);
+    return v4;
+}}
+"#
+            ),
+            "f",
+        )
+    }
+
+    #[test]
+    fn words_naming_no_allocation_are_raw() {
+        for word in [
+            // Zero words from memory.
+            "v3.i256 = evm_mload_bytes v2 0.i256;",
+            "v5.i256 = evm_calldata_load 0.i256;\n    v3.i256 = evm_mload_bytes v2 v5;",
+            "v5.*i256 = alloca i256;\n    memzero v5 32.i256;\n    v3.i256 = mload v5 i256;",
+            // A sub-word read shifts a stored pointer's bytes.
+            "v5.**i256 = alloca *i256;\n    mstore v5 v1 *i256;\n    v6.i256 = ptr_to_int v5 i256;\n    \
+             v3.i256 = evm_mload_bytes v6 1.i256;",
+            // Code bytes, whole and over part of a stored pointer.
+            "v5.*i256 = alloca i256;\n    v6.i256 = evm_code_size;\n    \
+             evm_code_copy v5 v6 32.i256;\n    v3.i256 = mload v5 i256;",
+            "v5.**i256 = alloca *i256;\n    mstore v5 v1 *i256;\n    v6.i256 = ptr_to_int v5 i256;\n    \
+             v7.i256 = add v6 1.i256;\n    v8.i256 = evm_code_size;\n    \
+             evm_code_copy v7 v8 31.i256;\n    v3.i256 = mload v5 i256;",
+            // Words widened from types too narrow for an address.
+            "v3.i256 = zext v0 i256;",
+            "v5.i1 = bitcast v9 i1;\n    v3.i256 = zext v5 i256;",
+            "v5.i1 = trunc_nuw v9 i1;\n    v3.i256 = zext v5 i256;",
+            "v5.i1 = call %narrow v9;\n    v3.i256 = zext v5 i256;",
+            "(v3.i256, v5.i1) = uaddo v9 1.i256;",
+            // Bytes no write has set, read here or by a callee.
+            "v5.*i256 = alloca i256;\n    v6.i256 = mload v5 i256;\n    v3.i256 = and v6 0.i256;",
+            "v5.*[i256; 2] = alloca [i256; 2];\n    v6.*i256 = gep v5 0.i256 0.i256;\n    \
+             v7.*i256 = gep v5 0.i256 1.i256;\n    mstore v6 v2 i256;\n    v3.i256 = mload v7 i256;",
+            "v5.*[i256; 2] = alloca [i256; 2];\n    v6.*i256 = gep v5 0.i256 0.i256;\n    \
+             mstore v6 v2 i256;\n    v7.*[i256; 2] = alloca [i256; 2];\n    \
+             evm_mcopy v7 v5 64.i256;\n    v8.*i256 = gep v7 0.i256 1.i256;\n    \
+             v3.i256 = mload v8 i256;",
+            "v5.*i256 = alloca i256;\n    v3.i256 = call %get v5;",
+            // A word straddling two stored pointers.
+            "v5.*[i256; 2] = alloca [i256; 2];\n    v6.*i256 = gep v5 0.i256 0.i256;\n    \
+             v7.*i256 = gep v5 0.i256 1.i256;\n    mstore v6 v2 i256;\n    mstore v7 v2 i256;\n    \
+             v8.i256 = ptr_to_int v5 i256;\n    v10.i256 = add v8 16.i256;\n    \
+             v3.i256 = mload v10 i256;",
+            // A copy of words straddling stored pointers.
+            "v5.*[i256; 2] = alloca [i256; 2];\n    v6.*i256 = gep v5 0.i256 0.i256;\n    \
+             v7.*i256 = gep v5 0.i256 1.i256;\n    mstore v6 v2 i256;\n    mstore v7 v2 i256;\n    \
+             v8.i256 = ptr_to_int v5 i256;\n    v10.i256 = add v8 16.i256;\n    \
+             mstore v10 v2 i256;\n    v11.*[i256; 2] = alloca [i256; 2];\n    \
+             evm_mcopy v11 v5 64.i256;\n    v3.i256 = mload v11 i256;",
+            // The null pointer as an integer: directly, from a zero aggregate, through
+            // memory, and from or through a callee.
+            "v5.i256 = ptr_to_int zero.*i256 i256;\n    v3.i256 = add v5 32.i256;",
+            "v5.*i256 = extract_value zero.@ptr 0.i8;\n    v3.i256 = ptr_to_int v5 i256;",
+            "v5.**i256 = alloca *i256;\n    mstore v5 zero.*i256 *i256;\n    \
+             v3.i256 = mload v5 i256;",
+            "v5.*i256 = call %maybe v1 v0;\n    v3.i256 = ptr_to_int v5 i256;",
+            "v5.**i256 = alloca *i256;\n    mstore v5 v1 *i256;\n    call %store_null v5;\n    \
+             v6.*i256 = mload v5 *i256;\n    v3.i256 = ptr_to_int v6 i256;",
+        ] {
+            let provenance = alloca_address_or(word);
+            assert!(provenance.may_be_raw(), "{word}: {provenance:?}");
+            assert!(
+                !provenance.names_allocation(|_| false),
+                "{word}: {provenance:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn written_words_keep_their_allocations() {
+        for word in [
+            "v5.**i256 = alloca *i256;\n    mstore v5 v1 *i256;\n    v6.*i256 = mload v5 *i256;\n    \
+             v3.i256 = ptr_to_int v6 i256;",
+            "v5.**i256 = alloca *i256;\n    mstore v5 v1 *i256;\n    v6.**i256 = alloca *i256;\n    \
+             evm_mcopy v6 v5 32.i256;\n    v7.*i256 = mload v6 *i256;\n    \
+             v3.i256 = ptr_to_int v7 i256;",
+            "v5.*[i256; 2] = alloca [i256; 2];\n    v6.*i256 = gep v5 0.i256 0.i256;\n    \
+             v7.*i256 = gep v5 0.i256 1.i256;\n    mstore v6 v2 i256;\n    mstore v7 v2 i256;\n    \
+             v3.i256 = mload v7 i256;",
+            "v5.*i256 = alloca i256;\n    mstore v5 v2 i256;\n    v3.i256 = call %get v5;",
+        ] {
+            let provenance = alloca_address_or(word);
+            assert!(
+                provenance.names_allocation(|_| false),
+                "{word}: {provenance:?}"
+            );
+        }
+    }
+
+    /// A load the store reaches only on some paths reads the allocation's
+    /// initial bytes on the others.
+    #[test]
+    fn reads_before_writes_are_raw() {
+        for (body, raw) in [
+            (
+                "jump block1;\nblock1:\n    v6.i256 = mload v5 i256;\n    mstore v5 v2 i256;\n    \
+                 br v0 block1 block2;\nblock2:",
+                true,
+            ),
+            (
+                "br v0 block1 block2;\nblock1:\n    mstore v5 v2 i256;\n    jump block2;\nblock2:\n    \
+                 v6.i256 = mload v5 i256;",
+                true,
+            ),
+            (
+                "mstore v5 v2 i256;\n    jump block1;\nblock1:\n    v6.i256 = mload v5 i256;\n    \
+                 mstore v5 v2 i256;\n    br v0 block1 block2;\nblock2:",
+                false,
+            ),
+            (
+                "jump block1;\nblock1:\n    v7.*i256 = alloca i256;\n    mstore v7 v2 i256;\n    \
+                 v6.i256 = mload v7 i256;\n    br v0 block1 block2;\nblock2:",
+                false,
+            ),
+        ] {
+            let provenance = ret_provenance(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+func public %f(v0.i1) -> i256 {{
+block0:
+    v1.*i256 = alloca i256;
+    v2.i256 = ptr_to_int v1 i256;
+    v5.*i256 = alloca i256;
+    {body}
+    return v6;
+}}
+"#
+                ),
+                "f",
+            );
+            assert_eq!(provenance.may_be_raw(), raw, "{body}: {provenance:?}");
+        }
+    }
+
     #[test]
     fn null_pointers_have_no_provenance() {
         let provenance = ret_provenance(
@@ -2103,6 +2547,33 @@ block3:
             "f",
         );
         assert!(provenance.names_allocation(|_| false), "{provenance:?}");
+    }
+
+    /// Unlike an access through it, the integer a null pointer converts to is a
+    /// defined address: a phi of pointers converts on the null path to 0.
+    #[test]
+    fn null_pointers_as_integers_are_raw() {
+        let provenance = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v2.*i256 = phi (v1 block1) (zero.*i256 block2);
+    v3.i256 = ptr_to_int v2 i256;
+    return v3;
+}
+"#,
+            "f",
+        );
+        assert!(provenance.may_be_raw(), "{provenance:?}");
+        assert!(!provenance.names_allocation(|_| false), "{provenance:?}");
     }
 
     #[test]

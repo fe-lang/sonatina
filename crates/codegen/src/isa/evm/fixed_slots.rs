@@ -66,7 +66,7 @@ fn slot_range_bytes(start: u32, len: Option<u32>) -> SlotBytes {
 
 /// The source values of each function that name an allocation on every path
 /// ([`Provenance::names_allocation`]). An argument does if every call passes
-/// such a value. The section entry and a function whose address is taken have
+/// such a value, never null. The section entry and a function whose address is taken have
 /// callers this cannot see.
 ///
 /// [`Provenance::names_allocation`]: super::ptr_provenance::Provenance::names_allocation
@@ -91,7 +91,8 @@ pub(crate) fn allocation_addresses(
     }
 
     // Greatest fixed point: an argument names an allocation until a call passes
-    // something else.
+    // something else, or the null pointer, which the callee may convert to the
+    // integer 0.
     let mut arg_allocations: FxHashMap<FuncRef, Vec<bool>> = calls
         .iter()
         .filter(|(_, callee, _)| !unseen_callers.contains(callee))
@@ -111,7 +112,8 @@ pub(crate) fn allocation_addresses(
         for (caller, callee, args) in &calls {
             for (arg, &value) in args.iter().enumerate() {
                 if arg_allocations.get(callee).is_some_and(|args| args[arg])
-                    && !names_allocation(&arg_allocations, *caller, value)
+                    && (!names_allocation(&arg_allocations, *caller, value)
+                        || analyses[caller].prov.value[value].may_be_null())
                 {
                     arg_allocations.get_mut(callee).expect("checked above")[arg] = false;
                     changed = true;
@@ -178,7 +180,7 @@ pub(crate) fn machine_allocation_addresses(
     addrs
 }
 
-fn func_address_taken(function: &Function, inst: InstId) -> Option<FuncRef> {
+pub(crate) fn func_address_taken(function: &Function, inst: InstId) -> Option<FuncRef> {
     if let Some(ptr) = function.dfg.downcast::<&GetFunctionPtr>(inst) {
         return Some(*ptr.func());
     }

@@ -3965,3 +3965,444 @@ func public %entry() {
         assert_eq!(result, Ok(IrU256::from(5u64)), "{level:?}");
     }
 }
+
+/// No constant-address write here reserves memory, so nothing kept allocations off address 0:
+/// the `alloca` landed there and its pointer tested null.
+#[test]
+fn alloca_pointer_is_not_null_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.i256 = ptr_to_int v0 i256;
+        v2.i1 = is_zero v1;
+        br v2 block1 block2;
+
+    block1:
+        mstore 0.i256 1.i256 i256;
+        evm_revert 0.i256 32.i256;
+
+    block2:
+        evm_return 0.i256 0.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &[]);
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::zero()), "{level:?}");
+    }
+}
+
+/// As above, with the `alloca` stored through and returned, so that it stays at every level.
+#[test]
+fn stored_alloca_pointer_is_not_null_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.i256 = ptr_to_int v0 i256;
+        mstore v1 7.i256 i256;
+        v2.i1 = is_zero v1;
+        br v2 block1 block2;
+
+    block1:
+        mstore 0.i256 1.i256 i256;
+        evm_revert 0.i256 32.i256;
+
+    block2:
+        evm_return v1 32.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &[]);
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::from(7u64)), "{level:?}");
+    }
+}
+
+/// The sum of a malloc's pointer and `2**256 - 1` carries, since no allocation is at address 0.
+/// The malloc is placed at a fixed address, and the carry is decided from it.
+#[test]
+fn malloc_pointer_plus_max_carries_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        (v2.i256, v3.i1) = uaddo v1 -1.i256;
+        br v3 block2 block1;
+
+    block1:
+        mstore 0.i256 1.i256 i256;
+        evm_revert 0.i256 32.i256;
+
+    block2:
+        evm_return 0.i256 0.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &[]);
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::zero()), "{level:?}");
+    }
+}
+
+/// As above, with the null test in a callee the pointer is passed to.
+#[test]
+fn alloca_pointer_passed_to_a_callee_is_not_null_at_all_levels() {
+    let body = r#"
+func private %is_null(v0.*i256) -> i1 {
+    block0:
+        v1.i256 = ptr_to_int v0 i256;
+        v2.i1 = is_zero v1;
+        return v2;
+}
+
+func public %entry() {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.i1 = call %is_null v0;
+        br v1 block1 block2;
+
+    block1:
+        mstore 0.i256 1.i256 i256;
+        evm_revert 0.i256 32.i256;
+
+    block2:
+        evm_return 0.i256 0.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &[]);
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::zero()), "{level:?}");
+    }
+}
+
+/// A phi of an `alloca` and the null pointer is null only on the null path.
+#[test]
+fn phi_of_alloca_and_null_is_null_only_on_null_path_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i1 = is_zero v0;
+        br v1 block1 block2;
+
+    block1:
+        v2.*i256 = alloca i256;
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.*i256 = phi (v2 block1) (zero.*i256 block2);
+        v4.i256 = ptr_to_int v3 i256;
+        v5.i1 = is_zero v4;
+        v6.i256 = zext v5 i256;
+        mstore 0.i256 v6 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    for (word, expected) in [(0, 0u64), (1, 1)] {
+        for (level, result) in word_results_at_all_levels(body, &calldata_words(&[word])) {
+            assert_eq!(result, Ok(IrU256::from(expected)), "{level:?} {word}");
+        }
+    }
+}
+
+/// A zero-sized `alloca` is placed at the arena base, which is above address 0 too.
+#[test]
+fn zero_sized_alloca_pointer_is_not_null_at_all_levels() {
+    let body = r#"
+type @empty = {};
+
+func public %entry() {
+    block0:
+        v0.*@empty = alloca @empty;
+        v1.i256 = ptr_to_int v0 i256;
+        v2.i1 = is_zero v1;
+        v3.i256 = zext v2 i256;
+        mstore 0.i256 v3 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    for (level, result) in word_results_at_all_levels(body, &[]) {
+        assert_eq!(result, Ok(IrU256::zero()), "{level:?}");
+    }
+}
+
+/// `entry` loads through a phi of an `alloca`'s address and the word `raw` makes, plus `offset`.
+/// With calldata 1 it takes the word's path, whose access lies in the fixed scratch region below
+/// the allocations and reads 0; with calldata 0 it reads the `alloca`'s 42.
+fn raw_word_or_alloca_address(raw: &str, offset: u64) -> String {
+    format!(
+        r#"
+func public %entry() {{
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 42.i256 i256;
+        v1.i256 = evm_calldata_load 0.i256;
+        v2.i1 = is_zero v1;
+        br v2 block1 block2;
+
+    block1:
+        v3.i256 = ptr_to_int v0 i256;
+        jump block3;
+
+    block2:
+        {raw}
+        v5.i256 = add v4 {offset}.i256;
+        jump block3;
+
+    block3:
+        v6.i256 = phi (v3 block1) (v5 block2);
+        v7.i256 = mload v6 i256;
+        mstore 0.i256 v7 i256;
+        evm_return 0.i256 32.i256;
+}}
+"#
+    )
+}
+
+/// A zero-length `evm_mload_bytes` and a load of a zeroed allocation are 0, not addresses: the
+/// scratch access through them reserves its word, so no allocation lands on it.
+#[test]
+fn raw_zero_word_access_misses_allocations_at_all_levels() {
+    for raw in [
+        "v4.i256 = evm_mload_bytes 0.i256 0.i256;",
+        "v8.*i256 = alloca i256;\n        memzero v8 32.i256;\n        v4.i256 = mload v8 i256;",
+    ] {
+        for offset in [0, 32] {
+            let body = raw_word_or_alloca_address(raw, offset);
+            for (word, expected) in [(0, 42u64), (1, 0)] {
+                for (level, result) in word_results_at_all_levels(&body, &calldata_words(&[word])) {
+                    assert_eq!(
+                        result,
+                        Ok(IrU256::from(expected)),
+                        "{level:?} {raw} +{offset} calldata {word}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// As above, with other words that may name no allocation. Each is 0 here; one read from bytes no
+/// write has set is masked to 0, whatever the allocation starts with.
+#[test]
+fn non_address_word_access_misses_allocations_at_all_levels() {
+    let callees = r#"
+func private %maybe(v0.*i256, v1.i1) -> *i256 {
+    block0:
+        br v1 block1 block2;
+
+    block1:
+        jump block2;
+
+    block2:
+        v2.*i256 = phi (zero.*i256 block0) (v0 block1);
+        return v2;
+}
+
+func private %widen(v0.i1) -> i256 {
+    block0:
+        v1.i256 = zext v0 i256;
+        return v1;
+}
+
+func private %narrow(v0.i256) -> i256 {
+    block0:
+        v1.i1 = trunc_nuw v0 i1;
+        v2.i256 = zext v1 i256;
+        return v2;
+}
+
+func private %narrow_bitcast(v0.i256) -> i256 {
+    block0:
+        v1.i1 = bitcast v0 i1;
+        v2.i256 = zext v1 i256;
+        return v2;
+}
+"#;
+    for raw in [
+        // The high byte of a stored pointer.
+        "v8.**i256 = alloca *i256;
+        mstore v8 v0 *i256;
+        v9.i256 = ptr_to_int v8 i256;
+        v4.i256 = evm_mload_bytes v9 1.i256;",
+        // Code bytes past the end of the code, whole and over all but a stored pointer's high byte.
+        "v8.*i256 = alloca i256;
+        v9.i256 = evm_code_size;
+        evm_code_copy v8 v9 32.i256;
+        v4.i256 = mload v8 i256;",
+        "v8.**i256 = alloca *i256;
+        mstore v8 v0 *i256;
+        v9.i256 = ptr_to_int v8 i256;
+        v10.i256 = add v9 1.i256;
+        v11.i256 = evm_code_size;
+        evm_code_copy v10 v11 31.i256;
+        v4.i256 = mload v8 i256;",
+        // Words widened from `i1`.
+        "v4.i256 = call %widen 0.i1;",
+        "v4.i256 = call %narrow 0.i256;",
+        "v4.i256 = call %narrow_bitcast 0.i256;",
+        // Bytes no write has set.
+        "v8.*i256 = alloca i256;
+        v9.i256 = mload v8 i256;
+        v4.i256 = and v9 0.i256;",
+        "v8.*[i256; 2] = alloca [i256; 2];
+        v9.*i256 = gep v8 0.i256 0.i256;
+        v10.i256 = ptr_to_int v0 i256;
+        mstore v9 v10 i256;
+        v11.*i256 = gep v8 0.i256 1.i256;
+        v12.i256 = mload v11 i256;
+        v4.i256 = and v12 0.i256;",
+        "v8.*[i256; 2] = alloca [i256; 2];
+        v9.*i256 = gep v8 0.i256 0.i256;
+        v10.i256 = ptr_to_int v0 i256;
+        mstore v9 v10 i256;
+        v11.*[i256; 2] = alloca [i256; 2];
+        evm_mcopy v11 v8 64.i256;
+        v12.*i256 = gep v11 0.i256 1.i256;
+        v13.i256 = mload v12 i256;
+        v4.i256 = and v13 0.i256;",
+        // A word straddling two stored pointers.
+        "v8.*[i256; 2] = alloca [i256; 2];
+        v9.*i256 = gep v8 0.i256 0.i256;
+        v10.*i256 = gep v8 0.i256 1.i256;
+        v11.i256 = ptr_to_int v0 i256;
+        mstore v9 v11 i256;
+        mstore v10 v11 i256;
+        v12.i256 = ptr_to_int v8 i256;
+        v13.i256 = add v12 16.i256;
+        v14.i256 = mload v13 i256;
+        v4.i256 = and v14 0.i256;",
+        // A copy of words straddling stored pointers.
+        "v8.*[i256; 2] = alloca [i256; 2];
+        v9.*i256 = gep v8 0.i256 0.i256;
+        v10.*i256 = gep v8 0.i256 1.i256;
+        v11.i256 = ptr_to_int v0 i256;
+        mstore v9 v11 i256;
+        mstore v10 v11 i256;
+        v12.i256 = ptr_to_int v8 i256;
+        v13.i256 = add v12 16.i256;
+        mstore v13 v11 i256;
+        v14.*[i256; 2] = alloca [i256; 2];
+        evm_mcopy v14 v8 64.i256;
+        v4.i256 = mload v14 i256;",
+        // The null pointer as an integer: directly, through memory and from a callee.
+        "v4.i256 = ptr_to_int zero.*i256 i256;",
+        "v8.**i256 = alloca *i256;
+        mstore v8 zero.*i256 *i256;
+        v4.i256 = mload v8 i256;",
+        "v8.*i256 = call %maybe v0 v2;
+        v4.i256 = ptr_to_int v8 i256;",
+    ] {
+        for offset in [0, 32] {
+            let body = format!("{callees}{}", raw_word_or_alloca_address(raw, offset));
+            for (word, expected) in [(0, 42u64), (1, 0)] {
+                for (level, result) in word_results_at_all_levels(&body, &calldata_words(&[word])) {
+                    assert_eq!(
+                        result,
+                        Ok(IrU256::from(expected)),
+                        "{level:?} {raw} +{offset} calldata {word}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// As above, with the word loaded in a loop from an `alloca` the loop stores to after the load: the
+/// first iteration reads bytes no write has set.
+#[test]
+fn read_before_write_access_misses_allocations_at_all_levels() {
+    for offset in [0, 32] {
+        let body = format!(
+            r#"
+func public %entry() {{
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 42.i256 i256;
+        v1.i256 = evm_calldata_load 0.i256;
+        v2.i1 = is_zero v1;
+        v3.i256 = ptr_to_int v0 i256;
+        v8.*i256 = alloca i256;
+        br v2 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        v9.i256 = mload v8 i256;
+        v4.i256 = and v9 0.i256;
+        mstore v8 v3 i256;
+        br v2 block2 block4;
+
+    block4:
+        v5.i256 = add v4 {offset}.i256;
+        jump block3;
+
+    block3:
+        v6.i256 = phi (v3 block1) (v5 block4);
+        v7.i256 = mload v6 i256;
+        mstore 0.i256 v7 i256;
+        evm_return 0.i256 32.i256;
+}}
+"#
+        );
+        for (word, expected) in [(0, 42u64), (1, 0)] {
+            for (level, result) in word_results_at_all_levels(&body, &calldata_words(&[word])) {
+                assert_eq!(
+                    result,
+                    Ok(IrU256::from(expected)),
+                    "{level:?} +{offset} calldata {word}"
+                );
+            }
+        }
+    }
+}
+
+/// A phi of an `alloca` and the null pointer, converted to an integer: on the null path the access
+/// lies in the fixed scratch region, below the allocations, and reads 0.
+#[test]
+fn null_pointer_phi_access_misses_allocations_at_all_levels() {
+    for offset in [0, 32] {
+        let body = format!(
+            r#"
+func public %entry() {{
+    block0:
+        v0.*[i256; 2] = alloca [i256; 2];
+        v8.*i256 = gep v0 0.i256 0.i256;
+        v9.*i256 = gep v0 0.i256 1.i256;
+        mstore v8 42.i256 i256;
+        mstore v9 42.i256 i256;
+        v1.i256 = evm_calldata_load 0.i256;
+        v2.i1 = is_zero v1;
+        br v2 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.*[i256; 2] = phi (v0 block1) (zero.*[i256; 2] block2);
+        v4.i256 = ptr_to_int v3 i256;
+        v5.i256 = add v4 {offset}.i256;
+        v6.i256 = mload v5 i256;
+        mstore 0.i256 v6 i256;
+        evm_return 0.i256 32.i256;
+}}
+"#
+        );
+        for (word, expected) in [(0, 42u64), (1, 0)] {
+            for (level, result) in word_results_at_all_levels(&body, &calldata_words(&[word])) {
+                assert_eq!(
+                    result,
+                    Ok(IrU256::from(expected)),
+                    "{level:?} +{offset} calldata {word}"
+                );
+            }
+        }
+    }
+}

@@ -32,6 +32,7 @@ use sonatina_ir::{
 use super::machine::final_spills::FinalSpillReplanCtx;
 use super::{
     EvmBackend, LateCleanupProfile,
+    address_observation::observes_allocation_address,
     dyn_sp::{FuncDynSpPlan, compute_machine_dyn_sp_plan},
     emit::{
         FinalAlloc, LateBlockAliasPlan, block_action_sites, compute_function_entry_jump_targets,
@@ -799,6 +800,8 @@ pub(crate) struct ArenaBaseFacts {
 pub(crate) fn scan_fixed_reservations(
     module: &Module,
     funcs: &[FuncRef],
+    entry: FuncRef,
+    includes: &[FuncRef],
     backend: &EvmBackend,
     analyses: &FxHashMap<FuncRef, memory_plan::FuncPreAnalysis>,
 ) -> Result<SectionMemoryLayout, String> {
@@ -814,6 +817,12 @@ pub(crate) fn scan_fixed_reservations(
                 &analysis.prov.value,
             )
         })?;
+    }
+    // Any reservation already starts the arena at 0x20 or above.
+    if layout.arena_base() == 0
+        && observes_allocation_address(module, funcs, entry, includes, &backend.isa)
+    {
+        layout.reserve_len(0, WORD_BYTES);
     }
     Ok(layout)
 }
@@ -872,8 +881,14 @@ fn prepare_machine_section_after_pipeline(
     let source_module = work.module();
     let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend, &ptr_escape);
     let schedule = CallGraphSchedule::compute(source_module, &funcs);
-    let fixed_reservations =
-        scan_fixed_reservations(source_module, &funcs, backend, &pre_analyses)?;
+    let fixed_reservations = scan_fixed_reservations(
+        source_module,
+        &funcs,
+        work.entry(),
+        work.includes(),
+        backend,
+        &pre_analyses,
+    )?;
     let allocation_addrs =
         fixed_slots::allocation_addresses(source_module, &funcs, work.entry(), &pre_analyses);
     let mut fixed_slot_effects = FxHashSet::default();
