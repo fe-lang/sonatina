@@ -1,0 +1,50 @@
+#! A use of a pointer or an aggregate reads all of it, so every bit of the word a
+#! cast makes it from is demanded.
+
+target = "evm-ethereum-osaka"
+
+type @Wrap = { i256 };
+
+# `v4` is `v1` or `v0` by the mask in `v2`; the load reads every bit of it.
+# sameln: func public %keeps_address_word_of_int_to_ptr(v0.i256, v1.i256, v2.i256) -> i256 {
+# check: v3.i256 = xor v0 v1;
+# check: v4.i256 = and v3 v2;
+# check: v5.i256 = xor v1 v4;
+# check: v6.*i256 = int_to_ptr v5 *i256;
+func public %keeps_address_word_of_int_to_ptr(v0.i256, v1.i256, v2.i256) -> i256 {
+block0:
+    v3.i256 = xor v0 v1;
+    v4.i256 = and v3 v2;
+    v5.i256 = xor v1 v4;
+    v6.*i256 = int_to_ptr v5 *i256;
+    v7.i256 = mload v6 i256;
+    return v7;
+}
+
+# sameln: func public %keeps_address_word_through_pointer_phi(v0.i256, v1.i1) {
+# check: v2.i256 = or v0 32.i256;
+# check: v3.*i256 = int_to_ptr v2 *i256;
+func public %keeps_address_word_through_pointer_phi(v0.i256, v1.i1) {
+block0:
+    v2.i256 = or v0 32.i256;
+    v3.*i256 = int_to_ptr v2 *i256;
+    br v1 block1 block2;
+
+block1:
+    jump block2;
+
+block2:
+    v4.*i256 = phi (v3 block0) (v3 block1);
+    mstore v4 1.i256 i256;
+    return;
+}
+
+# sameln: func public %keeps_word_of_aggregate_bitcast(v0.i256) -> @Wrap {
+# check: v1.i256 = and v0 255.i256;
+# check: v2.@Wrap = bitcast v1 @Wrap;
+func public %keeps_word_of_aggregate_bitcast(v0.i256) -> @Wrap {
+block0:
+    v1.i256 = and v0 255.i256;
+    v2.@Wrap = bitcast v1 @Wrap;
+    return v2;
+}

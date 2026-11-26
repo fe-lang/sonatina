@@ -2031,6 +2031,84 @@ object @Contract {{
     }
 }
 
+/// `v1 ^ ((v0 ^ v1) & mask)` is the address of `a` or of `b`, and only a load
+/// through `int_to_ptr` reads it; every bit of it is read.
+#[test]
+fn masked_address_words_choose_their_allocation() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i256 = evm_calldata_load 64.i256;
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        v5.i256 = ptr_to_int v3 i256;
+        v6.i256 = ptr_to_int v4 i256;
+        v7.i256 = xor v5 v6;
+        v8.i256 = and v7 v0;
+        v9.i256 = xor v6 v8;
+        v10.*i256 = int_to_ptr v9 *i256;
+        v11.i256 = mload v10 i256;
+        mstore 0.i256 v11 i256;
+        evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
+"#;
+    let (a, b) = (IrU256::from(0x1111u64), IrU256::from(0x2222u64));
+    for (optimize_ir, profile) in [
+        (false, LateCleanupProfile::Off),
+        (true, LateCleanupProfile::Off),
+        (false, LateCleanupProfile::Speed),
+        (true, LateCleanupProfile::Speed),
+    ] {
+        let mut parsed = parse_sona(source);
+        if optimize_ir {
+            Pipeline::speed().run(&mut parsed.module);
+        }
+        let backend =
+            EvmBackend::new(Evm::new(parsed.module.ctx.triple)).with_late_cleanup_profile(profile);
+        let artifact = compile_object(
+            &parsed.module,
+            &backend,
+            "Contract",
+            &CompileOptions::default(),
+        )
+        .expect("masked addresses should compile");
+        let runtime = artifact
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .expect("missing runtime section");
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for (mask, chosen) in [(IrU256::zero(), b), (IrU256::MAX, a)] {
+            let input = [mask, a, b].map(|word| word.to_big_endian()).concat();
+            let result = harness.call(&input);
+            let ExecutionResult::Success {
+                output: Output::Call(actual),
+                ..
+            } = result
+            else {
+                panic!("optimize_ir={optimize_ir}, {profile:?}: {result:?}");
+            };
+            assert_eq!(
+                actual.as_ref(),
+                chosen.to_big_endian(),
+                "optimize_ir={optimize_ir}, {profile:?}, mask={mask:#x}"
+            );
+        }
+    }
+}
+
 #[test]
 fn bit_counts_count_zeros_at_each_width() {
     let counting = IrU256::from_big_endian(&std::array::from_fn::<u8, 32, _>(|i| i as u8 + 1));
