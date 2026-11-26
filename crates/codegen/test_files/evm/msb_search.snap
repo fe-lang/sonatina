@@ -6,22 +6,22 @@ input_file: test_files/evm/msb_search.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 18 bytes
-  total: 18 bytes
+  section runtime: 15 bytes
+  total: 15 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
-  scan: ir_blocks=1 ir_insts=5 vcode_ops=9 fixups=0 imm_bytes=3
+  scan: ir_blocks=1 ir_insts=4 vcode_ops=7 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  entry: ir_blocks=1 ir_insts=7 vcode_ops=14 fixups=0 imm_bytes=4
+  entry: ir_blocks=1 ir_insts=6 vcode_ops=12 fixups=0 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case zero: calldata_len=32 success reason=Return gas_used=21169 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=41
-  case one: calldata_len=32 success reason=Return gas_used=21181 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=41
-  case sparse: calldata_len=32 success reason=Return gas_used=21181 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=41
-  case top: calldata_len=32 success reason=Return gas_used=21193 gas_refunded=0 logs=0 output=call len=32 tx_gas=21152 runtime_gas=41
-  case all: calldata_len=32 success reason=Return gas_used=21553 gas_refunded=0 logs=0 output=call len=32 tx_gas=21512 runtime_gas=41
+  case zero: calldata_len=32 success reason=Return gas_used=21163 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=35
+  case one: calldata_len=32 success reason=Return gas_used=21175 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=35
+  case sparse: calldata_len=32 success reason=Return gas_used=21175 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=35
+  case top: calldata_len=32 success reason=Return gas_used=21187 gas_refunded=0 logs=0 output=call len=32 tx_gas=21152 runtime_gas=35
+  case all: calldata_len=32 success reason=Return gas_used=21547 gas_refunded=0 logs=0 output=call len=32 tx_gas=21512 runtime_gas=35
 
 
 --------------- DEBUG ---------------
@@ -34,9 +34,7 @@ scan:
     CLZ  // v4.i256 = clz v3;
     PUSH1 0xff (255)  // v6.i256 = xor v4 v5;
     XOR
-    PUSH1 0xff (255)  // v7.i256 = and v6 v5;
-    AND
-    SWAP1  // return v7;
+    SWAP1  // return v6;
     JUMP
 
 // func public %entry()
@@ -49,9 +47,7 @@ entry:
     CLZ  // v4.i256 = clz v3;
     PUSH1 0xff (255)  // v6.i256 = xor v4 255.i256;
     XOR
-    PUSH1 0xff (255)  // v7.i256 = and v6 255.i256;
-    AND
-    PUSH0  // evm_mstore v0 v7;
+    PUSH0  // evm_mstore v0 v6;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0
