@@ -409,6 +409,7 @@ impl FuncLowerCtx<'_> {
                 let (lhs, rhs) = self.lower_binary_values(source_inst)?;
                 self.lower_inverted_cmp(source_inst, cmp::Eq::new(self.is, lhs, rhs))
             }
+            EvmInstKind::Select(select) => self.lower_select(source_inst, select),
             EvmInstKind::Bitcast(bitcast) => {
                 self.lower_bitcast(source_inst, *bitcast.from(), *bitcast.ty())
             }
@@ -896,8 +897,27 @@ impl FuncLowerCtx<'_> {
     fn emit_word_max(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
         let delta = self.emit_binary(arith::Sub::new(self.is, rhs, lhs), Type::I256);
         let cond = self.emit_binary(cmp::Lt::new(self.is, lhs, rhs), Type::I256);
+        self.emit_add_if(lhs, delta, cond)
+    }
+
+    /// `base + delta` if `cond` is 1, and `base` if it is 0.
+    fn emit_add_if(&mut self, base: ValueId, delta: ValueId, cond: ValueId) -> ValueId {
         let selected_delta = self.emit_binary(arith::Mul::new(self.is, delta, cond), Type::I256);
-        self.emit_binary(arith::Add::new(self.is, lhs, selected_delta), Type::I256)
+        self.emit_binary(arith::Add::new(self.is, base, selected_delta), Type::I256)
+    }
+
+    /// `else + (then - else) * cond`: a bool's word is 0 or 1.
+    fn lower_select(
+        &mut self,
+        source_inst: sonatina_ir::InstId,
+        select: &logic::Select,
+    ) -> Result<(), String> {
+        let cond = self.lower_value(*select.cond())?;
+        let then = self.lower_value(*select.then_value())?;
+        let otherwise = self.lower_value(*select.else_value())?;
+        let delta = self.emit_binary(arith::Sub::new(self.is, then, otherwise), Type::I256);
+        let chosen = self.emit_add_if(otherwise, delta, cond);
+        self.alias_inst_single_result(source_inst, chosen)
     }
 
     fn emit_word_max_const_u32(&mut self, lhs: ValueId, rhs: u32) -> ValueId {

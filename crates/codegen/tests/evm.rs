@@ -2109,6 +2109,99 @@ object @Contract {
     }
 }
 
+/// A `select` of two allocations' addresses, as pointers or as words, reads the one it
+/// chooses. Both stay live through the selected pointer, so the allocation made after
+/// the `select` takes neither's memory.
+#[test]
+fn pointer_selects_choose_their_allocation() {
+    let allocas = "v10.*i256 = alloca i256;
+        v11.*i256 = alloca i256;";
+    let mallocs = "v10.*i256 = evm_malloc 32.i256;
+        v11.*i256 = evm_malloc 32.i256;";
+    let pointers = "v12.*i256 = select v3 v10 v11;";
+    let words = "v13.i256 = ptr_to_int v10 i256;
+        v14.i256 = ptr_to_int v11 i256;
+        v15.i256 = select v3 v13 v14;
+        v12.*i256 = int_to_ptr v15 *i256;";
+    let (a, b) = (IrU256::from(0x1111u64), IrU256::from(0x2222u64));
+    for (allocations, choose) in [(allocas, pointers), (mallocs, pointers), (allocas, words)] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {{
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i256 = evm_calldata_load 64.i256;
+        v3.i1 = trunc v0 i1;
+        {allocations}
+        mstore v10 v1 i256;
+        mstore v11 v2 i256;
+        {choose}
+        v16.*i256 = alloca i256;
+        mstore v16 13107.i256 i256;
+        v9.i256 = mload v12 i256;
+        v17.i256 = mload v16 i256;
+        v18.i256 = add v9 v17;
+        mstore 0.i256 v18 i256;
+        evm_return 0.i256 32.i256;
+}}
+
+object @Contract {{
+    section runtime {{
+        entry %entry;
+    }}
+}}
+"#
+        );
+        for (optimize_ir, profile) in [
+            (false, LateCleanupProfile::Off),
+            (true, LateCleanupProfile::Off),
+            (false, LateCleanupProfile::Speed),
+            (true, LateCleanupProfile::Speed),
+        ] {
+            let mut parsed = parse_sona(&source);
+            if optimize_ir {
+                Pipeline::speed().run(&mut parsed.module);
+            }
+            let backend = EvmBackend::new(Evm::new(parsed.module.ctx.triple))
+                .with_late_cleanup_profile(profile);
+            let artifact = compile_object(
+                &parsed.module,
+                &backend,
+                "Contract",
+                &CompileOptions::default(),
+            )
+            .expect("pointer selects should compile");
+            let runtime = artifact
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .expect("missing runtime section");
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for (cond, chosen) in [(0u64, b), (1, a)] {
+                let input = [IrU256::from(cond), a, b]
+                    .map(|word| word.to_big_endian())
+                    .concat();
+                let result = harness.call(&input);
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("{choose}, optimize_ir={optimize_ir}, {profile:?}: {result:?}");
+                };
+                assert_eq!(
+                    actual.as_ref(),
+                    (chosen + IrU256::from(0x3333u64)).to_big_endian(),
+                    "{allocations} {choose}, optimize_ir={optimize_ir}, {profile:?}, cond={cond}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn bit_counts_count_zeros_at_each_width() {
     let counting = IrU256::from_big_endian(&std::array::from_fn::<u8, 32, _>(|i| i as u8 + 1));
