@@ -9,8 +9,8 @@ use super::{
 
 pub struct ScalarFacts<'a, 'r> {
     func: &'a Function,
-    known_bits: KnownBitsQuery,
-    demanded_bits: DemandedBitsQuery<'a>,
+    pub(crate) known_bits: KnownBitsQuery,
+    pub(crate) demanded_bits: DemandedBitsQuery<'a>,
     range: Option<&'r RangeEnv>,
 }
 

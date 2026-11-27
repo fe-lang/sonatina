@@ -158,6 +158,7 @@ impl<B: Backend> Compile<B> {
 pub struct EvmCompiler {
     emit_symbol_table: bool,
     emit_observability: bool,
+    emit_lowering: bool,
 }
 
 impl EvmCompiler {
@@ -168,6 +169,11 @@ impl EvmCompiler {
 
     pub fn with_observability(mut self, on: bool) -> Self {
         self.emit_observability = on;
+        self
+    }
+
+    pub fn with_lowering_record(mut self, on: bool) -> Self {
+        self.emit_lowering = on;
         self
     }
 }
@@ -189,10 +195,12 @@ impl Backend for EvmCompiler {
         module: &Module,
         options: &BackendOptions,
     ) -> Result<Self::Artifact, Vec<Self::Error>> {
-        let backend = evm_backend_for_module(module, options.opt_level)?;
+        let backend = evm_backend_for_module(module, options.opt_level)?
+            .with_lowering_record(self.emit_lowering);
         let opts = CompileOptions {
             emit_symtab: self.emit_symbol_table,
             emit_observability: self.emit_observability,
+            emit_lowering: self.emit_lowering,
             ..CompileOptions::default()
         };
         compile_all_objects(module, &backend, &opts)
@@ -227,6 +235,14 @@ impl EvmCompile {
     /// section bytes. They are omitted by default.
     pub fn with_symbol_table(mut self, on: bool) -> Self {
         self.inner.backend = self.inner.backend.with_symbol_table(on);
+        self
+    }
+
+    /// Include each section's `SectionLowering` in the compiled object
+    /// artifacts: the IR machine lowering read, the machine IR the code is
+    /// emitted from, and how it is laid out. It does not affect the bytes.
+    pub fn with_lowering_record(mut self, on: bool) -> Self {
+        self.inner.backend = self.inner.backend.with_lowering_record(on);
         self
     }
 

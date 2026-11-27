@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     ControlFlowGraph, Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
@@ -17,12 +19,16 @@ use crate::{
     },
     domtree::DomTree,
     loop_analysis::LoopTree,
+    object::lowering::{StepFacts, StepKind},
     range_analysis::{RangeAnalysis, RangeEnv, RangeFact, fact_for_value},
 };
 
-use super::simplify_expr::{
-    ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_binary_with_facts,
-    simplify_unary_with_same_inner,
+use super::{
+    simplify_expr::{
+        ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_binary_with_facts,
+        simplify_unary_with_same_inner,
+    },
+    steps::StepLog,
 };
 
 pub struct KnownBitsSimplify {
@@ -57,6 +63,8 @@ struct LocalExprFacts<'a, 'b> {
     func: &'a Function,
     scalar_facts: &'b ScalarFacts<'a, 'b>,
     range_env: Option<&'b RangeEnv>,
+    /// Whether a query found a range fact.
+    ranged: &'b Cell<bool>,
 }
 
 impl ExprFactProvider for LocalExprFacts<'_, '_> {
@@ -74,7 +82,9 @@ impl ExprFactProvider for LocalExprFacts<'_, '_> {
     }
 
     fn range(&self, value: ValueId) -> Option<RangeFact> {
-        self.range_env.and_then(|env| env.get(&value).copied())
+        let fact = self.range_env.and_then(|env| env.get(&value).copied());
+        self.ranged.set(self.ranged.get() || fact.is_some());
+        fact
     }
 }
 
@@ -87,9 +97,17 @@ impl KnownBitsSimplify {
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
+        self.run_with_steps(func, None)
+    }
+
+    pub(crate) fn run_with_steps(
+        &mut self,
+        func: &mut Function,
+        mut steps: Option<&mut StepLog>,
+    ) -> bool {
         let mut changed = false;
         loop {
-            let (round_changed, deferred) = self.run_round(func);
+            let (round_changed, deferred) = self.run_round(func, steps.as_deref_mut());
             changed |= round_changed;
             if !deferred {
                 return changed;
@@ -100,7 +118,7 @@ impl KnownBitsSimplify {
     /// One round of rewrites from the same facts. Returns whether it changed
     /// `func`, and whether it left rewrites from demanded bits for a round
     /// with fresh facts.
-    fn run_round(&mut self, func: &mut Function) -> (bool, bool) {
+    fn run_round(&mut self, func: &mut Function, mut steps: Option<&mut StepLog>) -> (bool, bool) {
         self.plans.clear();
         self.demand_plans.clear();
 
@@ -123,6 +141,8 @@ impl KnownBitsSimplify {
 
         let mut counts = Vec::new();
         let mut divisions = Vec::new();
+        // Whether a rewrite of `plans` may rest on a range fact.
+        let mut ranged_plans = false;
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
             let mut range_env = range_analysis
@@ -131,16 +151,21 @@ impl KnownBitsSimplify {
                 .map(|analysis| analysis.entry_env(block).clone());
 
             for inst in func.layout.iter_inst(block) {
+                let ranged = Cell::new(false);
                 let facts = LocalExprFacts {
                     func,
                     scalar_facts: &scalar_facts,
                     range_env: range_env.as_ref(),
+                    ranged: &ranged,
                 };
                 if let Some(plan) = signed_pow2_division(func, &scalar_facts, inst) {
                     divisions.push(plan);
                 }
                 match self.plan_inst(func, &facts, inst) {
-                    Some((plan, false)) => self.plans.push(plan),
+                    Some((plan, false)) => {
+                        self.plans.push(plan);
+                        ranged_plans |= ranged.get();
+                    }
                     Some((plan, true)) => self.demand_plans.push(plan),
                     None => {}
                 }
@@ -158,6 +183,22 @@ impl KnownBitsSimplify {
                 }
             }
         }
+
+        let deferred = !self.plans.is_empty() && !self.demand_plans.is_empty();
+        // Rewrites from demanded bits apply only in a round without others.
+        let from_demand = self.plans.is_empty() && !self.demand_plans.is_empty();
+        if self.plans.is_empty() {
+            std::mem::swap(&mut self.plans, &mut self.demand_plans);
+        }
+        let facts = steps.is_some().then(|| StepFacts {
+            known_bits: scalar_facts.known_bits.export(func),
+            demanded_bits: from_demand.then(|| scalar_facts.demanded_bits.export()),
+            ranges: range_analysis
+                .as_ref()
+                .filter(|_| (ranged_plans && !from_demand) || !counts.is_empty())
+                .map(|analysis| analysis.export(func)),
+            ..StepFacts::default()
+        });
 
         // These replacements retain the dividend and its full value semantics.
         // Later aliases therefore update their operands just like other users.
@@ -177,14 +218,7 @@ impl KnownBitsSimplify {
             mask_shift_count(func, inst, count, mask);
         }
 
-        let deferred = !self.plans.is_empty() && !self.demand_plans.is_empty();
-        if self.plans.is_empty() {
-            std::mem::swap(&mut self.plans, &mut self.demand_plans);
-        }
-        if self.plans.is_empty() {
-            return (masked || divided, false);
-        }
-
+        let changed = masked || divided || !self.plans.is_empty();
         let resolved = resolve_replacements(&self.plans);
         for &plan in &self.plans {
             apply_plan(func, plan, &resolved);
@@ -193,8 +227,9 @@ impl KnownBitsSimplify {
         for plan in self.plans.drain(..) {
             remove_rewritten_inst(func, plan);
         }
+        StepLog::step(&mut steps, 0, StepKind::KnownBitsSimplify, func, facts);
 
-        (true, deferred)
+        (changed, deferred)
     }
 
     fn plan_inst(

@@ -12,6 +12,8 @@ use sonatina_ir::{
 };
 use std::{collections::HashSet, fmt, io};
 
+use crate::stackalloc::SpillPoint;
+
 // xxx offset reference graph?
 //  fn call graph
 
@@ -27,7 +29,7 @@ pub fn section_code_unit_label_name(unit: SectionCodeUnitId) -> String {
     format!("__evm_shared_tail_{}", unit.0)
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Label {
     Insn(VCodeInst),
     Block(BlockId),
@@ -71,6 +73,21 @@ pub struct VCode<Op> {
     pub blocks: SecondaryMap<BlockId, EntityList<VCodeInst>>,
 
     pub insts_pool: ListPool<VCodeInst>,
+
+    /// Whether the lowering record is kept: only then are `redirects` and
+    /// `spill_points` collected.
+    pub record_lowering: bool,
+
+    /// Each label payload `rewrite_labels` replaced, as `(old, new)`, in order
+    /// and without repeats: where the late merges moved the code a label
+    /// named.
+    pub redirects: Vec<(Label, Label)>,
+    /// The pairs in `redirects`.
+    redirect_set: HashSet<(Label, Label)>,
+
+    /// Each spill store and reload lowering emitted, in emission order, when
+    /// `record_lowering`.
+    pub spill_points: Vec<SpillPoint>,
 }
 
 impl<Op> VCode<Op> {
@@ -94,15 +111,31 @@ impl<Op> VCode<Op> {
         }
     }
 
+    /// Records, if `record_lowering`, that the code `old` named is now at
+    /// `new`, for code that moves without a label naming it, as a block
+    /// reached by fallthrough does.
+    pub fn record_redirect(&mut self, old: Label, new: Label) {
+        if self.record_lowering && self.redirect_set.insert((old, new)) {
+            self.redirects.push((old, new));
+        }
+    }
+
     /// Rewrites each label payload in place and returns whether any label changed.
     pub fn rewrite_labels(&mut self, mut rewrite: impl FnMut(Label) -> Label) -> bool {
         let mut changed = false;
+        let mut rewritten = Vec::new();
         for label in self.labels.values_mut() {
             let new_label = rewrite(*label);
             if new_label != *label {
+                if self.record_lowering {
+                    rewritten.push((*label, new_label));
+                }
                 *label = new_label;
                 changed = true;
             }
+        }
+        for (old, new) in rewritten {
+            self.record_redirect(old, new);
         }
         changed
     }
@@ -212,6 +245,10 @@ impl<Op> Default for VCode<Op> {
             labels: PrimaryMap::default(),
             blocks: Default::default(),
             insts_pool: Default::default(),
+            record_lowering: false,
+            redirects: Vec::new(),
+            redirect_set: HashSet::new(),
+            spill_points: Vec::new(),
         }
     }
 }

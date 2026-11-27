@@ -4,11 +4,12 @@ use crate::{
     domtree::DomTree,
     isa::evm::test_util::osaka_triple,
     loop_analysis::LoopTree,
-    optim::{gvn::GvnSolver, known_bits_simplify::KnownBitsSimplify},
+    object::lowering::MachinePassKind,
+    optim::{gvn::GvnSolver, known_bits_simplify::KnownBitsSimplify, steps::StepRecorder},
     range_analysis::{RangeAnalysis, RangeFact},
 };
 use sonatina_ir::{
-    ControlFlowGraph, I256, Immediate, Linkage, Signature, Type,
+    ControlFlowGraph, I256, Immediate, Linkage, Module, Signature, Type, U256, ValueId,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
@@ -24,7 +25,7 @@ use sonatina_ir::{
         Isa,
         evm::{Evm, EvmMachine},
     },
-    module::ModuleCtx,
+    module::{FuncRef, ModuleCtx},
 };
 use sonatina_parser::parse_module;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_function};
@@ -448,6 +449,7 @@ fn machine_gvn_folds_word_bool_constant_without_zext() {
         LateCleanupProfile::Off,
         SwitchLoweringStrategy::Auto,
         16,
+        None,
     )
     .expect("GVN should fold word bool constants without panicking");
     module.func_store.view(func_ref, |function| {
@@ -457,8 +459,8 @@ fn machine_gvn_folds_word_bool_constant_without_zext() {
     });
 }
 
-#[test]
-fn machine_known_bits_drops_mask_on_mstore8_value() {
+/// `mstore8 addr (and value 255)`, of the arguments `addr` and `value`.
+fn mstore8_mask_module() -> (Module, FuncRef) {
     let mb = machine_builder();
     let func_ref = mb
         .declare_function(Signature::new(
@@ -482,20 +484,79 @@ fn machine_known_bits_drops_mask_on_mstore8_value() {
     builder.insert_inst_no_result(Return::new_unit(is));
     builder.seal_all();
     builder.finish();
+    (mb.build(), func_ref)
+}
 
-    let module = mb.build();
+#[test]
+fn machine_known_bits_drops_mask_on_mstore8_value() {
+    let (module, func_ref) = mstore8_mask_module();
     run_machine_opt_pipeline(
         &module,
         &[func_ref],
         LateCleanupProfile::Speed,
         SwitchLoweringStrategy::Auto,
         16,
+        None,
     )
     .expect("machine pipeline should run");
     module.func_store.view(func_ref, |function| {
         let dumped = FuncWriter::new(func_ref, function).dump_string();
         assert!(!dumped.contains(" and "), "{dumped}");
     });
+}
+
+/// The round that drops the mask relies on `mstore8` reading only the low
+/// byte of the mask.
+#[test]
+fn machine_steps_record_demanded_bits_of_dropped_mask() {
+    let (module, func_ref) = mstore8_mask_module();
+    let mut recorder = StepRecorder::new(&module, &[func_ref]);
+    run_machine_opt_pipeline(
+        &module,
+        &[func_ref],
+        LateCleanupProfile::Speed,
+        SwitchLoweringStrategy::Auto,
+        16,
+        Some(&mut recorder),
+    )
+    .expect("machine pipeline should run");
+    let steps = recorder.finish(LateCleanupProfile::Speed);
+    let pass = steps
+        .passes
+        .iter()
+        .find(|pass| pass.kind == MachinePassKind::KnownBitsSimplify)
+        .unwrap();
+    let [step] = &pass.steps[..] else {
+        panic!("one round drops the mask: {:?}", pass.steps);
+    };
+    let [func] = &step.funcs[..] else {
+        panic!("the round changes the function");
+    };
+    let masked = steps.lowered[0]
+        .text
+        .lines()
+        .find(|line| line.contains(" = and "));
+    let masked = masked.unwrap().trim().strip_prefix('v').unwrap();
+    let masked = ValueId(masked.split('.').next().unwrap().parse().unwrap());
+    let demanded = func
+        .facts
+        .demanded_bits
+        .as_ref()
+        .expect("a round from demanded bits");
+    let args = module
+        .func_store
+        .view(func_ref, |function| function.arg_values.clone());
+    // The round rests on no range fact.
+    assert_eq!(func.facts.ranges, None);
+    // `mstore8` reads all of its address and the low byte of its value.
+    assert_eq!(
+        demanded[..],
+        [
+            (args[0], U256::MAX),
+            (args[1], U256::from(255)),
+            (masked, U256::from(255))
+        ],
+    );
 }
 
 #[test]
@@ -552,6 +613,7 @@ fn machine_known_bits_drops_mask_on_mstore8_value_in_loop() {
         LateCleanupProfile::Speed,
         SwitchLoweringStrategy::Auto,
         16,
+        None,
     )
     .expect("machine pipeline should run");
     module.func_store.view(func_ref, |function| {
@@ -631,6 +693,7 @@ fn machine_gvn_accepts_truthy_word_branch_condition() {
         LateCleanupProfile::Off,
         SwitchLoweringStrategy::Auto,
         16,
+        None,
     )
     .expect("GVN should accept truthy word branch conditions");
 }
@@ -903,6 +966,7 @@ fn machine_pipeline_keeps_mask_after_decided_word_compare() {
         LateCleanupProfile::Speed,
         SwitchLoweringStrategy::Auto,
         16,
+        None,
     )
     .expect("machine pipeline should run");
     module.func_store.view(func_ref, |function| {
@@ -1010,6 +1074,7 @@ fn machine_pipeline_keeps_compare_under_word_not_branch() {
         LateCleanupProfile::Speed,
         SwitchLoweringStrategy::Auto,
         16,
+        None,
     )
     .expect("machine pipeline should run");
     module.func_store.view(func_ref, |function| {

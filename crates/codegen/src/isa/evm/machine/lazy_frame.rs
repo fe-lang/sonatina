@@ -9,7 +9,7 @@ use crate::{
     cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
     post_domtree::{PDTIdom, PostDomTree},
-    stackalloc::{Action, ActionSite, Allocator},
+    stackalloc::{Action, ActionSite, Allocator, SpillWord},
 };
 
 use super::module::FuncMachineMap;
@@ -26,6 +26,18 @@ pub(crate) enum FrameSite {
     EnterFunction,
     PreInst(InstId),
     PostInst(InstId),
+}
+
+impl FrameSite {
+    /// The site of the allocator actions run here.
+    pub(crate) fn action_site(self) -> ActionSite {
+        match self {
+            FrameSite::EnterFunction => ActionSite::Entry,
+            FrameSite::PreInst(inst) => ActionSite::Before(inst),
+            FrameSite::PostInst(inst) => ActionSite::After(inst),
+            FrameSite::BlockEntry(_) => unreachable!("a block entry runs no actions"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -638,7 +650,11 @@ fn compute_reachable_returns(
 fn action_touches_frame(action: &Action) -> bool {
     matches!(
         action,
-        Action::MemLoadFrameSlot(_) | Action::MemStoreFrameSlot(_) | Action::PushFrameAddr { .. }
+        Action::MemLoadFrameSlot(_)
+            | Action::MemStoreFrameSlot(_)
+            | Action::SpillLoad(_, SpillWord::Frame(_))
+            | Action::SpillStore(_, SpillWord::Frame(_))
+            | Action::PushFrameAddr { .. }
     )
 }
 

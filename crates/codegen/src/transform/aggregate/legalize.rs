@@ -2421,6 +2421,7 @@ mod tests {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,
             emit_observability: false,
+            emit_lowering: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
         }
     }
@@ -2507,6 +2508,7 @@ object @Contract {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,
             emit_observability: false,
+            emit_lowering: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
         };
         compile_all_objects(&module, &osaka_backend(), &opts).expect("compile should succeed");

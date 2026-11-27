@@ -8,7 +8,7 @@ use crate::{
         lower::Lower,
         vcode::{Label, VCode, VCodeFixup, VCodeInst},
     },
-    stackalloc::Action,
+    stackalloc::{Action, ActionSite, SpillPoint, SpillWord},
 };
 
 use super::super::{
@@ -66,8 +66,8 @@ fn classify_stack_peephole_input(input: StackPeepholeInput) -> Option<StackPeeph
             | Action::MemStoreFrameSlot(_)
             | Action::MaterializeLocalAddr { .. }
             | Action::PushFrameAddr { .. }
-            | Action::MemLoadObj(_)
-            | Action::MemStoreObj(_) => None,
+            | Action::SpillLoad(..)
+            | Action::SpillStore(..) => None,
         },
     }
 }
@@ -451,10 +451,12 @@ fn dynamic_frame_layout(
     frame_layout.unwrap_or_else(|| panic!("{context} requires an addressable dynamic frame layout"))
 }
 
+/// Emits `action`, one of the actions run at `site`.
 pub(crate) fn perform_action(
     ctx: &mut Lower<OpCode>,
     action: Action,
     frame_layout: Option<DynamicFrameLayout>,
+    site: ActionSite,
 ) {
     match action {
         Action::StackDup(slot) => {
@@ -523,8 +525,21 @@ pub(crate) fn perform_action(
         Action::MaterializeLocalAddr { .. } => {
             panic!("unlowered MaterializeLocalAddr action");
         }
-        Action::MemLoadObj(_) | Action::MemStoreObj(_) => {
-            panic!("unlowered Mem*Obj action");
+        Action::SpillLoad(value, word) | Action::SpillStore(value, word) => {
+            let reload = matches!(action, Action::SpillLoad(..));
+            ctx.record_spill_point(SpillPoint {
+                value,
+                reload,
+                site,
+            });
+            let action = match (word, reload) {
+                (SpillWord::Abs(addr), true) => Action::MemLoadAbs(addr),
+                (SpillWord::Frame(slot), true) => Action::MemLoadFrameSlot(slot),
+                (SpillWord::Abs(addr), false) => Action::MemStoreAbs(addr),
+                (SpillWord::Frame(slot), false) => Action::MemStoreFrameSlot(slot),
+                (SpillWord::Obj(_), _) => panic!("unplaced spill object"),
+            };
+            perform_action(ctx, action, frame_layout, site);
         }
         Action::PushContinuationOffset => {
             panic!("handle PushContinuationOffset elsewhere");
@@ -536,10 +551,11 @@ pub(crate) fn perform_actions(
     ctx: &mut Lower<OpCode>,
     actions: &[Action],
     frame_layout: Option<DynamicFrameLayout>,
+    site: ActionSite,
 ) {
     let folded = fold_stack_actions(actions);
     for action in folded {
-        perform_action(ctx, action, frame_layout);
+        perform_action(ctx, action, frame_layout, site);
     }
 }
 

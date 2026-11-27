@@ -69,5 +69,6 @@ pub(super) fn build_stackify_test_context<'a>(
         value_aliases,
         remat_actions,
         stack_cached_immediates: Default::default(),
+        record_entry_stacks: false,
     }
 }

@@ -10,7 +10,7 @@ use crate::{
         lower::Lower,
         vcode::{Label, SymFixup, SymFixupKind},
     },
-    stackalloc::{Action, Allocator},
+    stackalloc::{Action, ActionSite, Allocator},
 };
 
 use super::{
@@ -129,7 +129,12 @@ impl EvmMachineFunctionLowering<'_> {
                 // The lazy-frame plan never transitions inside case compares.
                 for (case_idx, (_, dest)) in table.iter().enumerate() {
                     let dest = self.canonical_block_target(*dest);
-                    self.emit_actions(ctx, alloc.br_table_case(insn, case_idx), frame_layout);
+                    self.emit_actions(
+                        ctx,
+                        alloc.br_table_case(insn, case_idx),
+                        frame_layout,
+                        ActionSite::Case(insn, case_idx),
+                    );
                     ctx.push(OpCode::EQ);
                     ctx.push_jump_target(OpCode::PUSH1, Label::Block(dest));
                     ctx.push(OpCode::JUMPI);

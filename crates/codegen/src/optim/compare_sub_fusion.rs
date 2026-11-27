@@ -325,7 +325,7 @@ func private %op(v0.i64, v1.i64, v2.i64) -> i64 {{
 }}
 "#
             ));
-            run_function_pass_round(&module, &[Pass::CompareSubFusion], &mut true, None);
+            run_function_pass_round(&module, &[Pass::CompareSubFusion], &mut true, None, None);
             dump_func_by_name(&module, "dispatch").contains("usubo")
         };
         // A private dispatch tail-calls through one table, where the
@@ -374,7 +374,7 @@ func public %no_overflow(v0.i64, v1.i64) -> i1 {
 }
 "#,
         );
-        run_function_pass_round(&module, &[Pass::CompareSubFusion], &mut true, None);
+        run_function_pass_round(&module, &[Pass::CompareSubFusion], &mut true, None, None);
         let checked_add = dump_func_by_name(&module, "checked_add");
         assert_eq!(checked_add.matches("uaddo").count(), 1, "{checked_add}");
         let (sum, carry) = checked_add

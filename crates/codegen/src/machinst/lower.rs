@@ -1,5 +1,5 @@
 use super::vcode::{Label, SectionCodeUnitId, SymFixup, VCode, VCodeFixup, VCodeInst};
-use crate::stackalloc::Allocator;
+use crate::stackalloc::{Allocator, SpillPoint};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Linkage, Module,
@@ -343,6 +343,13 @@ impl<'a, Op: Default> Lower<'a, Op> {
         }
     }
 
+    /// Keep what the lowering record reads of the code
+    /// (`VCode::record_lowering`).
+    pub fn with_lowering_record(mut self, record: bool) -> Self {
+        self.vcode.record_lowering = record;
+        self
+    }
+
     pub fn lower(
         mut self,
         alloc: &dyn Allocator,
@@ -367,6 +374,13 @@ impl<'a, Op: Default> Lower<'a, Op> {
         }
 
         Ok(self.vcode)
+    }
+
+    /// Records `point` if the lowering record is kept.
+    pub fn record_spill_point(&mut self, point: SpillPoint) {
+        if self.vcode.record_lowering {
+            self.vcode.spill_points.push(point);
+        }
     }
 
     pub fn push(&mut self, op: Op) -> VCodeInst {

@@ -9,8 +9,8 @@ mod edge_split;
 mod stackify;
 pub use edge_split::StackifyEdgeSplitter;
 pub(crate) use stackify::{
-    HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
-    StackifySearchCache, StackifyTrace,
+    HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES, SpillStorage,
+    StackItem, StackifySearchCache, StackifyTrace,
 };
 pub use stackify::{StackifyAlloc, StackifyBuilder, StackifySearchProfile};
 
@@ -28,6 +28,15 @@ pub enum ActionSite {
     /// Before the comparison of case `case` of the `br_table` `inst`
     /// ([`Allocator::br_table_case`]).
     Case(InstId, usize),
+}
+
+/// A reload of a spilled value from its word, or a store of it there, as
+/// emitted from an [`Action::SpillLoad`] or [`Action::SpillStore`] at `site`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct SpillPoint {
+    pub value: ValueId,
+    pub reload: bool,
+    pub site: ActionSite,
 }
 
 pub trait Allocator {
@@ -130,7 +139,21 @@ pub enum Action {
         extra_bytes: i64,
     },
 
-    /// Virtual stack-object memory operation, rewritten during lowering.
-    MemLoadObj(StackObjId),
-    MemStoreObj(StackObjId),
+    /// Reload spilled `value` from its word onto the stack.
+    SpillLoad(ValueId, SpillWord),
+    /// Store the stack top into the word of spilled `value`.
+    SpillStore(ValueId, SpillWord),
+}
+
+/// The word a spilled value is kept in.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum SpillWord {
+    /// A stack object, placed when the function's memory is laid out:
+    /// emission sees only the other two.
+    Obj(StackObjId),
+    /// The word at this address.
+    Abs(u32),
+    /// Local dynamic-frame word offset, excluding backend metadata such as the
+    /// hidden caller-SP link slot.
+    Frame(u32),
 }

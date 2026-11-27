@@ -29,7 +29,10 @@ use super::{
     sccp_simplify::{AuxDeps, SimplifyAction, SimplifyCtx, simplify_inst},
 };
 use crate::{
-    analysis::known_bits::KnownBitsQuery, cfg_edit::CfgEditor,
+    analysis::known_bits::KnownBitsQuery,
+    cfg_edit::CfgEditor,
+    object::lowering::{SccpFacts, StepFacts, StepKind},
+    optim::steps::StepLog,
     transform::aggregate::fresh::fold_fresh_insert,
 };
 
@@ -67,9 +70,21 @@ impl SccpSolver {
         }
     }
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) -> bool {
+        self.run_with_steps(func, cfg, None)
+    }
+
+    pub(crate) fn run_with_steps(
+        &mut self,
+        func: &mut Function,
+        cfg: &mut ControlFlowGraph,
+        mut steps: Option<&mut StepLog>,
+    ) -> bool {
         self.clear();
 
         let mut changed = CfgCleanup::new().run(func);
+        // The phases of the steps: cleanup, prune, fold, cleanup, then from 4
+        // ADCE's; `Pass::Sccp` cleans up in phase 6.
+        StepLog::step(&mut steps, 0, StepKind::CfgCleanup, func, None);
         let constref_value_tys = collect_constref_value_tys(func);
         let const_paths = analyze_const_paths(func, &constref_value_tys);
 
@@ -121,7 +136,13 @@ impl SccpSolver {
         #[cfg(debug_assertions)]
         self.assert_no_executable_inst_results_are_bot(func);
 
+        let facts = steps.is_some().then(|| StepFacts {
+            known_bits: solve_known_bits.export(func),
+            sccp: Some(self.export(func)),
+            ..StepFacts::default()
+        });
         let edges_removed = self.remove_unreachable_edges(func);
+        StepLog::step(&mut steps, 1, StepKind::SccpPrune, func, facts);
         changed |= edges_removed;
         cfg.compute(func);
         // Solving only reads the function, so its known bits still hold
@@ -131,12 +152,20 @@ impl SccpSolver {
         } else {
             solve_known_bits
         };
+        let facts = steps.is_some().then(|| StepFacts {
+            known_bits: fold_known_bits.export(func),
+            sccp: Some(self.export(func)),
+            ..StepFacts::default()
+        });
         changed |= self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
+        StepLog::step(&mut steps, 2, StepKind::SccpFold, func, facts);
 
         changed |= CfgCleanup::new().run(func);
+        StepLog::step(&mut steps, 3, StepKind::CfgCleanup, func, None);
         cfg.compute(func);
 
-        changed |= AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects).run(func);
+        changed |= AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects)
+            .run_with_steps(func, steps, 4);
         cfg.compute(func);
         changed
     }
@@ -506,6 +535,32 @@ impl SccpSolver {
             }
         }
         changed
+    }
+
+    /// The solution, of the values and blocks of `func`.
+    fn export(&self, func: &Function) -> SccpFacts {
+        let layout = &func.layout;
+        let consts = layout
+            .iter_block()
+            .flat_map(|block| layout.iter_inst(block))
+            .flat_map(|inst| func.dfg.inst_results(inst))
+            .filter_map(|&value| Some((value, self.lattice[value].to_imm()?)))
+            .collect();
+        let dead_edges = layout
+            .iter_block()
+            .filter(|&block| self.reachable_blocks[block])
+            .filter_map(|block| Some((block, layout.last_inst_of(block)?)))
+            .flat_map(|(block, term)| {
+                let dests = func.dfg.branch_info(term).map(|branch| branch.dests());
+                dests
+                    .unwrap_or_default()
+                    .into_iter()
+                    .zip(0..)
+                    .filter(move |&(dest, _)| !self.is_reachable_edge(term, dest))
+                    .map(move |(_, slot)| (block, slot))
+            })
+            .collect();
+        SccpFacts { consts, dead_edges }
     }
 
     fn is_reachable_edge(&self, inst: InstId, dest: BlockId) -> bool {
@@ -1152,7 +1207,61 @@ mod tests {
     use sonatina_parser::parse_module;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
 
-    use crate::analysis::known_bits::count_query_news_for_test;
+    use crate::{analysis::known_bits::count_query_news_for_test, object::lowering::FuncSnap};
+
+    /// SCCP finds `v1` is 3, so `block0` never takes the zero edge of `v2`.
+    #[test]
+    fn prune_step_lists_constants_and_dead_edges() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+    block0:
+        v1.i256 = add 1.i256 2.i256;
+        v2.i1 = eq v1 3.i256;
+        br v2 block1 block2;
+
+    block1:
+        return v0;
+
+    block2:
+        return v1;
+}
+"#,
+        )
+        .unwrap();
+        let func_ref = parsed.module.funcs()[0];
+        let value = |name| parsed.debug.value(func_ref, name).unwrap();
+        let mut log = parsed.module.func_store.view(func_ref, |func| {
+            StepLog::new(FuncSnap::capture(func_ref, func))
+        });
+        parsed.module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            SccpSolver::new().run_with_steps(func, &mut cfg, Some(&mut log));
+        });
+        let (_, _, _, step) = log
+            .steps
+            .iter()
+            .find(|(kind, ..)| *kind == StepKind::SccpPrune)
+            .unwrap();
+        let sccp = step
+            .as_ref()
+            .expect("the prune changes `block0`")
+            .facts
+            .sccp
+            .clone();
+        let sccp = sccp.unwrap();
+        assert_eq!(sccp.dead_edges, [(BlockId(0), 1)]);
+        assert_eq!(
+            sccp.consts,
+            [
+                (value("v1"), Immediate::I256(3.into())),
+                (value("v2"), Immediate::I1(true))
+            ]
+        );
+    }
 
     #[derive(Clone, Copy)]
     struct XorShift64(u64);

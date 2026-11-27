@@ -1,5 +1,7 @@
 use crate::{
-    isa::evm::{EvmBackend, EvmPreparedSection, PushWidthPolicy, opcode::OpCode},
+    isa::evm::{
+        EvmBackend, EvmPreparedSection, PushWidthPolicy, opcode::OpCode, record_section_lowering,
+    },
     machinst::{
         assemble::{CodeUnitOwner, ObjectLayout},
         lower::LoweredFunction,
@@ -371,6 +373,11 @@ pub(crate) fn link_section(
                 None
             };
 
+            let lowering = if opts.emit_lowering {
+                record_section_lowering(prepared, &layout, &symtab)
+            } else {
+                None
+            };
             return Ok(SectionArtifact {
                 bytes,
                 symtab: if opts.emit_symtab {
@@ -379,6 +386,7 @@ pub(crate) fn link_section(
                     FxHashMap::default()
                 },
                 observability,
+                lowering,
             });
         }
     }

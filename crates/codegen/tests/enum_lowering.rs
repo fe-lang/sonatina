@@ -321,6 +321,7 @@ object @Contract {
         fixup_policy: PushWidthPolicy::MinimalRelax,
         emit_symtab: false,
         emit_observability: false,
+        emit_lowering: false,
         verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
     };
     let backend = test_backend();
@@ -538,6 +539,7 @@ fn enum_tag_br_table_cases_compile_through_evm_codegen() {
         fixup_policy: PushWidthPolicy::MinimalRelax,
         emit_symtab: false,
         emit_observability: false,
+        emit_lowering: false,
         verifier_cfg: VerifierConfig::for_level(VerificationLevel::Full),
     };
     let backend = test_backend();

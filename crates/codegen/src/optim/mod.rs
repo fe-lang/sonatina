@@ -38,6 +38,7 @@ pub mod sccp;
 mod sccp_simplify;
 pub(crate) mod signature_rewrite;
 mod simplify_expr;
+pub(crate) mod steps;
 pub mod switch_formation;
 pub(crate) mod uniform_const_arg;
 

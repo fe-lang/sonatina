@@ -171,6 +171,8 @@ fn prepare_machine_stackify_analysis(
     // `StackifyEdgeSplitter` subsumes critical-edge splitting and additionally splits in-cycle
     // multiway edges, establishing stackify's edge preconditions (see `stackalloc::stackify`).
     // Split first, then compute domtree/liveness over the post-split CFG below.
+    // The lowering record takes the split function to be the prepared one:
+    // nothing after the splitter may change `function`.
     StackifyEdgeSplitter::run(function, &mut cfg);
     // The split is the last change to the function before emission, which verifies it again.
     verify_machine_function(func, function)?;
@@ -208,7 +210,8 @@ fn prepare_machine_stackify_analysis(
     )
     .with_search_profile(backend.stackify_search_profile)
     .with_scratch_slots(barred)
-    .with_hot_immediate_caching();
+    .with_hot_immediate_caching()
+    .with_entry_stack_record(backend.record_lowering);
 
     if backend.immediate_materialization_mode == ImmediateMaterializationMode::Size {
         builder = builder

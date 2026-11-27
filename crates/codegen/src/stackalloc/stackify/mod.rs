@@ -53,12 +53,14 @@ mod terminal_chain;
 mod trace;
 mod uses;
 
+pub(crate) use alloc::SpillStorage;
 pub use alloc::StackifyAlloc;
 pub(crate) use builder::{
     HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
 };
 pub use builder::{StackifyBuilder, StackifySearchProfile};
 pub(crate) use planner::StackifySearchCache;
+pub(crate) use sym_stack::StackItem;
 pub(crate) use trace::StackifyTrace;
 
 use builder::StackifyContext;
@@ -312,7 +314,7 @@ block2:
             assert!(
                 alloc.pre_actions[jump_inst]
                     .iter()
-                    .any(|action| matches!(action, Action::MemLoadObj(_) | Action::MemLoadAbs(_))),
+                    .any(|action| matches!(action, Action::SpillLoad(..))),
                 "expected backedge to entry to reload the dropped entry arg:\npre_actions={:?}",
                 alloc.pre_actions[jump_inst]
             );
@@ -413,7 +415,7 @@ block3:
                 alloc.pre_actions.values().any(|actions| {
                     actions
                         .iter()
-                        .any(|action| matches!(action, Action::MemStoreObj(_) | Action::MemStoreAbs(_)))
+                        .any(|action| matches!(action, Action::SpillStore(..)))
                 }),
                 "expected merge repair to emit at least one spill store"
             );

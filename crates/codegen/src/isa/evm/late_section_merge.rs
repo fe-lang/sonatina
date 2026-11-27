@@ -767,6 +767,7 @@ fn build_parameterized_payload_helper(
 ) -> SectionCodeUnit<OpCode> {
     let block = BlockId(0);
     let mut vcode = VCode::<OpCode>::default();
+    vcode.record_lowering = donor_vcode.record_lowering;
     vcode.add_inst_to_block(OpCode::JUMPDEST, None, block);
     let mut remaining_params = param_store_idxs.len();
 
@@ -998,9 +999,10 @@ fn build_section_helper(
     lowered: &[(FuncRef, LoweredFunction<OpCode>)],
 ) -> SectionCodeUnit<OpCode> {
     let block = BlockId(0);
-    let mut vcode = VCode::<OpCode>::default();
-    vcode.add_inst_to_block(OpCode::JUMPDEST, None, block);
     let donor_vcode = &lowered[donor.func_idx].1.vcode;
+    let mut vcode = VCode::<OpCode>::default();
+    vcode.record_lowering = donor_vcode.record_lowering;
+    vcode.add_inst_to_block(OpCode::JUMPDEST, None, block);
     for &inst in &donor.semantic_insts {
         clone_inst(&mut vcode, donor_vcode, inst, block);
     }
@@ -1065,6 +1067,10 @@ fn apply_unlock_to_section_helper(
     replace_block_insts(vcode, unlock.pred, &rebuilt);
 
     rewrite_block_labels_to_section_unit(vcode, unlock.fallthrough, helper_id);
+    vcode.record_redirect(
+        Label::Block(unlock.fallthrough),
+        Label::SectionCodeUnit(helper_id),
+    );
     let removed = block_order.remove(unlock.order_idx);
     debug_assert_eq!(removed, unlock.fallthrough);
 }
