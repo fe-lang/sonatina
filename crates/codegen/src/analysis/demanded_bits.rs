@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
-    Function, InstDowncast, U256, Value, ValueId,
+    Function, InstDowncast, Type, U256, Value, ValueId,
     inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, evm::EvmMstore8},
 };
 
@@ -24,12 +24,7 @@ impl<'a> DemandedBitsQuery<'a> {
     }
 
     pub fn for_value(&self, value: ValueId) -> U256 {
-        let ty = self.func.dfg.value_ty(value);
-        if !supports_known_bits(ty) {
-            return U256::zero();
-        }
-
-        self.demanded[value] & type_mask(ty)
+        self.demanded[value] & type_mask_or_zero(self.func, value)
     }
 
     pub fn all_uses_within_mask(&self, value: ValueId, mask: U256) -> bool {
@@ -328,12 +323,7 @@ impl<'a> DemandedBitsQuery<'a> {
         worklist: &mut VecDeque<ValueId>,
         queued: &mut SecondaryMap<ValueId, bool>,
     ) {
-        let ty = self.func.dfg.value_ty(value);
-        if !supports_known_bits(ty) {
-            return;
-        }
-
-        let demand = demand & type_mask(ty);
+        let demand = demand & type_mask_or_zero(self.func, value);
         if demand == U256::zero() {
             return;
         }
@@ -358,10 +348,15 @@ fn constant_shift(func: &Function, value: ValueId) -> Option<U256> {
     Some(func.dfg.value_imm(value)?.as_i256().to_u256())
 }
 
+/// The bits of `value` a use that reads all of it demands. A pointer or an aggregate
+/// is one opaque unit: any use reads all of it, and through a cast every bit of the
+/// word it came from.
 fn type_mask_or_zero(func: &Function, value: ValueId) -> U256 {
     let ty = func.dfg.value_ty(value);
     if supports_known_bits(ty) {
         type_mask(ty)
+    } else if ty != Type::Unit {
+        U256::MAX
     } else {
         U256::zero()
     }
